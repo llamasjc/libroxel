@@ -1,23 +1,29 @@
-//! Lua-side types and globals. Every script-visible name comes from
-//! [`crate::names`].
+//! Lua-side types, globals and the thread scheduler. Every script-visible
+//! name comes from [`crate::names`].
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
-use libroxel_instance::{ClassKind, Color3, InstanceId, PropertyValue, TreeError, Vec3};
+use libroxel_instance::{ClassKind, Color3, InstanceId, Property, PropertyValue, TreeError, Vec3};
 use mlua::{
-    AnyUserData, Function, Lua, MetaMethod, RegistryKey, Table, UserData, UserDataFields, UserDataMethods,
-    Value, Variadic,
+    AnyUserData, Function, Lua, MetaMethod, MultiValue, RegistryKey, Table, Thread, UserData, UserDataFields,
+    UserDataMethods, Value, Variadic,
 };
 
 use crate::names::{self, constructors, globals};
 use crate::{OutputLevel, OutputLine, ScriptError, SharedTree};
 
 const INSTANCE_CACHE: &str = "libroxel.instance_cache";
+const WAIT_FOR_CHILD_FN: &str = "libroxel.wait_for_child";
+/// How long a script may run without yielding before it is stopped.
+pub(crate) const RUN_LIMIT: Duration = Duration::from_secs(5);
 
 /// The signals a script can connect to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SignalKind {
     Heartbeat,
+    Touched(InstanceId),
 }
 
 struct Connection {
@@ -27,13 +33,28 @@ struct Connection {
     handler: RegistryKey,
 }
 
+/// A thread paused by `task.wait` or scheduled by `task.delay`.
+struct Waiting {
+    thread: Thread,
+    resume_at: f64,
+    since: f64,
+    /// `None`: resume with the elapsed time (a wait). `Some`: resume with these (a delay).
+    args: Option<Vec<Value>>,
+    script: String,
+}
+
 /// Host state stored in the VM's app data.
 struct Host {
     tree: SharedTree,
     connections: RefCell<Vec<Connection>>,
     next_connection: Cell<u64>,
     output: RefCell<Vec<OutputLine>>,
+    errors: RefCell<Vec<ScriptError>>,
     current_script: RefCell<String>,
+    clock: Cell<f64>,
+    waiting: RefCell<Vec<Waiting>>,
+    /// When the running thread must have yielded by. Checked by the VM's interrupt.
+    deadline: Rc<Cell<Option<Instant>>>,
 }
 
 fn host(lua: &Lua) -> mlua::AppDataRef<'_, Host> {
@@ -63,6 +84,52 @@ fn describe_tree_error(err: TreeError) -> String {
             names::value_kind_name(got)
         ),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Scheduler
+// ---------------------------------------------------------------------------
+
+/// Resumes `thread`; if it yields, it is parked until the time it asked for.
+/// Errors are recorded against `script`. Returns the error, if any, so the
+/// first resume of a script can report it directly.
+fn resume(lua: &Lua, thread: Thread, args: MultiValue, script: &str) -> Option<ScriptError> {
+    let previous = host(lua).current_script.replace(script.to_owned());
+    let deadline = host(lua).deadline.clone();
+    let previous_deadline = deadline.replace(Some(Instant::now() + RUN_LIMIT));
+    let result = thread.resume::<MultiValue>(args);
+    deadline.set(previous_deadline);
+    *host(lua).current_script.borrow_mut() = previous;
+    match result {
+        Ok(yielded) => {
+            if thread.is_resumable() {
+                let seconds = yielded.front().and_then(|v| match v {
+                    Value::Number(n) => Some(*n),
+                    Value::Integer(n) => Some(*n as f64),
+                    _ => None,
+                });
+                let host = host(lua);
+                let now = host.clock.get();
+                host.waiting.borrow_mut().push(Waiting {
+                    thread,
+                    resume_at: now + seconds.unwrap_or(0.0).max(0.0),
+                    since: now,
+                    args: None,
+                    script: script.to_owned(),
+                });
+            }
+            None
+        }
+        Err(err) => Some(ScriptError { script: script.to_owned(), message: err.to_string() }),
+    }
+}
+
+fn spawn(lua: &Lua, func: Function, args: MultiValue, script: &str) -> mlua::Result<()> {
+    let thread = lua.create_thread(func)?;
+    if let Some(err) = resume(lua, thread, args, script) {
+        host(lua).errors.borrow_mut().push(err);
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +231,13 @@ impl UserData for LuaColor3 {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_meta_method(MetaMethod::ToString, |_, this, ()| {
             Ok(format!("{}, {}, {}", this.0.r, this.0.g, this.0.b))
+        });
+        methods.add_meta_function(MetaMethod::Eq, |_, (a, b): (Value, Value)| {
+            let colour = |v: &Value| match v {
+                Value::UserData(ud) => ud.borrow::<LuaColor3>().ok().map(|c| c.0),
+                _ => None,
+            };
+            Ok(matches!((colour(&a), colour(&b)), (Some(a), Some(b)) if a == b))
         });
     }
 }
@@ -289,6 +363,10 @@ impl UserData for LuaInstance {
         methods.add_method(DESTROY, |lua, this, ()| {
             host(lua).tree.borrow_mut().destroy(this.0).map_err(tree_err)
         });
+        methods.add_method(CLONE, |lua, this, ()| {
+            let copy = host(lua).tree.borrow_mut().clone_subtree(this.0).map_err(tree_err)?;
+            push_instance(lua, copy)
+        });
         methods.add_method(GET_SERVICE, |lua, this, name: String| {
             let (root, workspace) = {
                 let host = host(lua);
@@ -319,6 +397,15 @@ impl UserData for LuaInstance {
                     Some(p) => Ok(Value::UserData(push_instance(lua, p)?)),
                     None => Ok(Value::Nil),
                 };
+            }
+            if key == WAIT_FOR_CHILD {
+                return lua.named_registry_value::<Value>(WAIT_FOR_CHILD_FN);
+            }
+            if key == names::events::TOUCHED {
+                let class = host(lua).tree.borrow().class(id).map_err(tree_err)?;
+                if class.is_physical() {
+                    return Ok(Value::UserData(lua.create_userdata(Signal(SignalKind::Touched(id)))?));
+                }
             }
             if let Some(property) = names::property_from_name(&key) {
                 let value = host(lua).tree.borrow().get(id, property);
@@ -425,6 +512,23 @@ impl UserData for ConnectionHandle {
     }
 }
 
+fn fire(lua: &Lua, signal: SignalKind, args: impl Fn() -> mlua::Result<MultiValue>) {
+    // Snapshot handlers first: a handler may connect or disconnect others.
+    let handlers: Vec<(String, mlua::Result<Function>)> = host(lua)
+        .connections
+        .borrow()
+        .iter()
+        .filter(|c| c.signal == signal)
+        .map(|c| (c.script.clone(), lua.registry_value::<Function>(&c.handler)))
+        .collect();
+    for (script, handler) in handlers {
+        let result = handler.and_then(|f| spawn(lua, f, args()?, &script));
+        if let Err(err) = result {
+            host(lua).errors.borrow_mut().push(ScriptError { script, message: err.to_string() });
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Installation and host entry points
 // ---------------------------------------------------------------------------
@@ -434,17 +538,57 @@ fn join_args(args: Variadic<Value>) -> mlua::Result<String> {
     Ok(parts?.join(" "))
 }
 
+/// Luau-side helpers that must be able to yield, so they can't be Rust functions.
+fn prelude() -> String {
+    use names::{instance, task};
+    format!(
+        r#"
+        local yield = coroutine.yield
+        local lib = ...
+        lib["{wait}"] = function(seconds) return yield(seconds or 0) end
+        local wait = lib["{wait}"]
+        return wait, function(self, name, timeout)
+            local waited = 0
+            while true do
+                local child = self:{find}(name)
+                if child then return child end
+                if timeout and waited >= timeout then return nil end
+                waited += wait()
+            end
+        end
+        "#,
+        wait = task::WAIT,
+        find = instance::FIND_FIRST_CHILD,
+    )
+}
+
 pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     let (root, workspace) = {
         let tree = tree.borrow();
         (tree.root(), tree.workspace())
     };
+    let deadline: Rc<Cell<Option<Instant>>> = Rc::new(Cell::new(None));
+    let check = deadline.clone();
+    lua.set_interrupt(move |_| {
+        if check.get().is_some_and(|d| Instant::now() > d) {
+            check.set(None);
+            return Err(mlua::Error::runtime(format!(
+                "script ran for more than {} seconds without waiting; add task.wait() inside long loops",
+                RUN_LIMIT.as_secs()
+            )));
+        }
+        Ok(mlua::VmState::Continue)
+    });
     lua.set_app_data(Host {
+        deadline,
         tree,
         connections: RefCell::new(Vec::new()),
         next_connection: Cell::new(1),
         output: RefCell::new(Vec::new()),
+        errors: RefCell::new(Vec::new()),
         current_script: RefCell::new(String::new()),
+        clock: Cell::new(0.0),
+        waiting: RefCell::new(Vec::new()),
     });
 
     // Weak-valued cache so each instance has exactly one userdata.
@@ -508,6 +652,38 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     )?;
     g.set(globals::COLOR3, color3_lib)?;
 
+    let task_lib = lua.create_table()?;
+    task_lib.set(
+        names::task::SPAWN,
+        lua.create_function(|lua, (func, args): (Function, Variadic<Value>)| {
+            let script = host(lua).current_script.borrow().clone();
+            spawn(lua, func, args.into_iter().collect(), &script)
+        })?,
+    )?;
+    task_lib.set(
+        names::task::DELAY,
+        lua.create_function(|lua, (seconds, func, args): (f64, Function, Variadic<Value>)| {
+            let thread = lua.create_thread(func)?;
+            let host = host(lua);
+            let now = host.clock.get();
+            let script = host.current_script.borrow().clone();
+            host.waiting.borrow_mut().push(Waiting {
+                thread,
+                resume_at: now + seconds.max(0.0),
+                since: now,
+                args: Some(args.into_iter().collect()),
+                script,
+            });
+            Ok(())
+        })?,
+    )?;
+    let (wait, wait_for_child): (Function, Function) =
+        lua.load(prelude()).set_name("=libroxel").call(task_lib.clone())?;
+    lua.set_named_registry_value(WAIT_FOR_CHILD_FN, wait_for_child)?;
+    g.set(globals::TASK, task_lib)?;
+    g.set(globals::WAIT, wait)?;
+    g.set(globals::TIME, lua.create_function(|lua, ()| Ok(host(lua).clock.get()))?)?;
+
     g.set(
         globals::PRINT,
         lua.create_function(|lua, args: Variadic<Value>| {
@@ -527,28 +703,99 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     Ok(())
 }
 
-pub(crate) fn set_current_script(lua: &Lua, name: &str) {
-    *host(lua).current_script.borrow_mut() = name.to_owned();
+/// Runs a chunk as a new thread in its own environment. Errors raised before
+/// the script first yields are returned; later ones surface from `step`.
+pub(crate) fn run_chunk(
+    lua: &Lua,
+    script_name: &str,
+    source: &str,
+    script_instance: Option<InstanceId>,
+) -> Result<(), ScriptError> {
+    let fail = |err: mlua::Error| ScriptError { script: script_name.to_owned(), message: err.to_string() };
+    // Each script gets its own global environment that falls back to the
+    // shared, read-only globals, so scripts can't leak globals into each other.
+    let env = lua.create_table().map_err(fail)?;
+    let meta = lua.create_table().map_err(fail)?;
+    meta.set("__index", lua.globals()).map_err(fail)?;
+    env.set_metatable(Some(meta)).map_err(fail)?;
+    if let Some(id) = script_instance {
+        env.raw_set(globals::SCRIPT, push_instance(lua, id).map_err(fail)?).map_err(fail)?;
+    }
+    let func = lua
+        .load(source)
+        .set_name(format!("={script_name}"))
+        .set_environment(env)
+        .into_function()
+        .map_err(fail)?;
+    let thread = lua.create_thread(func).map_err(fail)?;
+    match resume(lua, thread, MultiValue::new(), script_name) {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
 }
 
-pub(crate) fn fire_heartbeat(lua: &Lua, dt: f64) -> Vec<ScriptError> {
-    // Snapshot handlers first: a handler may connect or disconnect others.
-    let handlers: Vec<(String, mlua::Result<Function>)> = {
+/// Runs every enabled script instance in the tree, in tree order.
+pub(crate) fn run_tree_scripts(lua: &Lua) -> Vec<ScriptError> {
+    let scripts: Vec<(InstanceId, String, String)> = {
         let host = host(lua);
-        host.connections
-            .borrow()
-            .iter()
-            .filter(|c| c.signal == SignalKind::Heartbeat)
-            .map(|c| (c.script.clone(), lua.registry_value::<Function>(&c.handler)))
+        let tree = host.tree.borrow();
+        tree.descendants_of_class(tree.root(), ClassKind::Script)
+            .into_iter()
+            .filter(|id| tree.get_bool(*id, Property::Disabled) != Some(true))
+            .filter_map(|id| {
+                let source = match tree.get(id, Property::Source).ok()? {
+                    PropertyValue::String(s) => s,
+                    _ => return None,
+                };
+                Some((id, tree.name(id).ok()?.to_owned(), source))
+            })
             .collect()
     };
-    let mut errors = Vec::new();
-    for (script, handler) in handlers {
-        if let Err(err) = handler.and_then(|f| f.call::<()>(dt)) {
-            errors.push(ScriptError { script, message: err.to_string() });
+    scripts
+        .into_iter()
+        .filter_map(|(id, name, source)| run_chunk(lua, &name, &source, Some(id)).err())
+        .collect()
+}
+
+/// Advances the clock, resumes due threads, then fires the frame signal.
+pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
+    let now = {
+        let host = host(lua);
+        host.clock.set(host.clock.get() + dt);
+        host.clock.get()
+    };
+    // Take only threads due now; ones that wait again are parked for a later frame.
+    let mut due: Vec<Waiting> = {
+        let host = host(lua);
+        let mut waiting = host.waiting.borrow_mut();
+        let (due, later) = std::mem::take(&mut *waiting).into_iter().partition(|w| w.resume_at <= now);
+        *waiting = later;
+        due
+    };
+    due.sort_by(|a, b| a.resume_at.total_cmp(&b.resume_at));
+    for w in due {
+        let args: MultiValue = match w.args {
+            Some(args) => args.into_iter().collect(),
+            None => std::iter::once(Value::Number(now - w.since)).collect(),
+        };
+        if let Some(err) = resume(lua, w.thread, args, &w.script) {
+            host(lua).errors.borrow_mut().push(err);
         }
     }
-    errors
+    fire(lua, SignalKind::Heartbeat, || Ok(std::iter::once(Value::Number(dt)).collect()));
+    take_errors(lua)
+}
+
+/// Fires `part.Touched(other)`.
+pub(crate) fn fire_touched(lua: &Lua, part: InstanceId, other: InstanceId) -> Vec<ScriptError> {
+    fire(lua, SignalKind::Touched(part), || {
+        Ok(std::iter::once(Value::UserData(push_instance(lua, other)?)).collect())
+    });
+    take_errors(lua)
+}
+
+pub(crate) fn take_errors(lua: &Lua) -> Vec<ScriptError> {
+    std::mem::take(&mut *host(lua).errors.borrow_mut())
 }
 
 pub(crate) fn take_output(lua: &Lua) -> Vec<OutputLine> {
@@ -557,4 +804,12 @@ pub(crate) fn take_output(lua: &Lua) -> Vec<OutputLine> {
 
 pub(crate) fn connection_count(lua: &Lua) -> usize {
     host(lua).connections.borrow().len()
+}
+
+pub(crate) fn waiting_count(lua: &Lua) -> usize {
+    host(lua).waiting.borrow().len()
+}
+
+pub(crate) fn clock(lua: &Lua) -> f64 {
+    host(lua).clock.get()
 }

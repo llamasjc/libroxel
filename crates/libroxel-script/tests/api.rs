@@ -163,3 +163,152 @@ fn scripts_cannot_tamper_with_builtins() {
     let out = rt.take_output();
     assert_eq!(out, vec![OutputLine { level: OutputLevel::Print, text: "nil".into() }]);
 }
+
+#[test]
+fn task_wait_resumes_after_the_right_time() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        print("start")
+        local waited = task.wait(1)
+        print("after", math.floor(waited * 100 + 0.5) / 100)
+        wait()
+        print("next frame")
+    "#,
+    );
+    assert_eq!(printed(&rt), vec!["start"]);
+    assert_eq!(rt.waiting_count(), 1);
+    for _ in 0..3 {
+        assert!(rt.step(0.25).is_empty());
+    }
+    assert!(printed(&rt).is_empty(), "0.75s is not enough");
+    rt.step(0.25);
+    assert_eq!(printed(&rt), vec!["after 1"]);
+    rt.step(0.25);
+    assert_eq!(printed(&rt), vec!["next frame"]);
+    assert_eq!(rt.waiting_count(), 0);
+}
+
+#[test]
+fn spawn_and_delay() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        task.spawn(function(x) print("spawned", x) task.wait(0.5) print("spawn done") end, 7)
+        task.delay(1, function(a, b) print("delayed", a, b) end, "x", "y")
+        print("main")
+    "#,
+    );
+    assert_eq!(printed(&rt), vec!["spawned 7", "main"]);
+    rt.step(0.5);
+    assert_eq!(printed(&rt), vec!["spawn done"]);
+    rt.step(0.5);
+    assert_eq!(printed(&rt), vec!["delayed x y"]);
+}
+
+#[test]
+fn errors_after_a_wait_come_from_step() {
+    let rt = runtime();
+    run(&rt, "task.wait(0.1) error('late')");
+    let errors = rt.step(0.2);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].script, "test");
+    assert!(errors[0].message.contains("late"));
+}
+
+#[test]
+fn heartbeat_handlers_may_wait() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local busy = false
+        game:GetService("RunService").Heartbeat:Connect(function()
+            if busy then return end
+            busy = true
+            print("tick")
+            task.wait(1)
+            busy = false
+        end)
+    "#,
+    );
+    for _ in 0..8 {
+        assert!(rt.step(0.25).is_empty());
+    }
+    assert_eq!(printed(&rt).len(), 2, "once at t=0.25, again at t=1.5");
+}
+
+#[test]
+fn tree_scripts_get_their_own_script_global() {
+    use libroxel_instance::InstanceTree;
+    let mut tree = InstanceTree::new();
+    let ws = tree.workspace();
+    for (name, src, disabled) in [
+        ("A", "print(script.Name, script.Parent == workspace)", false),
+        ("B", "print('B ran')", true),
+        ("C", "error('C broke')", false),
+    ] {
+        let s = tree.create(ClassKind::Script, name).unwrap();
+        tree.set_parent(s, Some(ws)).unwrap();
+        tree.set(s, Property::Source, PropertyValue::String(src.into())).unwrap();
+        tree.set(s, Property::Disabled, PropertyValue::Bool(disabled)).unwrap();
+    }
+    let rt = ScriptRuntime::new_with_tree(tree).unwrap();
+    let errors = rt.run_tree_scripts();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].script, "C");
+    assert_eq!(printed(&rt), vec!["A true"]);
+}
+
+#[test]
+fn touched_and_clone_and_wait_for_child() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local lava = Instance.new("Part", workspace)
+        lava.Name = "Lava"
+        lava.Touched:Connect(function(hit)
+            print("touched by", hit.Name)
+        end)
+        local copy = lava:Clone()
+        copy.Name = "Lava2"
+        copy.Parent = workspace
+        print(#workspace:GetChildren(), copy ~= lava)
+        task.spawn(function()
+            local thing = workspace:WaitForChild("Later")
+            print("found", thing.Name)
+        end)
+        task.delay(0.5, function() Instance.new("Folder", workspace).Name = "Later" end)
+    "#,
+    );
+    assert_eq!(printed(&rt), vec!["2 true"]);
+    let (lava, lava2) = {
+        let tree = rt.tree().borrow();
+        let ws = tree.workspace();
+        (
+            tree.find_first_child(ws, "Lava").unwrap().unwrap(),
+            tree.find_first_child(ws, "Lava2").unwrap().unwrap(),
+        )
+    };
+    assert!(rt.fire_touched(lava, lava2).is_empty());
+    assert!(rt.fire_touched(lava2, lava).is_empty(), "clones don't copy connections");
+    assert_eq!(printed(&rt), vec!["touched by Lava2"]);
+    rt.step(0.5);
+    rt.step(0.1);
+    assert_eq!(printed(&rt), vec!["found Later"]);
+}
+
+#[test]
+fn endless_loops_are_stopped() {
+    let rt = runtime();
+    let started = std::time::Instant::now();
+    let err = rt.run("spin", "while true do end").unwrap_err();
+    assert!(err.message.contains("without waiting"), "{}", err.message);
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    // The runtime still works afterwards.
+    run(&rt, "print('alive')");
+    assert_eq!(printed(&rt), vec!["alive"]);
+}

@@ -15,6 +15,7 @@ local mover = Instance.new("Part")
 mover.Name = "Mover"
 mover.Size = Vector3.new(2, 2, 2)
 mover.Color = Color3.fromRGB(255, 140, 0)
+mover.Anchored = true -- the script moves it, not physics
 mover.Parent = workspace
 
 local RADIUS = 6

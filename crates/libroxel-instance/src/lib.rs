@@ -15,6 +15,7 @@
 //! reused.
 
 mod math;
+pub mod place;
 mod property;
 mod tree;
 
@@ -34,24 +35,40 @@ pub enum ClassKind {
     Workspace,
     /// A plain container with no behaviour of its own.
     Folder,
-    /// A group of instances that move together (behaviour arrives in a later phase).
+    /// A group of instances, such as a character.
     Model,
     /// A solid box with a position, size and colour.
     Part,
-    /// A Luau script attached to the tree.
+    /// A part that marks where players appear.
+    SpawnLocation,
+    /// A Luau script attached to the tree. It runs when the game starts.
     Script,
+    /// Gives a character health and movement settings.
+    Humanoid,
 }
 
 impl ClassKind {
+    /// Every class, in a stable order.
+    pub const ALL: &[ClassKind] = &[
+        ClassKind::DataModel,
+        ClassKind::Workspace,
+        ClassKind::Folder,
+        ClassKind::Model,
+        ClassKind::Part,
+        ClassKind::SpawnLocation,
+        ClassKind::Script,
+        ClassKind::Humanoid,
+    ];
+
     /// Whether scripts may create this class with a constructor.
     /// Singletons like the root and workspace may not.
     pub fn is_creatable(self) -> bool {
         !matches!(self, ClassKind::DataModel | ClassKind::Workspace)
     }
 
-    /// Whether this class has a position, size and colour.
+    /// Whether this class is a box in the world (it has a position, size and colour).
     pub fn is_physical(self) -> bool {
-        matches!(self, ClassKind::Part)
+        self.is_a(ClassKind::Part)
     }
 
     /// The parent class in the class hierarchy, if any.
@@ -59,6 +76,7 @@ impl ClassKind {
         match self {
             // Workspace behaves like a Model that can't be removed.
             ClassKind::Workspace => Some(ClassKind::Model),
+            ClassKind::SpawnLocation => Some(ClassKind::Part),
             _ => None,
         }
     }
@@ -84,12 +102,21 @@ impl ClassKind {
             Property::Size,
             Property::Color,
             Property::Anchored,
+            Property::CanCollide,
             Property::Transparency,
         ];
-        const SCRIPT: &[Property] = &[Property::Name, Property::Source];
+        const SCRIPT: &[Property] = &[Property::Name, Property::Disabled, Property::Source];
+        const HUMANOID: &[Property] = &[
+            Property::Name,
+            Property::Health,
+            Property::MaxHealth,
+            Property::WalkSpeed,
+            Property::JumpPower,
+        ];
         match self {
-            ClassKind::Part => PART,
+            ClassKind::Part | ClassKind::SpawnLocation => PART,
             ClassKind::Script => SCRIPT,
+            ClassKind::Humanoid => HUMANOID,
             _ => COMMON,
         }
     }
@@ -97,5 +124,46 @@ impl ClassKind {
     /// Whether this class has `property`.
     pub fn has_property(self, property: Property) -> bool {
         self.properties().contains(&property)
+    }
+
+    /// The value `property` starts with on a new instance of this class.
+    pub fn default_value(self, property: Property) -> Option<PropertyValue> {
+        if !self.has_property(property) {
+            return None;
+        }
+        Some(match property {
+            Property::Name | Property::Source => PropertyValue::String(String::new()),
+            Property::Position => PropertyValue::Vec3(Vec3::ZERO),
+            Property::Size => PropertyValue::Vec3(Vec3::new(4.0, 1.0, 2.0)),
+            Property::Color => PropertyValue::Color3(match self {
+                ClassKind::SpawnLocation => Color3::new(0.3, 0.55, 0.95),
+                _ => Color3::MEDIUM_GREY,
+            }),
+            Property::Anchored => PropertyValue::Bool(self == ClassKind::SpawnLocation),
+            Property::CanCollide => PropertyValue::Bool(true),
+            Property::Disabled => PropertyValue::Bool(false),
+            Property::Transparency => PropertyValue::Number(0.0),
+            Property::Health | Property::MaxHealth => PropertyValue::Number(100.0),
+            Property::WalkSpeed => PropertyValue::Number(16.0),
+            Property::JumpPower => PropertyValue::Number(50.0),
+        })
+    }
+
+    /// A stable name for files. Never shown to scripts; never change these.
+    pub fn file_name(self) -> &'static str {
+        match self {
+            ClassKind::DataModel => "data_model",
+            ClassKind::Workspace => "workspace",
+            ClassKind::Folder => "folder",
+            ClassKind::Model => "model",
+            ClassKind::Part => "part",
+            ClassKind::SpawnLocation => "spawn_location",
+            ClassKind::Script => "script",
+            ClassKind::Humanoid => "humanoid",
+        }
+    }
+
+    pub fn from_file_name(name: &str) -> Option<ClassKind> {
+        ClassKind::ALL.iter().copied().find(|c| c.file_name() == name)
     }
 }

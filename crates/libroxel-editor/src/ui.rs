@@ -1,0 +1,1000 @@
+//! The editor's panels: menu and toolbar, explorer, properties, output,
+//! the script editor and file dialogs.
+
+use std::path::PathBuf;
+
+use bevy::camera::Viewport;
+use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
+use bevy_egui::EguiContexts;
+use bevy_egui::egui::{self, Color32, Key, KeyboardShortcut, Modifiers, RichText};
+use libroxel_engine::view::{CameraMode, CameraRig, EngineState, InputCapture};
+use libroxel_engine::{LogEntry, LogLevel, PlaySession};
+use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property, PropertyValue, place};
+use libroxel_script::names;
+
+use crate::{Dialog, Editor, Tool, games_dir, templates, viewport};
+
+/// Things the UI asks for; applied after drawing so nothing is borrowed twice.
+enum Action {
+    New,
+    OpenSample,
+    Open(PathBuf),
+    Save,
+    SaveTo(PathBuf),
+    Play,
+    Stop,
+    Undo,
+    Redo,
+    Insert(ClassKind),
+    InsertInto(ClassKind, InstanceId),
+    Delete(InstanceId),
+    Duplicate(InstanceId),
+    Select(Option<InstanceId>),
+    Reparent(InstanceId, InstanceId),
+    OpenScript(InstanceId),
+    Rename(InstanceId, String),
+    RunCommand(String),
+    ClearOutput,
+}
+
+const INSERTABLE: &[ClassKind] =
+    &[ClassKind::Part, ClassKind::SpawnLocation, ClassKind::Script, ClassKind::Model, ClassKind::Folder];
+
+fn icon(class: ClassKind) -> &'static str {
+    match class {
+        ClassKind::DataModel => "🎮",
+        ClassKind::Workspace => "🌐",
+        ClassKind::Folder => "📁",
+        ClassKind::Model => "📦",
+        ClassKind::Part => "⬛",
+        ClassKind::SpawnLocation => "🏁",
+        ClassKind::Script => "📜",
+        ClassKind::Humanoid => "👤",
+    }
+}
+
+fn level_color(level: LogLevel) -> Color32 {
+    match level {
+        LogLevel::Info => Color32::from_gray(220),
+        LogLevel::Warn => Color32::from_rgb(240, 190, 60),
+        LogLevel::Error => Color32::from_rgb(255, 110, 100),
+    }
+}
+
+fn log(engine: &mut EngineState, level: LogLevel, text: impl Into<String>) {
+    let time = engine
+        .session
+        .as_ref()
+        .map(|s| s.runtime().clock())
+        .or_else(|| engine.log.last().map(|l| l.time))
+        .unwrap_or(0.0);
+    engine.log.push(LogEntry { level, time, text: text.into() });
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn editor_ui(
+    mut contexts: EguiContexts,
+    mut engine: NonSendMut<EngineState>,
+    mut editor: NonSendMut<Editor>,
+    mut capture: ResMut<InputCapture>,
+    mut cameras: Query<(&mut Camera, &GlobalTransform, &mut Transform, &mut CameraRig)>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    time: Res<Time>,
+) -> Result {
+    let ctx = contexts.ctx_mut()?.clone();
+    let now = time.elapsed_secs_f64();
+    let engine = &mut *engine;
+    let editor = &mut *editor;
+    let tree_rc = engine.tree.clone();
+    let playing = engine.is_playing();
+    let mut actions: Vec<Action> = Vec::new();
+
+    shortcuts(&ctx, editor, playing, &mut actions);
+
+    let mut root = egui::Ui::new(
+        ctx.clone(),
+        "libroxel-root".into(),
+        egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(ctx.viewport_rect()),
+    );
+
+    egui::Panel::top("menu").show(&mut root, |ui| {
+        menu_bar(ui, editor, playing, &mut actions);
+    });
+    egui::Panel::top("toolbar").show(&mut root, |ui| {
+        toolbar(ui, editor, playing, &mut actions);
+    });
+    egui::Panel::left("explorer").resizable(true).default_size(260.0).show(&mut root, |ui| {
+        ui.heading("Explorer");
+        ui.separator();
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            let tree = tree_rc.borrow();
+            explorer_node(ui, &tree, tree.root(), editor, &mut actions, 0);
+            editor.reveal_selection = false;
+        });
+    });
+    egui::Panel::right("properties").resizable(true).default_size(300.0).show(&mut root, |ui| {
+        ui.heading("Properties");
+        ui.separator();
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            properties(ui, editor, &mut tree_rc.borrow_mut(), now, playing, &mut actions);
+        });
+    });
+    egui::Panel::bottom("output").resizable(true).default_size(170.0).show(&mut root, |ui| {
+        output(ui, engine, editor, playing, &mut actions);
+    });
+
+    // The space left over is the 3D view.
+    let mut gizmo_hot = false;
+    let central = egui::CentralPanel::no_frame()
+        .show(&mut root, |ui| {
+            if let Ok((cam, gt, _, _)) = cameras.single() {
+                gizmo_hot = viewport::gizmo(
+                    ui,
+                    editor,
+                    &mut tree_rc.borrow_mut(),
+                    (cam, gt),
+                    ui.max_rect(),
+                    now,
+                    !playing,
+                );
+            }
+            hud(ui, playing);
+            ui.max_rect()
+        })
+        .inner;
+
+    script_editor(&ctx, editor, &mut tree_rc.borrow_mut(), now, playing);
+    dialogs(&ctx, editor, &mut actions);
+
+    // Decide who gets the mouse and keyboard this frame.
+    let pointer = ctx.input(|i| i.pointer.hover_pos());
+    let over_view = pointer.is_some_and(|p| {
+        central.contains(p) && ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background)
+    });
+    let pressed_in_view = ctx.input(|i| i.pointer.press_origin()).is_none_or(|p| central.contains(p));
+    capture.pointer = !(over_view && pressed_in_view) || gizmo_hot;
+    capture.keyboard = ctx.egui_wants_keyboard_input();
+    editor.gizmo_active = gizmo_hot;
+
+    // Click to select.
+    let clicked = ctx.input(|i| i.pointer.primary_clicked());
+    if clicked
+        && over_view
+        && !gizmo_hot
+        && let (Some(pos), Ok((cam, gt, _, _))) = (pointer, cameras.single())
+        && let Ok(ray) = cam.viewport_to_world(gt, Vec2::new(pos.x, pos.y))
+    {
+        let hit = viewport::pick(&tree_rc.borrow(), ray);
+        editor.reveal_selection = hit.is_some();
+        actions.push(Action::Select(hit));
+    }
+
+    // Fit the 3D camera to the free space between panels.
+    if let (Ok(window), Ok((mut cam, _, mut transform, rig))) = (window.single(), cameras.single_mut()) {
+        let scale = window.scale_factor();
+        let min = UVec2::new((central.min.x * scale) as u32, (central.min.y * scale) as u32);
+        let max = UVec2::new(
+            ((central.max.x * scale) as u32).min(window.physical_width()),
+            ((central.max.y * scale) as u32).min(window.physical_height()),
+        );
+        if max.x > min.x + 8 && max.y > min.y + 8 {
+            cam.viewport = Some(Viewport { physical_position: min, physical_size: max - min, ..default() });
+        }
+        if std::mem::take(&mut editor.focus_selection)
+            && rig.mode == CameraMode::Fly
+            && let Some(id) = editor.selection
+        {
+            viewport::frame_selection(&tree_rc.borrow(), id, &mut transform);
+        }
+    }
+
+    editor.history.tick(now, gizmo_hot && ctx.input(|i| i.pointer.primary_down()));
+    for action in actions {
+        apply(action, engine, editor, now);
+    }
+
+    // Remember the editing camera while playing, and put it back after.
+    if let Ok((_, _, mut transform, mut rig)) = cameras.single_mut() {
+        if engine.is_playing() && !playing {
+            editor.saved_camera = Some((*transform, *rig));
+            rig.distance = 16.0;
+        } else if !engine.is_playing()
+            && playing
+            && let Some((saved_transform, saved_rig)) = editor.saved_camera.take()
+        {
+            *transform = saved_transform;
+            *rig = saved_rig;
+        }
+    }
+    Ok(())
+}
+
+fn shortcuts(ctx: &egui::Context, editor: &Editor, playing: bool, actions: &mut Vec<Action>) {
+    let typing = ctx.egui_wants_keyboard_input();
+    ctx.input_mut(|i| {
+        let cmd = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
+        if i.consume_shortcut(&cmd(Key::S)) {
+            actions.push(Action::Save);
+        }
+        if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z))
+            || i.consume_shortcut(&cmd(Key::Y))
+        {
+            actions.push(Action::Redo);
+        }
+        if i.consume_shortcut(&cmd(Key::Z)) {
+            actions.push(Action::Undo);
+        }
+        if i.consume_key(Modifiers::NONE, Key::F5) {
+            actions.push(if playing { Action::Stop } else { Action::Play });
+        }
+        if playing && i.consume_key(Modifiers::NONE, Key::Escape) {
+            actions.push(Action::Stop);
+        }
+        if typing {
+            return;
+        }
+        if let Some(id) = editor.selection {
+            if i.consume_shortcut(&cmd(Key::D)) {
+                actions.push(Action::Duplicate(id));
+            }
+            if i.consume_key(Modifiers::NONE, Key::Delete) {
+                actions.push(Action::Delete(id));
+            }
+        }
+    });
+}
+
+fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut Vec<Action>) {
+    egui::MenuBar::new().ui(ui, |ui| {
+        ui.menu_button("File", |ui| {
+            if ui.button("New").clicked() {
+                actions.push(Action::New);
+            }
+            if ui.button("Open sample obby").clicked() {
+                actions.push(Action::OpenSample);
+            }
+            if ui.button("Open…").clicked() {
+                let path = games_dir().join("untitled.lrx").display().to_string();
+                editor.dialog = Some(Dialog::Open { path });
+            }
+            ui.separator();
+            if ui.add_enabled(!playing, egui::Button::new("Save        Ctrl+S")).clicked() {
+                actions.push(Action::Save);
+            }
+            if ui.add_enabled(!playing, egui::Button::new("Save as…")).clicked() {
+                let path = editor
+                    .file
+                    .clone()
+                    .unwrap_or_else(|| games_dir().join("untitled.lrx"))
+                    .display()
+                    .to_string();
+                editor.dialog = Some(Dialog::SaveAs { path });
+            }
+        });
+        ui.menu_button("Edit", |ui| {
+            if ui
+                .add_enabled(!playing && editor.history.can_undo(), egui::Button::new("Undo   Ctrl+Z"))
+                .clicked()
+            {
+                actions.push(Action::Undo);
+            }
+            if ui
+                .add_enabled(!playing && editor.history.can_redo(), egui::Button::new("Redo   Ctrl+Y"))
+                .clicked()
+            {
+                actions.push(Action::Redo);
+            }
+            ui.separator();
+            let selected = editor.selection;
+            if ui.add_enabled(selected.is_some(), egui::Button::new("Duplicate   Ctrl+D")).clicked()
+                && let Some(id) = selected
+            {
+                actions.push(Action::Duplicate(id));
+            }
+            if ui.add_enabled(selected.is_some(), egui::Button::new("Delete   Del")).clicked()
+                && let Some(id) = selected
+            {
+                actions.push(Action::Delete(id));
+            }
+        });
+        ui.menu_button("Insert", |ui| {
+            for &class in INSERTABLE {
+                if ui.button(format!("{} {}", icon(class), names::class_name(class))).clicked() {
+                    actions.push(Action::Insert(class));
+                }
+            }
+        });
+        ui.menu_button("View", |ui| {
+            ui.checkbox(&mut editor.show_grid, "Show grid");
+        });
+        ui.menu_button("Help", |ui| {
+            ui.label("Right mouse + WASD/QE: fly the camera (Shift = faster)");
+            ui.label("Scroll: move forward/back");
+            ui.label("Click: select · Del: delete · Ctrl+D: duplicate");
+            ui.label("F5: play / stop · Esc: stop");
+            ui.label("While playing: WASD walk, Space jump, right mouse turns the camera");
+        });
+    });
+}
+
+fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut Vec<Action>) {
+    ui.horizontal(|ui| {
+        if playing {
+            if ui.button(RichText::new("⏹ Stop").strong().color(Color32::from_rgb(255, 120, 110))).clicked()
+            {
+                actions.push(Action::Stop);
+            }
+        } else if ui
+            .button(RichText::new("▶ Play").strong().color(Color32::from_rgb(120, 220, 120)))
+            .clicked()
+        {
+            actions.push(Action::Play);
+        }
+        ui.separator();
+        ui.selectable_value(&mut editor.tool, Tool::Select, "🖱 Select");
+        ui.selectable_value(&mut editor.tool, Tool::Move, "✥ Move");
+        ui.selectable_value(&mut editor.tool, Tool::Scale, "⤢ Resize");
+        ui.separator();
+        ui.label("Snap");
+        egui::ComboBox::from_id_salt("snap")
+            .selected_text(if editor.snap > 0.0 { format!("{} stud", editor.snap) } else { "Off".into() })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut editor.snap, 0.0, "Off");
+                for s in [0.25, 0.5, 1.0, 2.0, 4.0] {
+                    ui.selectable_value(&mut editor.snap, s, format!("{s} stud"));
+                }
+            });
+        ui.separator();
+        for &class in &[ClassKind::Part, ClassKind::Script] {
+            if ui
+                .add_enabled(!playing, egui::Button::new(format!("+ {}", names::class_name(class))))
+                .clicked()
+            {
+                actions.push(Action::Insert(class));
+            }
+        }
+        if playing {
+            ui.separator();
+            ui.label(RichText::new("Playing: edits are undone when you stop").italics());
+        }
+    });
+}
+
+fn explorer_node(
+    ui: &mut egui::Ui,
+    tree: &InstanceTree,
+    id: InstanceId,
+    editor: &mut Editor,
+    actions: &mut Vec<Action>,
+    depth: usize,
+) {
+    let Ok(class) = tree.class(id) else { return };
+    let name = tree.name(id).unwrap_or("?");
+    let children = tree.children(id).map(|c| c.to_vec()).unwrap_or_default();
+    let selected = editor.selection == Some(id);
+
+    let mut label = |ui: &mut egui::Ui| {
+        if let Some((rid, text)) = editor.renaming.as_mut()
+            && *rid == id
+        {
+            let response = ui.text_edit_singleline(text);
+            response.request_focus();
+            if response.lost_focus() {
+                actions.push(Action::Rename(id, text.clone()));
+            }
+            return;
+        }
+        let text = format!("{} {}", icon(class), name);
+        let inner = ui.add(
+            egui::Button::selectable(selected, text)
+                .frame_when_inactive(false)
+                .sense(egui::Sense::click_and_drag()),
+        );
+        if class.is_creatable() {
+            inner.dnd_set_drag_payload(id);
+        }
+        if inner.clicked() {
+            actions.push(Action::Select(Some(id)));
+        }
+        if inner.double_clicked() {
+            if class == ClassKind::Script {
+                actions.push(Action::OpenScript(id));
+            } else {
+                editor.focus_selection = true;
+            }
+        }
+        if let Some(dragged) = inner.dnd_release_payload::<InstanceId>() {
+            actions.push(Action::Reparent(*dragged, id));
+        }
+        inner.context_menu(|ui| {
+            actions.push(Action::Select(Some(id)));
+            ui.menu_button("Insert", |ui| {
+                for &c in INSERTABLE {
+                    if ui.button(format!("{} {}", icon(c), names::class_name(c))).clicked() {
+                        actions.push(Action::InsertInto(c, id));
+                        ui.close();
+                    }
+                }
+            });
+            let editable = class.is_creatable();
+            if ui.add_enabled(editable, egui::Button::new("Rename")).clicked() {
+                editor.renaming = Some((id, name.to_owned()));
+                ui.close();
+            }
+            if ui.add_enabled(editable, egui::Button::new("Duplicate")).clicked() {
+                actions.push(Action::Duplicate(id));
+                ui.close();
+            }
+            if ui.add_enabled(editable, egui::Button::new("Delete")).clicked() {
+                actions.push(Action::Delete(id));
+                ui.close();
+            }
+            if class == ClassKind::Script && ui.button("Edit script").clicked() {
+                actions.push(Action::OpenScript(id));
+                ui.close();
+            }
+        });
+    };
+
+    if children.is_empty() {
+        ui.horizontal(|ui| {
+            ui.add_space(18.0);
+            label(ui);
+        });
+    } else {
+        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+            ui.ctx(),
+            egui::Id::new(("explorer-open", id)),
+            depth < 2,
+        );
+        if editor.reveal_selection
+            && editor.selection.is_some_and(|sel| tree.is_descendant_of(sel, id).unwrap_or(false))
+        {
+            state.set_open(true);
+        }
+        state.show_header(ui, |ui| label(ui)).body(|ui| {
+            for child in children {
+                explorer_node(ui, tree, child, editor, actions, depth + 1);
+            }
+        });
+    }
+}
+
+fn properties(
+    ui: &mut egui::Ui,
+    editor: &mut Editor,
+    tree: &mut InstanceTree,
+    now: f64,
+    playing: bool,
+    actions: &mut Vec<Action>,
+) {
+    let Some(id) = editor.selection.filter(|id| tree.exists(*id) && !tree.is_destroyed(*id).unwrap_or(true))
+    else {
+        ui.label("Select something in the Explorer or click a part in the view.");
+        return;
+    };
+    let Ok(class) = tree.class(id) else { return };
+    ui.label(RichText::new(format!("{} {}", icon(class), names::class_name(class))).strong());
+    ui.add_space(4.0);
+
+    let mut edited: Option<(Property, PropertyValue)> = None;
+    egui::Grid::new("props").num_columns(2).striped(true).spacing([8.0, 6.0]).show(ui, |ui| {
+        for &property in class.properties() {
+            let Ok(value) = tree.get(id, property) else { continue };
+            ui.label(names::property_name(property));
+            let locked = property == Property::Name && !class.is_creatable();
+            ui.add_enabled_ui(!locked, |ui| {
+                if let Some(new) = property_editor(ui, property, value, id, actions) {
+                    edited = Some((property, new));
+                }
+            });
+            ui.end_row();
+        }
+    });
+    if let Some((property, value)) = edited {
+        if !playing {
+            editor.history.begin_edit(tree, now);
+            editor.dirty = true;
+        }
+        let _ = tree.set(id, property, value);
+    }
+
+    if class == ClassKind::Script {
+        ui.add_space(8.0);
+        ui.label("Scripts start when you press Play. `script` is this Script; `script.Parent` is what it's inside.");
+    }
+}
+
+fn property_editor(
+    ui: &mut egui::Ui,
+    property: Property,
+    value: PropertyValue,
+    id: InstanceId,
+    actions: &mut Vec<Action>,
+) -> Option<PropertyValue> {
+    match value {
+        PropertyValue::String(mut s) => {
+            if property == Property::Source {
+                let lines = s.lines().count();
+                if ui.button(format!("📝 Edit ({lines} lines)")).clicked() {
+                    actions.push(Action::OpenScript(id));
+                }
+                None
+            } else {
+                ui.text_edit_singleline(&mut s).changed().then_some(PropertyValue::String(s))
+            }
+        }
+        PropertyValue::Bool(mut b) => ui.checkbox(&mut b, "").changed().then_some(PropertyValue::Bool(b)),
+        PropertyValue::Number(mut n) => {
+            let drag = egui::DragValue::new(&mut n).speed(if property == Property::Transparency {
+                0.01
+            } else {
+                0.5
+            });
+            let drag = if property == Property::Transparency { drag.range(0.0..=1.0) } else { drag };
+            ui.add(drag).changed().then_some(PropertyValue::Number(n))
+        }
+        PropertyValue::Vec3(mut v) => {
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                for (axis, value) in [("X", &mut v.x), ("Y", &mut v.y), ("Z", &mut v.z)] {
+                    ui.label(RichText::new(axis).small().weak());
+                    changed |= ui.add(egui::DragValue::new(value).speed(0.1).max_decimals(3)).changed();
+                }
+            });
+            if property == Property::Size {
+                v = libroxel_instance::Vec3::new(v.x.max(0.05), v.y.max(0.05), v.z.max(0.05));
+            }
+            changed.then_some(PropertyValue::Vec3(v))
+        }
+        PropertyValue::Color3(c) => {
+            let mut rgb = [c.r, c.g, c.b];
+            ui.color_edit_button_rgb(&mut rgb)
+                .changed()
+                .then(|| PropertyValue::Color3(libroxel_instance::Color3::new(rgb[0], rgb[1], rgb[2])))
+        }
+    }
+}
+
+fn output(
+    ui: &mut egui::Ui,
+    engine: &mut EngineState,
+    editor: &mut Editor,
+    playing: bool,
+    actions: &mut Vec<Action>,
+) {
+    ui.horizontal(|ui| {
+        ui.heading("Output");
+        if ui.small_button("Clear").clicked() {
+            actions.push(Action::ClearOutput);
+        }
+        ui.separator();
+        let hint =
+            if playing { "Run Luau in the running game…" } else { "Press Play to run Luau commands" };
+        let response = ui.add_enabled(
+            playing,
+            egui::TextEdit::singleline(&mut editor.command).hint_text(hint).desired_width(f32::INFINITY),
+        );
+        if response.lost_focus()
+            && ui.input(|i| i.key_pressed(Key::Enter))
+            && !editor.command.trim().is_empty()
+        {
+            actions.push(Action::RunCommand(std::mem::take(&mut editor.command)));
+            response.request_focus();
+        }
+    });
+    ui.separator();
+    egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
+        let start = engine.log.len().saturating_sub(1000);
+        for entry in &engine.log[start..] {
+            ui.label(
+                RichText::new(format!("[{:>6.1}s] {}", entry.time, entry.text))
+                    .monospace()
+                    .color(level_color(entry.level)),
+            );
+        }
+    });
+}
+
+fn hud(ui: &mut egui::Ui, playing: bool) {
+    let text = if playing {
+        "WASD walk · Space jump · right mouse turn · scroll zoom · Esc stop"
+    } else {
+        "Right mouse + WASD fly · click to select · F5 play"
+    };
+    let rect = ui.max_rect();
+    ui.painter().text(
+        rect.left_bottom() + egui::vec2(8.0, -8.0),
+        egui::Align2::LEFT_BOTTOM,
+        text,
+        egui::FontId::proportional(13.0),
+        Color32::from_white_alpha(170),
+    );
+}
+
+fn script_editor(ctx: &egui::Context, editor: &mut Editor, tree: &mut InstanceTree, now: f64, playing: bool) {
+    let Some(id) = editor.open_script else { return };
+    let Ok(PropertyValue::String(mut source)) = tree.get(id, Property::Source) else {
+        editor.open_script = None;
+        return;
+    };
+    let name = tree.name(id).unwrap_or("Script").to_owned();
+    let mut open = true;
+    let mut changed = false;
+    egui::Window::new(format!("📜 {name}"))
+        .id(egui::Id::new("script-editor"))
+        .open(&mut open)
+        .default_size([620.0, 460.0])
+        .default_pos([300.0, 90.0])
+        .resizable(true)
+        .show(ctx, |ui| {
+            if playing {
+                ui.label(
+                    RichText::new("Changes made while playing apply next time you press Play.").italics(),
+                );
+            }
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                changed = ui
+                    .add(
+                        egui::TextEdit::multiline(&mut source)
+                            .code_editor()
+                            .lock_focus(true)
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(24),
+                    )
+                    .changed();
+            });
+        });
+    if changed {
+        if !playing {
+            editor.history.begin_edit(tree, now);
+            editor.dirty = true;
+        }
+        let _ = tree.set(id, Property::Source, PropertyValue::String(source));
+    }
+    if !open {
+        editor.open_script = None;
+    }
+}
+
+fn list_places() -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = std::fs::read_dir(games_dir())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "lrx"))
+        .collect();
+    found.sort();
+    found
+}
+
+fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) {
+    let Some(dialog) = editor.dialog.as_mut() else { return };
+    let (title, button) = match dialog {
+        Dialog::Open { .. } => ("Open place", "Open"),
+        Dialog::SaveAs { .. } => ("Save place as", "Save"),
+    };
+    let opening = matches!(dialog, Dialog::Open { .. });
+    let mut close = false;
+    egui::Window::new(title).collapsible(false).resizable(false).default_width(480.0).show(ctx, |ui| {
+        let path = match dialog {
+            Dialog::Open { path } | Dialog::SaveAs { path } => path,
+        };
+        ui.label("File path (places use the .lrx extension):");
+        ui.add(egui::TextEdit::singleline(path).desired_width(f32::INFINITY));
+        let places = list_places();
+        if !places.is_empty() {
+            ui.label(format!("In {}:", games_dir().display()));
+            for p in places {
+                let label = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                if ui.link(label).clicked() {
+                    *path = p.display().to_string();
+                }
+            }
+        }
+        ui.horizontal(|ui| {
+            if ui.button(button).clicked() {
+                let mut chosen = PathBuf::from(path.trim());
+                if chosen.extension().is_none() {
+                    chosen.set_extension("lrx");
+                }
+                actions.push(if opening { Action::Open(chosen) } else { Action::SaveTo(chosen) });
+                close = true;
+            }
+            if ui.button("Cancel").clicked() {
+                close = true;
+            }
+        });
+    });
+    if close {
+        editor.dialog = None;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Applying actions
+// ---------------------------------------------------------------------------
+
+fn replace_world(engine: &mut EngineState, editor: &mut Editor, tree: InstanceTree, file: Option<PathBuf>) {
+    if engine.session.take().is_some() {
+        editor.edit_snapshot = None;
+    }
+    *engine.tree.borrow_mut() = tree;
+    editor.history.clear();
+    editor.selection = None;
+    editor.open_script = None;
+    editor.file = file;
+    editor.dirty = false;
+}
+
+fn save_to(engine: &mut EngineState, editor: &mut Editor, path: PathBuf) {
+    let text = {
+        let tree = engine.tree.borrow();
+        let source = editor.edit_snapshot.as_ref().unwrap_or(&tree);
+        place::save(source)
+    };
+    let result = text.map_err(|e| e.to_string()).and_then(|text| {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&path, text).map_err(|e| e.to_string())
+    });
+    match result {
+        Ok(()) => {
+            log(engine, LogLevel::Info, format!("Saved {}", path.display()));
+            editor.file = Some(path);
+            editor.dirty = false;
+        }
+        Err(err) => log(engine, LogLevel::Error, format!("Could not save {}: {err}", path.display())),
+    }
+}
+
+fn new_instance(
+    tree: &mut InstanceTree,
+    class: ClassKind,
+    parent: InstanceId,
+    near: Option<InstanceId>,
+) -> Option<InstanceId> {
+    let id = tree.create(class, names::class_name(class)).ok()?;
+    if class.is_physical() {
+        // Drop new parts on top of the selection, or at the origin.
+        let above = near
+            .and_then(|n| Some((tree.get_vec3(n, Property::Position)?, tree.get_vec3(n, Property::Size)?)))
+            .map(|(p, s)| p + libroxel_instance::Vec3::new(0.0, s.y / 2.0 + 0.5, 0.0))
+            .unwrap_or(libroxel_instance::Vec3::new(0.0, 0.5, 0.0));
+        let _ = tree.set(id, Property::Position, PropertyValue::Vec3(above));
+        let _ = tree.set(id, Property::Anchored, PropertyValue::Bool(true));
+    }
+    if class == ClassKind::Script {
+        let _ = tree.set(
+            id,
+            Property::Source,
+            PropertyValue::String("print(\"Hello from \" .. script.Name)\n".into()),
+        );
+    }
+    tree.set_parent(id, Some(parent)).ok()?;
+    Some(id)
+}
+
+fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64) {
+    let playing = engine.is_playing();
+    match action {
+        Action::New => replace_world(engine, editor, templates::blank(), None),
+        Action::OpenSample => {
+            replace_world(engine, editor, templates::sample_obby(), None);
+            log(engine, LogLevel::Info, "Opened the sample obby. Press Play to try it.");
+        }
+        Action::Open(path) => {
+            match std::fs::read_to_string(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|t| place::load(&t).map_err(|e| e.to_string()))
+            {
+                Ok((tree, report)) => {
+                    replace_world(engine, editor, tree, Some(path.clone()));
+                    log(engine, LogLevel::Info, format!("Opened {}", path.display()));
+                    for w in report.warnings {
+                        log(engine, LogLevel::Warn, w);
+                    }
+                }
+                Err(err) => log(engine, LogLevel::Error, format!("Could not open {}: {err}", path.display())),
+            }
+        }
+        Action::Save => match editor.file.clone() {
+            Some(path) => save_to(engine, editor, path),
+            None => {
+                let path = games_dir().join("untitled.lrx").display().to_string();
+                editor.dialog = Some(Dialog::SaveAs { path });
+            }
+        },
+        Action::SaveTo(path) => save_to(engine, editor, path),
+        Action::Play => {
+            if playing {
+                return;
+            }
+            editor.history.tick(f64::INFINITY, false);
+            editor.edit_snapshot = Some(engine.tree.borrow().clone());
+            match PlaySession::start(engine.tree.clone(), true) {
+                Ok(mut session) => {
+                    let lines = session.take_log();
+                    engine.session = Some(session);
+                    log(engine, LogLevel::Info, "▶ Playing");
+                    engine.log.extend(lines);
+                }
+                Err(err) => {
+                    log(engine, LogLevel::Error, err);
+                    if let Some(snapshot) = editor.edit_snapshot.take() {
+                        *engine.tree.borrow_mut() = snapshot;
+                    }
+                }
+            }
+        }
+        Action::Stop => {
+            if engine.session.take().is_some() {
+                if let Some(snapshot) = editor.edit_snapshot.take() {
+                    *engine.tree.borrow_mut() = snapshot;
+                }
+                if editor.selection.is_some_and(|id| !engine.tree.borrow().exists(id)) {
+                    editor.selection = None;
+                }
+                log(engine, LogLevel::Info, "⏹ Stopped");
+            }
+        }
+        Action::Undo | Action::Redo if playing => {}
+        Action::Undo => {
+            let mut tree = engine.tree.borrow_mut();
+            if editor.history.undo(&mut tree) {
+                editor.dirty = true;
+            }
+        }
+        Action::Redo => {
+            let mut tree = engine.tree.borrow_mut();
+            if editor.history.redo(&mut tree) {
+                editor.dirty = true;
+            }
+        }
+        Action::Insert(class) => {
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            let parent = tree.workspace();
+            if !playing {
+                editor.history.begin_edit(&tree, now);
+                editor.dirty = true;
+            }
+            let near = editor.selection.filter(|s| tree.class(*s).is_ok_and(|c| c.is_physical()));
+            // Scripts go inside the selected part, so `script.Parent` is useful straight away.
+            let parent = match (class, editor.selection) {
+                (ClassKind::Script, Some(sel)) if tree.class(sel).is_ok_and(|c| c != ClassKind::Script) => {
+                    sel
+                }
+                _ => parent,
+            };
+            if let Some(id) = new_instance(&mut tree, class, parent, near) {
+                editor.selection = Some(id);
+                if class == ClassKind::Script {
+                    editor.open_script = Some(id);
+                }
+            }
+        }
+        Action::InsertInto(class, parent) => {
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            if !playing {
+                editor.history.begin_edit(&tree, now);
+                editor.dirty = true;
+            }
+            let near = Some(parent).filter(|p| tree.class(*p).is_ok_and(|c| c.is_physical()));
+            if let Some(id) = new_instance(&mut tree, class, parent, near) {
+                editor.selection = Some(id);
+                if class == ClassKind::Script {
+                    editor.open_script = Some(id);
+                }
+            }
+        }
+        Action::Delete(id) => {
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            if !tree.class(id).is_ok_and(|c| c.is_creatable()) {
+                return;
+            }
+            if !playing {
+                editor.history.begin_edit(&tree, now);
+                editor.dirty = true;
+            }
+            if tree.destroy(id).is_ok() {
+                tree.purge_destroyed_if_editing(playing);
+                editor.selection = None;
+            }
+        }
+        Action::Duplicate(id) => {
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            if !playing {
+                editor.history.begin_edit(&tree, now);
+                editor.dirty = true;
+            }
+            let parent = tree.parent(id).ok().flatten().unwrap_or(tree.workspace());
+            if let Ok(copy) = tree.clone_subtree(id) {
+                // Offset copies so they don't hide inside the original.
+                if let (Some(pos), Some(size)) =
+                    (tree.get_vec3(copy, Property::Position), tree.get_vec3(copy, Property::Size))
+                {
+                    let moved = pos + libroxel_instance::Vec3::new(0.0, size.y, 0.0);
+                    let _ = tree.set(copy, Property::Position, PropertyValue::Vec3(moved));
+                }
+                let _ = tree.set_parent(copy, Some(parent));
+                editor.selection = Some(copy);
+            }
+        }
+        Action::Select(id) => editor.selection = id,
+        Action::Reparent(child, parent) => {
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            if child == parent {
+                return;
+            }
+            let before = tree.clone();
+            match tree.set_parent(child, Some(parent)) {
+                Ok(()) => {
+                    if !playing {
+                        editor.history.begin_edit(&before, now);
+                        editor.dirty = true;
+                    }
+                }
+                Err(err) => {
+                    drop(tree);
+                    log(engine, LogLevel::Warn, format!("Can't move that there: {err}"));
+                }
+            }
+        }
+        Action::OpenScript(id) => {
+            editor.selection = Some(id);
+            editor.open_script = Some(id);
+        }
+        Action::Rename(id, name) => {
+            editor.renaming = None;
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            if !name.trim().is_empty() && tree.name(id).is_ok_and(|n| n != name) {
+                if !playing {
+                    editor.history.begin_edit(&tree, now);
+                    editor.dirty = true;
+                }
+                let _ = tree.set_name(id, name.trim());
+            }
+        }
+        Action::RunCommand(code) => {
+            log(engine, LogLevel::Info, format!("> {code}"));
+            if let Some(session) = engine.session.as_mut() {
+                let result = session.runtime().run("command", &code);
+                let mut lines = session.take_log();
+                for line in session.runtime().take_output() {
+                    let level = match line.level {
+                        libroxel_script::OutputLevel::Print => LogLevel::Info,
+                        libroxel_script::OutputLevel::Warn => LogLevel::Warn,
+                    };
+                    lines.push(LogEntry { level, time: session.runtime().clock(), text: line.text });
+                }
+                engine.log.extend(lines);
+                if let Err(err) = result {
+                    log(engine, LogLevel::Error, err.to_string());
+                }
+            }
+        }
+        Action::ClearOutput => engine.log.clear(),
+    }
+}
+
+trait PurgeExt {
+    fn purge_destroyed_if_editing(&mut self, playing: bool);
+}
+
+impl PurgeExt for InstanceTree {
+    /// While editing nothing else holds ids, so deleted instances can be freed.
+    fn purge_destroyed_if_editing(&mut self, playing: bool) {
+        if !playing {
+            self.purge_destroyed();
+        }
+    }
+}

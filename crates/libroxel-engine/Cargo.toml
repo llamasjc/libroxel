@@ -1,0 +1,17 @@
+[package]
+name = "libroxel-engine"
+description = "Libroxel's game loop: play sessions, physics, characters, and the Bevy integration."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+libroxel-instance.workspace = true
+libroxel-script.workspace = true
+bevy.workspace = true
+
+[lints]
+workspace = true

@@ -21,6 +21,37 @@ pub mod globals {
     pub const COLOR3: &str = "Color3";
     pub const PRINT: &str = "print";
     pub const WARN: &str = "warn";
+    /// The scheduling library.
+    pub const TASK: &str = "task";
+    /// Shorthand for `task.wait`, kept because many existing scripts use it.
+    pub const WAIT: &str = "wait";
+    /// Seconds since the game started.
+    pub const TIME: &str = "time";
+    /// Inside a script: the script instance itself.
+    pub const SCRIPT: &str = "script";
+}
+
+/// Members of the scheduling library.
+pub mod task {
+    /// Pause the current thread for some seconds (one frame by default).
+    pub const WAIT: &str = "wait";
+    /// Run a function now in a new thread.
+    pub const SPAWN: &str = "spawn";
+    /// Run a function in a new thread after some seconds.
+    pub const DELAY: &str = "delay";
+}
+
+/// Events that instances fire.
+pub mod events {
+    /// On parts: fires with the other part when something starts touching it.
+    pub const TOUCHED: &str = "Touched";
+}
+
+/// Names of the instances the engine builds for each player.
+pub mod character {
+    pub const MODEL: &str = "Player";
+    pub const ROOT_PART: &str = "HumanoidRootPart";
+    pub const HUMANOID: &str = "Humanoid";
 }
 
 /// Constructors and constants on the global library tables.
@@ -43,6 +74,9 @@ pub mod instance {
     pub const IS_DESCENDANT_OF: &str = "IsDescendantOf";
     pub const GET_FULL_NAME: &str = "GetFullName";
     pub const DESTROY: &str = "Destroy";
+    pub const CLONE: &str = "Clone";
+    /// Yields until a child with the given name exists.
+    pub const WAIT_FOR_CHILD: &str = "WaitForChild";
     /// Only on the root instance.
     pub const GET_SERVICE: &str = "GetService";
 }
@@ -93,7 +127,9 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::Folder => "Folder",
         ClassKind::Model => "Model",
         ClassKind::Part => "Part",
+        ClassKind::SpawnLocation => "SpawnLocation",
         ClassKind::Script => "Script",
+        ClassKind::Humanoid => "Humanoid",
     }
 }
 
@@ -105,7 +141,9 @@ pub fn class_from_name(name: &str) -> Option<ClassKind> {
         "Folder" => ClassKind::Folder,
         "Model" => ClassKind::Model,
         "Part" => ClassKind::Part,
+        "SpawnLocation" => ClassKind::SpawnLocation,
         "Script" => ClassKind::Script,
+        "Humanoid" => ClassKind::Humanoid,
         _ => return None,
     })
 }
@@ -120,6 +158,12 @@ pub fn property_name(property: Property) -> &'static str {
         Property::Anchored => "Anchored",
         Property::Transparency => "Transparency",
         Property::Source => "Source",
+        Property::CanCollide => "CanCollide",
+        Property::Disabled => "Disabled",
+        Property::Health => "Health",
+        Property::MaxHealth => "MaxHealth",
+        Property::WalkSpeed => "WalkSpeed",
+        Property::JumpPower => "JumpPower",
     }
 }
 
@@ -133,6 +177,12 @@ pub fn property_from_name(name: &str) -> Option<Property> {
         "Anchored" => Property::Anchored,
         "Transparency" => Property::Transparency,
         "Source" => Property::Source,
+        "CanCollide" => Property::CanCollide,
+        "Disabled" => Property::Disabled,
+        "Health" => Property::Health,
+        "MaxHealth" => Property::MaxHealth,
+        "WalkSpeed" => Property::WalkSpeed,
+        "JumpPower" => Property::JumpPower,
         _ => return None,
     })
 }
@@ -151,25 +201,16 @@ pub fn value_kind_name(kind: &str) -> &str {
 mod tests {
     use super::*;
 
-    const ALL_CLASSES: &[ClassKind] = &[
-        ClassKind::DataModel,
-        ClassKind::Workspace,
-        ClassKind::Folder,
-        ClassKind::Model,
-        ClassKind::Part,
-        ClassKind::Script,
-    ];
-
     #[test]
     fn class_names_round_trip() {
-        for &class in ALL_CLASSES {
+        for &class in ClassKind::ALL {
             assert_eq!(class_from_name(class_name(class)), Some(class));
         }
     }
 
     #[test]
     fn property_names_round_trip() {
-        for &class in ALL_CLASSES {
+        for &class in ClassKind::ALL {
             for &property in class.properties() {
                 assert_eq!(property_from_name(property_name(property)), Some(property));
             }

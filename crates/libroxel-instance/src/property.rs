@@ -13,8 +13,14 @@ pub enum Property {
     Size,
     Color,
     Anchored,
+    CanCollide,
     Transparency,
+    Disabled,
     Source,
+    Health,
+    MaxHealth,
+    WalkSpeed,
+    JumpPower,
 }
 
 /// The value of a property.
@@ -47,8 +53,52 @@ impl Property {
             Property::Name | Property::Source => "string",
             Property::Position | Property::Size => "Vec3",
             Property::Color => "Color3",
-            Property::Anchored => "bool",
-            Property::Transparency => "number",
+            Property::Anchored | Property::CanCollide | Property::Disabled => "bool",
+            Property::Transparency
+            | Property::Health
+            | Property::MaxHealth
+            | Property::WalkSpeed
+            | Property::JumpPower => "number",
         }
+    }
+
+    /// Every property, in a stable order.
+    pub const ALL: &[Property] = &[
+        Property::Name,
+        Property::Position,
+        Property::Size,
+        Property::Color,
+        Property::Anchored,
+        Property::CanCollide,
+        Property::Transparency,
+        Property::Disabled,
+        Property::Source,
+        Property::Health,
+        Property::MaxHealth,
+        Property::WalkSpeed,
+        Property::JumpPower,
+    ];
+
+    /// A stable name for files. Never shown to scripts; never change these.
+    pub fn file_name(self) -> &'static str {
+        match self {
+            Property::Name => "name",
+            Property::Position => "position",
+            Property::Size => "size",
+            Property::Color => "color",
+            Property::Anchored => "anchored",
+            Property::CanCollide => "can_collide",
+            Property::Transparency => "transparency",
+            Property::Disabled => "disabled",
+            Property::Source => "source",
+            Property::Health => "health",
+            Property::MaxHealth => "max_health",
+            Property::WalkSpeed => "walk_speed",
+            Property::JumpPower => "jump_power",
+        }
+    }
+
+    pub fn from_file_name(name: &str) -> Option<Property> {
+        Property::ALL.iter().copied().find(|p| p.file_name() == name)
     }
 }

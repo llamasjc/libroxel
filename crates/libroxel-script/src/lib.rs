@@ -25,7 +25,7 @@ pub mod names;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use libroxel_instance::InstanceTree;
+use libroxel_instance::{InstanceId, InstanceTree};
 use mlua::Lua;
 
 pub use mlua;
@@ -85,24 +85,40 @@ impl ScriptRuntime {
         &self.tree
     }
 
-    /// Runs a script to completion. Signal handlers it connects stay alive.
+    /// Runs source code as a new script. Signal handlers it connects stay
+    /// alive, and if it calls `task.wait` it continues during later steps.
+    /// Errors raised before its first wait are returned here; later ones
+    /// come back from [`step`](Self::step).
     pub fn run(&self, script_name: &str, source: &str) -> Result<(), ScriptError> {
-        let fail =
-            |err: mlua::Error| ScriptError { script: script_name.to_owned(), message: err.to_string() };
-        bindings::set_current_script(&self.lua, script_name);
-        // Each script gets its own global environment that falls back to the
-        // shared, read-only globals, so scripts can't leak globals into each other.
-        let env = self.lua.create_table().map_err(fail)?;
-        let meta = self.lua.create_table().map_err(fail)?;
-        meta.set("__index", self.lua.globals()).map_err(fail)?;
-        env.set_metatable(Some(meta)).map_err(fail)?;
-        self.lua.load(source).set_name(format!("={script_name}")).set_environment(env).exec().map_err(fail)
+        bindings::run_chunk(&self.lua, script_name, source, None)
     }
 
-    /// Advances time by `dt` seconds, firing the per-frame signal. Errors
-    /// from individual handlers are returned; the other handlers still run.
+    /// Starts every enabled `Script` instance in the tree, in tree order,
+    /// with `script` bound to the instance. Returns their startup errors.
+    pub fn run_tree_scripts(&self) -> Vec<ScriptError> {
+        bindings::run_tree_scripts(&self.lua)
+    }
+
+    /// Advances time by `dt` seconds: resumes threads whose wait is over,
+    /// then fires the per-frame signal. Returns every script error raised
+    /// since the last call; one failing script never stops the others.
     pub fn step(&self, dt: f64) -> Vec<ScriptError> {
-        bindings::fire_heartbeat(&self.lua, dt)
+        bindings::step(&self.lua, dt)
+    }
+
+    /// Fires `part`'s touch event with `other` as the argument.
+    pub fn fire_touched(&self, part: InstanceId, other: InstanceId) -> Vec<ScriptError> {
+        bindings::fire_touched(&self.lua, part, other)
+    }
+
+    /// Seconds of game time so far (the sum of every `step`).
+    pub fn clock(&self) -> f64 {
+        bindings::clock(&self.lua)
+    }
+
+    /// Number of threads paused in a wait or delay.
+    pub fn waiting_count(&self) -> usize {
+        bindings::waiting_count(&self.lua)
     }
 
     /// Takes everything scripts have printed since the last call.

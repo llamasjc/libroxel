@@ -59,16 +59,18 @@ struct InstanceData {
     children: Vec<InstanceId>,
     parent_locked: bool,
     destroyed: bool,
-    position: Vec3,
-    size: Vec3,
-    color: Color3,
-    anchored: bool,
-    transparency: f64,
-    source: String,
+    /// Every property except `Name`, in [`ClassKind::properties`] order.
+    props: Vec<(Property, PropertyValue)>,
 }
 
 impl InstanceData {
     fn new(class: ClassKind, name: String) -> Self {
+        let props = class
+            .properties()
+            .iter()
+            .filter(|p| **p != Property::Name)
+            .filter_map(|p| Some((*p, class.default_value(*p)?)))
+            .collect();
         Self {
             class,
             name,
@@ -76,13 +78,12 @@ impl InstanceData {
             children: Vec::new(),
             parent_locked: false,
             destroyed: false,
-            position: Vec3::ZERO,
-            size: Vec3::new(4.0, 1.0, 2.0),
-            color: Color3::MEDIUM_GREY,
-            anchored: false,
-            transparency: 0.0,
-            source: String::new(),
+            props,
         }
+    }
+
+    fn prop_mut(&mut self, property: Property) -> Option<&mut PropertyValue> {
+        self.props.iter_mut().find(|(p, _)| *p == property).map(|(_, v)| v)
     }
 }
 
@@ -317,48 +318,111 @@ impl InstanceTree {
     /// Reads a property.
     pub fn get(&self, id: InstanceId, property: Property) -> Result<PropertyValue> {
         let data = self.data(id)?;
-        if !data.class.has_property(property) {
-            return Err(TreeError::NoSuchProperty { class: data.class, property });
+        if property == Property::Name {
+            return Ok(PropertyValue::String(data.name.clone()));
         }
-        Ok(match property {
-            Property::Name => PropertyValue::String(data.name.clone()),
-            Property::Position => PropertyValue::Vec3(data.position),
-            Property::Size => PropertyValue::Vec3(data.size),
-            Property::Color => PropertyValue::Color3(data.color),
-            Property::Anchored => PropertyValue::Bool(data.anchored),
-            Property::Transparency => PropertyValue::Number(data.transparency),
-            Property::Source => PropertyValue::String(data.source.clone()),
-        })
+        data.props
+            .iter()
+            .find(|(p, _)| *p == property)
+            .map(|(_, v)| v.clone())
+            .ok_or(TreeError::NoSuchProperty { class: data.class, property })
     }
 
     /// Writes a property, recording a change only if the value differs.
     pub fn set(&mut self, id: InstanceId, property: Property, value: PropertyValue) -> Result<()> {
         let data = self.data_mut(id)?;
-        if !data.class.has_property(property) {
-            return Err(TreeError::NoSuchProperty { class: data.class, property });
-        }
-        let changed = match (property, value) {
-            (Property::Name, PropertyValue::String(v)) => replace(&mut data.name, v),
-            (Property::Source, PropertyValue::String(v)) => replace(&mut data.source, v),
-            (Property::Position, PropertyValue::Vec3(v)) => replace(&mut data.position, v),
-            (Property::Size, PropertyValue::Vec3(v)) => replace(&mut data.size, v),
-            (Property::Color, PropertyValue::Color3(v)) => replace(&mut data.color, v),
-            (Property::Anchored, PropertyValue::Bool(v)) => replace(&mut data.anchored, v),
-            (Property::Transparency, PropertyValue::Number(v)) => {
-                replace(&mut data.transparency, v.clamp(0.0, 1.0))
+        let class = data.class;
+        let wrong_type = |value: &PropertyValue| TreeError::WrongType {
+            property,
+            expected: property.expected_kind(),
+            got: value.kind_name(),
+        };
+        let changed = if property == Property::Name {
+            match value {
+                PropertyValue::String(v) => replace(&mut data.name, v),
+                other => return Err(wrong_type(&other)),
             }
-            (property, value) => {
-                return Err(TreeError::WrongType {
-                    property,
-                    expected: property.expected_kind(),
-                    got: value.kind_name(),
-                });
+        } else {
+            let slot = data.prop_mut(property).ok_or(TreeError::NoSuchProperty { class, property })?;
+            if std::mem::discriminant(slot) != std::mem::discriminant(&value) {
+                return Err(wrong_type(&value));
             }
+            let value = match (property, value) {
+                (Property::Transparency, PropertyValue::Number(t)) => {
+                    PropertyValue::Number(t.clamp(0.0, 1.0))
+                }
+                (_, v) => v,
+            };
+            replace(slot, value)
         };
         if changed {
             self.changes.push(Change::PropertyChanged { id, property });
         }
         Ok(())
+    }
+
+    /// Typed read of a `Vec3` property.
+    pub fn get_vec3(&self, id: InstanceId, property: Property) -> Option<Vec3> {
+        match self.get(id, property).ok()? {
+            PropertyValue::Vec3(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Typed read of a number property.
+    pub fn get_number(&self, id: InstanceId, property: Property) -> Option<f64> {
+        match self.get(id, property).ok()? {
+            PropertyValue::Number(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Typed read of a bool property.
+    pub fn get_bool(&self, id: InstanceId, property: Property) -> Option<bool> {
+        match self.get(id, property).ok()? {
+            PropertyValue::Bool(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Typed read of a colour property.
+    pub fn get_color(&self, id: InstanceId, property: Property) -> Option<Color3> {
+        match self.get(id, property).ok()? {
+            PropertyValue::Color3(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Deep-copies `id` and its descendants. The copy is unparented.
+    pub fn clone_subtree(&mut self, id: InstanceId) -> Result<InstanceId> {
+        let source = self.data(id)?;
+        if !source.class.is_creatable() {
+            return Err(TreeError::NotCreatable(source.class));
+        }
+        let mut copy = source.clone();
+        let children = std::mem::take(&mut copy.children);
+        copy.parent = None;
+        copy.parent_locked = false;
+        copy.destroyed = false;
+        let new_id = self.alloc(copy);
+        self.changes.push(Change::Created(new_id));
+        for child in children {
+            if self.data(child)?.destroyed {
+                continue;
+            }
+            let child_copy = self.clone_subtree(child)?;
+            self.set_parent(child_copy, Some(new_id))?;
+        }
+        Ok(new_id)
+    }
+
+    /// All live instances that are, or inherit from, `class` under `ancestor`.
+    pub fn descendants_of_class(&self, ancestor: InstanceId, class: ClassKind) -> Vec<InstanceId> {
+        self.descendants(ancestor)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|id| self.class(*id).is_ok_and(|c| c.is_a(class)))
+            .collect()
     }
 
     /// Convenience for renaming.
@@ -526,6 +590,36 @@ mod tests {
             tree.drain_changes(),
             vec![Change::PropertyChanged { id: p, property: Property::Position }]
         );
+    }
+
+    #[test]
+    fn clone_subtree_copies_everything_but_the_parent() {
+        let mut tree = InstanceTree::new();
+        let ws = tree.workspace();
+        let model = tree.create(ClassKind::Model, "Car").unwrap();
+        let wheel = part(&mut tree, "Wheel");
+        tree.set_parent(model, Some(ws)).unwrap();
+        tree.set_parent(wheel, Some(model)).unwrap();
+        tree.set(wheel, Property::Size, PropertyValue::Vec3(Vec3::ONE)).unwrap();
+
+        let copy = tree.clone_subtree(model).unwrap();
+        assert_ne!(copy, model);
+        assert_eq!(tree.parent(copy).unwrap(), None);
+        let wheel_copy = tree.find_first_child(copy, "Wheel").unwrap().unwrap();
+        assert_ne!(wheel_copy, wheel);
+        assert_eq!(tree.get_vec3(wheel_copy, Property::Size), Some(Vec3::ONE));
+        assert_eq!(tree.children(model).unwrap(), &[wheel], "original untouched");
+        assert_eq!(tree.clone_subtree(ws), Err(TreeError::NotCreatable(ClassKind::Workspace)));
+    }
+
+    #[test]
+    fn defaults_follow_the_class() {
+        let mut tree = InstanceTree::new();
+        let spawn = tree.create(ClassKind::SpawnLocation, "Spawn").unwrap();
+        let hum = tree.create(ClassKind::Humanoid, "Humanoid").unwrap();
+        assert_eq!(tree.get_bool(spawn, Property::Anchored), Some(true));
+        assert_eq!(tree.get_number(hum, Property::WalkSpeed), Some(16.0));
+        assert!(ClassKind::SpawnLocation.is_physical());
     }
 
     #[test]

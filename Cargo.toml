@@ -13,7 +13,9 @@ authors = ["Libroxel contributors"]
 [workspace.dependencies]
 libroxel-instance = { path = "crates/libroxel-instance", version = "0.0.1" }
 libroxel-script = { path = "crates/libroxel-script", version = "0.0.1" }
+libroxel-engine = { path = "crates/libroxel-engine", version = "0.0.1" }
 thiserror = "2"
+serde_json = "1"
 mlua = { version = "0.12", features = ["luau", "vendored"] }
 bevy = { version = "0.20", default-features = false, features = ["3d"] }
 
@@ -29,3 +31,5 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+# Debug info for Bevy and friends is huge and rarely needed; keep it for our crates only.
+debug = false

@@ -1,6 +1,6 @@
 [package]
 name = "libroxel-proto"
-description = "Phase 0 prototype: a Bevy window where a Luau script moves a part."
+description = "Plays a Libroxel game (a .lrx place or a single .luau script) in a window."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,7 +11,7 @@ publish = false
 
 [dependencies]
 libroxel-instance.workspace = true
-libroxel-script.workspace = true
+libroxel-engine.workspace = true
 bevy.workspace = true
 
 [lints]
