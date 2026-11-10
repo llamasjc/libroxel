@@ -1,0 +1,17 @@
+[package]
+name = "libroxel-script"
+description = "Luau scripting runtime for Libroxel, bound to the instance tree."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+libroxel-instance.workspace = true
+mlua.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

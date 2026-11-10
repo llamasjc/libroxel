@@ -1,0 +1,537 @@
+//! The tree itself: storage, hierarchy and the change journal.
+
+use std::fmt;
+
+use crate::{ClassKind, Color3, Property, PropertyValue, Vec3};
+
+/// A generational handle to an instance.
+///
+/// Ids are cheap to copy and compare. An id stays valid while its instance
+/// exists, including after it is destroyed (so scripts can still read a
+/// destroyed instance's properties). Only [`InstanceTree::purge_destroyed`]
+/// retires ids; a retired id never resolves again, even after its slot is
+/// reused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct InstanceId {
+    index: u32,
+    generation: u32,
+}
+
+impl fmt::Display for InstanceId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "#{}v{}", self.index, self.generation)
+    }
+}
+
+/// Something that happened to the tree, recorded so other systems (the
+/// renderer, replication) can catch up without diffing the whole tree.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Change {
+    Created(InstanceId),
+    Reparented { id: InstanceId, old_parent: Option<InstanceId>, new_parent: Option<InstanceId> },
+    PropertyChanged { id: InstanceId, property: Property },
+    Destroyed(InstanceId),
+}
+
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum TreeError {
+    #[error("instance {0} no longer exists")]
+    Dead(InstanceId),
+    #[error("the parent of {0} is locked and cannot be changed")]
+    ParentLocked(InstanceId),
+    #[error("cannot parent {child} to {parent}: it would create a cycle")]
+    WouldCycle { child: InstanceId, parent: InstanceId },
+    #[error("{0:?} cannot be created directly")]
+    NotCreatable(ClassKind),
+    #[error("{class:?} has no property {property:?}")]
+    NoSuchProperty { class: ClassKind, property: Property },
+    #[error("{property:?} expects a {expected}, got a {got}")]
+    WrongType { property: Property, expected: &'static str, got: &'static str },
+}
+
+pub type Result<T> = std::result::Result<T, TreeError>;
+
+#[derive(Debug, Clone)]
+struct InstanceData {
+    class: ClassKind,
+    name: String,
+    parent: Option<InstanceId>,
+    children: Vec<InstanceId>,
+    parent_locked: bool,
+    destroyed: bool,
+    position: Vec3,
+    size: Vec3,
+    color: Color3,
+    anchored: bool,
+    transparency: f64,
+    source: String,
+}
+
+impl InstanceData {
+    fn new(class: ClassKind, name: String) -> Self {
+        Self {
+            class,
+            name,
+            parent: None,
+            children: Vec::new(),
+            parent_locked: false,
+            destroyed: false,
+            position: Vec3::ZERO,
+            size: Vec3::new(4.0, 1.0, 2.0),
+            color: Color3::MEDIUM_GREY,
+            anchored: false,
+            transparency: 0.0,
+            source: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Slot {
+    generation: u32,
+    data: Option<InstanceData>,
+}
+
+/// A world's instance tree.
+#[derive(Debug, Clone)]
+pub struct InstanceTree {
+    slots: Vec<Slot>,
+    free: Vec<u32>,
+    root: InstanceId,
+    workspace: InstanceId,
+    changes: Vec<Change>,
+}
+
+impl Default for InstanceTree {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl InstanceTree {
+    /// Creates a tree with a root and a workspace. Neither can be reparented
+    /// or destroyed.
+    pub fn new() -> Self {
+        let mut tree = Self {
+            slots: Vec::new(),
+            free: Vec::new(),
+            root: InstanceId { index: 0, generation: 0 },
+            workspace: InstanceId { index: 0, generation: 0 },
+            changes: Vec::new(),
+        };
+        tree.root = tree.alloc(InstanceData::new(ClassKind::DataModel, "Game".into()));
+        tree.workspace = tree.alloc(InstanceData::new(ClassKind::Workspace, "Workspace".into()));
+        tree.set_parent(tree.workspace, Some(tree.root)).expect("fresh workspace can be parented");
+        tree.data_mut(tree.root).expect("root exists").parent_locked = true;
+        tree.data_mut(tree.workspace).expect("workspace exists").parent_locked = true;
+        tree.changes.clear();
+        tree
+    }
+
+    pub fn root(&self) -> InstanceId {
+        self.root
+    }
+
+    pub fn workspace(&self) -> InstanceId {
+        self.workspace
+    }
+
+    fn alloc(&mut self, data: InstanceData) -> InstanceId {
+        if let Some(index) = self.free.pop() {
+            let slot = &mut self.slots[index as usize];
+            slot.data = Some(data);
+            InstanceId { index, generation: slot.generation }
+        } else {
+            let index = u32::try_from(self.slots.len()).expect("fewer than 2^32 instances");
+            self.slots.push(Slot { generation: 0, data: Some(data) });
+            InstanceId { index, generation: 0 }
+        }
+    }
+
+    fn data(&self, id: InstanceId) -> Result<&InstanceData> {
+        self.slots
+            .get(id.index as usize)
+            .filter(|slot| slot.generation == id.generation)
+            .and_then(|slot| slot.data.as_ref())
+            .ok_or(TreeError::Dead(id))
+    }
+
+    fn data_mut(&mut self, id: InstanceId) -> Result<&mut InstanceData> {
+        self.slots
+            .get_mut(id.index as usize)
+            .filter(|slot| slot.generation == id.generation)
+            .and_then(|slot| slot.data.as_mut())
+            .ok_or(TreeError::Dead(id))
+    }
+
+    /// Creates a new, unparented instance.
+    pub fn create(&mut self, class: ClassKind, name: impl Into<String>) -> Result<InstanceId> {
+        if !class.is_creatable() {
+            return Err(TreeError::NotCreatable(class));
+        }
+        let id = self.alloc(InstanceData::new(class, name.into()));
+        self.changes.push(Change::Created(id));
+        Ok(id)
+    }
+
+    /// Whether `id` still refers to an instance (destroyed or not).
+    pub fn exists(&self, id: InstanceId) -> bool {
+        self.data(id).is_ok()
+    }
+
+    /// Whether `id` has been destroyed.
+    pub fn is_destroyed(&self, id: InstanceId) -> Result<bool> {
+        Ok(self.data(id)?.destroyed)
+    }
+
+    pub fn class(&self, id: InstanceId) -> Result<ClassKind> {
+        Ok(self.data(id)?.class)
+    }
+
+    pub fn name(&self, id: InstanceId) -> Result<&str> {
+        Ok(&self.data(id)?.name)
+    }
+
+    pub fn parent(&self, id: InstanceId) -> Result<Option<InstanceId>> {
+        Ok(self.data(id)?.parent)
+    }
+
+    pub fn children(&self, id: InstanceId) -> Result<&[InstanceId]> {
+        Ok(&self.data(id)?.children)
+    }
+
+    /// The first direct child called `name`, in child order.
+    pub fn find_first_child(&self, id: InstanceId, name: &str) -> Result<Option<InstanceId>> {
+        let data = self.data(id)?;
+        Ok(data.children.iter().copied().find(|child| self.data(*child).is_ok_and(|c| c.name == name)))
+    }
+
+    /// The first direct child of class `class` (or a subclass of it).
+    pub fn find_first_child_of_class(&self, id: InstanceId, class: ClassKind) -> Result<Option<InstanceId>> {
+        let data = self.data(id)?;
+        Ok(data.children.iter().copied().find(|child| self.data(*child).is_ok_and(|c| c.class.is_a(class))))
+    }
+
+    /// All descendants of `id` in depth-first pre-order, not including `id`.
+    pub fn descendants(&self, id: InstanceId) -> Result<Vec<InstanceId>> {
+        let mut out = Vec::new();
+        let mut stack: Vec<InstanceId> = self.data(id)?.children.iter().rev().copied().collect();
+        while let Some(next) = stack.pop() {
+            out.push(next);
+            if let Ok(data) = self.data(next) {
+                stack.extend(data.children.iter().rev().copied());
+            }
+        }
+        Ok(out)
+    }
+
+    /// Whether `id` is a strict descendant of `ancestor`.
+    pub fn is_descendant_of(&self, id: InstanceId, ancestor: InstanceId) -> Result<bool> {
+        let mut current = self.data(id)?.parent;
+        while let Some(parent) = current {
+            if parent == ancestor {
+                return Ok(true);
+            }
+            current = self.data(parent)?.parent;
+        }
+        Ok(false)
+    }
+
+    /// Moves `id` under `new_parent`, or detaches it with `None`.
+    pub fn set_parent(&mut self, id: InstanceId, new_parent: Option<InstanceId>) -> Result<()> {
+        let data = self.data(id)?;
+        if data.parent_locked {
+            return Err(TreeError::ParentLocked(id));
+        }
+        let old_parent = data.parent;
+        if old_parent == new_parent {
+            return Ok(());
+        }
+        if let Some(parent) = new_parent {
+            if self.data(parent)?.destroyed {
+                return Err(TreeError::ParentLocked(id));
+            }
+            if parent == id || self.is_descendant_of(parent, id)? {
+                return Err(TreeError::WouldCycle { child: id, parent });
+            }
+        }
+
+        if let Some(old) = old_parent {
+            self.data_mut(old)?.children.retain(|c| *c != id);
+        }
+        if let Some(parent) = new_parent {
+            self.data_mut(parent)?.children.push(id);
+        }
+        self.data_mut(id)?.parent = new_parent;
+        self.changes.push(Change::Reparented { id, old_parent, new_parent });
+        Ok(())
+    }
+
+    /// Destroys `id` and all its descendants: each is detached, its parent
+    /// is locked, and a [`Change::Destroyed`] is recorded. Their data stays
+    /// readable until [`purge_destroyed`](Self::purge_destroyed).
+    pub fn destroy(&mut self, id: InstanceId) -> Result<()> {
+        let data = self.data(id)?;
+        if data.destroyed {
+            return Ok(());
+        }
+        if data.parent_locked {
+            return Err(TreeError::ParentLocked(id));
+        }
+        self.set_parent(id, None)?;
+        let mut doomed = self.descendants(id)?;
+        doomed.insert(0, id);
+        // Destroy leaves first so observers never see a destroyed parent with live children.
+        for victim in doomed.into_iter().rev() {
+            let children = std::mem::take(&mut self.data_mut(victim)?.children);
+            for child in children {
+                let child_data = self.data_mut(child)?;
+                child_data.parent = None;
+            }
+            let data = self.data_mut(victim)?;
+            data.parent = None;
+            data.parent_locked = true;
+            data.destroyed = true;
+            self.changes.push(Change::Destroyed(victim));
+        }
+        Ok(())
+    }
+
+    /// Frees every destroyed instance. Their ids stop resolving.
+    ///
+    /// Call this only when nothing (such as a script) can still hold one of
+    /// those ids, or accept that such holders will see [`TreeError::Dead`].
+    pub fn purge_destroyed(&mut self) -> usize {
+        let mut purged = 0;
+        for (index, slot) in self.slots.iter_mut().enumerate() {
+            if slot.data.as_ref().is_some_and(|d| d.destroyed) {
+                slot.data = None;
+                slot.generation = slot.generation.wrapping_add(1);
+                self.free.push(index as u32);
+                purged += 1;
+            }
+        }
+        purged
+    }
+
+    /// Reads a property.
+    pub fn get(&self, id: InstanceId, property: Property) -> Result<PropertyValue> {
+        let data = self.data(id)?;
+        if !data.class.has_property(property) {
+            return Err(TreeError::NoSuchProperty { class: data.class, property });
+        }
+        Ok(match property {
+            Property::Name => PropertyValue::String(data.name.clone()),
+            Property::Position => PropertyValue::Vec3(data.position),
+            Property::Size => PropertyValue::Vec3(data.size),
+            Property::Color => PropertyValue::Color3(data.color),
+            Property::Anchored => PropertyValue::Bool(data.anchored),
+            Property::Transparency => PropertyValue::Number(data.transparency),
+            Property::Source => PropertyValue::String(data.source.clone()),
+        })
+    }
+
+    /// Writes a property, recording a change only if the value differs.
+    pub fn set(&mut self, id: InstanceId, property: Property, value: PropertyValue) -> Result<()> {
+        let data = self.data_mut(id)?;
+        if !data.class.has_property(property) {
+            return Err(TreeError::NoSuchProperty { class: data.class, property });
+        }
+        let changed = match (property, value) {
+            (Property::Name, PropertyValue::String(v)) => replace(&mut data.name, v),
+            (Property::Source, PropertyValue::String(v)) => replace(&mut data.source, v),
+            (Property::Position, PropertyValue::Vec3(v)) => replace(&mut data.position, v),
+            (Property::Size, PropertyValue::Vec3(v)) => replace(&mut data.size, v),
+            (Property::Color, PropertyValue::Color3(v)) => replace(&mut data.color, v),
+            (Property::Anchored, PropertyValue::Bool(v)) => replace(&mut data.anchored, v),
+            (Property::Transparency, PropertyValue::Number(v)) => {
+                replace(&mut data.transparency, v.clamp(0.0, 1.0))
+            }
+            (property, value) => {
+                return Err(TreeError::WrongType {
+                    property,
+                    expected: property.expected_kind(),
+                    got: value.kind_name(),
+                });
+            }
+        };
+        if changed {
+            self.changes.push(Change::PropertyChanged { id, property });
+        }
+        Ok(())
+    }
+
+    /// Convenience for renaming.
+    pub fn set_name(&mut self, id: InstanceId, name: impl Into<String>) -> Result<()> {
+        self.set(id, Property::Name, PropertyValue::String(name.into()))
+    }
+
+    /// Takes every change recorded since the last call.
+    pub fn drain_changes(&mut self) -> Vec<Change> {
+        std::mem::take(&mut self.changes)
+    }
+
+    /// Number of live slots (destroyed but unpurged instances included).
+    pub fn len(&self) -> usize {
+        self.slots.iter().filter(|s| s.data.is_some()).count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+fn replace<T: PartialEq>(slot: &mut T, value: T) -> bool {
+    if *slot == value {
+        false
+    } else {
+        *slot = value;
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn part(tree: &mut InstanceTree, name: &str) -> InstanceId {
+        tree.create(ClassKind::Part, name).unwrap()
+    }
+
+    #[test]
+    fn new_tree_has_locked_root_and_workspace() {
+        let mut tree = InstanceTree::new();
+        let (root, ws) = (tree.root(), tree.workspace());
+        assert_eq!(tree.class(root).unwrap(), ClassKind::DataModel);
+        assert_eq!(tree.parent(ws).unwrap(), Some(root));
+        assert_eq!(tree.children(root).unwrap(), &[ws]);
+        assert_eq!(tree.set_parent(ws, None), Err(TreeError::ParentLocked(ws)));
+        assert_eq!(tree.destroy(root), Err(TreeError::ParentLocked(root)));
+        assert!(tree.drain_changes().is_empty());
+    }
+
+    #[test]
+    fn singletons_are_not_creatable() {
+        let mut tree = InstanceTree::new();
+        assert_eq!(
+            tree.create(ClassKind::Workspace, "w"),
+            Err(TreeError::NotCreatable(ClassKind::Workspace))
+        );
+    }
+
+    #[test]
+    fn parenting_and_lookup() {
+        let mut tree = InstanceTree::new();
+        let ws = tree.workspace();
+        let folder = tree.create(ClassKind::Folder, "Stuff").unwrap();
+        let a = part(&mut tree, "A");
+        let b = part(&mut tree, "B");
+        tree.set_parent(folder, Some(ws)).unwrap();
+        tree.set_parent(a, Some(folder)).unwrap();
+        tree.set_parent(b, Some(folder)).unwrap();
+
+        assert_eq!(tree.children(folder).unwrap(), &[a, b]);
+        assert_eq!(tree.find_first_child(folder, "B").unwrap(), Some(b));
+        assert_eq!(tree.find_first_child(folder, "C").unwrap(), None);
+        assert_eq!(tree.find_first_child_of_class(ws, ClassKind::Folder).unwrap(), Some(folder));
+        assert_eq!(tree.descendants(ws).unwrap(), vec![folder, a, b]);
+        assert!(tree.is_descendant_of(a, ws).unwrap());
+        assert!(!tree.is_descendant_of(ws, a).unwrap());
+
+        // Moving keeps child lists consistent.
+        tree.set_parent(a, Some(ws)).unwrap();
+        assert_eq!(tree.children(folder).unwrap(), &[b]);
+        assert_eq!(tree.children(ws).unwrap(), &[folder, a]);
+    }
+
+    #[test]
+    fn cycles_are_rejected() {
+        let mut tree = InstanceTree::new();
+        let outer = tree.create(ClassKind::Folder, "Outer").unwrap();
+        let inner = tree.create(ClassKind::Folder, "Inner").unwrap();
+        tree.set_parent(inner, Some(outer)).unwrap();
+        assert_eq!(
+            tree.set_parent(outer, Some(inner)),
+            Err(TreeError::WouldCycle { child: outer, parent: inner })
+        );
+        assert_eq!(
+            tree.set_parent(outer, Some(outer)),
+            Err(TreeError::WouldCycle { child: outer, parent: outer })
+        );
+    }
+
+    #[test]
+    fn destroy_detaches_locks_and_keeps_data_readable() {
+        let mut tree = InstanceTree::new();
+        let ws = tree.workspace();
+        let model = tree.create(ClassKind::Model, "Car").unwrap();
+        let wheel = part(&mut tree, "Wheel");
+        tree.set_parent(model, Some(ws)).unwrap();
+        tree.set_parent(wheel, Some(model)).unwrap();
+        tree.drain_changes();
+
+        tree.destroy(model).unwrap();
+        assert!(tree.children(ws).unwrap().is_empty());
+        assert_eq!(tree.parent(wheel).unwrap(), None);
+        assert!(tree.is_destroyed(wheel).unwrap());
+        assert_eq!(tree.name(wheel).unwrap(), "Wheel");
+        assert_eq!(tree.set_parent(wheel, Some(ws)), Err(TreeError::ParentLocked(wheel)));
+
+        let changes = tree.drain_changes();
+        assert!(changes.contains(&Change::Destroyed(model)));
+        assert!(changes.contains(&Change::Destroyed(wheel)));
+        let wheel_pos = changes.iter().position(|c| *c == Change::Destroyed(wheel)).unwrap();
+        let model_pos = changes.iter().position(|c| *c == Change::Destroyed(model)).unwrap();
+        assert!(wheel_pos < model_pos, "children are destroyed before parents");
+
+        // Destroying twice is harmless.
+        tree.destroy(model).unwrap();
+    }
+
+    #[test]
+    fn purged_ids_never_resolve_again() {
+        let mut tree = InstanceTree::new();
+        let old = part(&mut tree, "Old");
+        tree.destroy(old).unwrap();
+        assert_eq!(tree.purge_destroyed(), 1);
+        assert_eq!(tree.name(old), Err(TreeError::Dead(old)));
+
+        let new = part(&mut tree, "New");
+        assert_ne!(old, new, "the reused slot gets a new generation");
+        assert_eq!(tree.name(old), Err(TreeError::Dead(old)));
+        assert_eq!(tree.name(new).unwrap(), "New");
+    }
+
+    #[test]
+    fn properties_are_typed_and_class_checked() {
+        let mut tree = InstanceTree::new();
+        let p = part(&mut tree, "P");
+        let folder = tree.create(ClassKind::Folder, "F").unwrap();
+        tree.drain_changes();
+
+        tree.set(p, Property::Position, PropertyValue::Vec3(Vec3::new(1.0, 2.0, 3.0))).unwrap();
+        assert_eq!(tree.get(p, Property::Position).unwrap(), PropertyValue::Vec3(Vec3::new(1.0, 2.0, 3.0)));
+        assert_eq!(
+            tree.set(p, Property::Position, PropertyValue::Bool(true)),
+            Err(TreeError::WrongType { property: Property::Position, expected: "Vec3", got: "bool" })
+        );
+        assert_eq!(
+            tree.get(folder, Property::Position),
+            Err(TreeError::NoSuchProperty { class: ClassKind::Folder, property: Property::Position })
+        );
+
+        // Setting the same value again records nothing.
+        tree.set(p, Property::Position, PropertyValue::Vec3(Vec3::new(1.0, 2.0, 3.0))).unwrap();
+        assert_eq!(
+            tree.drain_changes(),
+            vec![Change::PropertyChanged { id: p, property: Property::Position }]
+        );
+    }
+
+    #[test]
+    fn class_hierarchy() {
+        assert!(ClassKind::Workspace.is_a(ClassKind::Model));
+        assert!(ClassKind::Part.is_a(ClassKind::Part));
+        assert!(!ClassKind::Part.is_a(ClassKind::Model));
+    }
+}

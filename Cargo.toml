@@ -1,0 +1,31 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/llamasjc/libroxel"
+authors = ["Libroxel contributors"]
+
+[workspace.dependencies]
+libroxel-instance = { path = "crates/libroxel-instance", version = "0.0.1" }
+libroxel-script = { path = "crates/libroxel-script", version = "0.0.1" }
+thiserror = "2"
+mlua = { version = "0.12", features = ["luau", "vendored"] }
+bevy = { version = "0.20", default-features = false, features = ["3d"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# Bevy is slow in debug builds; optimize dependencies but keep our own crates fast to compile.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
