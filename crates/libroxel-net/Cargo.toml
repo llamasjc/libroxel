@@ -1,0 +1,22 @@
+[package]
+name = "libroxel-net"
+description = "Player identity and join codes for Libroxel, carrying games over iroh peer-to-peer connections"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+iroh = "1.4"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }
+serde_json.workspace = true
+data-encoding = "2"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+libroxel-engine.workspace = true
+libroxel-instance.workspace = true

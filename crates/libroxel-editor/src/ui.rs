@@ -15,7 +15,7 @@ use libroxel_instance::{
 };
 use libroxel_script::names;
 
-use crate::{Dialog, Editor, Tool, games_dir, gui, templates, viewport};
+use crate::{Dialog, Editor, Tool, Tunnel, games_dir, gui, templates, viewport};
 
 /// Things the UI asks for; applied after drawing so nothing is borrowed twice.
 enum Action {
@@ -263,6 +263,10 @@ pub fn editor_ui(
     let tree_rc = engine.tree.clone();
     let playing = engine.is_playing();
     let mut actions: Vec<Action> = Vec::new();
+    // A game that has ended no longer needs its internet connection.
+    if engine.session.is_none() {
+        editor.tunnel = None;
+    }
 
     shortcuts(&ctx, editor, playing, &mut actions);
 
@@ -820,14 +824,37 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
             }
         }
         if let Some(session) = session {
+            let red = Color32::from_rgb(255, 120, 110);
             if let Some(address) = session.host_address() {
                 let joined = session.joined_count();
                 let who = if joined == 1 { "1 joined".to_owned() } else { format!("{joined} joined") };
                 ui.label(format!("🌐 Hosting on port {} · {who}", address.port()))
-                    .on_hover_text("Others join with this computer's address and this port");
+                    .on_hover_text("Others on your network join with this computer's address and this port");
+                if let Some(Tunnel::Host(tunnel)) = &editor.tunnel {
+                    if let Some(code) = tunnel.code() {
+                        let copy = ui
+                            .button("📋 Copy join code")
+                            .on_hover_text(format!("Friends anywhere paste this into Join:\n{code}"));
+                        if copy.clicked() {
+                            ui.ctx().copy_text(code);
+                        }
+                    } else if let Some(error) = tunnel.error() {
+                        ui.colored_label(red, "No join code").on_hover_text(error);
+                    } else {
+                        ui.label("⏳ Getting a join code…");
+                    }
+                }
             } else if session.is_joined() {
-                if session.disconnected() {
-                    ui.colored_label(Color32::from_rgb(255, 120, 110), "🔗 Disconnected");
+                let tunnel = match &editor.tunnel {
+                    Some(Tunnel::Join(tunnel)) => Some(tunnel),
+                    _ => None,
+                };
+                if let Some(error) = tunnel.and_then(|t| t.error()) {
+                    ui.colored_label(red, "🔗 Could not reach the host").on_hover_text(error);
+                } else if session.disconnected() {
+                    ui.colored_label(red, "🔗 Disconnected");
+                } else if tunnel.is_some_and(|t| !t.connected()) {
+                    ui.label("⏳ Connecting…");
                 } else {
                     ui.label("🔗 Joined");
                 }
@@ -1725,14 +1752,18 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
             ctx,
             |ui| {
                 egui::Grid::new("join").num_columns(2).show(ui, |ui| {
-                    ui.label("Address");
-                    ui.add(egui::TextEdit::singleline(address).hint_text("192.168.1.20 or host:port"));
+                    ui.label("Join code or address");
+                    ui.add(egui::TextEdit::singleline(address).hint_text("lrx1… or 192.168.1.20"));
                     ui.end_row();
                     ui.label("Your name");
                     ui.add(egui::TextEdit::singleline(name).char_limit(20));
                     ui.end_row();
                 });
-                ui.label(format!("Without a port, {} is used.", libroxel_engine::net::DEFAULT_PORT));
+                ui.label(format!(
+                    "Paste the join code the host copied to play from anywhere, or type an address on \
+                     your network (without a port, {} is used).",
+                    libroxel_engine::net::DEFAULT_PORT
+                ));
                 ui.horizontal(|ui| {
                     if ui.button("Join").clicked() {
                         actions.push(Action::Join {
@@ -2071,6 +2102,23 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     ),
                     "🌐 Hosting".to_owned(),
                 ),
+                Action::Join { address, name } if libroxel_net::is_join_code(address) => {
+                    let name = if name.is_empty() { "Player" } else { name.as_str() };
+                    let tunnel = crate::identity().and_then(|me| {
+                        libroxel_net::JoinTunnel::start(&me, libroxel_net::Network::Internet, address)
+                    });
+                    match tunnel {
+                        Ok(tunnel) => {
+                            let local = tunnel.local_addr().to_string();
+                            editor.tunnel = Some(Tunnel::Join(tunnel));
+                            (
+                                PlaySession::join(engine.tree.clone(), &local, name),
+                                "🔗 Joining with a code".to_owned(),
+                            )
+                        }
+                        Err(e) => (Err(e), String::new()),
+                    }
+                }
                 Action::Join { address, name } => {
                     let name = if name.is_empty() { "Player" } else { name.as_str() };
                     // The session says where it is joining.
@@ -2089,6 +2137,24 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     let lines = session.take_log();
                     if let Some(address) = session.host_address() {
                         log(engine, LogLevel::Info, format!("{what} on port {}", address.port()));
+                        let tunnel = crate::identity().and_then(|me| {
+                            libroxel_net::HostTunnel::start(
+                                &me,
+                                libroxel_net::Network::Internet,
+                                address.port(),
+                            )
+                        });
+                        match tunnel {
+                            Ok(tunnel) => {
+                                editor.tunnel = Some(Tunnel::Host(tunnel));
+                                log(
+                                    engine,
+                                    LogLevel::Info,
+                                    "Getting a join code so friends anywhere can join…",
+                                );
+                            }
+                            Err(e) => log(engine, LogLevel::Warn, format!("Only your network can join: {e}")),
+                        }
                     } else if !what.is_empty() {
                         log(engine, LogLevel::Info, what);
                     }
@@ -2097,6 +2163,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                 }
                 Err(err) => {
                     log(engine, LogLevel::Error, err);
+                    editor.tunnel = None;
                     if let Some(snapshot) = editor.edit_snapshot.take() {
                         *engine.tree.borrow_mut() = snapshot;
                     }

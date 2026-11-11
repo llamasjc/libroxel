@@ -113,15 +113,21 @@ The first build compiles Bevy and takes a while. After that it is quick.
   press Play. **File → Clear saved data** forgets it.
 - **Output** (bottom) shows `print`, `warn` and script errors. While playing
   you can type Luau into its command bar and press Enter.
-- **Playing together:** **🌐 Host** plays the game and lets other computers
-  join on port 7420 (open it in your firewall to play across a network).
-  On another computer, **🔗 Join** asks for the host's address (and a port,
-  if not 7420) and a name. The host runs every `Script` and all the physics;
-  each joined computer runs its own player's `LocalScript`s, moves its own
-  character straight away (telling the host where it went), and shows the
-  rest of the world as the host sends it. The toolbar shows how many have joined. To host
-  without a window, run
-  `cargo run --release -p libroxel-engine --example server -- mygame.lrx`.
+- **Playing together:** **🌐 Host** plays the game and lets others join.
+  Once the toolbar shows **📋 Copy join code**, click it and send the code
+  to friends: they paste it into **🔗 Join** with a name and play from
+  anywhere, with no port forwarding. The code connects the two computers
+  directly over [iroh](https://www.iroh.computer), going through a relay
+  only when home routers block a direct path, and is encrypted either way.
+  On your own network, Join also takes the host's address (and a port, if
+  not 7420). The host runs every `Script` and all the physics; each joined
+  computer runs its own player's `LocalScript`s, moves its own character
+  straight away (telling the host where it went), and shows the rest of the
+  world as the host sends it. The toolbar shows how many have joined. To
+  host without a window, run
+  `cargo run --release -p libroxel-net --example server -- mygame.lrx`,
+  which prints a join code. Your player identity (a key made on first use)
+  lives in `~/.config/libroxel/identity.key`.
 - **Undo/redo** with Ctrl+Z and Ctrl+Y. **Save** with Ctrl+S. Games are
   saved as `.lrx` files in `~/Projects/libroxel-games/` by default.
 
@@ -130,6 +136,7 @@ The first build compiles Bevy and takes a while. After that it is quick.
 | Crate | What it is |
 | --- | --- |
 | [`libroxel-instance`](crates/libroxel-instance) | The instance tree: classes, typed properties, parenting, destroy, a change journal, and the `.lrx` file format. No engine dependencies. |
+| [`libroxel-net`](crates/libroxel-net) | Player identity (a keypair) and join codes. Carries a hosted game between computers over iroh, peer to peer with a relay fallback. |
 | [`libroxel-script`](crates/libroxel-script) | The sandboxed Luau runtime (via `mlua`) with a thread scheduler. Every name scripts can see lives in [`names.rs`](crates/libroxel-script/src/names.rs). |
 | [`libroxel-engine`](crates/libroxel-engine) | Play sessions: box physics, the player character, touch events, respawning, and the Bevy integration (rendering and cameras). |
 | [`libroxel-editor`](crates/libroxel-editor) | The editor. |

@@ -94,6 +94,16 @@ pub struct Editor {
     /// still needs to take the keyboard.
     pub typing: Option<InstanceId>,
     pub focus_typing: bool,
+    /// While hosting or joining by code: the connection over the internet.
+    pub tunnel: Option<Tunnel>,
+}
+
+/// A game carried over the internet with a join code.
+pub enum Tunnel {
+    /// This computer hosts and hands out a join code.
+    Host(libroxel_net::HostTunnel),
+    /// This computer joined someone else's game with their code.
+    Join(libroxel_net::JoinTunnel),
 }
 
 impl Default for Editor {
@@ -123,6 +133,7 @@ impl Default for Editor {
             new_tag: String::new(),
             typing: None,
             focus_typing: false,
+            tunnel: None,
         }
     }
 }
@@ -133,6 +144,18 @@ pub fn games_dir() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Projects/libroxel-games")
+}
+
+/// This player's identity, made the first time it is needed and kept in
+/// the user's settings folder.
+pub fn identity() -> Result<libroxel_net::Identity, String> {
+    let dir = std::env::var_os("APPDATA")
+        .map(|d| PathBuf::from(d).join("Libroxel"))
+        .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(|d| PathBuf::from(d).join("libroxel")))
+        .or_else(|| std::env::var_os("HOME").map(|d| PathBuf::from(d).join(".config/libroxel")))
+        .unwrap_or_else(|| PathBuf::from(".libroxel"));
+    let path = dir.join("identity.key");
+    libroxel_net::Identity::load_or_create(&path).map_err(|e| format!("Could not load your identity: {e}"))
 }
 
 fn main() {
