@@ -48,6 +48,8 @@ enum Action {
     ClearData,
     /// While playing: hold or put away the tool in a hotbar slot.
     ToggleTool(usize),
+    /// A model with a body, a head and a humanoid that scripts can walk around.
+    InsertNpc,
     /// While playing: start typing into a text box, or stop (saying whether Enter was pressed).
     FocusTextBox(Option<InstanceId>, bool),
     Reparent(InstanceId, InstanceId),
@@ -84,6 +86,7 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::TextBox,
     ClassKind::UICorner,
     ClassKind::UIListLayout,
+    ClassKind::Team,
 ];
 
 const SHAPES: &[(PartShape, &str)] = &[
@@ -131,6 +134,7 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::UICorner => "◜",
         ClassKind::UIListLayout => "☰",
         ClassKind::Explosion => "💥",
+        ClassKind::Teams | ClassKind::Team => "🚩",
     }
 }
 
@@ -433,6 +437,34 @@ pub fn editor_ui(
     Ok(())
 }
 
+/// A walking dummy standing on `ground`: a body part (its root), a head on
+/// top, a humanoid, and a script that walks it back and forth.
+fn new_npc(tree: &mut InstanceTree, ground: libroxel_instance::Vec3) -> Option<InstanceId> {
+    use libroxel_instance::{Color3, Vec3 as V};
+    let ws = tree.workspace();
+    let model = tree.create(ClassKind::Model, "Dummy").ok()?;
+    let root = tree.create(ClassKind::Part, names::character::ROOT_PART).ok()?;
+    let _ = tree.set(root, Property::Size, PropertyValue::Vec3(V::new(2.0, 4.0, 1.5)));
+    let _ = tree.set(root, Property::Position, PropertyValue::Vec3(ground + V::new(0.0, 2.1, 0.0)));
+    let _ = tree.set(root, Property::Color, PropertyValue::Color3(Color3::from_rgb8(120, 160, 90)));
+    tree.set_parent(root, Some(model)).ok()?;
+    let head = tree.create(ClassKind::Part, "Head").ok()?;
+    let _ = tree.set(head, Property::Size, PropertyValue::Vec3(V::new(1.2, 1.2, 1.2)));
+    let _ = tree.set(head, Property::Position, PropertyValue::Vec3(ground + V::new(0.0, 4.7, 0.0)));
+    let _ = tree.set(head, Property::Color, PropertyValue::Color3(Color3::from_rgb8(245, 205, 48)));
+    let _ = tree.set(head, Property::Anchored, PropertyValue::Bool(true));
+    let _ = tree.set(head, Property::CanCollide, PropertyValue::Bool(false));
+    tree.set_parent(head, Some(model)).ok()?;
+    let humanoid = tree.create(ClassKind::Humanoid, names::character::HUMANOID).ok()?;
+    tree.set_parent(humanoid, Some(model)).ok()?;
+    let script = tree.create(ClassKind::Script, "Walk").ok()?;
+    let source = "-- Walks back and forth between two points.\nlocal model = script.Parent\nlocal humanoid = model.Humanoid\nlocal start = model.HumanoidRootPart.Position\n\nwhile true do\n\thumanoid:MoveTo(start + Vector3.new(10, 0, 0))\n\thumanoid.MoveToFinished:Wait()\n\thumanoid:MoveTo(start)\n\thumanoid.MoveToFinished:Wait()\nend\n";
+    let _ = tree.set(script, Property::Source, PropertyValue::String(source.into()));
+    tree.set_parent(script, Some(model)).ok()?;
+    tree.set_parent(model, Some(ws)).ok()?;
+    Some(model)
+}
+
 /// While playing, the text field for the text box being typed into, drawn
 /// over the box. Typing writes straight into the box's Text.
 fn text_field(
@@ -597,6 +629,10 @@ fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
                 if ui.button(format!("{} part", label)).clicked() {
                     actions.push(Action::InsertShape(shape));
                 }
+            }
+            ui.separator();
+            if ui.button("👤 Character (NPC)").clicked() {
+                actions.push(Action::InsertNpc);
             }
         });
         ui.menu_button("View", |ui| {
@@ -896,6 +932,17 @@ fn properties(
             "The player's view. Scripts reach it as `workspace.CurrentCamera`; set CameraType to Scriptable \
              and move its CFrame to take over the view.",
         ),
+        ClassKind::Team => Some(
+            "Players joining go on the AutoAssignable team with the fewest players. A SpawnLocation with \
+             Neutral off and the same TeamColor is where that team spawns. Scripts can set `player.Team`.",
+        ),
+        ClassKind::Teams => {
+            Some("Teams in here split the players up; each one has a colour (Insert > Team).")
+        }
+        ClassKind::Humanoid => Some(
+            "A model with a Humanoid and an unanchored part called HumanoidRootPart walks: \
+             `humanoid:MoveTo(point)` sends it, `MoveToFinished` says when it got there, and setting `Jump` jumps.",
+        ),
         ClassKind::Explosion => Some(
             "Goes off as soon as it is in the workspace while playing: parts within BlastRadius are hit, \
              characters die and loose parts are thrown.",
@@ -1114,7 +1161,9 @@ fn property_editor(
 /// While playing: everyone's `leaderstats` values in the top-right corner.
 fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree) {
     let Some(players) = tree.service(ClassKind::Players) else { return };
-    let rows: Vec<(String, Vec<(String, String)>)> = tree
+    // Each player: their name, their stats (name and value), and their team.
+    type Row = (String, Vec<(String, String)>, Option<InstanceId>);
+    let mut rows: Vec<Row> = tree
         .children(players)
         .unwrap_or_default()
         .iter()
@@ -1150,14 +1199,26 @@ fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree) {
                         .collect()
                 })
                 .unwrap_or_default();
-            (tree.name(player).unwrap_or("?").to_owned(), stats)
+            let team = tree
+                .get_ref(player, Property::Team)
+                .filter(|_| tree.get_bool(player, Property::Neutral) == Some(false));
+            (tree.name(player).unwrap_or("?").to_owned(), stats, team)
         })
         .collect();
+    // Players on teams are listed under their team, in the order of the Teams service.
+    let team_order = |t: Option<InstanceId>| {
+        t.and_then(|t| {
+            let teams = tree.service(ClassKind::Teams)?;
+            tree.children(teams).ok()?.iter().position(|c| *c == t)
+        })
+        .unwrap_or(usize::MAX)
+    };
+    rows.sort_by_key(|(_, _, team)| team_order(*team));
     if rows.is_empty() {
         return;
     }
     let columns: Vec<String> =
-        rows.iter().flat_map(|(_, s)| s.iter().map(|(n, _)| n.clone())).fold(Vec::new(), |mut acc, n| {
+        rows.iter().flat_map(|(_, s, _)| s.iter().map(|(n, _)| n.clone())).fold(Vec::new(), |mut acc, n| {
             if !acc.contains(&n) {
                 acc.push(n);
             }
@@ -1175,7 +1236,26 @@ fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree) {
                         ui.label(RichText::new(c).strong().color(Color32::WHITE));
                     }
                     ui.end_row();
-                    for (name, stats) in &rows {
+                    let mut last_team = None;
+                    for (name, stats, team) in &rows {
+                        if *team != last_team {
+                            last_team = *team;
+                            let (label, color) = match team {
+                                Some(t) => {
+                                    let c = tree
+                                        .get_color(*t, Property::TeamColor)
+                                        .unwrap_or(libroxel_instance::Color3::WHITE);
+                                    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                                    (
+                                        tree.name(*t).unwrap_or("?").to_owned(),
+                                        Color32::from_rgb(byte(c.r), byte(c.g), byte(c.b)),
+                                    )
+                                }
+                                None => ("Neutral".to_owned(), Color32::from_gray(200)),
+                            };
+                            ui.label(RichText::new(label).strong().color(color));
+                            ui.end_row();
+                        }
                         ui.label(RichText::new(name).color(Color32::WHITE));
                         for c in &columns {
                             let v =
@@ -1586,6 +1666,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                 ClassKind::ScreenGui => tree.service(ClassKind::StarterGui).unwrap_or(parent),
                 ClassKind::RemoteEvent => tree.service(ClassKind::ReplicatedStorage).unwrap_or(parent),
                 ClassKind::Tool => tree.service(ClassKind::StarterPack).unwrap_or(parent),
+                ClassKind::Team => tree.service(ClassKind::Teams).unwrap_or(parent),
                 // Corners and layouts go inside the selected GUI object.
                 ClassKind::UICorner | ClassKind::UIListLayout => editor
                     .selection
@@ -1625,6 +1706,25 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                 if is_code(class) {
                     editor.open_script = Some(id);
                 }
+            }
+        }
+        Action::InsertNpc => {
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            if !playing {
+                editor.history.begin_edit(&tree, now);
+                editor.dirty = true;
+            }
+            let near = editor
+                .selection
+                .filter(|s| tree.class(*s).is_ok_and(|c| c.is_physical()))
+                .and_then(|n| {
+                    Some((tree.get_vec3(n, Property::Position)?, tree.get_vec3(n, Property::Size)?))
+                })
+                .map(|(p, s)| p + libroxel_instance::Vec3::new(0.0, s.y / 2.0, 0.0))
+                .unwrap_or(libroxel_instance::Vec3::ZERO);
+            if let Some(model) = new_npc(&mut tree, near) {
+                editor.selection = Some(model);
             }
         }
         Action::InsertShape(shape) => {

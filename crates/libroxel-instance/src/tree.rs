@@ -145,6 +145,7 @@ impl InstanceTree {
                 ClassKind::Lighting => "Lighting",
                 ClassKind::ServerScriptService => "ServerScriptService",
                 ClassKind::StarterPack => "StarterPack",
+                ClassKind::Teams => "Teams",
                 _ => unreachable!("every service has a name"),
             };
             let id = tree.alloc(InstanceData::new(class, name.into()));

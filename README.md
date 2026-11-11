@@ -48,11 +48,13 @@ The first build compiles Bevy and takes a while. After that it is quick.
   and a builder tool (press 1, then click) places bricks. There's also a
   launch pad, street lamps that light up at night, TNT that blows up a stack
   of crates, a chat box (press /) that floats what you say over your head,
-  and an overhead camera (press C).
+  an overhead camera (press C), and a zombie in the quarry that chases you.
+  Everyone starts on the Runners team and joins the Winners at the finish.
   Press **▶ Play** (or F5) to try it.
 - **Explorer** (left) shows the instance tree. Click to select, double-click
   a script to edit it, drag one item onto another to move it inside, and
-  right-click for Insert, Rename, Duplicate and Delete.
+  right-click for Insert, Rename, Duplicate and Delete. **Insert → Character
+  (NPC)** drops in a dummy with a script that walks it back and forth.
 - **Properties** (right) edits the selection: name, position, orientation,
   size, shape, colour, material, anchored, can-collide, transparency, and so on.
 - **Parts** come in four shapes (block, ball, cylinder, wedge) and eight
@@ -226,8 +228,22 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `HumanoidRootPart` and a `Humanoid` (`Health`, `MaxHealth`, `WalkSpeed`,
   `JumpPower`, `TakeDamage(amount)` and the `Died` event). When health
   reaches 0 the character dies and respawns after two seconds.
-- **Services:** `RunService.Heartbeat`, fired once per frame with the frame
-  time. Scripts start when they are in Workspace or ServerScriptService.
+- **NPCs:** any `Model` in the workspace with a `Humanoid` and an unanchored
+  `HumanoidRootPart` is a character. `Humanoid:MoveTo(position)` walks it
+  there and fires `MoveToFinished(reached)` (it gives up after 8 seconds),
+  setting `Humanoid.Jump = true` makes it jump, and its other parts follow
+  the root. `MoveTo` works on the player's character too, until they steer.
+- **Teams:** `Team`s go in the `Teams` service and have `TeamColor` and
+  `AutoAssignable`. New players join the smallest auto-assignable team;
+  `player.Team` and `player.Neutral` change it. A `SpawnLocation` with
+  `Neutral = false` only spawns players whose team colour matches its
+  `TeamColor`. `Teams:GetTeams()` and `team:GetPlayers()` list them, and the
+  leaderboard groups players by team.
+- **Random numbers:** `Random.new(seed?)` with `NextNumber(min?, max?)` and
+  `NextInteger(min, max)`.
+- **Services:** `RunService.Stepped(time, dt)`, `Heartbeat(dt)` and
+  `RenderStepped(dt)` fire each frame in that order; `IsClient`, `IsServer`
+  and `IsStudio` all return true while play testing. Scripts start when they are in Workspace or ServerScriptService.
 
 A kill brick, for example:
 

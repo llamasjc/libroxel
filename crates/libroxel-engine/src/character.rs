@@ -30,9 +30,30 @@ pub struct Character {
 
 /// Where a new character should appear: on top of the first spawn location.
 pub fn spawn_point(tree: &InstanceTree) -> Vec3 {
-    tree.descendants_of_class(tree.workspace(), ClassKind::SpawnLocation)
-        .into_iter()
-        .find_map(|id| {
+    spawn_point_for(tree, None)
+}
+
+fn same_color(a: Color3, b: Color3) -> bool {
+    (a.r - b.r).abs() < 0.01 && (a.g - b.g).abs() < 0.01 && (a.b - b.b).abs() < 0.01
+}
+
+/// Where a character on a team of colour `team` should appear: the first
+/// spawn location for that team, else the first neutral one, else any.
+pub fn spawn_point_for(tree: &InstanceTree, team: Option<Color3>) -> Vec3 {
+    let spawns = tree.descendants_of_class(tree.workspace(), ClassKind::SpawnLocation);
+    let neutral = |id: InstanceId| tree.get_bool(id, Property::Neutral) != Some(false);
+    let for_team = |id: InstanceId| {
+        !neutral(id)
+            && team.zip(tree.get_color(id, Property::TeamColor)).is_some_and(|(t, c)| same_color(t, c))
+    };
+    let chosen = spawns
+        .iter()
+        .copied()
+        .find(|s| for_team(*s))
+        .or_else(|| spawns.iter().copied().find(|s| neutral(*s)))
+        .or_else(|| spawns.first().copied());
+    chosen
+        .and_then(|id| {
             let pos = tree.get_vec3(id, Property::Position)?;
             let size = tree.get_vec3(id, Property::Size)?;
             Some(pos + Vec3::new(0.0, size.y / 2.0 + BODY_SIZE.y / 2.0 + 0.1, 0.0))
@@ -52,7 +73,12 @@ impl Character {
 
     /// Like [`spawn`](Self::spawn), with the model called `name` (usually the player's name).
     pub fn spawn_named(tree: &mut InstanceTree, name: &str) -> Character {
-        let at = spawn_point(tree);
+        Self::spawn_for_team(tree, name, None)
+    }
+
+    /// Like [`spawn_named`](Self::spawn_named), at a spawn for the team with colour `team`.
+    pub fn spawn_for_team(tree: &mut InstanceTree, name: &str, team: Option<Color3>) -> Character {
+        let at = spawn_point_for(tree, team);
         let ws = tree.workspace();
         let make = |tree: &mut InstanceTree, class, name: &str, parent| {
             let id = tree.create(class, name).expect("character classes are creatable");
@@ -97,16 +123,35 @@ impl Character {
 
     /// Turns input into velocity. Call before [`Physics::step`].
     pub fn drive(&self, tree: &InstanceTree, physics: &mut Physics, input: CharacterInput) {
-        let walk = tree.get_number(self.humanoid, Property::WalkSpeed).unwrap_or(16.0) as f32;
-        let jump = tree.get_number(self.humanoid, Property::JumpPower).unwrap_or(50.0) as f32;
+        drive(tree, physics, self.root, self.humanoid, input);
+    }
+
+    /// Keeps the head on the body. Call after [`Physics::step`].
+    pub fn follow(&self, tree: &mut InstanceTree) {
+        self.place_head(tree);
+    }
+}
+
+/// Moves any humanoid's root part: walking at its walk speed in the input's
+/// direction, and jumping when on the ground.
+pub fn drive(
+    tree: &InstanceTree,
+    physics: &mut Physics,
+    root: InstanceId,
+    humanoid: InstanceId,
+    input: CharacterInput,
+) {
+    {
+        let walk = tree.get_number(humanoid, Property::WalkSpeed).unwrap_or(16.0) as f32;
+        let jump = tree.get_number(humanoid, Property::JumpPower).unwrap_or(50.0) as f32;
         let mut dir = Vec3::new(input.move_dir.x, 0.0, input.move_dir.z);
         if dir.length() > 1.0 {
             dir = dir.normalize_or_zero();
         }
-        let mut v = physics.velocity(self.root);
+        let mut v = physics.velocity(root);
         let (want_x, want_z) = (dir.x * walk, dir.z * walk);
         let flung = (v.x * v.x + v.z * v.z).sqrt() > walk + 1.0;
-        if flung && !physics.is_grounded(self.root) {
+        if flung && !physics.is_grounded(root) {
             // Thrown by something (a launch pad, an explosion): keep the
             // momentum in the air, steering only a little.
             v.x += (want_x - v.x) * 0.03;
@@ -115,14 +160,9 @@ impl Character {
             v.x = want_x;
             v.z = want_z;
         }
-        if input.jump && physics.is_grounded(self.root) {
+        if input.jump && physics.is_grounded(root) {
             v.y = jump;
         }
-        physics.set_velocity(self.root, v);
-    }
-
-    /// Keeps the head on the body. Call after [`Physics::step`].
-    pub fn follow(&self, tree: &mut InstanceTree) {
-        self.place_head(tree);
+        physics.set_velocity(root, v);
     }
 }

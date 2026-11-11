@@ -239,6 +239,17 @@ impl ScriptRuntime {
         world::explosion_hit(&self.lua, explosion, part, distance)
     }
 
+    /// Takes the walks scripts asked humanoids for since the last call:
+    /// a point to walk to, or `None` to stop.
+    pub fn take_move_requests(&self) -> Vec<(InstanceId, Option<libroxel_instance::Vec3>)> {
+        world::take_move_requests(&self.lua)
+    }
+
+    /// Fires a humanoid's `MoveToFinished` with whether it got there.
+    pub fn move_finished(&self, humanoid: InstanceId, reached: bool) -> Vec<ScriptError> {
+        world::move_finished(&self.lua, humanoid, reached)
+    }
+
     /// The text box the player is typing into, if any.
     pub fn focused_text_box(&self) -> Option<InstanceId> {
         world::focused_text_box(&self.lua)

@@ -1,0 +1,210 @@
+//! Humanoids other than the player's character: any model in the workspace
+//! with a `Humanoid` and an unanchored `HumanoidRootPart` walks where
+//! scripts send it with `MoveTo`, jumps when its `Jump` is set, and carries
+//! the rest of its parts along with its root.
+
+use std::collections::{HashMap, HashSet};
+
+use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property, PropertyValue, Rotation, Vec3};
+use libroxel_script::names;
+
+use crate::character::{CharacterInput, drive};
+use crate::physics::Physics;
+
+/// How long a walk may take before it gives up, in seconds.
+pub const MOVE_TIMEOUT: f32 = 8.0;
+/// How close (across the ground) counts as there.
+const ARRIVED: f32 = 1.0;
+
+#[derive(Debug, Clone, Copy)]
+struct Walk {
+    target: Vec3,
+    elapsed: f32,
+}
+
+/// A walking model as it was before physics moved it.
+#[derive(Debug, Clone, Copy)]
+pub struct Pose {
+    humanoid: InstanceId,
+    model: InstanceId,
+    root: InstanceId,
+    pos: Vec3,
+    yaw: f32,
+    dir: Vec3,
+}
+
+/// Where every humanoid is walking to, and which have died.
+#[derive(Debug, Default)]
+pub struct Npcs {
+    walks: HashMap<InstanceId, Walk>,
+    dead: HashSet<InstanceId>,
+}
+
+/// The direction across the ground from `from` to `to`, and how far.
+fn toward(from: Vec3, to: Vec3) -> (Vec3, f32) {
+    let flat = Vec3::new(to.x - from.x, 0.0, to.z - from.z);
+    (flat.normalize_or_zero(), flat.length())
+}
+
+impl Npcs {
+    /// Starts (or with `None`, stops) a walk. Returns the humanoid if a walk
+    /// it was already on was cut short, so its finish event can fire.
+    pub fn request(&mut self, humanoid: InstanceId, target: Option<Vec3>) -> Option<InstanceId> {
+        let replaced = match target {
+            Some(target) => self.walks.insert(humanoid, Walk { target, elapsed: 0.0 }),
+            None => self.walks.remove(&humanoid),
+        };
+        replaced.map(|_| humanoid)
+    }
+
+    /// Whether `humanoid` is walking somewhere.
+    pub fn is_walking(&self, humanoid: InstanceId) -> bool {
+        self.walks.contains_key(&humanoid)
+    }
+
+    /// Input that walks `humanoid` (whose root is at `pos`) toward its target.
+    pub fn input_for(&self, humanoid: InstanceId, pos: Vec3) -> CharacterInput {
+        match self.walks.get(&humanoid) {
+            Some(walk) => CharacterInput { move_dir: toward(pos, walk.target).0, jump: false },
+            None => CharacterInput::default(),
+        }
+    }
+
+    /// Sets every model's walk going. `player` is the player's character
+    /// model, which the session drives itself. Returns where each one was,
+    /// for [`after_physics`](Self::after_physics).
+    pub fn before_physics(
+        &mut self,
+        tree: &mut InstanceTree,
+        physics: &mut Physics,
+        player: Option<InstanceId>,
+    ) -> Vec<Pose> {
+        let mut poses = Vec::new();
+        for humanoid in tree.descendants_of_class(tree.workspace(), ClassKind::Humanoid) {
+            let Some(model) = tree.parent(humanoid).ok().flatten() else { continue };
+            if Some(model) == player || tree.class(model) != Ok(ClassKind::Model) {
+                continue;
+            }
+            let Some(root) = tree.find_first_child(model, names::character::ROOT_PART).ok().flatten() else {
+                continue;
+            };
+            if !tree.class(root).is_ok_and(|c| c.is_physical())
+                || tree.get_bool(root, Property::Anchored) != Some(false)
+            {
+                continue;
+            }
+            let Some(pos) = tree.get_vec3(root, Property::Position) else { continue };
+            let yaw = tree.get_vec3(root, Property::Orientation).unwrap_or_default().y;
+            let alive = tree.get_number(humanoid, Property::Health).is_some_and(|h| h > 0.0);
+            let mut input = if alive { self.input_for(humanoid, pos) } else { CharacterInput::default() };
+            if alive && tree.get_bool(humanoid, Property::Jump) == Some(true) {
+                input.jump = true;
+                let _ = tree.set(humanoid, Property::Jump, PropertyValue::Bool(false));
+            }
+            drive(tree, physics, root, humanoid, input);
+            poses.push(Pose { humanoid, model, root, pos, yaw, dir: input.move_dir });
+        }
+        poses
+    }
+
+    /// Carries each model's other parts along with its root, turns it to
+    /// face where it walks, and ends walks that arrived or took too long.
+    /// Returns the walks that ended (with whether they arrived) and the
+    /// humanoids that just died.
+    pub fn after_physics(
+        &mut self,
+        tree: &mut InstanceTree,
+        poses: &[Pose],
+        dt: f32,
+    ) -> (Vec<(InstanceId, bool)>, Vec<InstanceId>) {
+        for pose in poses {
+            let Some(new_pos) = tree.get_vec3(pose.root, Property::Position) else { continue };
+            let new_yaw = if pose.dir.x != 0.0 || pose.dir.z != 0.0 {
+                (-pose.dir.x).atan2(-pose.dir.z).to_degrees()
+            } else {
+                pose.yaw
+            };
+            let turn = Rotation::about_y((new_yaw - pose.yaw).to_radians());
+            if new_yaw != pose.yaw {
+                let o = tree.get_vec3(pose.root, Property::Orientation).unwrap_or_default();
+                let _ = tree.set(
+                    pose.root,
+                    Property::Orientation,
+                    PropertyValue::Vec3(Vec3::new(o.x, new_yaw, o.z)),
+                );
+            }
+            for part in tree.descendants_of_class(pose.model, ClassKind::Part) {
+                // Tools are placed by the tool code, not carried.
+                if part == pose.root || in_tool(tree, part, pose.model) {
+                    continue;
+                }
+                let Some(p) = tree.get_vec3(part, Property::Position) else { continue };
+                let moved = new_pos + turn.apply(p - pose.pos);
+                let _ = tree.set(part, Property::Anchored, PropertyValue::Bool(true));
+                let _ = tree.set(part, Property::CanCollide, PropertyValue::Bool(false));
+                let _ = tree.set(part, Property::Position, PropertyValue::Vec3(moved));
+                if new_yaw != pose.yaw {
+                    let o = tree.get_vec3(part, Property::Orientation).unwrap_or_default();
+                    let turned = Vec3::new(o.x, o.y + new_yaw - pose.yaw, o.z);
+                    let _ = tree.set(part, Property::Orientation, PropertyValue::Vec3(turned));
+                }
+            }
+        }
+
+        let mut finished = Vec::new();
+        let mut died = Vec::new();
+        for pose in poses {
+            let dead = tree.get_number(pose.humanoid, Property::Health).is_none_or(|h| h <= 0.0);
+            if dead && self.dead.insert(pose.humanoid) {
+                died.push(pose.humanoid);
+                if self.walks.remove(&pose.humanoid).is_some() {
+                    finished.push((pose.humanoid, false));
+                }
+            }
+        }
+        finished
+            .extend(self.finish_walks(tree, dt, |h| poses.iter().find(|p| p.humanoid == h).map(|p| p.root)));
+        (finished, died)
+    }
+
+    /// Ends the walks of humanoids (whose roots `root_of` finds) that got
+    /// there or ran out of time. Walks whose humanoid is gone end too.
+    pub fn finish_walks(
+        &mut self,
+        tree: &InstanceTree,
+        dt: f32,
+        root_of: impl Fn(InstanceId) -> Option<InstanceId>,
+    ) -> Vec<(InstanceId, bool)> {
+        let mut done = Vec::new();
+        for (&humanoid, walk) in self.walks.iter_mut() {
+            let Some(root) = root_of(humanoid) else { continue };
+            let Some(pos) = tree.get_vec3(root, Property::Position) else { continue };
+            walk.elapsed += dt;
+            if toward(pos, walk.target).1 <= ARRIVED {
+                done.push((humanoid, true));
+            } else if walk.elapsed >= MOVE_TIMEOUT {
+                done.push((humanoid, false));
+            }
+        }
+        for (humanoid, _) in &done {
+            self.walks.remove(humanoid);
+        }
+        // Humanoids that were destroyed never finish.
+        self.walks.retain(|h, _| tree.exists(*h) && !tree.is_destroyed(*h).unwrap_or(true));
+        done
+    }
+}
+
+fn in_tool(tree: &InstanceTree, part: InstanceId, model: InstanceId) -> bool {
+    let mut current = tree.parent(part).ok().flatten();
+    while let Some(id) = current {
+        if id == model {
+            return false;
+        }
+        if tree.class(id) == Ok(ClassKind::Tool) {
+            return true;
+        }
+        current = tree.parent(id).ok().flatten();
+    }
+    false
+}

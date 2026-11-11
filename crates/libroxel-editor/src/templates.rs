@@ -177,6 +177,11 @@ pad.Touched:Connect(function(hit)
 	celebrated = true
 	print(hit.Parent.Name .. " finished the obby!")
 	notify:FireAllClients(hit.Parent.Name .. " finished the obby!")
+	-- Finishers move to the Winners team on the leaderboard.
+	local player = game:GetService("Players"):GetPlayerFromCharacter(hit.Parent)
+	if player then
+		player.Team = game:GetService("Teams").Winners
+	end
 
 	-- Rain down some confetti blocks.
 	for i = 1, 30 do
@@ -347,6 +352,70 @@ ReplicatedStorage:WaitForChild("Say").OnServerEvent:Connect(function(player, tex
 	Debris:AddItem(bubble, 5)
 	print(player.Name .. ": " .. text)
 end)
+"#;
+
+const ZOMBIE_SCRIPT: &str = r#"
+-- The quarry zombie chases players who come into the quarry and hurts them
+-- on touch. TNT knocks it down; a new one climbs out a few seconds later.
+local Players = game:GetService("Players")
+local template = workspace.Zombie:Clone()
+local SIGHT, DAMAGE = 20, 20
+
+local function inQuarry(position)
+	return position.Z > 8 and position.Z < 21 and math.abs(position.X) < 9
+end
+
+local function nearestPlayer(from)
+	local best, bestDistance = nil, SIGHT
+	for _, player in Players:GetPlayers() do
+		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		if root and inQuarry(root.Position) then
+			local distance = (root.Position - from).Magnitude
+			if distance < bestDistance then
+				best, bestDistance = root, distance
+			end
+		end
+	end
+	return best
+end
+
+local function run(zombie)
+	local humanoid = zombie.Humanoid
+	local root = zombie.HumanoidRootPart
+	local home = root.Position
+	humanoid.WalkSpeed = 10
+	local resting = false
+	root.Touched:Connect(function(hit)
+		local victim = hit.Parent and hit.Parent:FindFirstChild("Humanoid")
+		if victim and victim ~= humanoid and not resting and humanoid.Health > 0 then
+			resting = true
+			victim:TakeDamage(DAMAGE)
+			task.wait(1)
+			resting = false
+		end
+	end)
+	humanoid.Died:Connect(function()
+		print("The zombie is down!")
+		task.wait(5)
+		zombie:Destroy()
+		local fresh = template:Clone()
+		fresh.Parent = workspace
+		run(fresh)
+	end)
+	task.spawn(function()
+		while humanoid.Health > 0 and zombie.Parent do
+			local target = nearestPlayer(root.Position)
+			if target then
+				humanoid:MoveTo(target.Position)
+			elseif (root.Position - home).Magnitude > 2 then
+				humanoid:MoveTo(home)
+			end
+			task.wait(0.4)
+		end
+	end)
+end
+
+run(workspace.Zombie)
 "#;
 
 const HUD_SCRIPT: &str = r#"
@@ -630,7 +699,7 @@ pub fn sample_obby() -> InstanceTree {
     set(&mut tree, height, Property::Text, PropertyValue::String("Height: 0 studs".into()));
     let help = add(&mut tree, hud, ClassKind::Frame, "Help");
     set(&mut tree, help, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.0, 12.0, 0.5, 0.0)));
-    set(&mut tree, help, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 260.0, 0.0, 170.0)));
+    set(&mut tree, help, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 260.0, 0.0, 192.0)));
     set(&mut tree, help, Property::AnchorPoint, PropertyValue::Vec2(Vec2::new(0.0, 0.5)));
     set(&mut tree, help, Property::BackgroundColor, PropertyValue::Color3(dark));
     set(&mut tree, help, Property::BackgroundTransparency, PropertyValue::Number(0.3));
@@ -644,6 +713,7 @@ pub fn sample_obby() -> InstanceTree {
         "1: builder tool, click to build",
         "/: chat    C: overhead camera",
         "Green pad: jump!    Click the TNT",
+        "Look out for the quarry zombie",
         "Coins are saved",
     ]
     .iter()
@@ -769,6 +839,38 @@ pub fn sample_obby() -> InstanceTree {
     let tnt_corner = add(&mut tree, tnt_label, ClassKind::UICorner, "UICorner");
     set(&mut tree, tnt_corner, Property::CornerRadius, PropertyValue::UDim(UDim::new(0.5, 0.0)));
     script(&mut tree, tnt, "Blast", TNT_SCRIPT);
+
+    // A zombie that lives in the quarry.
+    let zombie = add(&mut tree, ws, ClassKind::Model, "Zombie");
+    let zombie_body =
+        block(&mut tree, zombie, "HumanoidRootPart", [-5.0, 2.1, 13.0], [2.0, 4.0, 1.5], [90, 140, 80]);
+    set(&mut tree, zombie_body, Property::Anchored, PropertyValue::Bool(false));
+    let zombie_head = block(&mut tree, zombie, "Head", [-5.0, 4.7, 13.0], [1.2, 1.2, 1.2], [140, 190, 120]);
+    set(&mut tree, zombie_head, Property::CanCollide, PropertyValue::Bool(false));
+    add(&mut tree, zombie, ClassKind::Humanoid, "Humanoid");
+    let zombie_tag = add(&mut tree, zombie_head, ClassKind::BillboardGui, "NameTag");
+    set(&mut tree, zombie_tag, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 120.0, 0.0, 26.0)));
+    set(&mut tree, zombie_tag, Property::StudsOffset, PropertyValue::Vec3(Vec3::new(0.0, 1.6, 0.0)));
+    let zombie_label = add(&mut tree, zombie_tag, ClassKind::TextLabel, "Label");
+    set(&mut tree, zombie_label, Property::GuiSize, PropertyValue::UDim2(UDim2::new(1.0, 0.0, 1.0, 0.0)));
+    set(&mut tree, zombie_label, Property::BackgroundTransparency, PropertyValue::Number(1.0));
+    set(
+        &mut tree,
+        zombie_label,
+        Property::TextColor,
+        PropertyValue::Color3(Color3::from_rgb8(170, 255, 140)),
+    );
+    set(&mut tree, zombie_label, Property::TextSize, PropertyValue::Number(17.0));
+    set(&mut tree, zombie_label, Property::Text, PropertyValue::String("Zombie".into()));
+    script(&mut tree, server, "ZombieBrain", ZOMBIE_SCRIPT);
+
+    // Everyone starts as a Runner; finishing the obby makes you a Winner.
+    let teams = tree.service(ClassKind::Teams).expect("every tree has Teams");
+    let runners = add(&mut tree, teams, ClassKind::Team, "Runners");
+    set(&mut tree, runners, Property::TeamColor, PropertyValue::Color3(Color3::from_rgb8(90, 170, 255)));
+    let winners = add(&mut tree, teams, ClassKind::Team, "Winners");
+    set(&mut tree, winners, Property::TeamColor, PropertyValue::Color3(Color3::from_rgb8(255, 210, 60)));
+    set(&mut tree, winners, Property::AutoAssignable, PropertyValue::Bool(false));
 
     // A builder tool every player gets: press 1 to hold it, click to place bricks.
     let pack = tree.service(ClassKind::StarterPack).expect("every tree has StarterPack");
@@ -1172,6 +1274,60 @@ mod tests {
             "{log:?}"
         );
         assert!(log.iter().any(|l| l.text == "Player1: hello there"), "{log:?}");
+        assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
+    }
+
+    #[test]
+    fn zombie_chases_and_teams_change_at_the_finish() {
+        let frame = |s: &mut libroxel_engine::PlaySession, n: usize| {
+            for _ in 0..n {
+                s.step(1.0 / 60.0, CharacterInput::default());
+            }
+        };
+        let mut session = start_on(sample_obby(), true).unwrap();
+        frame(&mut session, 10);
+        let tree = session.runtime().tree().clone();
+        let character = session.character().unwrap();
+        let team_name = |s: &libroxel_engine::PlaySession| {
+            let t = s.runtime().tree().borrow();
+            let team = t.get_ref(s.player().unwrap(), Property::Team).unwrap();
+            t.name(team).unwrap().to_owned()
+        };
+        assert_eq!(team_name(&session), "Runners");
+
+        // Safe on the start platform: the zombie stays home.
+        frame(&mut session, 60);
+        assert_eq!(tree.borrow().get_number(character.humanoid, Property::Health), Some(100.0));
+        // In the quarry it comes for you.
+        session
+            .runtime()
+            .run("move", "workspace.Player1.HumanoidRootPart.Position = Vector3.new(-5, 3, 18.5)")
+            .unwrap();
+        frame(&mut session, 150);
+        let health = tree.borrow().get_number(character.humanoid, Property::Health).unwrap();
+        assert!(health < 100.0, "the zombie hit: {health}");
+
+        // Knocked down, then back a few seconds later.
+        session.runtime().run("kill", "workspace.Zombie.Humanoid.Health = 0").unwrap();
+        frame(&mut session, 60 * 6);
+        let zombie = tree.borrow().find_first_child(tree.borrow().workspace(), "Zombie").unwrap().unwrap();
+        assert_eq!(
+            tree.borrow()
+                .find_first_child(zombie, "Humanoid")
+                .ok()
+                .flatten()
+                .and_then(|h| tree.borrow().get_number(h, Property::Health)),
+            Some(100.0)
+        );
+
+        session
+            .runtime()
+            .run("finish", "workspace.Player1.HumanoidRootPart.Position = workspace.Finish.Position + Vector3.new(0, 3, 0)")
+            .unwrap();
+        frame(&mut session, 30);
+        assert_eq!(team_name(&session), "Winners");
+        let log = session.take_log();
+        assert!(log.iter().any(|l| l.text == "The zombie is down!"), "{log:?}");
         assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
     }
 }

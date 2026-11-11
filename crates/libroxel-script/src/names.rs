@@ -40,6 +40,8 @@ pub mod globals {
     pub const VECTOR2: &str = "Vector2";
     pub const UDIM2: &str = "UDim2";
     pub const UDIM: &str = "UDim";
+    /// Random number generators: `Random.new(seed?)`.
+    pub const RANDOM: &str = "Random";
     pub const TWEEN_INFO: &str = "TweenInfo";
     pub const RAYCAST_PARAMS: &str = "RaycastParams";
 }
@@ -109,6 +111,8 @@ pub mod events {
     pub const FOCUS_LOST: &str = "FocusLost";
     /// On an explosion: fires with each part it reaches and how far away it was.
     pub const HIT: &str = "Hit";
+    /// On a humanoid: fires with whether it got there after `MoveTo`.
+    pub const MOVE_TO_FINISHED: &str = "MoveToFinished";
 }
 
 /// Methods that only some classes have.
@@ -176,6 +180,20 @@ pub mod methods {
     /// Camera: where a point in the world appears on screen.
     pub const WORLD_TO_VIEWPORT_POINT: &str = "WorldToViewportPoint";
     pub const WORLD_TO_SCREEN_POINT: &str = "WorldToScreenPoint";
+    /// Humanoid: walk to a point (or a part, if one is given).
+    pub const MOVE_TO: &str = "MoveTo";
+    /// Teams service: every team.
+    pub const GET_TEAMS: &str = "GetTeams";
+}
+
+/// Members of random number generators.
+pub mod random {
+    pub const NEW: &str = "new";
+    /// A number from 0 to 1, or between two numbers.
+    pub const NEXT_NUMBER: &str = "NextNumber";
+    /// A whole number between two whole numbers, both included.
+    pub const NEXT_INTEGER: &str = "NextInteger";
+    pub const TYPE_NAME: &str = "Random";
 }
 
 /// Members that some classes have beyond their saved properties.
@@ -525,6 +543,15 @@ pub mod services {
     pub const COLLECTION_SERVICE: &str = "CollectionService";
     /// Fires once per frame with the frame's delta time in seconds.
     pub const HEARTBEAT: &str = "Heartbeat";
+    /// Fires each frame before physics, with the game time and the frame time.
+    pub const STEPPED: &str = "Stepped";
+    /// Fires each frame after everything else, with the frame time.
+    pub const RENDER_STEPPED: &str = "RenderStepped";
+    /// There is one computer, so both are always true.
+    pub const IS_CLIENT: &str = "IsClient";
+    pub const IS_SERVER: &str = "IsServer";
+    /// True: games only run inside the editor for now.
+    pub const IS_STUDIO: &str = "IsStudio";
 }
 
 /// Members of signals and connections.
@@ -585,6 +612,8 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::UICorner => "UICorner",
         ClassKind::UIListLayout => "UIListLayout",
         ClassKind::Explosion => "Explosion",
+        ClassKind::Teams => "Teams",
+        ClassKind::Team => "Team",
     }
 }
 
@@ -649,6 +678,11 @@ pub fn property_name(property: Property) -> &'static str {
         Property::Padding => "Padding",
         Property::BlastRadius => "BlastRadius",
         Property::BlastPressure => "BlastPressure",
+        Property::Jump => "Jump",
+        Property::Team => "Team",
+        Property::Neutral => "Neutral",
+        Property::TeamColor => "TeamColor",
+        Property::AutoAssignable => "AutoAssignable",
     }
 }
 

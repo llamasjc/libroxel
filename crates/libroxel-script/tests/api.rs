@@ -973,3 +973,53 @@ fn camera_velocity_text_boxes_and_explosions() {
 
     assert_eq!(printed(&rt), vec!["lost true typed"]);
 }
+
+#[test]
+fn random_run_service_and_teams() {
+    let rt = runtime();
+    let player = add_player(&rt, "Sam");
+    run(
+        &rt,
+        r#"
+        local a, b = Random.new(42), Random.new(42)
+        local same, inside = true, true
+        for _ = 1, 50 do
+            local x, y = a:NextInteger(1, 6), b:NextInteger(1, 6)
+            same = same and x == y
+            inside = inside and x >= 1 and x <= 6
+            local n = a:NextNumber(5, 10)
+            b:NextNumber(5, 10)
+            inside = inside and n >= 5 and n < 10
+        end
+        print(same, inside, typeof(a))
+
+        local RunService = game:GetService("RunService")
+        print(RunService:IsClient(), RunService:IsServer())
+        local order = {}
+        RunService.Stepped:Connect(function(t, dt) table.insert(order, "stepped") end)
+        RunService.Heartbeat:Connect(function() table.insert(order, "heartbeat") end)
+        RunService.RenderStepped:Connect(function() table.insert(order, "render") print(table.concat(order, " ")) end)
+
+        local Teams = game:GetService("Teams")
+        local red = Instance.new("Team", Teams)
+        red.Name = "Red"
+        red.TeamColor = Color3.new(1, 0, 0)
+        local blue = Instance.new("Team", Teams)
+        blue.Name = "Blue"
+        local sam = game:GetService("Players").Sam
+        sam.Team = red
+        print(#Teams:GetTeams(), sam.Neutral, #red:GetPlayers(), #blue:GetPlayers(), #game:GetService("Players"):GetPlayers())
+        sam.Team = nil
+        print(sam.Neutral)
+        local h = Instance.new("Humanoid")
+        h.Jump = true
+        print(h.Jump)
+    "#,
+    );
+    let _ = player;
+    rt.step(0.1);
+    assert_eq!(
+        printed(&rt),
+        vec!["true true Random", "true true", "2 false 1 0 1", "true", "true", "stepped heartbeat render"]
+    );
+}

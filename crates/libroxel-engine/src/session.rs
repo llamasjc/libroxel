@@ -71,6 +71,8 @@ pub struct PlaySession {
     blasts: Vec<Blast>,
     /// The workspace camera the view follows or obeys.
     camera: Option<InstanceId>,
+    /// Walks that scripts started with `MoveTo`, and humanoids that died.
+    npcs: crate::npc::Npcs,
 }
 
 /// An explosion's flash, for drawing.
@@ -134,6 +136,7 @@ impl PlaySession {
             exploded: Default::default(),
             blasts: Vec::new(),
             camera: None,
+            npcs: Default::default(),
         };
         // Scripts find the camera through the workspace, so it exists from the start.
         session.camera = {
@@ -186,6 +189,7 @@ impl PlaySession {
             };
             session.backpack = Some(backpack);
             session.copy_starter_gui(&tree, false);
+            auto_assign_team(&mut tree.borrow_mut(), player);
             let errors = session.runtime.player_added(player);
             session.collect(errors);
             session.spawn_character(&tree);
@@ -198,7 +202,11 @@ impl PlaySession {
         let character = {
             let mut t = tree.borrow_mut();
             let name = t.name(player).unwrap_or(LOCAL_PLAYER_NAME).to_owned();
-            let character = Character::spawn_named(&mut t, &name);
+            let team = t
+                .get_ref(player, Property::Team)
+                .filter(|_| t.get_bool(player, Property::Neutral) == Some(false))
+                .and_then(|team| t.get_color(team, Property::TeamColor));
+            let character = Character::spawn_for_team(&mut t, &name, team);
             let _ = t.set(player, Property::Character, PropertyValue::Ref(Some(character.model)));
             character
         };
@@ -626,8 +634,26 @@ impl PlaySession {
             b.age += dt;
             b.age < BLAST_TIME
         });
-        let result = {
+        let mut walks_ended = Vec::new();
+        for (humanoid, target) in self.runtime.take_move_requests() {
+            walks_ended.extend(self.npcs.request(humanoid, target).map(|h| (h, false)));
+        }
+        let mut input = input;
+        let (result, died) = {
             let mut tree = tree.borrow_mut();
+            // The player's own character walks where MoveTo sends it until they steer.
+            if let Some(c) = self.character.filter(|c| !c.is_dead(&tree)) {
+                let steering = input.move_dir.x != 0.0 || input.move_dir.z != 0.0;
+                if steering {
+                    walks_ended.extend(self.npcs.request(c.humanoid, None).map(|h| (h, false)));
+                } else if let Some(pos) = tree.get_vec3(c.root, Property::Position) {
+                    input.move_dir = self.npcs.input_for(c.humanoid, pos).move_dir;
+                }
+                if tree.get_bool(c.humanoid, Property::Jump) == Some(true) {
+                    input.jump = true;
+                    let _ = tree.set(c.humanoid, Property::Jump, PropertyValue::Bool(false));
+                }
+            }
             for (id, request) in self.runtime.take_velocity_requests() {
                 if tree.get_bool(id, Property::Anchored) != Some(false) {
                     continue;
@@ -641,12 +667,28 @@ impl PlaySession {
             if let Some(c) = self.character.filter(|c| !c.is_dead(&tree)) {
                 c.drive(&tree, &mut self.physics, input);
             }
+            let player_model = self.character.map(|c| c.model);
+            let poses = self.npcs.before_physics(&mut tree, &mut self.physics, player_model);
             let result = self.physics.step(&mut tree, dt);
             if let Some(c) = self.character.filter(|c| !c.is_dead(&tree)) {
                 c.follow(&mut tree);
             }
-            result
+            let (ended, died) = self.npcs.after_physics(&mut tree, &poses, dt);
+            walks_ended.extend(ended);
+            if let Some(c) = self.character {
+                walks_ended
+                    .extend(self.npcs.finish_walks(&tree, dt, |h| (h == c.humanoid).then_some(c.root)));
+            }
+            (result, died)
         };
+        for (humanoid, reached) in walks_ended {
+            let errors = self.runtime.move_finished(humanoid, reached);
+            self.collect(errors);
+        }
+        for humanoid in died {
+            let errors = self.runtime.humanoid_died(humanoid);
+            self.collect(errors);
+        }
         self.runtime.set_velocities(self.physics.velocities().clone());
         self.pose_character(input);
         self.refresh_hotbar();
@@ -745,6 +787,32 @@ impl PlaySession {
             self.collect(errors);
         }
     }
+}
+
+/// Puts a player who just joined on the auto-assignable team with the
+/// fewest players, if the game has teams.
+fn auto_assign_team(tree: &mut InstanceTree, player: InstanceId) {
+    let Some(teams) = tree.service(ClassKind::Teams) else { return };
+    let players: Vec<InstanceId> = tree
+        .service(ClassKind::Players)
+        .and_then(|p| tree.children(p).ok())
+        .map(|c| c.to_vec())
+        .unwrap_or_default();
+    let candidates: Vec<InstanceId> = tree
+        .children(teams)
+        .unwrap_or_default()
+        .iter()
+        .copied()
+        .filter(|t| {
+            tree.class(*t) == Ok(ClassKind::Team) && tree.get_bool(*t, Property::AutoAssignable) == Some(true)
+        })
+        .collect();
+    let count =
+        |team: InstanceId| players.iter().filter(|p| tree.get_ref(**p, Property::Team) == Some(team)).count();
+    // The first of the smallest teams, so the result doesn't depend on chance.
+    let Some(team) = candidates.iter().copied().min_by_key(|t| count(*t)) else { return };
+    let _ = tree.set(player, Property::Team, PropertyValue::Ref(Some(team)));
+    let _ = tree.set(player, Property::Neutral, PropertyValue::Bool(false));
 }
 
 /// Convenience for tests and tools: a session over a fresh copy of `tree`.

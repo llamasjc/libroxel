@@ -89,6 +89,16 @@ pub enum Property {
     BlastRadius,
     /// On an explosion: how hard it pushes.
     BlastPressure,
+    /// On a humanoid: set to make it jump once.
+    Jump,
+    /// On a player: the team they're on.
+    Team,
+    /// On a player: on no team. On a spawn location: anyone may spawn there.
+    Neutral,
+    /// On a team: its colour. On a spawn location: which team spawns there.
+    TeamColor,
+    /// On a team: whether players joining are put on it.
+    AutoAssignable,
 }
 
 /// The value of a property.
@@ -146,7 +156,11 @@ impl Property {
             | Property::Enabled
             | Property::ResetOnSpawn
             | Property::AlwaysOnTop
-            | Property::ClearTextOnFocus => "bool",
+            | Property::ClearTextOnFocus
+            | Property::Jump
+            | Property::Neutral
+            | Property::AutoAssignable => "bool",
+            Property::TeamColor => "Color3",
             Property::CornerRadius | Property::Padding => "UDim",
             Property::CameraType => EnumKind::CameraType.kind_name(),
             Property::FillDirection => EnumKind::FillDirection.kind_name(),
@@ -175,7 +189,7 @@ impl Property {
             | Property::UserId => "number",
             Property::Shape => EnumKind::Shape.kind_name(),
             Property::Material => EnumKind::Material.kind_name(),
-            Property::Character => "ref",
+            Property::Character | Property::Team => "ref",
         }
     }
 
@@ -247,6 +261,11 @@ impl Property {
         Property::Padding,
         Property::BlastRadius,
         Property::BlastPressure,
+        Property::Jump,
+        Property::Team,
+        Property::Neutral,
+        Property::TeamColor,
+        Property::AutoAssignable,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -306,6 +325,11 @@ impl Property {
             Property::Padding => "padding",
             Property::BlastRadius => "blast_radius",
             Property::BlastPressure => "blast_pressure",
+            Property::Jump => "jump",
+            Property::Team => "team",
+            Property::Neutral => "neutral",
+            Property::TeamColor => "team_color",
+            Property::AutoAssignable => "auto_assignable",
         }
     }
 

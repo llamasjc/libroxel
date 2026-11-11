@@ -61,6 +61,9 @@ pub(crate) enum SignalKind {
     MouseButton1Down,
     MouseButton1Up,
     TextBoxFocused(InstanceId),
+    MoveToFinished(InstanceId),
+    Stepped,
+    RenderStepped,
     TextBoxFocusLost(InstanceId),
     ExplosionHit(InstanceId),
 }
@@ -503,6 +506,7 @@ fn instance_event(class: ClassKind, id: InstanceId, key: &str) -> Option<SignalK
         FOCUSED if class == ClassKind::TextBox => SignalKind::TextBoxFocused(id),
         FOCUS_LOST if class == ClassKind::TextBox => SignalKind::TextBoxFocusLost(id),
         HIT if class == ClassKind::Explosion => SignalKind::ExplosionHit(id),
+        MOVE_TO_FINISHED if class == ClassKind::Humanoid => SignalKind::MoveToFinished(id),
         _ => return None,
     })
 }
@@ -612,12 +616,24 @@ impl UserData for LuaInstance {
             }
         });
         methods.add_method(names::methods::GET_PLAYERS, |lua, this, ()| {
-            require_class(lua, this.0, ClassKind::Players, names::methods::GET_PLAYERS)?;
+            let class = class_of(lua, this.0)?;
+            if class != ClassKind::Players && class != ClassKind::Team {
+                return Err(not_a_member(lua, this.0, names::methods::GET_PLAYERS));
+            }
             let players: Vec<InstanceId> = {
                 let host = host(lua);
                 let tree = host.tree.borrow();
-                let children = tree.children(this.0).map_err(tree_err)?;
-                children.iter().copied().filter(|c| tree.class(*c) == Ok(ClassKind::Player)).collect()
+                let Some(service) = tree.service(ClassKind::Players) else { return Ok(Vec::new()) };
+                let children = tree.children(service).map_err(tree_err)?;
+                children
+                    .iter()
+                    .copied()
+                    .filter(|c| tree.class(*c) == Ok(ClassKind::Player))
+                    // On a team: only the players on it.
+                    .filter(|c| {
+                        class == ClassKind::Players || tree.get_ref(*c, Property::Team) == Some(this.0)
+                    })
+                    .collect()
             };
             players.into_iter().map(|id| push_instance(lua, id)).collect::<mlua::Result<Vec<_>>>()
         });
@@ -811,6 +827,17 @@ struct RunService;
 impl UserData for RunService {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         fields.add_field_method_get(names::services::HEARTBEAT, |_, _| Ok(Signal(SignalKind::Heartbeat)));
+        fields.add_field_method_get(names::services::STEPPED, |_, _| Ok(Signal(SignalKind::Stepped)));
+        fields.add_field_method_get(names::services::RENDER_STEPPED, |_, _| {
+            Ok(Signal(SignalKind::RenderStepped))
+        });
+    }
+
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        use names::services::*;
+        for name in [IS_CLIENT, IS_SERVER, IS_STUDIO] {
+            methods.add_method(name, |_, _, ()| Ok(true));
+        }
     }
 }
 
@@ -1451,6 +1478,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     crate::types::install(lua)?;
     install_tween_info(lua)?;
     crate::services::install(lua)?;
+    crate::world::install(lua)?;
     lua.set_named_registry_value(WAIT_FOR_CHILD_FN, wait_for_child)?;
     g.set(globals::REQUIRE, require)?;
 
@@ -1589,7 +1617,9 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
     }
     step_tweens(lua, dt);
     crate::services::step_debris(lua, now);
+    fire(lua, SignalKind::Stepped, || Ok([Value::Number(now), Value::Number(dt)].into_iter().collect()));
     fire(lua, SignalKind::Heartbeat, || Ok(std::iter::once(Value::Number(dt)).collect()));
+    fire(lua, SignalKind::RenderStepped, || Ok(std::iter::once(Value::Number(dt)).collect()));
     take_errors(lua)
 }
 

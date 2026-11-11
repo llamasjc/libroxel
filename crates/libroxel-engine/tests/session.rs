@@ -253,3 +253,78 @@ fn launch_pads_explosions_and_the_camera() {
     assert!(log.iter().any(|l| l == "hit Crate"), "{log:?}");
     assert!(!log.iter().any(|l| l.contains("died")), "the character was out of reach: {log:?}");
 }
+
+#[test]
+fn npcs_walk_where_they_are_sent_and_teams_pick_spawns() {
+    let mut tree = world();
+    // A second spawn for the red team, away from the neutral one.
+    let red_spawn = part(
+        &mut tree,
+        ClassKind::SpawnLocation,
+        "RedSpawn",
+        Vec3::new(30.0, 0.5, 0.0),
+        Vec3::new(6.0, 1.0, 6.0),
+    );
+    tree.set(red_spawn, Property::Neutral, PropertyValue::Bool(false)).unwrap();
+    let red = libroxel_instance::Color3::new(1.0, 0.0, 0.0);
+    tree.set(red_spawn, Property::TeamColor, PropertyValue::Color3(red)).unwrap();
+    let teams = tree.service(ClassKind::Teams).unwrap();
+    let team = tree.create(ClassKind::Team, "Red").unwrap();
+    tree.set_parent(team, Some(teams)).unwrap();
+    tree.set(team, Property::TeamColor, PropertyValue::Color3(red)).unwrap();
+    script(
+        &mut tree,
+        "GuardScript",
+        r#"
+        local guard = Instance.new("Model")
+        guard.Name = "Guard"
+        local root = Instance.new("Part", guard)
+        root.Name = "HumanoidRootPart"
+        root.Size = Vector3.new(2, 4, 1)
+        root.Position = Vector3.new(-20, 3, 0)
+        local head = Instance.new("Part", guard)
+        head.Name = "Head"
+        head.Size = Vector3.new(1, 1, 1)
+        head.Position = Vector3.new(-20, 5.5, 0)
+        local humanoid = Instance.new("Humanoid", guard)
+        guard.Parent = workspace
+        humanoid.MoveToFinished:Connect(function(reached)
+            print("arrived", reached)
+        end)
+        humanoid.Died:Connect(function() print("guard down") end)
+        game:GetService("Players").PlayerAdded:Connect(function(player)
+            print("team", player.Team and player.Team.Name, player.Neutral, #game:GetService("Teams").Red:GetPlayers())
+        end)
+        task.wait(0.5)
+        humanoid:MoveTo(Vector3.new(-10, 0, 0))
+        "#,
+    );
+    let mut session = start_on(tree, true).unwrap();
+    let character = session.character().unwrap();
+    let tree = session.runtime().tree().clone();
+    let at = tree.borrow().get_vec3(character.root, Property::Position).unwrap();
+    assert!((at.x - 30.0).abs() < 0.01, "spawned on the team's spawn: {at:?}");
+    for _ in 0..150 {
+        session.step(DT, CharacterInput::default());
+    }
+    let (root, head) = {
+        let t = tree.borrow();
+        let guard = t.find_first_child(t.workspace(), "Guard").unwrap();
+        let guard = guard.unwrap();
+        (
+            t.find_first_child(guard, "HumanoidRootPart").unwrap().unwrap(),
+            t.find_first_child(guard, "Head").unwrap().unwrap(),
+        )
+    };
+    let pos = tree.borrow().get_vec3(root, Property::Position).unwrap();
+    let head_pos = tree.borrow().get_vec3(head, Property::Position).unwrap();
+    assert!((pos.x + 10.0).abs() < 1.5, "walked over: {pos:?}");
+    assert!((head_pos.x - pos.x).abs() < 0.01 && head_pos.y > pos.y, "the head came along: {head_pos:?}");
+    session.runtime().run("kill", "workspace.Guard.Humanoid.Health = 0").unwrap();
+    session.step(DT, CharacterInput::default());
+    session.step(DT, CharacterInput::default());
+    let log: Vec<String> = session.take_log().into_iter().map(|l| l.text).collect();
+    assert!(log.iter().any(|l| l == "team Red false 1"), "{log:?}");
+    assert!(log.iter().any(|l| l == "arrived true"), "{log:?}");
+    assert!(log.iter().any(|l| l == "guard down"), "{log:?}");
+}

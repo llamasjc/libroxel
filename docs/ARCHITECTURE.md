@@ -109,6 +109,16 @@
   box being typed into gets an egui text field over it, which writes into
   `Text`; focus changes go through the runtime so `Focused`, `FocusLost`
   and `CaptureFocus` agree with the editor.
+- **NPCs** live in `libroxel-engine/src/npc.rs`. Before physics, every
+  humanoid model other than the player's character is driven with the same
+  walk code as the player (`character::drive`), steered toward its `MoveTo`
+  target. After physics its other parts are carried along with the root
+  (anchored and non-colliding) and turned to face where it walks; arrived,
+  timed-out and cut-short walks fire `MoveToFinished`, and health reaching 0
+  fires `Died`.
+- **Teams.** Before `PlayerAdded` fires the session puts the player on the
+  auto-assignable team with the fewest players. Spawning prefers a
+  non-neutral spawn of the player's team colour, then a neutral spawn.
 - **Threading.** The Luau VM is single-threaded, so the engine state is a
   Bevy non-send resource and the tree is shared as `Rc<RefCell<_>>`.
 

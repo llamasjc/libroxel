@@ -117,6 +117,10 @@ pub enum ClassKind {
     UIListLayout,
     /// In the workspace: a blast that hits everything nearby, once.
     Explosion,
+    /// A service holding the game's teams.
+    Teams,
+    /// A side players can be on, with its own colour.
+    Team,
 }
 
 impl ClassKind {
@@ -163,6 +167,8 @@ impl ClassKind {
         ClassKind::UICorner,
         ClassKind::UIListLayout,
         ClassKind::Explosion,
+        ClassKind::Teams,
+        ClassKind::Team,
     ];
 
     /// The services every tree has under its root, in order. They can't be
@@ -175,6 +181,7 @@ impl ClassKind {
         ClassKind::Lighting,
         ClassKind::ServerScriptService,
         ClassKind::StarterPack,
+        ClassKind::Teams,
     ];
 
     /// Whether this class is one of the [`SERVICES`](Self::SERVICES).
@@ -245,7 +252,23 @@ impl ClassKind {
         ];
         const SCRIPT: &[Property] = &[Property::Name, Property::Disabled, Property::Source];
         const MODULE: &[Property] = &[Property::Name, Property::Source];
-        const PLAYER: &[Property] = &[Property::Name, Property::UserId, Property::Character];
+        const PLAYER: &[Property] =
+            &[Property::Name, Property::UserId, Property::Character, Property::Team, Property::Neutral];
+        const SPAWN: &[Property] = &[
+            Property::Name,
+            Property::Position,
+            Property::Orientation,
+            Property::Size,
+            Property::Shape,
+            Property::Color,
+            Property::Material,
+            Property::Anchored,
+            Property::CanCollide,
+            Property::Transparency,
+            Property::TeamColor,
+            Property::Neutral,
+        ];
+        const TEAM: &[Property] = &[Property::Name, Property::TeamColor, Property::AutoAssignable];
         const NUMBER: &[Property] = &[Property::Name, Property::NumberValue];
         const STRING: &[Property] = &[Property::Name, Property::StringValue];
         const BOOL: &[Property] = &[Property::Name, Property::BoolValue];
@@ -335,9 +358,12 @@ impl ClassKind {
             Property::MaxHealth,
             Property::WalkSpeed,
             Property::JumpPower,
+            Property::Jump,
         ];
         match self {
-            ClassKind::Part | ClassKind::SpawnLocation => PART,
+            ClassKind::Part => PART,
+            ClassKind::SpawnLocation => SPAWN,
+            ClassKind::Team => TEAM,
             ClassKind::Script | ClassKind::LocalScript => SCRIPT,
             ClassKind::Humanoid => HUMANOID,
             ClassKind::ModuleScript => MODULE,
@@ -430,6 +456,14 @@ impl ClassKind {
             Property::Padding => PropertyValue::UDim(UDim::default()),
             Property::BlastRadius => PropertyValue::Number(4.0),
             Property::BlastPressure => PropertyValue::Number(500_000.0),
+            Property::Jump => PropertyValue::Bool(false),
+            Property::Team => PropertyValue::Ref(None),
+            Property::Neutral => PropertyValue::Bool(true),
+            Property::TeamColor => PropertyValue::Color3(match self {
+                ClassKind::Team => Color3::WHITE,
+                _ => Color3::MEDIUM_GREY,
+            }),
+            Property::AutoAssignable => PropertyValue::Bool(true),
             Property::Size => PropertyValue::Vec3(Vec3::new(4.0, 1.0, 2.0)),
             Property::Color => PropertyValue::Color3(match self {
                 ClassKind::SpawnLocation => Color3::new(0.3, 0.55, 0.95),
@@ -490,6 +524,8 @@ impl ClassKind {
             ClassKind::UICorner => "ui_corner",
             ClassKind::UIListLayout => "ui_list_layout",
             ClassKind::Explosion => "explosion",
+            ClassKind::Teams => "teams",
+            ClassKind::Team => "team",
         }
     }
 
