@@ -6,8 +6,11 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use libroxel_instance::{
-    ClassKind, Color3, EnumKind, EnumValue, InstanceId, Property, PropertyValue, TreeError, Vec3,
+    CFrame, Change, ClassKind, Color3, EasingDirection, EasingStyle, EnumKind, EnumValue, InstanceId,
+    Property, PropertyValue, Rotation, TreeError, UDim2, Vec2, Vec3,
 };
+
+use crate::types::{LuaCFrame, LuaUDim2, LuaVector2, as_cframe, as_udim2, as_vector2};
 use mlua::{
     AnyUserData, Function, Lua, MetaMethod, MultiValue, RegistryKey, Table, Thread, UserData, UserDataFields,
     UserDataMethods, Value, Variadic,
@@ -18,6 +21,7 @@ use crate::{OutputLevel, OutputLine, ScriptError, SharedTree};
 
 const INSTANCE_CACHE: &str = "libroxel.instance_cache";
 const WAIT_FOR_CHILD_FN: &str = "libroxel.wait_for_child";
+const SIGNAL_WAIT_FN: &str = "libroxel.signal_wait";
 /// How long a script may run without yielding before it is stopped.
 pub(crate) const RUN_LIMIT: Duration = Duration::from_secs(5);
 
@@ -30,6 +34,25 @@ pub(crate) enum SignalKind {
     PlayerRemoving,
     CharacterAdded(InstanceId),
     Died(InstanceId),
+    Changed(InstanceId),
+    PropertyChanged(InstanceId, Property),
+    ChildAdded(InstanceId),
+    ButtonClicked(InstanceId),
+    ButtonActivated(InstanceId),
+    MouseClick(InstanceId),
+    TweenCompleted(u64),
+}
+
+impl SignalKind {
+    /// The instance whose changes this signal follows, if any.
+    fn watched(self) -> Option<InstanceId> {
+        match self {
+            SignalKind::Changed(id) | SignalKind::PropertyChanged(id, _) | SignalKind::ChildAdded(id) => {
+                Some(id)
+            }
+            _ => None,
+        }
+    }
 }
 
 struct Connection {
@@ -37,6 +60,8 @@ struct Connection {
     signal: SignalKind,
     script: String,
     handler: RegistryKey,
+    /// Disconnect after the first time it fires.
+    once: bool,
 }
 
 /// A thread paused by `task.wait` or scheduled by `task.delay`.
@@ -61,6 +86,8 @@ struct Host {
     waiting: RefCell<Vec<Waiting>>,
     /// When the running thread must have yielded by. Checked by the VM's interrupt.
     deadline: Rc<Cell<Option<Instant>>>,
+    tweens: RefCell<Vec<TweenState>>,
+    next_tween: Cell<u64>,
 }
 
 fn host(lua: &Lua) -> mlua::AppDataRef<'_, Host> {
@@ -143,19 +170,19 @@ fn spawn(lua: &Lua, func: Function, args: MultiValue, script: &str) -> mlua::Res
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy)]
-struct LuaVector3(Vec3);
+pub(crate) struct LuaVector3(pub Vec3);
 
 #[derive(Debug, Clone, Copy)]
 struct LuaColor3(Color3);
 
-fn as_vector3(value: &Value) -> Option<Vec3> {
+pub(crate) fn as_vector3(value: &Value) -> Option<Vec3> {
     match value {
         Value::UserData(ud) => ud.borrow::<LuaVector3>().ok().map(|v| v.0),
         _ => None,
     }
 }
 
-fn as_number(value: &Value) -> Option<f32> {
+pub(crate) fn as_number(value: &Value) -> Option<f32> {
     match value {
         Value::Number(n) => Some(*n as f32),
         Value::Integer(n) => Some(*n as f32),
@@ -327,6 +354,8 @@ fn property_to_lua(lua: &Lua, value: PropertyValue) -> mlua::Result<Value> {
         PropertyValue::Enum(e) => Value::UserData(lua.create_userdata(LuaEnumItem(e))?),
         PropertyValue::Ref(Some(id)) => Value::UserData(push_instance(lua, id)?),
         PropertyValue::Ref(None) => Value::Nil,
+        PropertyValue::Vec2(v) => Value::UserData(lua.create_userdata(LuaVector2(v))?),
+        PropertyValue::UDim2(u) => Value::UserData(lua.create_userdata(LuaUDim2(u))?),
     })
 }
 
@@ -347,7 +376,11 @@ fn property_from_lua(property: Property, value: &Value) -> Option<PropertyValue>
         Value::Integer(n) => PropertyValue::Number(*n as f64),
         Value::String(s) => PropertyValue::String(s.to_string_lossy()),
         Value::UserData(ud) => {
-            if let Ok(v) = ud.borrow::<LuaVector3>() {
+            if let Some(v) = as_vector2(value) {
+                PropertyValue::Vec2(v)
+            } else if let Some(u) = as_udim2(value) {
+                PropertyValue::UDim2(u)
+            } else if let Ok(v) = ud.borrow::<LuaVector3>() {
                 PropertyValue::Vec3(v.0)
             } else if let Ok(c) = ud.borrow::<LuaColor3>() {
                 PropertyValue::Color3(c.0)
@@ -389,8 +422,38 @@ fn instance_event(class: ClassKind, id: InstanceId, key: &str) -> Option<SignalK
         PLAYER_REMOVING if class == ClassKind::Players => SignalKind::PlayerRemoving,
         CHARACTER_ADDED if class == ClassKind::Player => SignalKind::CharacterAdded(id),
         DIED if class == ClassKind::Humanoid => SignalKind::Died(id),
+        CHANGED => SignalKind::Changed(id),
+        CHILD_ADDED => SignalKind::ChildAdded(id),
+        MOUSE_BUTTON1_CLICK if class == ClassKind::TextButton => SignalKind::ButtonClicked(id),
+        ACTIVATED if class == ClassKind::TextButton => SignalKind::ButtonActivated(id),
+        MOUSE_CLICK if class == ClassKind::ClickDetector => SignalKind::MouseClick(id),
         _ => return None,
     })
+}
+
+/// A part's position and orientation as one CFrame.
+fn part_cframe(lua: &Lua, id: InstanceId) -> mlua::Result<CFrame> {
+    let host = host(lua);
+    let tree = host.tree.borrow();
+    let pos = tree.get_vec3(id, Property::Position).ok_or_else(|| tree_err(TreeError::Dead(id)))?;
+    let orientation = tree.get_vec3(id, Property::Orientation).unwrap_or_default();
+    Ok(CFrame::new(pos, Rotation::from_orientation(orientation)))
+}
+
+fn set_part_cframe(lua: &Lua, id: InstanceId, cf: CFrame) -> mlua::Result<()> {
+    let host = host(lua);
+    let mut tree = host.tree.borrow_mut();
+    tree.set(id, Property::Position, PropertyValue::Vec3(cf.pos)).map_err(tree_err)?;
+    tree.set(id, Property::Orientation, PropertyValue::Vec3(cf.rot.to_orientation())).map_err(tree_err)
+}
+
+/// The part a model pivots around: its root part if it has one, else its first part.
+fn model_pivot_part(lua: &Lua, model: InstanceId) -> mlua::Result<Option<InstanceId>> {
+    let host = host(lua);
+    let tree = host.tree.borrow();
+    let parts = tree.descendants_of_class(model, ClassKind::Part);
+    let root = parts.iter().copied().find(|p| tree.name(*p) == Ok(names::character::ROOT_PART));
+    Ok(root.or_else(|| parts.first().copied()))
 }
 
 impl UserData for LuaInstance {
@@ -455,6 +518,9 @@ impl UserData for LuaInstance {
             if name == names::services::RUN_SERVICE {
                 return Ok(Value::UserData(lua.create_userdata(RunService)?));
             }
+            if name == names::services::TWEEN_SERVICE {
+                return Ok(Value::UserData(lua.create_userdata(TweenService)?));
+            }
             let service = names::class_from_name(&name).and_then(|c| host(lua).tree.borrow().service(c));
             match service {
                 Some(id) => Ok(Value::UserData(push_instance(lua, id)?)),
@@ -482,6 +548,68 @@ impl UserData for LuaInstance {
             };
             found.map(|id| push_instance(lua, id)).transpose()
         });
+        methods.add_method(names::methods::GET_PROPERTY_CHANGED_SIGNAL, |lua, this, name: String| {
+            let class = class_of(lua, this.0)?;
+            let property =
+                names::property_from_name(class, &name).ok_or_else(|| not_a_member(lua, this.0, &name))?;
+            Ok(Signal(SignalKind::PropertyChanged(this.0, property)))
+        });
+        methods.add_method(names::methods::CLEAR_ALL_CHILDREN, |lua, this, ()| {
+            let host = host(lua);
+            let mut tree = host.tree.borrow_mut();
+            let children = tree.children(this.0).map_err(tree_err)?.to_vec();
+            for child in children {
+                let _ = tree.destroy(child);
+            }
+            Ok(())
+        });
+        methods.add_method(names::methods::FIND_FIRST_ANCESTOR, |lua, this, name: String| {
+            let found = {
+                let host = host(lua);
+                let tree = host.tree.borrow();
+                let mut current = tree.parent(this.0).map_err(tree_err)?;
+                while let Some(id) = current {
+                    if tree.name(id) == Ok(name.as_str()) {
+                        break;
+                    }
+                    current = tree.parent(id).map_err(tree_err)?;
+                }
+                current
+            };
+            found.map(|id| push_instance(lua, id)).transpose()
+        });
+        methods.add_method(names::methods::FIND_FIRST_DESCENDANT, |lua, this, name: String| {
+            let found = {
+                let host = host(lua);
+                let tree = host.tree.borrow();
+                tree.descendants(this.0)
+                    .map_err(tree_err)?
+                    .into_iter()
+                    .find(|d| tree.name(*d) == Ok(name.as_str()))
+            };
+            found.map(|id| push_instance(lua, id)).transpose()
+        });
+        methods.add_method(names::methods::GET_PIVOT, |lua, this, ()| {
+            require_class(lua, this.0, ClassKind::Model, names::methods::GET_PIVOT)?;
+            match model_pivot_part(lua, this.0)? {
+                Some(part) => Ok(LuaCFrame(part_cframe(lua, part)?)),
+                None => Ok(LuaCFrame(CFrame::IDENTITY)),
+            }
+        });
+        methods.add_method(names::methods::PIVOT_TO, |lua, this, target: Value| {
+            require_class(lua, this.0, ClassKind::Model, names::methods::PIVOT_TO)?;
+            let target =
+                as_cframe(&target).ok_or_else(|| mlua::Error::runtime("PivotTo expects a CFrame"))?;
+            let Some(pivot) = model_pivot_part(lua, this.0)? else { return Ok(()) };
+            // Move every part by the same rigid motion that takes the pivot to the target.
+            let delta = target * part_cframe(lua, pivot)?.inverse();
+            let parts = host(lua).tree.borrow().descendants_of_class(this.0, ClassKind::Part);
+            for part in parts {
+                let cf = part_cframe(lua, part)?;
+                set_part_cframe(lua, part, delta * cf)?;
+            }
+            Ok(())
+        });
         methods.add_method(names::methods::TAKE_DAMAGE, |lua, this, amount: f64| {
             require_class(lua, this.0, ClassKind::Humanoid, names::methods::TAKE_DAMAGE)?;
             let host = host(lua);
@@ -508,6 +636,21 @@ impl UserData for LuaInstance {
                 return lua.named_registry_value::<Value>(WAIT_FOR_CHILD_FN);
             }
             let class = class_of(lua, id)?;
+            if key == names::PART_CFRAME && class.is_physical() {
+                return Ok(Value::UserData(lua.create_userdata(LuaCFrame(part_cframe(lua, id)?))?));
+            }
+            if key == names::methods::LOCAL_PLAYER && class == ClassKind::Players {
+                let first = {
+                    let host = host(lua);
+                    let tree = host.tree.borrow();
+                    let children = tree.children(id).map_err(tree_err)?;
+                    children.iter().copied().find(|c| tree.class(*c) == Ok(ClassKind::Player))
+                };
+                return match first {
+                    Some(p) => Ok(Value::UserData(push_instance(lua, p)?)),
+                    None => Ok(Value::Nil),
+                };
+            }
             if let Some(signal) = instance_event(class, id, &key) {
                 return Ok(Value::UserData(lua.create_userdata(Signal(signal))?));
             }
@@ -540,6 +683,10 @@ impl UserData for LuaInstance {
                 return host(lua).tree.borrow_mut().set_parent(id, parent).map_err(tree_err);
             }
             let class = class_of(lua, id)?;
+            if key == names::PART_CFRAME && class.is_physical() {
+                let cf = as_cframe(&value).ok_or_else(|| mlua::Error::runtime("CFrame expects a CFrame"))?;
+                return set_part_cframe(lua, id, cf);
+            }
             let Some(property) = names::property_from_name(class, &key) else {
                 return Err(not_a_member(lua, id, &key));
             };
@@ -574,6 +721,327 @@ impl UserData for RunService {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tweens
+// ---------------------------------------------------------------------------
+
+/// How a tween plays: from `TweenInfo.new`.
+#[derive(Debug, Clone, Copy)]
+struct LuaTweenInfo {
+    time: f64,
+    style: EasingStyle,
+    direction: EasingDirection,
+    /// Extra plays after the first; negative repeats forever.
+    repeat_count: i64,
+    reverses: bool,
+    delay: f64,
+}
+
+impl UserData for LuaTweenInfo {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        use names::tween::*;
+        fields.add_field_method_get(TIME, |_, this| Ok(this.time));
+        fields.add_field_method_get(EASING_STYLE, |_, this| {
+            Ok(LuaEnumItem(EnumValue::EasingStyle(this.style)))
+        });
+        fields.add_field_method_get(EASING_DIRECTION, |_, this| {
+            Ok(LuaEnumItem(EnumValue::EasingDirection(this.direction)))
+        });
+        fields.add_field_method_get(REPEAT_COUNT, |_, this| Ok(this.repeat_count));
+        fields.add_field_method_get(REVERSES, |_, this| Ok(this.reverses));
+        fields.add_field_method_get(DELAY_TIME, |_, this| Ok(this.delay));
+        fields.add_meta_field(MetaMethod::Type, INFO_TYPE_NAME);
+    }
+}
+
+/// time, style, direction, repeat count, reverses, delay.
+type TweenInfoArgs = (Option<f64>, Option<Value>, Option<Value>, Option<i64>, Option<bool>, Option<f64>);
+
+fn install_tween_info(lua: &Lua) -> mlua::Result<()> {
+    let lib = lua.create_table()?;
+    lib.set(
+        constructors::NEW,
+        lua.create_function(|_, (time, style, direction, repeat_count, reverses, delay): TweenInfoArgs| {
+            let style = match style.as_ref().map(|v| as_enum(EnumKind::EasingStyle, v)) {
+                None => EasingStyle::Quad,
+                Some(Some(EnumValue::EasingStyle(s))) => s,
+                Some(_) => return Err(mlua::Error::runtime("TweenInfo.new expects an EasingStyle")),
+            };
+            let direction = match direction.as_ref().map(|v| as_enum(EnumKind::EasingDirection, v)) {
+                None => EasingDirection::Out,
+                Some(Some(EnumValue::EasingDirection(d))) => d,
+                Some(_) => return Err(mlua::Error::runtime("TweenInfo.new expects an EasingDirection")),
+            };
+            Ok(LuaTweenInfo {
+                time: time.unwrap_or(1.0).max(0.0),
+                style,
+                direction,
+                repeat_count: repeat_count.unwrap_or(0),
+                reverses: reverses.unwrap_or(false),
+                delay: delay.unwrap_or(0.0).max(0.0),
+            })
+        })?,
+    )?;
+    lua.globals().set(globals::TWEEN_INFO, lib)
+}
+
+/// A value a tween can move between.
+#[derive(Debug, Clone, Copy)]
+enum TweenValue {
+    Number(f64),
+    Vec3(Vec3),
+    Color(Color3),
+    Vec2(Vec2),
+    UDim2(UDim2),
+    CFrame(CFrame),
+}
+
+impl TweenValue {
+    fn from_property(value: &PropertyValue) -> Option<TweenValue> {
+        Some(match value {
+            PropertyValue::Number(n) => TweenValue::Number(*n),
+            PropertyValue::Vec3(v) => TweenValue::Vec3(*v),
+            PropertyValue::Color3(c) => TweenValue::Color(*c),
+            PropertyValue::Vec2(v) => TweenValue::Vec2(*v),
+            PropertyValue::UDim2(u) => TweenValue::UDim2(*u),
+            _ => return None,
+        })
+    }
+
+    fn lerp(self, to: TweenValue, t: f32) -> TweenValue {
+        match (self, to) {
+            (TweenValue::Number(a), TweenValue::Number(b)) => TweenValue::Number(a + (b - a) * t as f64),
+            (TweenValue::Vec3(a), TweenValue::Vec3(b)) => TweenValue::Vec3(a.lerp(b, t)),
+            (TweenValue::Color(a), TweenValue::Color(b)) => TweenValue::Color(a.lerp(b, t)),
+            (TweenValue::Vec2(a), TweenValue::Vec2(b)) => {
+                TweenValue::Vec2(Vec2::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t))
+            }
+            (TweenValue::UDim2(a), TweenValue::UDim2(b)) => TweenValue::UDim2(a.lerp(b, t)),
+            (TweenValue::CFrame(a), TweenValue::CFrame(b)) => TweenValue::CFrame(a.lerp(b, t)),
+            (_, to) => to,
+        }
+    }
+}
+
+/// What a tween goal changes: a property, or a part's CFrame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TweenTarget {
+    Property(Property),
+    PartCFrame,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TweenPhase {
+    Idle,
+    Playing,
+    Paused,
+    Done,
+}
+
+struct TweenState {
+    id: u64,
+    instance: InstanceId,
+    info: LuaTweenInfo,
+    /// Target, value at the start (filled in when played), goal value.
+    goals: Vec<(TweenTarget, Option<TweenValue>, TweenValue)>,
+    elapsed: f64,
+    phase: TweenPhase,
+}
+
+struct TweenService;
+
+impl UserData for TweenService {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method(names::methods::CREATE, |lua, _, (target, info, goals): (Value, Value, Table)| {
+            create_tween(lua, target, info, goals)
+        });
+    }
+}
+
+fn read_tween_value(lua: &Lua, id: InstanceId, target: TweenTarget) -> mlua::Result<Option<TweenValue>> {
+    Ok(match target {
+        TweenTarget::PartCFrame => Some(TweenValue::CFrame(part_cframe(lua, id)?)),
+        TweenTarget::Property(p) => {
+            host(lua).tree.borrow().get(id, p).ok().as_ref().and_then(TweenValue::from_property)
+        }
+    })
+}
+
+fn write_tween_value(lua: &Lua, id: InstanceId, target: TweenTarget, value: TweenValue) {
+    let _ = match (target, value) {
+        (TweenTarget::PartCFrame, TweenValue::CFrame(cf)) => set_part_cframe(lua, id, cf),
+        (TweenTarget::Property(p), v) => {
+            let value = match v {
+                TweenValue::Number(n) => PropertyValue::Number(n),
+                TweenValue::Vec3(v) => PropertyValue::Vec3(v),
+                TweenValue::Color(c) => PropertyValue::Color3(c),
+                TweenValue::Vec2(v) => PropertyValue::Vec2(v),
+                TweenValue::UDim2(u) => PropertyValue::UDim2(u),
+                TweenValue::CFrame(_) => return,
+            };
+            host(lua).tree.borrow_mut().set(id, p, value).map_err(tree_err)
+        }
+        _ => Ok(()),
+    };
+}
+
+fn create_tween(lua: &Lua, target: Value, info: Value, goals: Table) -> mlua::Result<LuaTween> {
+    let id = as_instance(&target).ok_or_else(|| mlua::Error::runtime("Create expects an Instance"))?;
+    let info = match &info {
+        Value::UserData(ud) => {
+            *ud.borrow::<LuaTweenInfo>().map_err(|_| mlua::Error::runtime("Create expects a TweenInfo"))?
+        }
+        _ => return Err(mlua::Error::runtime("Create expects a TweenInfo")),
+    };
+    let class = class_of(lua, id)?;
+    let mut list = Vec::new();
+    for pair in goals.pairs::<String, Value>() {
+        let (key, value) = pair?;
+        if key == names::PART_CFRAME && class.is_physical() {
+            let cf = as_cframe(&value).ok_or_else(|| mlua::Error::runtime("CFrame goals must be CFrames"))?;
+            list.push((TweenTarget::PartCFrame, None, TweenValue::CFrame(cf)));
+            continue;
+        }
+        let property = names::property_from_name(class, &key).ok_or_else(|| not_a_member(lua, id, &key))?;
+        let goal = property_from_lua(property, &value)
+            .as_ref()
+            .and_then(TweenValue::from_property)
+            .ok_or_else(|| mlua::Error::runtime(format!("{key} can't be tweened to that value")))?;
+        list.push((TweenTarget::Property(property), None, goal));
+    }
+    let host = host(lua);
+    let tween = host.next_tween.get();
+    host.next_tween.set(tween + 1);
+    host.tweens.borrow_mut().push(TweenState {
+        id: tween,
+        instance: id,
+        info,
+        goals: list,
+        elapsed: 0.0,
+        phase: TweenPhase::Idle,
+    });
+    Ok(LuaTween(tween))
+}
+
+struct LuaTween(u64);
+
+impl LuaTween {
+    fn with<R>(&self, lua: &Lua, f: impl FnOnce(&mut TweenState) -> R) -> Option<R> {
+        let host = host(lua);
+        let mut tweens = host.tweens.borrow_mut();
+        tweens.iter_mut().find(|t| t.id == self.0).map(f)
+    }
+}
+
+impl UserData for LuaTween {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        fields.add_field_method_get(names::events::COMPLETED, |_, this| {
+            Ok(Signal(SignalKind::TweenCompleted(this.0)))
+        });
+        fields.add_meta_field(MetaMethod::Type, names::tween::TYPE_NAME);
+    }
+
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method(names::tween::PLAY, |lua, this, ()| {
+            let Some((instance, phase, targets)) =
+                this.with(lua, |t| (t.instance, t.phase, t.goals.iter().map(|g| g.0).collect::<Vec<_>>()))
+            else {
+                return Ok(());
+            };
+            if phase == TweenPhase::Playing {
+                return Ok(());
+            }
+            if phase != TweenPhase::Paused {
+                // Starting fresh: remember where everything starts.
+                let mut starts = Vec::new();
+                for target in &targets {
+                    starts.push(read_tween_value(lua, instance, *target)?);
+                }
+                this.with(lua, |t| {
+                    for (goal, start) in t.goals.iter_mut().zip(starts) {
+                        goal.1 = start;
+                    }
+                    t.elapsed = 0.0;
+                });
+            }
+            // A newer tween takes over any property an older one is still moving.
+            {
+                let host = host(lua);
+                let mut tweens = host.tweens.borrow_mut();
+                for other in tweens.iter_mut().filter(|t| t.id != this.0 && t.instance == instance) {
+                    if other.phase == TweenPhase::Playing {
+                        other.goals.retain(|g| !targets.contains(&g.0));
+                    }
+                }
+            }
+            this.with(lua, |t| t.phase = TweenPhase::Playing);
+            Ok(())
+        });
+        methods.add_method(names::tween::PAUSE, |lua, this, ()| {
+            this.with(lua, |t| {
+                if t.phase == TweenPhase::Playing {
+                    t.phase = TweenPhase::Paused;
+                }
+            });
+            Ok(())
+        });
+        methods.add_method(names::tween::CANCEL, |lua, this, ()| {
+            this.with(lua, |t| {
+                t.phase = TweenPhase::Idle;
+                t.elapsed = 0.0;
+            });
+            Ok(())
+        });
+    }
+}
+
+/// Moves every playing tween forward by `dt` and fires the ones that finished.
+fn step_tweens(lua: &Lua, dt: f64) {
+    let mut writes: Vec<(InstanceId, TweenTarget, TweenValue)> = Vec::new();
+    let mut finished = Vec::new();
+    {
+        let host = host(lua);
+        let mut tweens = host.tweens.borrow_mut();
+        for t in tweens.iter_mut().filter(|t| t.phase == TweenPhase::Playing) {
+            t.elapsed += dt;
+            let info = t.info;
+            let active = t.elapsed - info.delay;
+            if active < 0.0 {
+                continue;
+            }
+            let cycle = info.time * if info.reverses { 2.0 } else { 1.0 };
+            let plays = if info.repeat_count < 0 { f64::INFINITY } else { (info.repeat_count + 1) as f64 };
+            let done = cycle <= 0.0 || active >= cycle * plays;
+            let alpha = if done {
+                if info.reverses { 0.0 } else { 1.0 }
+            } else {
+                let within = active % cycle;
+                let forward = within.min(info.time) / info.time.max(1e-9);
+                if info.reverses && within > info.time {
+                    1.0 - (within - info.time) / info.time.max(1e-9)
+                } else {
+                    forward
+                }
+            };
+            let eased = info.style.ease(info.direction, alpha as f32);
+            for (target, start, goal) in &t.goals {
+                let Some(start) = start else { continue };
+                writes.push((t.instance, *target, start.lerp(*goal, eased)));
+            }
+            if done {
+                t.phase = TweenPhase::Done;
+                finished.push(t.id);
+            }
+        }
+    }
+    for (id, target, value) in writes {
+        write_tween_value(lua, id, target, value);
+    }
+    for tween in finished {
+        fire(lua, SignalKind::TweenCompleted(tween), || Ok(MultiValue::new()));
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Signal(SignalKind);
 
@@ -585,8 +1053,36 @@ impl UserData for Signal {
             let id = host.next_connection.get();
             host.next_connection.set(id + 1);
             let script = host.current_script.borrow().clone();
-            host.connections.borrow_mut().push(Connection { id, signal: this.0, script, handler });
+            host.connections.borrow_mut().push(Connection {
+                id,
+                signal: this.0,
+                script,
+                handler,
+                once: false,
+            });
             Ok(ConnectionHandle(id))
+        });
+        methods.add_method(names::signal::ONCE, |lua, this, handler: Function| {
+            let handler = lua.create_registry_value(handler)?;
+            let host = host(lua);
+            let id = host.next_connection.get();
+            host.next_connection.set(id + 1);
+            let script = host.current_script.borrow().clone();
+            host.connections.borrow_mut().push(Connection {
+                id,
+                signal: this.0,
+                script,
+                handler,
+                once: true,
+            });
+            Ok(ConnectionHandle(id))
+        });
+        // `Wait` has to yield, so it is written in Luau (see the prelude).
+        methods.add_meta_method(MetaMethod::Index, |lua, _, key: String| {
+            if key == names::signal::WAIT {
+                return lua.named_registry_value::<Value>(SIGNAL_WAIT_FN);
+            }
+            Err(mlua::Error::runtime(format!("{key} is not a valid member of a signal")))
         });
     }
 }
@@ -626,6 +1122,18 @@ fn fire(lua: &Lua, signal: SignalKind, args: impl Fn() -> mlua::Result<MultiValu
         .filter(|c| c.signal == signal)
         .map(|c| (c.script.clone(), lua.registry_value::<Function>(&c.handler)))
         .collect();
+    // One-shot connections are gone once they have fired.
+    let spent: Vec<Connection> = {
+        let host = host(lua);
+        let mut conns = host.connections.borrow_mut();
+        let (spent, kept) =
+            std::mem::take(&mut *conns).into_iter().partition(|c| c.once && c.signal == signal);
+        *conns = kept;
+        spent
+    };
+    for conn in spent {
+        let _ = lua.remove_registry_value(conn.handler);
+    }
     for (script, handler) in handlers {
         let result = handler.and_then(|f| spawn(lua, f, args()?, &script));
         if let Err(err) = result {
@@ -680,8 +1188,15 @@ fn prelude() -> String {
             results[module] = {{ value = out[2] }}
             return out[2]
         end
-        return wait, wait_for_child, require
+        local signal_wait = function(self)
+            local result
+            self:{once}(function(...) result = table.pack(...) end)
+            while not result do wait() end
+            return table.unpack(result, 1, result.n)
+        end
+        return wait, wait_for_child, require, signal_wait
         "#,
+        once = names::signal::ONCE,
         wait = task::WAIT,
         find = instance::FIND_FIRST_CHILD,
     )
@@ -714,6 +1229,8 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         current_script: RefCell::new(String::new()),
         clock: Cell::new(0.0),
         waiting: RefCell::new(Vec::new()),
+        tweens: RefCell::new(Vec::new()),
+        next_tween: Cell::new(1),
     });
 
     // Weak-valued cache so each instance has exactly one userdata.
@@ -824,8 +1341,11 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         let env = script_env(lua, Some(id))?;
         lua.load(source.unwrap_or_default()).set_name(format!("={name}")).set_environment(env).into_function()
     })?;
-    let (wait, wait_for_child, require): (Function, Function, Function) =
+    let (wait, wait_for_child, require, signal_wait): (Function, Function, Function, Function) =
         lua.load(prelude()).set_name("=libroxel").call((task_lib.clone(), load_module))?;
+    lua.set_named_registry_value(SIGNAL_WAIT_FN, signal_wait)?;
+    crate::types::install(lua)?;
+    install_tween_info(lua)?;
     lua.set_named_registry_value(WAIT_FOR_CHILD_FN, wait_for_child)?;
     g.set(globals::REQUIRE, require)?;
 
@@ -899,12 +1419,27 @@ pub(crate) fn run_chunk(
     }
 }
 
-/// Runs every enabled script instance in the tree, in tree order.
+/// Runs every enabled `Script` in the workspace and the server script
+/// service, in tree order. Scripts elsewhere (in storage, or in GUIs
+/// waiting to be copied to players) don't run.
 pub(crate) fn run_tree_scripts(lua: &Lua) -> Vec<ScriptError> {
+    let roots: Vec<InstanceId> = {
+        let host = host(lua);
+        let tree = host.tree.borrow();
+        [ClassKind::Workspace, ClassKind::ServerScriptService]
+            .iter()
+            .filter_map(|c| tree.service(*c))
+            .collect()
+    };
+    roots.into_iter().flat_map(|root| run_scripts_under(lua, root, ClassKind::Script)).collect()
+}
+
+/// Runs every enabled script of `class` under `ancestor`, in tree order.
+pub(crate) fn run_scripts_under(lua: &Lua, ancestor: InstanceId, class: ClassKind) -> Vec<ScriptError> {
     let scripts: Vec<(InstanceId, String, String)> = {
         let host = host(lua);
         let tree = host.tree.borrow();
-        tree.descendants_of_class(tree.root(), ClassKind::Script)
+        tree.descendants_of_class(ancestor, class)
             .into_iter()
             .filter(|id| tree.get_bool(*id, Property::Disabled) != Some(true))
             .filter_map(|id| {
@@ -947,6 +1482,7 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
             host(lua).errors.borrow_mut().push(err);
         }
     }
+    step_tweens(lua, dt);
     fire(lua, SignalKind::Heartbeat, || Ok(std::iter::once(Value::Number(dt)).collect()));
     take_errors(lua)
 }
@@ -960,6 +1496,40 @@ pub(crate) fn fire_with_instance(lua: &Lua, signal: SignalKind, arg: InstanceId)
 /// Fires an instance event with no arguments.
 pub(crate) fn fire_plain(lua: &Lua, signal: SignalKind) -> Vec<ScriptError> {
     fire(lua, signal, || Ok(MultiValue::new()));
+    take_errors(lua)
+}
+
+/// Fires change events for everything in `changes` that a script is listening to.
+pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
+    let watched: std::collections::HashSet<InstanceId> =
+        host(lua).connections.borrow().iter().filter_map(|c| c.signal.watched()).collect();
+    if watched.is_empty() {
+        return Vec::new();
+    }
+    for change in changes {
+        match *change {
+            Change::PropertyChanged { id, property } if watched.contains(&id) => {
+                let name = names::property_name(property);
+                fire(lua, SignalKind::Changed(id), || {
+                    Ok(std::iter::once(Value::String(lua.create_string(name)?)).collect())
+                });
+                fire(lua, SignalKind::PropertyChanged(id, property), || Ok(MultiValue::new()));
+            }
+            Change::Reparented { id, new_parent: Some(parent), .. } if watched.contains(&parent) => {
+                fire(lua, SignalKind::ChildAdded(parent), || {
+                    Ok(std::iter::once(Value::UserData(push_instance(lua, id)?)).collect())
+                });
+            }
+            _ => {}
+        }
+    }
+    take_errors(lua)
+}
+
+/// Fires a text button's click events.
+pub(crate) fn click_button(lua: &Lua, button: InstanceId) -> Vec<ScriptError> {
+    fire(lua, SignalKind::ButtonClicked(button), || Ok(MultiValue::new()));
+    fire(lua, SignalKind::ButtonActivated(button), || Ok(MultiValue::new()));
     take_errors(lua)
 }
 

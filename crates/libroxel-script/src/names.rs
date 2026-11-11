@@ -10,7 +10,9 @@
 //! They are written from the public descriptions of that style only.
 //! See `CONTRIBUTING.md` for the clean-room rules.
 
-use libroxel_instance::{ClassKind, EnumKind, EnumValue, Material, PartShape, Property};
+use libroxel_instance::{
+    ClassKind, EasingDirection, EasingStyle, EnumKind, EnumValue, Material, PartShape, Property,
+};
 
 /// Global variables installed into every script.
 pub mod globals {
@@ -33,6 +35,10 @@ pub mod globals {
     pub const REQUIRE: &str = "require";
     /// The table of enumerations, such as `Enum.Material`.
     pub const ENUM: &str = "Enum";
+    pub const CFRAME: &str = "CFrame";
+    pub const VECTOR2: &str = "Vector2";
+    pub const UDIM2: &str = "UDim2";
+    pub const TWEEN_INFO: &str = "TweenInfo";
 }
 
 /// Members of the scheduling library.
@@ -57,6 +63,18 @@ pub mod events {
     pub const CHARACTER_ADDED: &str = "CharacterAdded";
     /// On a humanoid: fires once when its health reaches zero.
     pub const DIED: &str = "Died";
+    /// On any instance: fires with a property's name after it changes.
+    pub const CHANGED: &str = "Changed";
+    /// On any instance: fires with the new child when one is added.
+    pub const CHILD_ADDED: &str = "ChildAdded";
+    /// On a text button: fires when it is clicked.
+    pub const MOUSE_BUTTON1_CLICK: &str = "MouseButton1Click";
+    /// On a text button: fires when it is clicked (same moment as the click event).
+    pub const ACTIVATED: &str = "Activated";
+    /// On a click detector: fires with the player who clicked its part.
+    pub const MOUSE_CLICK: &str = "MouseClick";
+    /// On a tween: fires when it finishes playing.
+    pub const COMPLETED: &str = "Completed";
 }
 
 /// Methods that only some classes have.
@@ -67,7 +85,82 @@ pub mod methods {
     pub const GET_PLAYER_FROM_CHARACTER: &str = "GetPlayerFromCharacter";
     /// Humanoid: lowers health by an amount, never below zero.
     pub const TAKE_DAMAGE: &str = "TakeDamage";
+    /// Any instance: a signal that fires when one named property changes.
+    pub const GET_PROPERTY_CHANGED_SIGNAL: &str = "GetPropertyChangedSignal";
+    /// Any instance: destroys every child.
+    pub const CLEAR_ALL_CHILDREN: &str = "ClearAllChildren";
+    /// Any instance: the nearest ancestor with a name.
+    pub const FIND_FIRST_ANCESTOR: &str = "FindFirstAncestor";
+    /// Any instance: the first descendant with a name.
+    pub const FIND_FIRST_DESCENDANT: &str = "FindFirstDescendant";
+    /// Players service: the player on this computer.
+    pub const LOCAL_PLAYER: &str = "LocalPlayer";
+    /// Tween service: makes a tween.
+    pub const CREATE: &str = "Create";
+    /// Model: moves the whole model so its first part is at a CFrame.
+    pub const PIVOT_TO: &str = "PivotTo";
+    /// Model: the CFrame of its first part.
+    pub const GET_PIVOT: &str = "GetPivot";
 }
+
+/// Members of tweens.
+pub mod tween {
+    pub const PLAY: &str = "Play";
+    pub const PAUSE: &str = "Pause";
+    pub const CANCEL: &str = "Cancel";
+    pub const TYPE_NAME: &str = "Tween";
+    pub const INFO_TYPE_NAME: &str = "TweenInfo";
+    pub const TIME: &str = "Time";
+    pub const EASING_STYLE: &str = "EasingStyle";
+    pub const EASING_DIRECTION: &str = "EasingDirection";
+    pub const REPEAT_COUNT: &str = "RepeatCount";
+    pub const REVERSES: &str = "Reverses";
+    pub const DELAY_TIME: &str = "DelayTime";
+}
+
+/// Members of the position-and-rotation type.
+pub mod cframe {
+    pub const TYPE_NAME: &str = "CFrame";
+    pub const POSITION: &str = "Position";
+    pub const X: &str = "X";
+    pub const Y: &str = "Y";
+    pub const Z: &str = "Z";
+    pub const LOOK_VECTOR: &str = "LookVector";
+    pub const RIGHT_VECTOR: &str = "RightVector";
+    pub const UP_VECTOR: &str = "UpVector";
+    pub const ROTATION: &str = "Rotation";
+    pub const INVERSE: &str = "Inverse";
+    pub const LERP: &str = "Lerp";
+    pub const TO_WORLD_SPACE: &str = "ToWorldSpace";
+    pub const TO_OBJECT_SPACE: &str = "ToObjectSpace";
+    pub const POINT_TO_WORLD_SPACE: &str = "PointToWorldSpace";
+    pub const POINT_TO_OBJECT_SPACE: &str = "PointToObjectSpace";
+    pub const TO_ORIENTATION: &str = "ToOrientation";
+    /// Constructors.
+    pub const LOOK_AT: &str = "lookAt";
+    pub const ANGLES: &str = "Angles";
+    pub const FROM_ORIENTATION: &str = "fromOrientation";
+    pub const FROM_AXIS_ANGLE: &str = "fromAxisAngle";
+    pub const IDENTITY: &str = "identity";
+}
+
+/// Members of the 2D vector and screen-dimension types.
+pub mod gui_values {
+    pub const VECTOR2_TYPE_NAME: &str = "Vector2";
+    pub const UDIM2_TYPE_NAME: &str = "UDim2";
+    pub const FROM_SCALE: &str = "fromScale";
+    pub const FROM_OFFSET: &str = "fromOffset";
+    pub const X: &str = "X";
+    pub const Y: &str = "Y";
+    /// On a UDim2 axis.
+    pub const SCALE: &str = "Scale";
+    pub const OFFSET: &str = "Offset";
+    pub const WIDTH: &str = "Width";
+    pub const HEIGHT: &str = "Height";
+}
+
+/// The extra member every part has: its position and rotation together.
+pub const PART_CFRAME: &str = "CFrame";
 
 /// Members of enum items.
 pub mod enum_item {
@@ -82,6 +175,8 @@ pub fn enum_name(kind: EnumKind) -> &'static str {
     match kind {
         EnumKind::Shape => "PartType",
         EnumKind::Material => "Material",
+        EnumKind::EasingStyle => "EasingStyle",
+        EnumKind::EasingDirection => "EasingDirection",
     }
 }
 
@@ -108,6 +203,24 @@ pub fn enum_item_name(value: EnumValue) -> &'static str {
             Material::Wood => "Wood",
             Material::Brick => "Brick",
             Material::Grass => "Grass",
+        },
+        EnumValue::EasingStyle(e) => match e {
+            EasingStyle::Linear => "Linear",
+            EasingStyle::Sine => "Sine",
+            EasingStyle::Quad => "Quad",
+            EasingStyle::Cubic => "Cubic",
+            EasingStyle::Quart => "Quart",
+            EasingStyle::Quint => "Quint",
+            EasingStyle::Exponential => "Exponential",
+            EasingStyle::Circular => "Circular",
+            EasingStyle::Back => "Back",
+            EasingStyle::Bounce => "Bounce",
+            EasingStyle::Elastic => "Elastic",
+        },
+        EnumValue::EasingDirection(d) => match d {
+            EasingDirection::In => "In",
+            EasingDirection::Out => "Out",
+            EasingDirection::InOut => "InOut",
         },
     }
 }
@@ -175,6 +288,7 @@ pub mod color3 {
 /// Services reachable through the root's `GetService`.
 pub mod services {
     pub const RUN_SERVICE: &str = "RunService";
+    pub const TWEEN_SERVICE: &str = "TweenService";
     /// Fires once per frame with the frame's delta time in seconds.
     pub const HEARTBEAT: &str = "Heartbeat";
 }
@@ -184,6 +298,10 @@ pub mod signal {
     pub const CONNECT: &str = "Connect";
     pub const DISCONNECT: &str = "Disconnect";
     pub const CONNECTED: &str = "Connected";
+    /// Like Connect, but only for the next time the signal fires.
+    pub const ONCE: &str = "Once";
+    /// Yields until the signal fires, then returns what it fired with.
+    pub const WAIT: &str = "Wait";
 }
 
 /// What `typeof` reports for an instance.
@@ -208,6 +326,17 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::NumberValue => "NumberValue",
         ClassKind::StringValue => "StringValue",
         ClassKind::BoolValue => "BoolValue",
+        ClassKind::StarterGui => "StarterGui",
+        ClassKind::Lighting => "Lighting",
+        ClassKind::PlayerGui => "PlayerGui",
+        ClassKind::ScreenGui => "ScreenGui",
+        ClassKind::GuiObject => "GuiObject",
+        ClassKind::Frame => "Frame",
+        ClassKind::TextLabel => "TextLabel",
+        ClassKind::TextButton => "TextButton",
+        ClassKind::ClickDetector => "ClickDetector",
+        ClassKind::ServerScriptService => "ServerScriptService",
+        ClassKind::LocalScript => "LocalScript",
     }
 }
 
@@ -239,6 +368,20 @@ pub fn property_name(property: Property) -> &'static str {
         Property::NumberValue | Property::StringValue | Property::BoolValue => "Value",
         Property::Character => "Character",
         Property::UserId => "UserId",
+        Property::GuiPosition => "Position",
+        Property::GuiSize => "Size",
+        Property::AnchorPoint => "AnchorPoint",
+        Property::BackgroundColor => "BackgroundColor3",
+        Property::BackgroundTransparency => "BackgroundTransparency",
+        Property::Visible => "Visible",
+        Property::Text => "Text",
+        Property::TextColor => "TextColor3",
+        Property::TextSize => "TextSize",
+        Property::Enabled => "Enabled",
+        Property::ResetOnSpawn => "ResetOnSpawn",
+        Property::MaxActivationDistance => "MaxActivationDistance",
+        Property::ClockTime => "ClockTime",
+        Property::Brightness => "Brightness",
     }
 }
 
@@ -249,13 +392,16 @@ pub fn property_from_name(class: ClassKind, name: &str) -> Option<Property> {
 
 /// The name scripts see for a kind of property value.
 pub fn value_kind_name(kind: &str) -> &str {
+    if let Some(e) = EnumKind::ALL.iter().find(|e| e.kind_name() == kind) {
+        return enum_name(*e);
+    }
     match kind {
         "Vec3" => vector3::TYPE_NAME,
         "Color3" => color3::TYPE_NAME,
         "bool" => "boolean",
         "ref" => INSTANCE_TYPE_NAME,
-        k if k == EnumKind::Shape.kind_name() => enum_name(EnumKind::Shape),
-        k if k == EnumKind::Material.kind_name() => enum_name(EnumKind::Material),
+        "Vec2" => gui_values::VECTOR2_TYPE_NAME,
+        "UDim2" => gui_values::UDIM2_TYPE_NAME,
         other => other,
     }
 }

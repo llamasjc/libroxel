@@ -11,7 +11,7 @@ and the engine runs on [Bevy](https://bevy.org).
 
 ![The Libroxel editor](docs/editor.png)
 
-![Playing the sample obby, with the leaderboard](docs/playing.png)
+![Playing the sample obby, with the leaderboard and an on-screen coin counter](docs/playing.png)
 
 ## Getting started
 
@@ -42,7 +42,9 @@ The first build compiles Bevy and takes a while. After that it is quick.
 
 - **File → Open sample obby** loads a small obstacle course with a wooden
   ramp, spinning coins, lava, fading platforms, a lift and a finish pad, plus
-  a leaderboard that counts coins and deaths. Press **▶ Play** (or F5) to try it.
+  a leaderboard that counts coins and deaths, an on-screen coin counter, a
+  day/night button and a vault whose door opens when you click it. Press
+  **▶ Play** (or F5) to try it.
 - **Explorer** (left) shows the instance tree. Click to select, double-click
   a script to edit it, drag one item onto another to move it inside, and
   right-click for Insert, Rename, Duplicate and Delete.
@@ -60,6 +62,11 @@ The first build compiles Bevy and takes a while. After that it is quick.
   your character spawns at the first SpawnLocation. If scripts give you a
   `leaderstats` folder, the leaderboard shows it in the top-right corner. Walk with WASD, jump with Space, turn the camera with
   the right mouse button. Stop (or Esc) puts the world back as it was.
+- **Screen GUIs:** put a `ScreenGui` in StarterGui and fill it with frames,
+  text labels and text buttons (Insert menu). They are drawn over the view
+  while you edit, so you can click one to select it and lay it out with
+  Position, Size and AnchorPoint. While playing, every player gets a copy,
+  buttons can be clicked, and parts with a `ClickDetector` can be clicked too.
 - **Output** (bottom) shows `print`, `warn` and script errors. While playing
   you can type Luau into its command bar and press Enter.
 - **Undo/redo** with Ctrl+Z and Ctrl+Y. **Save** with Ctrl+S. Games are
@@ -84,16 +91,43 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
 `game:GetService`, and signals with `:Connect`. What exists today:
 
 - **Globals:** `game`, `workspace`, `script`, `Instance.new(class, parent?)`,
-  `Vector3.new/zero/one`, `Color3.new/fromRGB`, `Enum`, `require`, `print`,
-  `warn`, `time()`, `task.wait`, `task.spawn`, `task.delay`, and `wait`.
+  `Vector3.new/zero/one`, `Vector2`, `Color3.new/fromRGB`, `CFrame`, `UDim2`,
+  `TweenInfo`, `Enum`, `require`, `print`, `warn`, `time()`, `task.wait`,
+  `task.spawn`, `task.delay`, and `wait`.
 - **Classes:** `Part`, `SpawnLocation`, `Model`, `Folder`, `Script`,
-  `ModuleScript`, `Humanoid`, `IntValue`, `NumberValue`, `StringValue`,
-  `BoolValue`, plus the built-in `Workspace`, `Players` (with one `Player`
-  each) and `ReplicatedStorage`.
+  `LocalScript`, `ModuleScript`, `Humanoid`, `IntValue`, `NumberValue`,
+  `StringValue`, `BoolValue`, `ClickDetector`, `ScreenGui`, `Frame`,
+  `TextLabel`, `TextButton`, plus the built-in `Workspace`, `Players` (with
+  one `Player` each, holding a `PlayerGui`), `ReplicatedStorage`,
+  `ServerScriptService`, `StarterGui` and `Lighting`.
 - **Instance members:** `Name`, `ClassName`, `Parent`, `FindFirstChild`,
-  `FindFirstChildOfClass`, `WaitForChild`, `GetChildren`, `GetDescendants`,
-  `IsA`, `IsDescendantOf`, `GetFullName`, `Clone`, `Destroy`, and
-  `instance.ChildName`.
+  `FindFirstChildOfClass`, `FindFirstAncestor`, `FindFirstDescendant`,
+  `WaitForChild`, `GetChildren`, `GetDescendants`, `ClearAllChildren`, `IsA`,
+  `IsDescendantOf`, `GetFullName`, `Clone`, `Destroy`, `instance.ChildName`,
+  the `Changed` and `ChildAdded` events, and `GetPropertyChangedSignal(name)`.
+- **Signals:** `Connect` (returns a connection with `Disconnect`), `Once`,
+  and `Wait`, which pauses the script until the signal fires and returns its
+  arguments.
+- **CFrame:** `CFrame.new`, `CFrame.lookAt`, `CFrame.Angles`,
+  `fromOrientation` and `fromAxisAngle`; `Position`, `LookVector`,
+  `RightVector`, `UpVector`, `Inverse`, `Lerp`, `ToWorldSpace`,
+  `ToObjectSpace`, `PointToWorldSpace`, `PointToObjectSpace`, `*` and `+`.
+  Parts have a `CFrame`, and models have `GetPivot` and `PivotTo`.
+- **TweenService:** `TweenService:Create(instance, TweenInfo.new(time, style,
+  direction, repeats, reverses, delay), goals)` animates numbers, vectors,
+  colours, `UDim2`s and `CFrame`s with eleven easing styles. Tweens have
+  `Play`, `Pause`, `Cancel` and a `Completed` event.
+- **GUIs:** `ScreenGui` (`Enabled`, `ResetOnSpawn`), and `Frame`,
+  `TextLabel` and `TextButton` with `Position` and `Size` (`UDim2`),
+  `AnchorPoint`, `BackgroundColor3`, `BackgroundTransparency`, `Visible`,
+  `Text`, `TextColor3` and `TextSize`. Buttons fire `MouseButton1Click` and
+  `Activated`. `LocalScript`s inside a GUI run for the player, and
+  `Players.LocalPlayer` is that player.
+- **Clicking parts:** a `ClickDetector` inside a part fires
+  `MouseClick(player)` when the player clicks the part from within
+  `MaxActivationDistance` studs.
+- **Lighting:** `ClockTime` (0 to 24) moves the sun and colours the sky, and
+  `Brightness` sets how strong the sun is.
 - **Part properties and events:** `Position`, `Orientation` (degrees),
   `Size`, `Shape` (`Enum.PartType`), `Color`, `Material` (`Enum.Material`),
   `Anchored`, `CanCollide`, `Transparency`, and the `Touched` event. Enum
@@ -109,7 +143,8 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `HumanoidRootPart` and a `Humanoid` (`Health`, `MaxHealth`, `WalkSpeed`,
   `JumpPower`, `TakeDamage(amount)` and the `Died` event). When health
   reaches 0 the character dies and respawns after two seconds.
-- **Services:** `RunService.Heartbeat`, fired once per frame with the frame time.
+- **Services:** `RunService.Heartbeat`, fired once per frame with the frame
+  time. Scripts start when they are in Workspace or ServerScriptService.
 
 A kill brick, for example:
 
@@ -140,7 +175,19 @@ script.Parent.Touched:Connect(function(hit)
 end)
 ```
 
-**Not yet:** `CFrame`, GUIs, sounds, terrain and voxels, multiplayer, and
+A door that slides open when clicked:
+
+```lua
+local TweenService = game:GetService("TweenService")
+local door = script.Parent
+
+door.ClickDetector.MouseClick:Connect(function(player)
+	local goal = { CFrame = door.CFrame + Vector3.new(0, 6, 0) }
+	TweenService:Create(door, TweenInfo.new(0.6), goal):Play()
+end)
+```
+
+**Not yet:** images and other GUI objects, sounds, terrain and voxels, multiplayer, and
 data saving. Physics is simple: anchored parts can be rotated and shaped
 (ramps and balls work), but loose parts are upright boxes that fall and
 stack without tipping over. Characters climb steps up to 0.6 studs.

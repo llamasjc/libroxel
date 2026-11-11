@@ -422,3 +422,173 @@ fn players_service_and_leaderstats() {
     assert!(rt.humanoid_died(humanoid).is_empty());
     assert_eq!(printed(&rt), vec!["joined Alex 1 10", "character Alex true", "health 0", "died"]);
 }
+
+#[test]
+fn cframes_move_and_turn_parts() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local part = Instance.new("Part", workspace)
+        part.CFrame = CFrame.new(1, 2, 3) * CFrame.Angles(0, math.rad(90), 0)
+        print(part.Position, part.Orientation)
+        local look = part.CFrame.LookVector
+        print(math.round(look.X) + 0, math.round(look.Y) + 0, math.round(look.Z) + 0)
+        local cf = CFrame.lookAt(Vector3.new(0, 0, 0), Vector3.new(0, 0, -10))
+        print(cf.LookVector == Vector3.new(0, 0, -1), typeof(cf))
+        local moved = (cf * CFrame.new(0, 0, -5)).Position
+        print(moved.Z, (cf:Inverse() * cf).Position.Magnitude)
+        print(CFrame.new(1, 0, 0):PointToWorldSpace(Vector3.new(1, 0, 0)))
+
+        local model = Instance.new("Model", workspace)
+        for i = 1, 2 do
+            local p = Instance.new("Part", model)
+            p.Position = Vector3.new(i * 10, 0, 0)
+        end
+        model:PivotTo(CFrame.new(0, 50, 0))
+        local a, b = model:GetChildren()[1], model:GetChildren()[2]
+        print(a.Position, b.Position)
+    "#,
+    );
+    let out = printed(&rt);
+    assert_eq!(out[0], "1, 2, 3 0, 90, 0");
+    assert_eq!(out[1], "-1 0 0", "turned 90 degrees, forward is now -X");
+    assert_eq!(out[2], "true CFrame");
+    assert_eq!(out[3], "-5 0");
+    assert_eq!(out[4], "2, 0, 0");
+    assert_eq!(out[5], "0, 50, 0 10, 50, 0", "the model moved as one piece");
+}
+
+#[test]
+fn tweens_animate_properties_and_signal_completion() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local TweenService = game:GetService("TweenService")
+        local part = Instance.new("Part", workspace)
+        part.Name = "Door"
+        local info = TweenInfo.new(1, Enum.EasingStyle.Linear)
+        local tween = TweenService:Create(part, info, { Position = Vector3.new(10, 0, 0), Transparency = 1 })
+        tween:Play()
+        tween.Completed:Wait()
+        print("done", part.Position, part.Transparency)
+    "#,
+    );
+    rt.step(0.5);
+    {
+        let tree = rt.tree().borrow();
+        let door = tree.find_first_child(tree.workspace(), "Door").unwrap().unwrap();
+        let x = tree.get_vec3(door, Property::Position).unwrap().x;
+        assert!((x - 5.0).abs() < 0.2, "halfway after half the time: {x}");
+    }
+    assert!(printed(&rt).is_empty());
+    rt.step(0.6);
+    rt.step(0.1);
+    assert_eq!(printed(&rt), vec!["done 10, 0, 0 1"]);
+}
+
+#[test]
+fn change_events_and_signal_helpers() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local value = Instance.new("IntValue", workspace)
+        value.Name = "Score"
+        value.Changed:Connect(function(property) print("changed", property, value.Value) end)
+        value:GetPropertyChangedSignal("Name"):Connect(function() print("renamed", value.Name) end)
+        workspace.ChildAdded:Once(function(child) print("added", child.Name) end)
+        task.spawn(function()
+            local child = workspace.ChildAdded:Wait()
+            print("waited for", child.Name)
+        end)
+    "#,
+    );
+    rt.tree().borrow_mut().drain_changes();
+    run(
+        &rt,
+        r#"
+        workspace.Score.Value = 5
+        workspace.Score.Name = "Points"
+        Instance.new("Folder", workspace).Name = "First"
+    "#,
+    );
+    let changes = rt.tree().borrow_mut().drain_changes();
+    assert!(rt.fire_changes(&changes).is_empty());
+    rt.step(0.1);
+    let out = printed(&rt);
+    assert!(out.contains(&"changed Value 5".to_string()), "{out:?}");
+    assert!(out.contains(&"renamed Points".to_string()), "{out:?}");
+    assert!(out.contains(&"added Folder".to_string()) || out.contains(&"added First".to_string()), "{out:?}");
+    assert!(out.iter().any(|l| l.starts_with("waited for")), "{out:?}");
+
+    // Once really is once.
+    run(&rt, r#"Instance.new("Folder", workspace)"#);
+    let changes = rt.tree().borrow_mut().drain_changes();
+    rt.fire_changes(&changes);
+    rt.step(0.1);
+    assert!(printed(&rt).iter().all(|l| !l.starts_with("added")));
+}
+
+#[test]
+fn guis_buttons_and_click_detectors() {
+    let rt = runtime();
+    let (player, button, detector) = {
+        let mut tree = rt.tree().borrow_mut();
+        let players = tree.service(ClassKind::Players).unwrap();
+        let player = tree.create(ClassKind::Player, "Sam").unwrap();
+        tree.set_parent(player, Some(players)).unwrap();
+        let gui = tree.create(ClassKind::PlayerGui, "PlayerGui").unwrap();
+        tree.set_parent(gui, Some(player)).unwrap();
+        let screen = tree.create(ClassKind::ScreenGui, "Hud").unwrap();
+        tree.set_parent(screen, Some(gui)).unwrap();
+        let button = tree.create(ClassKind::TextButton, "Buy").unwrap();
+        tree.set_parent(button, Some(screen)).unwrap();
+        let part = tree.create(ClassKind::Part, "Lever").unwrap();
+        let ws = tree.workspace();
+        tree.set_parent(part, Some(ws)).unwrap();
+        let detector = tree.create(ClassKind::ClickDetector, "ClickDetector").unwrap();
+        tree.set_parent(detector, Some(part)).unwrap();
+        (player, button, detector)
+    };
+    run(
+        &rt,
+        r#"
+        local player = game:GetService("Players").LocalPlayer
+        local button = player.PlayerGui.Hud.Buy
+        button.Size = UDim2.new(0.5, 10, 0, 40)
+        button.AnchorPoint = Vector2.new(0.5, 0.5)
+        print(button.Size, button.Size.X.Scale, button.AnchorPoint, button:IsA("GuiObject"))
+        button.MouseButton1Click:Connect(function() button.Text = "Bought!" end)
+        workspace.Lever.ClickDetector.MouseClick:Connect(function(who) print("pulled by", who.Name) end)
+    "#,
+    );
+    assert_eq!(printed(&rt), vec!["{0.5, 10}, {0, 40} 0.5 0.5, 0.5 true"]);
+    assert!(rt.click_button(button).is_empty());
+    assert!(rt.click_detector(detector, player).is_empty());
+    assert_eq!(printed(&rt), vec!["pulled by Sam"]);
+    let tree = rt.tree().borrow();
+    assert_eq!(tree.get_string(button, Property::Text).as_deref(), Some("Bought!"));
+}
+
+#[test]
+fn only_world_and_server_scripts_start() {
+    let rt = runtime();
+    {
+        let mut tree = rt.tree().borrow_mut();
+        for (service, name) in [
+            (ClassKind::Workspace, "InWorld"),
+            (ClassKind::ServerScriptService, "OnServer"),
+            (ClassKind::ReplicatedStorage, "InStorage"),
+            (ClassKind::StarterGui, "InStarterGui"),
+        ] {
+            let parent = tree.service(service).unwrap();
+            let script = tree.create(ClassKind::Script, name).unwrap();
+            tree.set_parent(script, Some(parent)).unwrap();
+            tree.set(script, Property::Source, PropertyValue::String("print(script.Name)".into())).unwrap();
+        }
+    }
+    assert!(rt.run_tree_scripts().is_empty());
+    assert_eq!(printed(&rt), vec!["InWorld", "OnServer"]);
+}

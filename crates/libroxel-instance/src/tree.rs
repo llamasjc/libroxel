@@ -130,6 +130,9 @@ impl InstanceTree {
                 ClassKind::Workspace => "Workspace",
                 ClassKind::Players => "Players",
                 ClassKind::ReplicatedStorage => "ReplicatedStorage",
+                ClassKind::StarterGui => "StarterGui",
+                ClassKind::Lighting => "Lighting",
+                ClassKind::ServerScriptService => "ServerScriptService",
                 _ => unreachable!("every service has a name"),
             };
             let id = tree.alloc(InstanceData::new(class, name.into()));
@@ -366,12 +369,13 @@ impl InstanceTree {
                 return Err(wrong_type(&value));
             }
             let value = match (property, value) {
-                (Property::Transparency, PropertyValue::Number(t)) => {
+                (Property::Transparency | Property::BackgroundTransparency, PropertyValue::Number(t)) => {
                     PropertyValue::Number(t.clamp(0.0, 1.0))
                 }
                 (Property::NumberValue, PropertyValue::Number(n)) if class == ClassKind::IntValue => {
                     PropertyValue::Number(n.round())
                 }
+                (Property::ClockTime, PropertyValue::Number(n)) => PropertyValue::Number(n.rem_euclid(24.0)),
                 (_, v) => v,
             };
             replace(slot, value)

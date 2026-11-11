@@ -1,6 +1,6 @@
 //! Typed properties.
 
-use crate::{Color3, EnumKind, EnumValue, InstanceId, Vec3};
+use crate::{Color3, EnumKind, EnumValue, InstanceId, UDim2, Vec2, Vec3};
 
 /// Every property an instance can have.
 ///
@@ -32,6 +32,26 @@ pub enum Property {
     /// On a player: the model they control, if any.
     Character,
     UserId,
+    /// A GUI object's place inside its parent.
+    GuiPosition,
+    GuiSize,
+    /// Which point of a GUI object sits at its position (0,0 top-left, 1,1 bottom-right).
+    AnchorPoint,
+    BackgroundColor,
+    BackgroundTransparency,
+    Visible,
+    Text,
+    TextColor,
+    TextSize,
+    /// Whether a screen GUI is shown.
+    Enabled,
+    /// Whether a screen GUI is put back fresh each time the character respawns.
+    ResetOnSpawn,
+    /// How far away (in studs) a player can be to click a part.
+    MaxActivationDistance,
+    /// Hours since midnight, 0 to 24.
+    ClockTime,
+    Brightness,
 }
 
 /// The value of a property.
@@ -45,6 +65,8 @@ pub enum PropertyValue {
     Enum(EnumValue),
     /// A link to another instance. Links are runtime-only and are not saved.
     Ref(Option<InstanceId>),
+    Vec2(Vec2),
+    UDim2(UDim2),
 }
 
 impl PropertyValue {
@@ -58,6 +80,8 @@ impl PropertyValue {
             PropertyValue::Color3(_) => "Color3",
             PropertyValue::Enum(v) => v.kind().kind_name(),
             PropertyValue::Ref(_) => "ref",
+            PropertyValue::Vec2(_) => "Vec2",
+            PropertyValue::UDim2(_) => "UDim2",
         }
     }
 }
@@ -66,10 +90,23 @@ impl Property {
     /// The kind of value this property holds, as [`PropertyValue::kind_name`] spells it.
     pub fn expected_kind(self) -> &'static str {
         match self {
-            Property::Name | Property::Source | Property::StringValue => "string",
+            Property::Name | Property::Source | Property::StringValue | Property::Text => "string",
             Property::Position | Property::Size | Property::Orientation => "Vec3",
-            Property::Color => "Color3",
-            Property::Anchored | Property::CanCollide | Property::Disabled | Property::BoolValue => "bool",
+            Property::Color | Property::BackgroundColor | Property::TextColor => "Color3",
+            Property::Anchored
+            | Property::CanCollide
+            | Property::Disabled
+            | Property::BoolValue
+            | Property::Visible
+            | Property::Enabled
+            | Property::ResetOnSpawn => "bool",
+            Property::GuiPosition | Property::GuiSize => "UDim2",
+            Property::AnchorPoint => "Vec2",
+            Property::BackgroundTransparency
+            | Property::TextSize
+            | Property::MaxActivationDistance
+            | Property::ClockTime
+            | Property::Brightness => "number",
             Property::Transparency
             | Property::Health
             | Property::MaxHealth
@@ -115,6 +152,20 @@ impl Property {
         Property::BoolValue,
         Property::Character,
         Property::UserId,
+        Property::GuiPosition,
+        Property::GuiSize,
+        Property::AnchorPoint,
+        Property::BackgroundColor,
+        Property::BackgroundTransparency,
+        Property::Visible,
+        Property::Text,
+        Property::TextColor,
+        Property::TextSize,
+        Property::Enabled,
+        Property::ResetOnSpawn,
+        Property::MaxActivationDistance,
+        Property::ClockTime,
+        Property::Brightness,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -141,6 +192,20 @@ impl Property {
             Property::BoolValue => "bool_value",
             Property::Character => "character",
             Property::UserId => "user_id",
+            Property::GuiPosition => "gui_position",
+            Property::GuiSize => "gui_size",
+            Property::AnchorPoint => "anchor_point",
+            Property::BackgroundColor => "background_color",
+            Property::BackgroundTransparency => "background_transparency",
+            Property::Visible => "visible",
+            Property::Text => "text",
+            Property::TextColor => "text_color",
+            Property::TextSize => "text_size",
+            Property::Enabled => "enabled",
+            Property::ResetOnSpawn => "reset_on_spawn",
+            Property::MaxActivationDistance => "max_activation_distance",
+            Property::ClockTime => "clock_time",
+            Property::Brightness => "brightness",
         }
     }
 

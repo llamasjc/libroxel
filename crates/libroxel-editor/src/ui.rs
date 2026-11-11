@@ -15,7 +15,7 @@ use libroxel_instance::{
 };
 use libroxel_script::names;
 
-use crate::{Dialog, Editor, Tool, games_dir, templates, viewport};
+use crate::{Dialog, Editor, Tool, games_dir, gui, templates, viewport};
 
 /// Things the UI asks for; applied after drawing so nothing is borrowed twice.
 enum Action {
@@ -36,6 +36,10 @@ enum Action {
     Delete(InstanceId),
     Duplicate(InstanceId),
     Select(Option<InstanceId>),
+    /// While playing: the player clicked a GUI button.
+    ClickButton(InstanceId),
+    /// While playing: the player clicked a part in the world.
+    ClickPart(InstanceId),
     Reparent(InstanceId, InstanceId),
     OpenScript(InstanceId),
     Rename(InstanceId, String),
@@ -47,6 +51,7 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::Part,
     ClassKind::SpawnLocation,
     ClassKind::Script,
+    ClassKind::LocalScript,
     ClassKind::ModuleScript,
     ClassKind::Model,
     ClassKind::Folder,
@@ -54,6 +59,11 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::NumberValue,
     ClassKind::StringValue,
     ClassKind::BoolValue,
+    ClassKind::ClickDetector,
+    ClassKind::ScreenGui,
+    ClassKind::Frame,
+    ClassKind::TextLabel,
+    ClassKind::TextButton,
 ];
 
 const SHAPES: &[(PartShape, &str)] = &[
@@ -80,12 +90,21 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::IntValue | ClassKind::NumberValue => "🔢",
         ClassKind::StringValue => "🔤",
         ClassKind::BoolValue => "☑",
+        ClassKind::LocalScript => "📄",
+        ClassKind::StarterGui | ClassKind::PlayerGui => "🖼",
+        ClassKind::ScreenGui => "🖥",
+        ClassKind::GuiObject | ClassKind::Frame => "▭",
+        ClassKind::TextLabel => "🏷",
+        ClassKind::TextButton => "🔘",
+        ClassKind::ClickDetector => "👆",
+        ClassKind::Lighting => "☀",
+        ClassKind::ServerScriptService => "⚙",
     }
 }
 
 /// Classes that hold Luau source and open in the script editor.
 fn is_code(class: ClassKind) -> bool {
-    matches!(class, ClassKind::Script | ClassKind::ModuleScript)
+    matches!(class, ClassKind::Script | ClassKind::LocalScript | ClassKind::ModuleScript)
 }
 
 fn level_color(level: LogLevel) -> Color32 {
@@ -160,6 +179,12 @@ pub fn editor_ui(
 
     // The space left over is the 3D view.
     let mut gizmo_hot = false;
+    let mut gui_hit: gui::GuiHit = None;
+    let gui_root = if playing {
+        engine.session.as_ref().and_then(|s| s.player_gui())
+    } else {
+        tree_rc.borrow().service(ClassKind::StarterGui)
+    };
     let central = egui::CentralPanel::no_frame()
         .show(&mut root, |ui| {
             if let Ok((cam, gt, _, _)) = cameras.single() {
@@ -172,6 +197,10 @@ pub fn editor_ui(
                     now,
                     !playing,
                 );
+            }
+            if let Some(root) = gui_root {
+                let selected = if playing { None } else { editor.selection };
+                gui_hit = gui::draw(ui, &tree_rc.borrow(), root, ui.max_rect(), selected);
             }
             hud(ui, playing);
             if playing {
@@ -202,9 +231,24 @@ pub fn editor_ui(
         && let (Some(pos), Ok((cam, gt, _, _))) = (pointer, cameras.single())
         && let Ok(ray) = cam.viewport_to_world(gt, Vec2::new(pos.x, pos.y))
     {
-        let hit = viewport::pick(&tree_rc.borrow(), ray);
-        editor.reveal_selection = hit.is_some();
-        actions.push(Action::Select(hit));
+        match gui_hit {
+            Some((id, ClassKind::TextButton)) if playing => actions.push(Action::ClickButton(id)),
+            Some(_) if playing => {}
+            Some((id, _)) => {
+                editor.reveal_selection = true;
+                actions.push(Action::Select(Some(id)));
+            }
+            None => {
+                let hit = viewport::pick(&tree_rc.borrow(), ray);
+                match hit {
+                    Some(part) if playing => actions.push(Action::ClickPart(part)),
+                    _ => {
+                        editor.reveal_selection = hit.is_some();
+                        actions.push(Action::Select(hit));
+                    }
+                }
+            }
+        }
     }
 
     // Fit the 3D camera to the free space between panels.
@@ -599,6 +643,28 @@ fn properties(
             "While playing, each player appears here. Scripts can add a `leaderstats` folder with values to show them on the leaderboard.",
         ),
         ClassKind::ReplicatedStorage => Some("A place for modules and templates that aren't in the world."),
+        ClassKind::LocalScript => Some(
+            "Local scripts run for the player, from inside a screen GUI in StarterGui. \
+             `game.Players.LocalPlayer` is the player.",
+        ),
+        ClassKind::ServerScriptService => {
+            Some("Scripts in here start when you press Play, without being part of the world.")
+        }
+        ClassKind::StarterGui => Some(
+            "Screen GUIs in here are copied to each player when they spawn, and drawn over the view. \
+             Click a GUI object in the view to select it.",
+        ),
+        ClassKind::ScreenGui => {
+            Some("Put frames, text labels and text buttons inside to show them on screen.")
+        }
+        ClassKind::TextButton => {
+            Some("A local script can listen with `button.MouseButton1Click:Connect(function() ... end)`.")
+        }
+        ClassKind::ClickDetector => Some(
+            "Put this inside a part. While playing, clicking the part fires `MouseClick` with the player, \
+             if their character is close enough.",
+        ),
+        ClassKind::Lighting => Some("ClockTime sets the time of day: 6 is sunrise, 12 noon, 18 sunset."),
         _ => None,
     };
     if let Some(hint) = hint {
@@ -628,12 +694,14 @@ fn property_editor(
         }
         PropertyValue::Bool(mut b) => ui.checkbox(&mut b, "").changed().then_some(PropertyValue::Bool(b)),
         PropertyValue::Number(mut n) => {
-            let drag = egui::DragValue::new(&mut n).speed(if property == Property::Transparency {
-                0.01
-            } else {
-                0.5
-            });
-            let drag = if property == Property::Transparency { drag.range(0.0..=1.0) } else { drag };
+            let fraction = matches!(property, Property::Transparency | Property::BackgroundTransparency);
+            let speed = match property {
+                _ if fraction => 0.01,
+                Property::ClockTime | Property::Brightness => 0.05,
+                _ => 0.5,
+            };
+            let drag = egui::DragValue::new(&mut n).speed(speed);
+            let drag = if fraction { drag.range(0.0..=1.0) } else { drag };
             ui.add(drag).changed().then_some(PropertyValue::Number(n))
         }
         PropertyValue::Vec3(mut v) => {
@@ -665,6 +733,35 @@ fn property_editor(
                     }
                 });
             (chosen != current).then_some(PropertyValue::Enum(chosen))
+        }
+        PropertyValue::Vec2(mut v) => {
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                for (axis, value) in [("X", &mut v.x), ("Y", &mut v.y)] {
+                    ui.label(RichText::new(axis).small().weak());
+                    changed |= ui.add(egui::DragValue::new(value).speed(0.01).max_decimals(3)).changed();
+                }
+            });
+            changed.then_some(PropertyValue::Vec2(v))
+        }
+        PropertyValue::UDim2(mut u) => {
+            let mut changed = false;
+            ui.vertical(|ui| {
+                for (axis, scale, offset) in
+                    [("X", &mut u.x_scale, &mut u.x_offset), ("Y", &mut u.y_scale, &mut u.y_offset)]
+                {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(axis).small().weak());
+                        changed |= ui
+                            .add(egui::DragValue::new(scale).speed(0.01).max_decimals(3).prefix("scale "))
+                            .changed();
+                        changed |= ui
+                            .add(egui::DragValue::new(offset).speed(1.0).max_decimals(1).prefix("px "))
+                            .changed();
+                    });
+                }
+            });
+            changed.then_some(PropertyValue::UDim2(u))
         }
         // Shown by the caller, which can look up the name.
         PropertyValue::Ref(_) => None,
@@ -797,8 +894,8 @@ fn hud(ui: &mut egui::Ui, playing: bool) {
     };
     let rect = ui.max_rect();
     ui.painter().text(
-        rect.left_bottom() + egui::vec2(8.0, -8.0),
-        egui::Align2::LEFT_BOTTOM,
+        rect.right_bottom() + egui::vec2(-8.0, -8.0),
+        egui::Align2::RIGHT_BOTTOM,
         text,
         egui::FontId::proportional(13.0),
         Color32::from_white_alpha(170),
@@ -943,6 +1040,23 @@ fn save_to(engine: &mut EngineState, editor: &mut Editor, path: PathBuf) {
     }
 }
 
+/// Where a new frame, label or button goes: inside the selected GUI, or the
+/// first screen GUI in StarterGui (made if there is none).
+fn gui_parent(tree: &mut InstanceTree, selection: Option<InstanceId>) -> Option<InstanceId> {
+    if let Some(sel) = selection
+        && tree.class(sel).is_ok_and(|c| c == ClassKind::ScreenGui || c.is_gui_object())
+    {
+        return Some(sel);
+    }
+    let starter = tree.service(ClassKind::StarterGui)?;
+    if let Some(screen) = tree.find_first_child_of_class(starter, ClassKind::ScreenGui).ok().flatten() {
+        return Some(screen);
+    }
+    let screen = tree.create(ClassKind::ScreenGui, names::class_name(ClassKind::ScreenGui)).ok()?;
+    tree.set_parent(screen, Some(starter)).ok()?;
+    Some(screen)
+}
+
 fn new_instance(
     tree: &mut InstanceTree,
     class: ClassKind,
@@ -965,6 +1079,10 @@ fn new_instance(
             Property::Source,
             PropertyValue::String("print(\"Hello from \" .. script.Name)\n".into()),
         );
+    }
+    if class == ClassKind::LocalScript {
+        let source = "local player = game.Players.LocalPlayer\nprint(\"Hello, \" .. player.Name)\n";
+        let _ = tree.set(id, Property::Source, PropertyValue::String(source.into()));
     }
     if class == ClassKind::ModuleScript {
         let source = "local module = {}\n\nfunction module.hello()\n\tprint(\"Hello from \" .. script.Name)\nend\n\nreturn module\n";
@@ -1063,11 +1181,15 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             // Modules live in storage unless something else is selected.
             let parent = match class {
                 ClassKind::ModuleScript => tree.service(ClassKind::ReplicatedStorage).unwrap_or(parent),
+                ClassKind::ScreenGui => tree.service(ClassKind::StarterGui).unwrap_or(parent),
+                c if c.is_gui_object() => gui_parent(&mut tree, editor.selection).unwrap_or(parent),
                 _ => parent,
             };
             let goes_inside = matches!(
                 class,
                 ClassKind::Script
+                    | ClassKind::LocalScript
+                    | ClassKind::ClickDetector
                     | ClassKind::ModuleScript
                     | ClassKind::IntValue
                     | ClassKind::NumberValue
@@ -1181,6 +1303,18 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             }
         }
         Action::Select(id) => editor.selection = id,
+        Action::ClickButton(id) => {
+            if let Some(session) = engine.session.as_mut() {
+                session.click_button(id);
+            }
+        }
+        Action::ClickPart(id) => {
+            let clickable = engine.session.as_mut().is_some_and(|s| s.click_part(id));
+            if !clickable {
+                editor.reveal_selection = true;
+                editor.selection = Some(id);
+            }
+        }
         Action::Reparent(child, parent) => {
             let tree_rc = engine.tree.clone();
             let mut tree = tree_rc.borrow_mut();

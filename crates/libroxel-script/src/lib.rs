@@ -21,6 +21,7 @@
 
 mod bindings;
 pub mod names;
+mod types;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -109,6 +110,28 @@ impl ScriptRuntime {
     /// Fires `part`'s touch event with `other` as the argument.
     pub fn fire_touched(&self, part: InstanceId, other: InstanceId) -> Vec<ScriptError> {
         bindings::fire_touched(&self.lua, part, other)
+    }
+
+    /// Starts every enabled `LocalScript` under `ancestor` (such as a
+    /// player's GUI after it is copied in).
+    pub fn run_local_scripts(&self, ancestor: InstanceId) -> Vec<ScriptError> {
+        bindings::run_scripts_under(&self.lua, ancestor, libroxel_instance::ClassKind::LocalScript)
+    }
+
+    /// Fires change events (`Changed`, `GetPropertyChangedSignal`,
+    /// `ChildAdded`) for changes the host has drained from the tree.
+    pub fn fire_changes(&self, changes: &[libroxel_instance::Change]) -> Vec<ScriptError> {
+        bindings::fire_changes(&self.lua, changes)
+    }
+
+    /// Fires a text button's click events, as if the player clicked it.
+    pub fn click_button(&self, button: InstanceId) -> Vec<ScriptError> {
+        bindings::click_button(&self.lua, button)
+    }
+
+    /// Fires a click detector's click event with the player who clicked.
+    pub fn click_detector(&self, detector: InstanceId, player: InstanceId) -> Vec<ScriptError> {
+        bindings::fire_with_instance(&self.lua, bindings::SignalKind::MouseClick(detector), player)
     }
 
     /// Fires the players service's join event for `player`.

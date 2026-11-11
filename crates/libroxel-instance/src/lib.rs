@@ -20,8 +20,8 @@ pub mod place;
 mod property;
 mod tree;
 
-pub use enums::{EnumKind, EnumValue, Material, PartShape};
-pub use math::{Color3, Vec3};
+pub use enums::{EasingDirection, EasingStyle, EnumKind, EnumValue, Material, PartShape};
+pub use math::{CFrame, Color3, Rotation, UDim2, Vec2, Vec3};
 pub use property::{Property, PropertyValue};
 pub use tree::{Change, InstanceId, InstanceTree, TreeError};
 
@@ -63,6 +63,28 @@ pub enum ClassKind {
     StringValue,
     /// Holds true or false.
     BoolValue,
+    /// A service whose GUIs are copied to each player when they join.
+    StarterGui,
+    /// Lighting and time of day.
+    Lighting,
+    /// Inside a player: the GUIs on their screen. Made by the engine.
+    PlayerGui,
+    /// A layer of GUI drawn over the 3D view.
+    ScreenGui,
+    /// The base of every on-screen rectangle. Not creatable on its own.
+    GuiObject,
+    /// A plain rectangle.
+    Frame,
+    /// A rectangle with text.
+    TextLabel,
+    /// A rectangle with text that can be clicked.
+    TextButton,
+    /// Inside a part: lets players click the part.
+    ClickDetector,
+    /// A service for scripts that aren't attached to anything in the world.
+    ServerScriptService,
+    /// A script that runs for one player: inside their GUI or character.
+    LocalScript,
 }
 
 impl ClassKind {
@@ -84,12 +106,29 @@ impl ClassKind {
         ClassKind::NumberValue,
         ClassKind::StringValue,
         ClassKind::BoolValue,
+        ClassKind::StarterGui,
+        ClassKind::Lighting,
+        ClassKind::PlayerGui,
+        ClassKind::ScreenGui,
+        ClassKind::GuiObject,
+        ClassKind::Frame,
+        ClassKind::TextLabel,
+        ClassKind::TextButton,
+        ClassKind::ClickDetector,
+        ClassKind::ServerScriptService,
+        ClassKind::LocalScript,
     ];
 
     /// The services every tree has under its root, in order. They can't be
     /// created, moved or destroyed.
-    pub const SERVICES: &[ClassKind] =
-        &[ClassKind::Workspace, ClassKind::Players, ClassKind::ReplicatedStorage];
+    pub const SERVICES: &[ClassKind] = &[
+        ClassKind::Workspace,
+        ClassKind::Players,
+        ClassKind::ReplicatedStorage,
+        ClassKind::StarterGui,
+        ClassKind::Lighting,
+        ClassKind::ServerScriptService,
+    ];
 
     /// Whether this class is one of the [`SERVICES`](Self::SERVICES).
     pub fn is_service(self) -> bool {
@@ -98,13 +137,18 @@ impl ClassKind {
 
     /// Whether the tree may create this class. The root and services may not.
     pub fn is_creatable(self) -> bool {
-        self != ClassKind::DataModel && !self.is_service()
+        !matches!(self, ClassKind::DataModel | ClassKind::GuiObject) && !self.is_service()
     }
 
-    /// Whether scripts and the editor may create this class. Players are
-    /// made by the engine when someone joins.
+    /// Whether scripts and the editor may create this class. Players and
+    /// their GUI containers are made by the engine when someone joins.
     pub fn is_user_creatable(self) -> bool {
-        self.is_creatable() && self != ClassKind::Player
+        self.is_creatable() && !matches!(self, ClassKind::Player | ClassKind::PlayerGui)
+    }
+
+    /// Whether this class is drawn on screen as a rectangle.
+    pub fn is_gui_object(self) -> bool {
+        self.is_a(ClassKind::GuiObject)
     }
 
     /// Whether this class is a box in the world (it has a position, size and colour).
@@ -118,6 +162,7 @@ impl ClassKind {
             // Workspace behaves like a Model that can't be removed.
             ClassKind::Workspace => Some(ClassKind::Model),
             ClassKind::SpawnLocation => Some(ClassKind::Part),
+            ClassKind::Frame | ClassKind::TextLabel | ClassKind::TextButton => Some(ClassKind::GuiObject),
             _ => None,
         }
     }
@@ -155,6 +200,30 @@ impl ClassKind {
         const NUMBER: &[Property] = &[Property::Name, Property::NumberValue];
         const STRING: &[Property] = &[Property::Name, Property::StringValue];
         const BOOL: &[Property] = &[Property::Name, Property::BoolValue];
+        const SCREEN_GUI: &[Property] = &[Property::Name, Property::Enabled, Property::ResetOnSpawn];
+        const FRAME: &[Property] = &[
+            Property::Name,
+            Property::GuiPosition,
+            Property::GuiSize,
+            Property::AnchorPoint,
+            Property::BackgroundColor,
+            Property::BackgroundTransparency,
+            Property::Visible,
+        ];
+        const TEXT: &[Property] = &[
+            Property::Name,
+            Property::GuiPosition,
+            Property::GuiSize,
+            Property::AnchorPoint,
+            Property::BackgroundColor,
+            Property::BackgroundTransparency,
+            Property::Visible,
+            Property::Text,
+            Property::TextColor,
+            Property::TextSize,
+        ];
+        const CLICK: &[Property] = &[Property::Name, Property::MaxActivationDistance];
+        const LIGHTING: &[Property] = &[Property::Name, Property::ClockTime, Property::Brightness];
         const HUMANOID: &[Property] = &[
             Property::Name,
             Property::Health,
@@ -164,13 +233,18 @@ impl ClassKind {
         ];
         match self {
             ClassKind::Part | ClassKind::SpawnLocation => PART,
-            ClassKind::Script => SCRIPT,
+            ClassKind::Script | ClassKind::LocalScript => SCRIPT,
             ClassKind::Humanoid => HUMANOID,
             ClassKind::ModuleScript => MODULE,
             ClassKind::Player => PLAYER,
             ClassKind::IntValue | ClassKind::NumberValue => NUMBER,
             ClassKind::StringValue => STRING,
             ClassKind::BoolValue => BOOL,
+            ClassKind::ScreenGui => SCREEN_GUI,
+            ClassKind::Frame | ClassKind::GuiObject => FRAME,
+            ClassKind::TextLabel | ClassKind::TextButton => TEXT,
+            ClassKind::ClickDetector => CLICK,
+            ClassKind::Lighting => LIGHTING,
             _ => COMMON,
         }
     }
@@ -193,6 +267,24 @@ impl ClassKind {
             Property::NumberValue | Property::UserId => PropertyValue::Number(0.0),
             Property::BoolValue => PropertyValue::Bool(false),
             Property::Character => PropertyValue::Ref(None),
+            Property::GuiPosition => PropertyValue::UDim2(UDim2::default()),
+            Property::GuiSize => PropertyValue::UDim2(match self {
+                ClassKind::Frame => UDim2::new(0.0, 100.0, 0.0, 100.0),
+                _ => UDim2::new(0.0, 200.0, 0.0, 50.0),
+            }),
+            Property::AnchorPoint => PropertyValue::Vec2(Vec2::ZERO),
+            Property::BackgroundColor => PropertyValue::Color3(Color3::WHITE),
+            Property::BackgroundTransparency => PropertyValue::Number(0.0),
+            Property::Visible | Property::Enabled | Property::ResetOnSpawn => PropertyValue::Bool(true),
+            Property::Text => PropertyValue::String(match self {
+                ClassKind::TextButton => "Button".into(),
+                _ => "Label".into(),
+            }),
+            Property::TextColor => PropertyValue::Color3(Color3::from_rgb8(27, 42, 53)),
+            Property::TextSize => PropertyValue::Number(14.0),
+            Property::MaxActivationDistance => PropertyValue::Number(32.0),
+            Property::ClockTime => PropertyValue::Number(14.0),
+            Property::Brightness => PropertyValue::Number(2.0),
             Property::Size => PropertyValue::Vec3(Vec3::new(4.0, 1.0, 2.0)),
             Property::Color => PropertyValue::Color3(match self {
                 ClassKind::SpawnLocation => Color3::new(0.3, 0.55, 0.95),
@@ -227,6 +319,17 @@ impl ClassKind {
             ClassKind::NumberValue => "number_value",
             ClassKind::StringValue => "string_value",
             ClassKind::BoolValue => "bool_value",
+            ClassKind::StarterGui => "starter_gui",
+            ClassKind::Lighting => "lighting",
+            ClassKind::PlayerGui => "player_gui",
+            ClassKind::ScreenGui => "screen_gui",
+            ClassKind::GuiObject => "gui_object",
+            ClassKind::Frame => "frame",
+            ClassKind::TextLabel => "text_label",
+            ClassKind::TextButton => "text_button",
+            ClassKind::ClickDetector => "click_detector",
+            ClassKind::ServerScriptService => "server_script_service",
+            ClassKind::LocalScript => "local_script",
         }
     }
 

@@ -2,7 +2,7 @@
 
 use libroxel_instance::{
     ClassKind, Color3, EnumValue, InstanceId, InstanceTree, Material, PartShape, Property, PropertyValue,
-    Vec3,
+    UDim2, Vec2, Vec3,
 };
 
 fn add(tree: &mut InstanceTree, parent: InstanceId, class: ClassKind, name: &str) -> InstanceId {
@@ -147,9 +147,62 @@ pad.Touched:Connect(function(hit)
 end)
 "#;
 
+const DOOR_SCRIPT: &str = r#"
+-- Click the door to open it. It slides up, waits, then closes again.
+local TweenService = game:GetService("TweenService")
+local door = script.Parent
+local closed = door.CFrame
+local open = closed + Vector3.new(0, 5.5, 0)
+local info = TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local busy = false
+
+door.ClickDetector.MouseClick:Connect(function(player)
+	if busy then
+		return
+	end
+	busy = true
+	print(player.Name .. " opened the vault")
+	local opening = TweenService:Create(door, info, { CFrame = open })
+	opening:Play()
+	opening.Completed:Wait()
+	task.wait(3)
+	local closing = TweenService:Create(door, info, { CFrame = closed })
+	closing:Play()
+	closing.Completed:Wait()
+	busy = false
+end)
+"#;
+
+const HUD_SCRIPT: &str = r#"
+-- Runs for the player: shows their coins and switches between day and night.
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local player = Players.LocalPlayer
+local hud = script.Parent
+
+local coins = player:WaitForChild("leaderstats"):WaitForChild("Coins")
+local label = hud.CoinLabel
+local function show()
+	label.Text = "Coins: " .. coins.Value
+end
+coins.Changed:Connect(show)
+show()
+
+local button = hud.DayNight
+local night = false
+button.MouseButton1Click:Connect(function()
+	night = not night
+	local goal = if night then 21 else 14
+	TweenService:Create(Lighting, TweenInfo.new(2, Enum.EasingStyle.Sine), { ClockTime = goal }):Play()
+	button.Text = if night then "Make it day" else "Make it night"
+end)
+"#;
+
 const WELCOME_SCRIPT: &str = r#"
 print("Welcome to the sample obby! Reach the gold pad. Red blocks are lava.")
 print("Grab the spinning coins on the way. Your score is on the leaderboard.")
+print("There's a coin locked in the vault: click its door to open it.")
 "#;
 
 const STATS_MODULE: &str = r#"
@@ -256,14 +309,53 @@ pub fn sample_obby() -> InstanceTree {
     shape(&mut tree, ball, PartShape::Ball);
     material(&mut tree, ball, Material::Glass);
 
+    // A little vault beside the start, with a door that opens when clicked.
+    let vault = add(&mut tree, ws, ClassKind::Folder, "Vault");
+    let stone = [120, 120, 130];
+    let vault_floor = block(&mut tree, vault, "Floor", [-12.0, -0.5, 0.0], [8.0, 1.0, 8.0], stone);
+    material(&mut tree, vault_floor, Material::Metal);
+    block(&mut tree, vault, "BackWall", [-16.5, 3.0, 0.0], [1.0, 6.0, 10.0], stone);
+    block(&mut tree, vault, "LeftWall", [-12.0, 3.0, -4.5], [8.0, 6.0, 1.0], stone);
+    block(&mut tree, vault, "RightWall", [-12.0, 3.0, 4.5], [8.0, 6.0, 1.0], stone);
+    block(&mut tree, vault, "Roof", [-12.0, 6.5, 0.0], [10.0, 1.0, 10.0], stone);
+    let door = block(&mut tree, vault, "Door", [-7.5, 3.0, 0.0], [1.0, 6.0, 8.0], [150, 70, 50]);
+    material(&mut tree, door, Material::Wood);
+    add(&mut tree, door, ClassKind::ClickDetector, "ClickDetector");
+    script(&mut tree, door, "OpenOnClick", DOOR_SCRIPT);
+
+    // An on-screen display: a coin counter and a day/night button.
+    let starter_gui = tree.service(ClassKind::StarterGui).expect("every tree has StarterGui");
+    let hud = add(&mut tree, starter_gui, ClassKind::ScreenGui, "HUD");
+    let dark = Color3::from_rgb8(25, 30, 40);
+    let white = Color3::from_rgb8(255, 255, 255);
+    let label = add(&mut tree, hud, ClassKind::TextLabel, "CoinLabel");
+    set(&mut tree, label, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.5, 0.0, 0.0, 10.0)));
+    set(&mut tree, label, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 200.0, 0.0, 40.0)));
+    set(&mut tree, label, Property::AnchorPoint, PropertyValue::Vec2(Vec2::new(0.5, 0.0)));
+    set(&mut tree, label, Property::BackgroundColor, PropertyValue::Color3(dark));
+    set(&mut tree, label, Property::BackgroundTransparency, PropertyValue::Number(0.3));
+    set(&mut tree, label, Property::TextColor, PropertyValue::Color3(Color3::from_rgb8(255, 215, 60)));
+    set(&mut tree, label, Property::TextSize, PropertyValue::Number(22.0));
+    set(&mut tree, label, Property::Text, PropertyValue::String("Coins: 0".into()));
+    let button = add(&mut tree, hud, ClassKind::TextButton, "DayNight");
+    set(&mut tree, button, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.0, 12.0, 1.0, -12.0)));
+    set(&mut tree, button, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 150.0, 0.0, 40.0)));
+    set(&mut tree, button, Property::AnchorPoint, PropertyValue::Vec2(Vec2::new(0.0, 1.0)));
+    set(&mut tree, button, Property::BackgroundColor, PropertyValue::Color3(Color3::from_rgb8(60, 110, 200)));
+    set(&mut tree, button, Property::TextColor, PropertyValue::Color3(white));
+    set(&mut tree, button, Property::TextSize, PropertyValue::Number(18.0));
+    set(&mut tree, button, Property::Text, PropertyValue::String("Make it night".into()));
+    code(&mut tree, hud, ClassKind::LocalScript, "HudScript", HUD_SCRIPT);
+
     let coins = add(&mut tree, ws, ClassKind::Folder, "Coins");
-    let coin_spots: [[f32; 3]; 6] = [
+    let coin_spots: [[f32; 3]; 7] = [
         [0.0, 5.5, -18.0],
         [0.0, 5.5, -22.0],
         [14.0, 2.5, 0.0],
         [30.0, 5.5, 0.0],
         [48.0, 7.0, 0.0],
         [84.0, 7.0, 0.0],
+        [-12.0, 1.5, 0.0],
     ];
     for (i, spot) in coin_spots.iter().enumerate() {
         let coin = block(&mut tree, coins, &format!("Coin{}", i + 1), *spot, [0.4, 2.0, 2.0], [255, 205, 40]);
@@ -383,5 +475,49 @@ mod tests {
         assert_eq!(leaderstat(&session, "Coins"), 2.0, "{log:?}");
         let errors: Vec<_> = session.take_log().into_iter().filter(|l| l.level == LogLevel::Error).collect();
         assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn vault_door_opens_and_hud_works() {
+        let mut session = start_on(sample_obby(), true).unwrap();
+        for _ in 0..10 {
+            session.step(1.0 / 60.0, CharacterInput::default());
+        }
+        let (door, label, button, lighting) = {
+            let tree = session.runtime().tree().borrow();
+            let vault = tree.find_first_child(tree.workspace(), "Vault").unwrap().unwrap();
+            let door = tree.find_first_child(vault, "Door").unwrap().unwrap();
+            let gui = session.player_gui().unwrap();
+            let hud = tree.find_first_child(gui, "HUD").unwrap().unwrap();
+            let label = tree.find_first_child(hud, "CoinLabel").unwrap().unwrap();
+            let button = tree.find_first_child(hud, "DayNight").unwrap().unwrap();
+            (door, label, button, tree.service(ClassKind::Lighting).unwrap())
+        };
+        let get = |s: &libroxel_engine::PlaySession, id, p| s.runtime().tree().borrow().get(id, p).unwrap();
+        assert_eq!(get(&session, label, Property::Text), PropertyValue::String("Coins: 0".into()));
+
+        session.click_button(button);
+        for _ in 0..150 {
+            session.step(1.0 / 60.0, CharacterInput::default());
+        }
+        assert_eq!(get(&session, lighting, Property::ClockTime), PropertyValue::Number(21.0));
+        assert_eq!(get(&session, button, Property::Text), PropertyValue::String("Make it day".into()));
+
+        assert!(session.click_part(door));
+        for _ in 0..60 {
+            session.step(1.0 / 60.0, CharacterInput::default());
+        }
+        let PropertyValue::Vec3(open) = get(&session, door, Property::Position) else { panic!() };
+        assert!((open.y - 8.5).abs() < 0.01, "door slid up: {open:?}");
+
+        // Walk into the open vault for the coin; the counter follows.
+        let west = CharacterInput { move_dir: Vec3::new(-1.0, 0.0, 0.0), jump: false };
+        for _ in 0..60 {
+            session.step(1.0 / 60.0, west);
+        }
+        let log = session.take_log();
+        assert_eq!(leaderstat(&session, "Coins"), 1.0, "{log:?}");
+        assert_eq!(get(&session, label, Property::Text), PropertyValue::String("Coins: 1".into()));
+        assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
     }
 }

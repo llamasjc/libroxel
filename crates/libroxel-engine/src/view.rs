@@ -148,7 +148,10 @@ fn sync_parts(
     mut parts: Query<(&mut Transform, &mut PartAppearance, &mut PartName, &mut PartGeometry), With<PartLink>>,
 ) {
     let mut tree = engine.tree.borrow_mut();
-    tree.drain_changes();
+    // While playing, the session reads the change journal (for Changed events).
+    if !engine.is_playing() {
+        tree.drain_changes();
+    }
 
     let live: Vec<InstanceId> = tree.descendants_of_class(tree.workspace(), ClassKind::Part);
     let live_set: std::collections::HashSet<_> = live.iter().copied().collect();
@@ -210,7 +213,8 @@ impl Plugin for RenderPlugin {
         app.add_systems(Startup, setup_scene)
             .add_systems(Update, (camera_controls, play_input).chain().in_set(EngineSet::Input))
             .add_systems(PostUpdate, (attach_visuals, update_materials, update_meshes).chain())
-            .add_systems(PostUpdate, follow_camera.before(TransformSystems::Propagate));
+            .add_systems(PostUpdate, follow_camera.before(TransformSystems::Propagate))
+            .add_systems(Update, update_lighting.after(EngineSet::Sync));
     }
 }
 
@@ -400,10 +404,64 @@ fn setup_scene(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ima
         Transform::from_xyz(-18.0, 16.0, 24.0).with_rotation(rig.rotation()),
     ));
     commands.spawn((
+        Sun,
         DirectionalLight { illuminance: 9_000.0, shadow_maps_enabled: true, ..default() },
         Transform::from_xyz(8.0, 20.0, 6.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     commands.insert_resource(ClearColor(Color::srgb(0.53, 0.72, 0.9)));
+}
+
+/// The world's main light, moved by the time of day.
+#[derive(Component)]
+struct Sun;
+
+/// How the sky and sun look at a time of day (hours, 0 to 24) and brightness.
+pub fn sky_at(clock: f32, brightness: f32) -> (Vec3, f32, Color, f32) {
+    use std::f32::consts::PI;
+    // Sunrise at 6, noon overhead, sunset at 18.
+    let angle = (clock - 6.0) / 12.0 * PI;
+    let height = angle.sin();
+    let dir = Vec3::new(angle.cos(), height.max(0.05), 0.35).normalize();
+    let day = (height * 3.0 + 0.4).clamp(0.0, 1.0);
+    let dusk = (1.0 - (height.abs() * 4.0)).clamp(0.0, 1.0);
+    let night = Vec3::new(0.02, 0.03, 0.09);
+    let noon = Vec3::new(0.53, 0.72, 0.9);
+    let glow = Vec3::new(0.95, 0.55, 0.35);
+    let sky = night.lerp(noon, day).lerp(glow, dusk * 0.5 * day.max(0.3));
+    let scale = (brightness / 2.0).clamp(0.0, 3.0);
+    let illuminance = (300.0 + 8_700.0 * day) * scale;
+    let ambient = (60.0 + 440.0 * day) * scale.max(0.2);
+    (dir, illuminance, Color::srgb(sky.x, sky.y, sky.z), ambient)
+}
+
+fn update_lighting(
+    engine: NonSend<EngineState>,
+    mut sun: Query<(&mut DirectionalLight, &mut Transform), With<Sun>>,
+    mut clear: ResMut<ClearColor>,
+    mut ambient: ResMut<GlobalAmbientLight>,
+) {
+    let (clock, brightness) = {
+        let tree = engine.tree.borrow();
+        let lighting = tree.service(ClassKind::Lighting);
+        let read = |p| lighting.and_then(|l| tree.get_number(l, p)).map(|n| n as f32);
+        (read(Property::ClockTime).unwrap_or(14.0), read(Property::Brightness).unwrap_or(2.0))
+    };
+    let (dir, illuminance, sky, ambient_brightness) = sky_at(clock, brightness);
+    for (mut light, mut transform) in &mut sun {
+        if (light.illuminance - illuminance).abs() > 0.5 {
+            light.illuminance = illuminance;
+        }
+        let wanted = Transform::from_translation(dir * 30.0).looking_at(Vec3::ZERO, Vec3::Y);
+        if transform.rotation.angle_between(wanted.rotation) > 1e-4 {
+            *transform = wanted;
+        }
+    }
+    if clear.0 != sky {
+        clear.0 = sky;
+    }
+    if (ambient.brightness - ambient_brightness).abs() > 0.5 {
+        ambient.brightness = ambient_brightness;
+    }
 }
 
 fn material_for(appearance: &PartAppearance, textures: &MaterialTextures) -> StandardMaterial {

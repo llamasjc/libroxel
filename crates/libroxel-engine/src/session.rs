@@ -34,6 +34,8 @@ pub struct PlaySession {
     character: Option<Character>,
     /// The local player's object under the players service.
     player: Option<InstanceId>,
+    /// The local player's GUI container.
+    player_gui: Option<InstanceId>,
     respawn_in: Option<f32>,
     log: Vec<LogEntry>,
 }
@@ -51,6 +53,7 @@ impl PlaySession {
             physics: Physics::default(),
             character: None,
             player: None,
+            player_gui: None,
             respawn_in: None,
             log: Vec::new(),
         };
@@ -66,6 +69,14 @@ impl PlaySession {
                 player
             };
             session.player = Some(player);
+            let gui = {
+                let mut t = tree.borrow_mut();
+                let gui = t.create(ClassKind::PlayerGui, "PlayerGui").expect("player GUIs can be created");
+                t.set_parent(gui, Some(player)).expect("fresh GUIs can be parented");
+                gui
+            };
+            session.player_gui = Some(gui);
+            session.copy_starter_gui(&tree, false);
             let errors = session.runtime.player_added(player);
             session.collect(errors);
             session.spawn_character(&tree);
@@ -90,6 +101,82 @@ impl PlaySession {
     /// The local player's object, while a character is being played.
     pub fn player(&self) -> Option<InstanceId> {
         self.player
+    }
+
+    /// The local player's GUI container, whose screen GUIs are drawn over the view.
+    pub fn player_gui(&self) -> Option<InstanceId> {
+        self.player_gui
+    }
+
+    /// Copies the starter GUIs into the player's GUI and starts their local
+    /// scripts. With `respawn`, only GUIs that reset on spawn are replaced.
+    fn copy_starter_gui(&mut self, tree: &SharedTree, respawn: bool) {
+        let Some(gui) = self.player_gui else { return };
+        let copies: Vec<InstanceId> = {
+            let mut t = tree.borrow_mut();
+            let resets =
+                |t: &InstanceTree, id: InstanceId| t.get_bool(id, Property::ResetOnSpawn) != Some(false);
+            if respawn {
+                let old: Vec<InstanceId> =
+                    t.children(gui).unwrap_or_default().iter().copied().filter(|c| resets(&t, *c)).collect();
+                for id in old {
+                    let _ = t.destroy(id);
+                }
+            }
+            let Some(starter) = t.service(ClassKind::StarterGui) else { return };
+            let templates: Vec<InstanceId> = t
+                .children(starter)
+                .unwrap_or_default()
+                .iter()
+                .copied()
+                .filter(|c| !respawn || resets(&t, *c))
+                .collect();
+            templates
+                .into_iter()
+                .filter_map(|template| {
+                    let copy = t.clone_subtree(template).ok()?;
+                    t.set_parent(copy, Some(gui)).ok()?;
+                    Some(copy)
+                })
+                .collect()
+        };
+        for copy in copies {
+            let errors = self.runtime.run_local_scripts(copy);
+            self.collect(errors);
+        }
+    }
+
+    /// The player clicked a GUI button.
+    pub fn click_button(&mut self, button: InstanceId) {
+        let errors = self.runtime.click_button(button);
+        self.collect(errors);
+    }
+
+    /// The player clicked a part. Fires its click detector if it has one and
+    /// the character is close enough. Returns whether the part was clickable.
+    pub fn click_part(&mut self, part: InstanceId) -> bool {
+        let Some(player) = self.player else { return false };
+        let (detector, in_reach) = {
+            let tree = self.runtime.tree().borrow();
+            let Some(detector) =
+                tree.find_first_child_of_class(part, ClassKind::ClickDetector).ok().flatten()
+            else {
+                return false;
+            };
+            let reach = tree.get_number(detector, Property::MaxActivationDistance).unwrap_or(32.0) as f32;
+            let from = self.character.and_then(|c| tree.get_vec3(c.root, Property::Position));
+            let to = tree.get_vec3(part, Property::Position);
+            let in_reach = match (from, to) {
+                (Some(a), Some(b)) => (a - b).length() <= reach,
+                _ => false,
+            };
+            (detector, in_reach)
+        };
+        if in_reach {
+            let errors = self.runtime.click_detector(detector, player);
+            self.collect(errors);
+        }
+        true
     }
 
     pub fn runtime(&self) -> &ScriptRuntime {
@@ -131,6 +218,10 @@ impl PlaySession {
     /// Runs one frame: scripts, then character movement and physics, then
     /// touch events, then deaths and respawns.
     pub fn step(&mut self, dt: f32, input: CharacterInput) {
+        // Everything that changed since last frame, for Changed events.
+        let changes = self.runtime.tree().borrow_mut().drain_changes();
+        let errors = self.runtime.fire_changes(&changes);
+        self.collect(errors);
         let errors = self.runtime.step(dt as f64);
         self.collect(errors);
 
@@ -166,6 +257,7 @@ impl PlaySession {
             if *remaining <= 0.0 {
                 self.respawn_in = None;
                 let _ = tree.borrow_mut().destroy(character.model);
+                self.copy_starter_gui(tree, true);
                 self.spawn_character(tree);
                 self.info("Respawned");
             }

@@ -22,18 +22,37 @@
 - **Scripts are threads.** Every script, signal handler and `task.spawn`
   runs in its own Luau thread. `task.wait` yields; the scheduler resumes the
   thread on the right frame. One failing thread never stops the others.
-- **Services.** Every tree has a root and three locked services: Workspace
-  (the world), Players (one Player per person in the game, made by the
-  engine) and ReplicatedStorage (modules and templates). Saved places merge
+- **Services.** Every tree has a root and locked services: Workspace (the
+  world), Players (one Player per person in the game, made by the engine),
+  ReplicatedStorage (modules and templates), ServerScriptService (scripts
+  outside the world), StarterGui (screen GUIs copied to each player) and
+  Lighting (time of day). Saved places merge
   into the services instead of creating new ones. Links between instances
   (like a player's `Character`) are runtime-only and are not saved.
 - **Modules.** `require` is written in Luau so that a module can yield. It
   caches each module's single return value and detects require loops.
-- **Play sessions.** Pressing Play clones the tree, starts every `Script`,
-  adds the local Player (firing `PlayerAdded`) and spawns their character
-  (firing `CharacterAdded`). Each frame runs: waiting threads and `Heartbeat`,
-  character movement, physics, `Touched` events, then deaths and respawns.
-  Stop throws the session away and restores the clone.
+- **Play sessions.** Pressing Play clones the tree, starts every `Script` in
+  Workspace and ServerScriptService, adds the local Player (firing
+  `PlayerAdded`), copies StarterGui into their `PlayerGui` (starting the
+  `LocalScript`s there) and spawns their character (firing `CharacterAdded`).
+  Each frame runs: `Changed` events for whatever changed since the last
+  frame, waiting threads, tweens, `Heartbeat`, character movement, physics,
+  `Touched` events, then deaths and respawns. Stop throws the session away
+  and restores the clone.
+- **Change events.** The tree records every property and parent change in
+  its journal. The session drains it once a frame and fires `Changed`,
+  `GetPropertyChangedSignal` and `ChildAdded` for instances that scripts are
+  listening to, so events never run in the middle of another script.
+- **Tweens** are owned by the host, not by Luau threads: each frame the
+  runtime advances them, eases the progress and writes the in-between value,
+  then fires `Completed`. A new tween on the same property takes it over.
+- **GUIs** are instances like any other. The editor lays them out each frame
+  from `Position`, `Size` and `AnchorPoint` (scale of the parent plus pixel
+  offset) and draws them with egui over the 3D view; clicks on buttons and
+  `ClickDetector` parts go back to the session, which fires the events.
+- **CFrames.** Parts store `Position` and `Orientation` (degrees, applied Y,
+  then X, then Z). `CFrame` is built from and written back to those two, so
+  saved games stay readable.
 - **Physics.** Unanchored parts are upright boxes. They fall, are moved one
   axis at a time and pushed out of anything with `CanCollide`, and step up
   ledges up to 0.6 studs. Anchored parts can be rotated and shaped: boxes
@@ -49,6 +68,5 @@
 
 - The ECS sync does a full pass over the workspace each frame; it will move
   to the change journal once worlds get big.
-- Orientation is a plain vector of degrees; there is no `CFrame` yet.
 - Loose parts never rotate, and cylinders collide as boxes.
 - No networking.

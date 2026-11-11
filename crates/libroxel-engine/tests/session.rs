@@ -152,3 +152,57 @@ fn players_join_get_leaderstats_and_respawn() {
     let log: Vec<String> = session.take_log().into_iter().map(|e| e.text).collect();
     assert_eq!(log.iter().filter(|l| l.as_str() == "spawned Player1").count(), 2, "{log:?}");
 }
+
+#[test]
+fn guis_are_copied_and_parts_can_be_clicked() {
+    let mut tree = world();
+    let starter = tree.service(ClassKind::StarterGui).unwrap();
+    let screen = tree.create(ClassKind::ScreenGui, "Hud").unwrap();
+    tree.set_parent(screen, Some(starter)).unwrap();
+    let label = tree.create(ClassKind::TextLabel, "Status").unwrap();
+    tree.set_parent(label, Some(screen)).unwrap();
+    let local = tree.create(ClassKind::LocalScript, "Show").unwrap();
+    tree.set_parent(local, Some(screen)).unwrap();
+    let source = r#"
+        local label = script.Parent.Status
+        label.Text = "Hello " .. game:GetService("Players").LocalPlayer.Name
+        workspace.Button.ClickDetector.MouseClick:Connect(function(player)
+            label.Text = "Clicked by " .. player.Name
+        end)
+        workspace.Button.Changed:Connect(function(property)
+            if property == "Color" then label.Text = "Recoloured" end
+        end)
+    "#;
+    tree.set(local, Property::Source, PropertyValue::String(source.into())).unwrap();
+    let button = part(&mut tree, ClassKind::Part, "Button", Vec3::new(4.0, 1.0, 0.0), Vec3::ONE);
+    let detector = tree.create(ClassKind::ClickDetector, "ClickDetector").unwrap();
+    tree.set_parent(detector, Some(button)).unwrap();
+    let far = part(&mut tree, ClassKind::Part, "Far", Vec3::new(90.0, 1.0, 0.0), Vec3::ONE);
+    let far_detector = tree.create(ClassKind::ClickDetector, "ClickDetector").unwrap();
+    tree.set_parent(far_detector, Some(far)).unwrap();
+
+    let mut session = start_on(tree, true).unwrap();
+    session.step(DT, CharacterInput::default());
+    let tree = session.runtime().tree().clone();
+    let gui = session.player_gui().unwrap();
+    let text = |tree: &InstanceTree| {
+        let hud = tree.find_first_child(gui, "Hud").unwrap().unwrap();
+        let status = tree.find_first_child(hud, "Status").unwrap().unwrap();
+        tree.get_string(status, Property::Text).unwrap()
+    };
+    assert_eq!(text(&tree.borrow()), "Hello Player1");
+    assert!(session.click_part(far), "clickable, but too far away");
+    assert_eq!(text(&tree.borrow()), "Hello Player1");
+    assert!(session.click_part(button));
+    assert_eq!(text(&tree.borrow()), "Clicked by Player1");
+    let floor = tree.borrow().find_first_child(tree.borrow().workspace(), "Floor").unwrap().unwrap();
+    assert!(!session.click_part(floor), "no click detector");
+
+    tree.borrow_mut()
+        .set(button, Property::Color, PropertyValue::Color3(libroxel_instance::Color3::WHITE))
+        .unwrap();
+    session.step(DT, CharacterInput::default());
+    assert_eq!(text(&tree.borrow()), "Recoloured");
+    let errors: Vec<_> = session.take_log().into_iter().filter(|l| l.level == LogLevel::Error).collect();
+    assert!(errors.is_empty(), "{errors:?}");
+}

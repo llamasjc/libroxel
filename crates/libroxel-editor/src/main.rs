@@ -9,6 +9,7 @@
 //! cargo run -p libroxel-editor -- --sample     # open the sample obby
 //! ```
 
+mod gui;
 mod history;
 mod templates;
 mod ui;
