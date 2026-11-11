@@ -125,6 +125,24 @@ pub enum Property {
     Throttle,
     /// On a vehicle seat: -1 (left), 0 or 1 (right), from the driver.
     Steer,
+    /// The instance an object value links to.
+    ObjectValue,
+    Vector3Value,
+    Color3Value,
+    /// On the starter player: the walk speed new characters get.
+    CharacterWalkSpeed,
+    /// On the starter player: the jump power new characters get.
+    CharacterJumpPower,
+    /// On lighting: the colour shadows are filled with.
+    Ambient,
+    /// On lighting: the colour far-away things fade into.
+    FogColor,
+    /// On lighting: how far away (in studs) the fog starts.
+    FogStart,
+    /// On lighting: how far away (in studs) everything is fully fogged.
+    FogEnd,
+    /// On the workspace: loose parts below this height are destroyed.
+    FallenPartsDestroyHeight,
 }
 
 /// The value of a property.
@@ -174,6 +192,13 @@ impl Property {
             | Property::PlaceholderText => "string",
             Property::Position | Property::Size | Property::Orientation | Property::StudsOffset => "Vec3",
             Property::Color | Property::BackgroundColor | Property::TextColor => "Color3",
+            Property::Color3Value | Property::Ambient | Property::FogColor => "Color3",
+            Property::Vector3Value => "Vec3",
+            Property::CharacterWalkSpeed
+            | Property::CharacterJumpPower
+            | Property::FogStart
+            | Property::FogEnd
+            | Property::FallenPartsDestroyHeight => "number",
             Property::Anchored
             | Property::CanCollide
             | Property::Disabled
@@ -229,7 +254,8 @@ impl Property {
             | Property::Part0
             | Property::Part1
             | Property::Occupant
-            | Property::SeatPart => "ref",
+            | Property::SeatPart
+            | Property::ObjectValue => "ref",
         }
     }
 
@@ -319,6 +345,16 @@ impl Property {
         Property::TurnSpeed,
         Property::Throttle,
         Property::Steer,
+        Property::ObjectValue,
+        Property::Vector3Value,
+        Property::Color3Value,
+        Property::CharacterWalkSpeed,
+        Property::CharacterJumpPower,
+        Property::Ambient,
+        Property::FogColor,
+        Property::FogStart,
+        Property::FogEnd,
+        Property::FallenPartsDestroyHeight,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -396,6 +432,16 @@ impl Property {
             Property::TurnSpeed => "turn_speed",
             Property::Throttle => "throttle",
             Property::Steer => "steer",
+            Property::ObjectValue => "object_value",
+            Property::Vector3Value => "vector3_value",
+            Property::Color3Value => "color3_value",
+            Property::CharacterWalkSpeed => "character_walk_speed",
+            Property::CharacterJumpPower => "character_jump_power",
+            Property::Ambient => "ambient",
+            Property::FogColor => "fog_color",
+            Property::FogStart => "fog_start",
+            Property::FogEnd => "fog_end",
+            Property::FallenPartsDestroyHeight => "fallen_parts_destroy_height",
         }
     }
 

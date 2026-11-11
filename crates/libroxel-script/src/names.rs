@@ -44,6 +44,13 @@ pub mod globals {
     pub const RANDOM: &str = "Random";
     pub const TWEEN_INFO: &str = "TweenInfo";
     pub const RAYCAST_PARAMS: &str = "RaycastParams";
+    /// Seconds since 1970, as a fractional number.
+    pub const TICK: &str = "tick";
+    /// Seconds since the game started (the same as `time()`).
+    pub const ELAPSED_TIME: &str = "elapsedTime";
+    /// Older spellings of `task.spawn` and `task.delay`.
+    pub const SPAWN: &str = "spawn";
+    pub const DELAY: &str = "delay";
 }
 
 /// Members of the scheduling library.
@@ -54,6 +61,8 @@ pub mod task {
     pub const SPAWN: &str = "spawn";
     /// Run a function in a new thread after some seconds.
     pub const DELAY: &str = "delay";
+    /// Run a function in a new thread at the next step.
+    pub const DEFER: &str = "defer";
 }
 
 /// Events that instances fire.
@@ -204,6 +213,8 @@ pub mod methods {
     pub const MOVE_TO: &str = "MoveTo";
     /// Teams service: every team.
     pub const GET_TEAMS: &str = "GetTeams";
+    /// On the players service: the player with this user id.
+    pub const GET_PLAYER_BY_USER_ID: &str = "GetPlayerByUserId";
 }
 
 /// Members of random number generators.
@@ -275,6 +286,33 @@ pub mod data_store {
 }
 
 /// Members of the clean-up service.
+/// Remote and bindable functions: a call that waits for an answer.
+pub mod functions {
+    pub const INVOKE_SERVER: &str = "InvokeServer";
+    pub const INVOKE_CLIENT: &str = "InvokeClient";
+    pub const INVOKE: &str = "Invoke";
+    /// The callbacks a script sets to answer.
+    pub const ON_SERVER_INVOKE: &str = "OnServerInvoke";
+    pub const ON_CLIENT_INVOKE: &str = "OnClientInvoke";
+    pub const ON_INVOKE: &str = "OnInvoke";
+}
+
+/// The web helper service. It turns tables into JSON text and back.
+pub mod http {
+    pub const JSON_ENCODE: &str = "JSONEncode";
+    pub const JSON_DECODE: &str = "JSONDecode";
+    pub const GENERATE_GUID: &str = "GenerateGUID";
+    pub const URL_ENCODE: &str = "UrlEncode";
+}
+
+/// Read-only facts about the running game.
+pub mod game_info {
+    pub const JOB_ID: &str = "JobId";
+    pub const PLACE_ID: &str = "PlaceId";
+    pub const GAME_ID: &str = "GameId";
+    pub const CREATOR_ID: &str = "CreatorId";
+}
+
 pub mod debris {
     /// Destroys an instance after some seconds (10 by default).
     pub const ADD_ITEM: &str = "AddItem";
@@ -530,6 +568,10 @@ pub mod instance {
     pub const WAIT_FOR_CHILD: &str = "WaitForChild";
     /// Only on the root instance.
     pub const GET_SERVICE: &str = "GetService";
+    pub const FIND_FIRST_CHILD_WHICH_IS_A: &str = "FindFirstChildWhichIsA";
+    pub const FIND_FIRST_ANCESTOR_OF_CLASS: &str = "FindFirstAncestorOfClass";
+    pub const FIND_FIRST_ANCESTOR_WHICH_IS_A: &str = "FindFirstAncestorWhichIsA";
+    pub const IS_ANCESTOR_OF: &str = "IsAncestorOf";
 }
 
 /// Members of the 3D vector type.
@@ -542,6 +584,17 @@ pub mod vector3 {
     pub const DOT: &str = "Dot";
     pub const CROSS: &str = "Cross";
     pub const LERP: &str = "Lerp";
+    pub const MIN: &str = "Min";
+    pub const MAX: &str = "Max";
+    pub const ABS: &str = "Abs";
+    pub const FLOOR: &str = "Floor";
+    pub const CEIL: &str = "Ceil";
+    pub const SIGN: &str = "Sign";
+    pub const FUZZY_EQ: &str = "FuzzyEq";
+    pub const ANGLE: &str = "Angle";
+    pub const X_AXIS: &str = "xAxis";
+    pub const Y_AXIS: &str = "yAxis";
+    pub const Z_AXIS: &str = "zAxis";
     pub const TYPE_NAME: &str = "Vector3";
 }
 
@@ -550,6 +603,11 @@ pub mod color3 {
     pub const R: &str = "R";
     pub const G: &str = "G";
     pub const B: &str = "B";
+    pub const LERP: &str = "Lerp";
+    pub const TO_HSV: &str = "ToHSV";
+    pub const TO_HEX: &str = "ToHex";
+    pub const FROM_HSV: &str = "fromHSV";
+    pub const FROM_HEX: &str = "fromHex";
     pub const TYPE_NAME: &str = "Color3";
 }
 
@@ -561,6 +619,7 @@ pub mod services {
     pub const DATA_STORE_SERVICE: &str = "DataStoreService";
     pub const DEBRIS: &str = "Debris";
     pub const COLLECTION_SERVICE: &str = "CollectionService";
+    pub const HTTP_SERVICE: &str = "HttpService";
     /// Fires once per frame with the frame's delta time in seconds.
     pub const HEARTBEAT: &str = "Heartbeat";
     /// Fires each frame before physics, with the game time and the frame time.
@@ -637,6 +696,13 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::WeldConstraint => "WeldConstraint",
         ClassKind::Seat => "Seat",
         ClassKind::VehicleSeat => "VehicleSeat",
+        ClassKind::RemoteFunction => "RemoteFunction",
+        ClassKind::BindableFunction => "BindableFunction",
+        ClassKind::ObjectValue => "ObjectValue",
+        ClassKind::Vector3Value => "Vector3Value",
+        ClassKind::Color3Value => "Color3Value",
+        ClassKind::ServerStorage => "ServerStorage",
+        ClassKind::StarterPlayer => "StarterPlayer",
     }
 }
 
@@ -665,7 +731,12 @@ pub fn property_name(property: Property) -> &'static str {
         Property::Shape => "Shape",
         Property::Material => "Material",
         // Every value object calls its value `Value`, whatever its type.
-        Property::NumberValue | Property::StringValue | Property::BoolValue => "Value",
+        Property::NumberValue
+        | Property::StringValue
+        | Property::BoolValue
+        | Property::ObjectValue
+        | Property::Vector3Value
+        | Property::Color3Value => "Value",
         Property::Character => "Character",
         Property::UserId => "UserId",
         Property::GuiPosition => "Position",
@@ -719,6 +790,13 @@ pub fn property_name(property: Property) -> &'static str {
         Property::TurnSpeed => "TurnSpeed",
         Property::Throttle => "Throttle",
         Property::Steer => "Steer",
+        Property::CharacterWalkSpeed => "CharacterWalkSpeed",
+        Property::CharacterJumpPower => "CharacterJumpPower",
+        Property::Ambient => "Ambient",
+        Property::FogColor => "FogColor",
+        Property::FogStart => "FogStart",
+        Property::FogEnd => "FogEnd",
+        Property::FallenPartsDestroyHeight => "FallenPartsDestroyHeight",
     }
 }
 

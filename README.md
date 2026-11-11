@@ -126,11 +126,11 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
 - **Classes:** `Part`, `SpawnLocation`, `Model`, `Folder`, `Script`,
   `LocalScript`, `ModuleScript`, `Humanoid`, `IntValue`, `NumberValue`,
   `StringValue`, `BoolValue`, `ClickDetector`, `ProximityPrompt`,
-  `RemoteEvent`, `BindableEvent`, `ScreenGui`, `Frame`, `TextLabel`,
+  `RemoteEvent`, `BindableEvent`, `RemoteFunction`, `BindableFunction`, `ObjectValue`, `Vector3Value`, `Color3Value`, `ScreenGui`, `Frame`, `TextLabel`,
   `TextButton`, `TextBox`, `UICorner`, `UIListLayout`, `BillboardGui`,
   `Tool`, `PointLight`, `SpotLight`, `Explosion`, `Camera`, plus the built-in `Workspace`,
   `Players` (with one `Player` each, holding a `PlayerGui` and a
-  `Backpack`), `ReplicatedStorage`, `ServerScriptService`, `StarterGui`,
+  `Backpack`), `ReplicatedStorage`, `ServerStorage`, `StarterPlayer`, `ServerScriptService`, `StarterGui`,
   `StarterPack` and `Lighting`.
 - **Instance members:** `Name`, `ClassName`, `Parent`, `FindFirstChild`,
   `FindFirstChildOfClass`, `FindFirstAncestor`, `FindFirstDescendant`,
@@ -176,6 +176,12 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
 - **Floating text:** `BillboardGui` has `Size` (`UDim2`, scale in studs plus
   pixels), `StudsOffset`, `AlwaysOnTop`, `MaxDistance` and `Enabled`, and
   shows the labels inside it over its parent part (or a model's `Head`).
+- **Helpers:** `tick()`, `elapsedTime()`, `spawn`, `delay` and
+  `task.defer(fn, ...)`; `Color3.fromHSV`, `Color3.fromHex`, `ToHSV`,
+  `ToHex` and `Lerp`; `Vector3.xAxis`/`yAxis`/`zAxis`, `Min`, `Max`, `Abs`,
+  `Floor`, `Ceil`, `Sign`, `FuzzyEq` and `Angle`; `FindFirstChildWhichIsA`,
+  `FindFirstAncestorOfClass`, `FindFirstAncestorWhichIsA`, `IsAncestorOf`,
+  `Players:GetPlayerByUserId`, and `game.PlaceId` / `game.JobId`.
 - **Signals:** `Connect` (returns a connection with `Disconnect`), `Once`,
   and `Wait`, which pauses the script until the signal fires and returns its
   arguments.
@@ -201,8 +207,26 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   bubble when the player is within `MaxActivationDistance`. It has
   `ActionText`, `ObjectText`, `KeyboardKeyCode`, `HoldDuration` and
   `Enabled`, and fires `Triggered(player)` and `TriggerEnded(player)`.
-- **Lighting:** `ClockTime` (0 to 24) moves the sun and colours the sky, and
-  `Brightness` sets how strong the sun is.
+- **Lighting:** `ClockTime` (0 to 24) moves the sun and colours the sky,
+  `Brightness` sets how strong the sun is, `Ambient` tints the shadows (0.5
+  grey is normal), and things further than `FogStart` studs fade into
+  `FogColor` until they vanish at `FogEnd`.
+- **Remote and bindable functions:** like events, but the caller waits for
+  an answer. A `RemoteFunction`'s `InvokeServer(...)` is answered by the
+  function a game script sets as `OnServerInvoke(player, ...)`, and
+  `InvokeClient(player, ...)` by `OnClientInvoke`. A `BindableFunction`'s
+  `Invoke(...)` is answered by `OnInvoke`. The answer may wait itself, errors
+  in it reach the caller, and calling before an answer is set waits for one.
+- **HttpService:** `JSONEncode(table)`, `JSONDecode(text)`,
+  `GenerateGUID(braces?)` and `UrlEncode(text)`. (It doesn't fetch from the
+  web.)
+- **More value objects:** `ObjectValue` (a link to an instance),
+  `Vector3Value` and `Color3Value`, besides the number, string and boolean
+  ones.
+- **ServerStorage and StarterPlayer:** `ServerStorage` keeps templates out of
+  the world; `StarterPlayer.CharacterWalkSpeed` and `CharacterJumpPower` are
+  what new characters start with. `workspace.FallenPartsDestroyHeight` (-100)
+  is how low loose parts and characters can fall.
 - **Input:** `UserInputService.InputBegan` and `InputEnded` fire with an input
   object (`KeyCode`, `UserInputType`) and whether the game's UI already used
   it. `IsKeyDown(Enum.KeyCode.X)` and `IsMouseButtonPressed` check what is

@@ -414,6 +414,12 @@ fn setup_scene(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ima
     commands.spawn((
         Camera3d::default(),
         rig,
+        // Lighting's FogStart and FogEnd move this; by default it is too far away to see.
+        bevy::pbr::DistanceFog {
+            color: Color::srgb(0.75, 0.75, 0.75),
+            falloff: bevy::pbr::FogFalloff::Linear { start: 0.0, end: 100_000.0 },
+            ..default()
+        },
         Transform::from_xyz(-18.0, 16.0, 24.0).with_rotation(rig.rotation()),
     ));
     commands.spawn((
@@ -452,14 +458,51 @@ fn update_lighting(
     mut sun: Query<(&mut DirectionalLight, &mut Transform), With<Sun>>,
     mut clear: ResMut<ClearColor>,
     mut ambient: ResMut<GlobalAmbientLight>,
+    mut fogs: Query<&mut bevy::pbr::DistanceFog>,
 ) {
-    let (clock, brightness) = {
+    let (clock, brightness, tint, fog) = {
         let tree = engine.tree.borrow();
         let lighting = tree.service(ClassKind::Lighting);
         let read = |p| lighting.and_then(|l| tree.get_number(l, p)).map(|n| n as f32);
-        (read(Property::ClockTime).unwrap_or(14.0), read(Property::Brightness).unwrap_or(2.0))
+        let colour = |p| lighting.and_then(|l| tree.get_color(l, p));
+        (
+            read(Property::ClockTime).unwrap_or(14.0),
+            read(Property::Brightness).unwrap_or(2.0),
+            colour(Property::Ambient).unwrap_or(libroxel_instance::Color3::new(0.5, 0.5, 0.5)),
+            (
+                colour(Property::FogColor).unwrap_or(libroxel_instance::Color3::new(0.75, 0.75, 0.75)),
+                read(Property::FogStart).unwrap_or(0.0),
+                read(Property::FogEnd).unwrap_or(100_000.0),
+            ),
+        )
     };
     let (dir, illuminance, sky, ambient_brightness) = sky_at(clock, brightness);
+    // Ambient 0.5 grey is the normal amount; brighter or coloured ambient tints the shadows.
+    let strongest = tint.r.max(tint.g).max(tint.b);
+    let ambient_brightness = ambient_brightness * (strongest * 2.0);
+    let ambient_color = if strongest > 0.0 {
+        Color::srgb(tint.r / strongest, tint.g / strongest, tint.b / strongest)
+    } else {
+        Color::WHITE
+    };
+    if ambient.color != ambient_color {
+        ambient.color = ambient_color;
+    }
+    let (fog_colour, fog_start, fog_end) = fog;
+    let fog_colour = Color::srgb(fog_colour.r, fog_colour.g, fog_colour.b);
+    let fog_end = fog_end.max(fog_start + 0.01);
+    for mut f in &mut fogs {
+        let changed = match f.falloff {
+            bevy::pbr::FogFalloff::Linear { start, end } => start != fog_start || end != fog_end,
+            _ => true,
+        };
+        if changed {
+            f.falloff = bevy::pbr::FogFalloff::Linear { start: fog_start, end: fog_end };
+        }
+        if f.color != fog_colour {
+            f.color = fog_colour;
+        }
+    }
     for (mut light, mut transform) in &mut sun {
         if (light.illuminance - illuminance).abs() > 0.5 {
             light.illuminance = illuminance;

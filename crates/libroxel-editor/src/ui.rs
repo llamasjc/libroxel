@@ -91,6 +91,11 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::WeldConstraint,
     ClassKind::Seat,
     ClassKind::VehicleSeat,
+    ClassKind::RemoteFunction,
+    ClassKind::BindableFunction,
+    ClassKind::ObjectValue,
+    ClassKind::Vector3Value,
+    ClassKind::Color3Value,
 ];
 
 const SHAPES: &[(PartShape, &str)] = &[
@@ -141,6 +146,13 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::WeldConstraint => "🔗",
         ClassKind::Seat => "🪑",
         ClassKind::VehicleSeat => "🏎",
+        ClassKind::RemoteFunction => "📞",
+        ClassKind::BindableFunction => "🛎",
+        ClassKind::ObjectValue => "🔗",
+        ClassKind::Vector3Value => "📐",
+        ClassKind::Color3Value => "🎨",
+        ClassKind::ServerStorage => "🗃",
+        ClassKind::StarterPlayer => "🧍",
         ClassKind::Teams | ClassKind::Team => "🚩",
     }
 }
@@ -907,7 +919,6 @@ fn properties(
             "Put this inside a part. While playing, clicking the part fires `MouseClick` with the player, \
              if their character is close enough.",
         ),
-        ClassKind::Lighting => Some("ClockTime sets the time of day: 6 is sunrise, 12 noon, 18 sunset."),
         ClassKind::ProximityPrompt => Some(
             "Put this inside a part. While playing, walking close shows a prompt; pressing its key (or \
              clicking it) fires `Triggered` with the player. HoldDuration makes the player hold the key.",
@@ -967,6 +978,24 @@ fn properties(
         ClassKind::VehicleSeat => Some(
             "Sit in it to drive: WASD sets Throttle and Steer, and it pushes whatever it's welded to \
              (unanchored) at up to MaxSpeed. Insert > Go-kart builds a ready-made kart.",
+        ),
+        ClassKind::RemoteFunction => Some(
+            "A local script calls `InvokeServer(...)` and waits; the game script's \
+             `remote.OnServerInvoke = function(player, ...) return answer end` answers it.",
+        ),
+        ClassKind::BindableFunction => Some(
+            "Set `OnInvoke = function(...) return answer end` in one script; any other script can call \
+             `Invoke(...)` and gets the answer back.",
+        ),
+        ClassKind::ServerStorage => {
+            Some("A place for templates and modules only game scripts use. Nothing in here is in the world.")
+        }
+        ClassKind::StarterPlayer => {
+            Some("CharacterWalkSpeed and CharacterJumpPower are what each new character starts with.")
+        }
+        ClassKind::Lighting => Some(
+            "ClockTime sets the time of day: 6 is sunrise, 12 noon, 18 sunset. Ambient lights the shadows, \
+             and things further than FogStart fade into FogColor until they vanish at FogEnd.",
         ),
         ClassKind::WeldConstraint => Some(
             "Holds Part0 and Part1 together while playing: they move as one, keeping how they sit now. \
@@ -1757,7 +1786,9 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             let parent = match class {
                 ClassKind::ModuleScript => tree.service(ClassKind::ReplicatedStorage).unwrap_or(parent),
                 ClassKind::ScreenGui => tree.service(ClassKind::StarterGui).unwrap_or(parent),
-                ClassKind::RemoteEvent => tree.service(ClassKind::ReplicatedStorage).unwrap_or(parent),
+                ClassKind::RemoteEvent | ClassKind::RemoteFunction => {
+                    tree.service(ClassKind::ReplicatedStorage).unwrap_or(parent)
+                }
                 ClassKind::Tool => tree.service(ClassKind::StarterPack).unwrap_or(parent),
                 ClassKind::Team => tree.service(ClassKind::Teams).unwrap_or(parent),
                 // Corners and layouts go inside the selected GUI object.
@@ -1779,6 +1810,10 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     | ClassKind::PointLight
                     | ClassKind::SpotLight
                     | ClassKind::BindableEvent
+                    | ClassKind::BindableFunction
+                    | ClassKind::ObjectValue
+                    | ClassKind::Vector3Value
+                    | ClassKind::Color3Value
                     | ClassKind::ModuleScript
                     | ClassKind::IntValue
                     | ClassKind::NumberValue

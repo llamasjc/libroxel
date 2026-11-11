@@ -239,7 +239,7 @@ fn json_number(n: f64) -> mlua::Result<serde_json::Value> {
 
 /// Converts a script value to saved data. Only nil, booleans, numbers,
 /// strings and tables of those can be saved.
-fn to_json(value: &Value, depth: usize) -> mlua::Result<serde_json::Value> {
+pub(crate) fn to_json(value: &Value, depth: usize) -> mlua::Result<serde_json::Value> {
     if depth > 32 {
         return Err(runtime_err("saved tables can't be nested that deeply (or contain themselves)"));
     }
@@ -273,7 +273,7 @@ fn table_to_json(table: &Table, depth: usize) -> mlua::Result<serde_json::Value>
     Ok(serde_json::Value::Object(map))
 }
 
-fn from_json(lua: &Lua, value: &serde_json::Value) -> mlua::Result<Value> {
+pub(crate) fn from_json(lua: &Lua, value: &serde_json::Value) -> mlua::Result<Value> {
     Ok(match value {
         serde_json::Value::Null => Value::Nil,
         serde_json::Value::Bool(b) => Value::Boolean(*b),

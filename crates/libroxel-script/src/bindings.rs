@@ -321,6 +321,53 @@ impl UserData for LuaVector3 {
             let other = as_vector3(&other).ok_or_else(|| mlua::Error::runtime("Lerp expects a Vector3"))?;
             Ok(LuaVector3(this.0.lerp(other, t)))
         });
+        for (name, pick) in [(MIN, f32::min as fn(f32, f32) -> f32), (MAX, f32::max)] {
+            methods.add_method(name, move |_, this, others: Variadic<Value>| {
+                let mut out = this.0;
+                for other in others.iter() {
+                    let other = as_vector3(other)
+                        .ok_or_else(|| mlua::Error::runtime(format!("{name} expects Vector3s")))?;
+                    out = Vec3::new(pick(out.x, other.x), pick(out.y, other.y), pick(out.z, other.z));
+                }
+                Ok(LuaVector3(out))
+            });
+        }
+        for (name, each) in [
+            (ABS, f32::abs as fn(f32) -> f32),
+            (FLOOR, f32::floor),
+            (CEIL, f32::ceil),
+            (SIGN, |v: f32| {
+                if v > 0.0 {
+                    1.0
+                } else if v < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                }
+            }),
+        ] {
+            methods.add_method(name, move |_, this, ()| {
+                Ok(LuaVector3(Vec3::new(each(this.0.x), each(this.0.y), each(this.0.z))))
+            });
+        }
+        methods.add_method(FUZZY_EQ, |_, this, (other, epsilon): (Value, Option<f32>)| {
+            let other =
+                as_vector3(&other).ok_or_else(|| mlua::Error::runtime("FuzzyEq expects a Vector3"))?;
+            let eps = epsilon.unwrap_or(1e-5);
+            let d = this.0 - other;
+            Ok(d.x.abs() <= eps && d.y.abs() <= eps && d.z.abs() <= eps)
+        });
+        methods.add_method(ANGLE, |_, this, (other, axis): (Value, Option<Value>)| {
+            let other = as_vector3(&other).ok_or_else(|| mlua::Error::runtime("Angle expects a Vector3"))?;
+            let (a, b) = (this.0.normalize_or_zero(), other.normalize_or_zero());
+            let angle = a.dot(b).clamp(-1.0, 1.0).acos();
+            // With an axis, the angle is signed: positive turning one way round it.
+            let sign = match axis.as_ref().and_then(as_vector3) {
+                Some(axis) if a.cross(b).dot(axis) < 0.0 => -1.0,
+                _ => 1.0,
+            };
+            Ok(angle * sign)
+        });
 
         methods.add_meta_function(MetaMethod::Add, |_, (a, b): (Value, Value)| {
             let (a, b) = vector_operands("add", &a, &b)?;
@@ -361,6 +408,17 @@ impl UserData for LuaColor3 {
         methods.add_meta_method(MetaMethod::ToString, |_, this, ()| {
             Ok(format!("{}, {}, {}", this.0.r, this.0.g, this.0.b))
         });
+        methods.add_method(names::color3::LERP, |_, this, (other, t): (Value, f32)| {
+            let Value::UserData(ud) = &other else {
+                return Err(mlua::Error::runtime("Lerp expects a Color3"));
+            };
+            let other =
+                ud.borrow::<LuaColor3>().map_err(|_| mlua::Error::runtime("Lerp expects a Color3"))?.0;
+            let mix = |a: f32, b: f32| a + (b - a) * t;
+            Ok(LuaColor3(Color3::new(mix(this.0.r, other.r), mix(this.0.g, other.g), mix(this.0.b, other.b))))
+        });
+        methods.add_method(names::color3::TO_HSV, |_, this, ()| Ok(crate::calls::to_hsv(this.0)));
+        methods.add_method(names::color3::TO_HEX, |_, this, ()| Ok(crate::calls::to_hex(this.0)));
         methods.add_meta_function(MetaMethod::Eq, |_, (a, b): (Value, Value)| {
             let colour = |v: &Value| match v {
                 Value::UserData(ud) => ud.borrow::<LuaColor3>().ok().map(|c| c.0),
@@ -650,6 +708,9 @@ impl UserData for LuaInstance {
             if let Some(service) = crate::services::get_service(lua, &name)? {
                 return Ok(service);
             }
+            if let Some(service) = crate::calls::get_service(lua, &name)? {
+                return Ok(service);
+            }
             let service = names::class_from_name(&name).and_then(|c| host(lua).tree.borrow().service(c));
             match service {
                 Some(id) => Ok(Value::UserData(push_instance(lua, id)?)),
@@ -754,6 +815,7 @@ impl UserData for LuaInstance {
         crate::services::add_instance_methods(methods);
         crate::items::add_instance_methods(methods);
         crate::world::add_instance_methods(methods);
+        crate::calls::add_instance_methods(methods);
         methods.add_method(names::methods::TAKE_DAMAGE, |lua, this, amount: f64| {
             require_class(lua, this.0, ClassKind::Humanoid, names::methods::TAKE_DAMAGE)?;
             let host = host(lua);
@@ -784,6 +846,9 @@ impl UserData for LuaInstance {
                 return Ok(Value::UserData(lua.create_userdata(LuaCFrame(part_cframe(lua, id)?))?));
             }
             if let Some(value) = crate::world::index(lua, id, class, &key)? {
+                return Ok(value);
+            }
+            if let Some(value) = crate::calls::index(lua, id, class, &key)? {
                 return Ok(value);
             }
             if key == names::methods::LOCAL_PLAYER && class == ClassKind::Players {
@@ -835,6 +900,9 @@ impl UserData for LuaInstance {
                 return set_part_cframe(lua, id, cf);
             }
             if crate::world::new_index(lua, id, class, &key, &value)? {
+                return Ok(());
+            }
+            if crate::calls::new_index(lua, id, class, &key, &value)? {
                 return Ok(());
             }
             let Some(property) = names::property_from_name(class, &key) else {
@@ -1545,6 +1613,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     g.set(globals::TASK, task_lib)?;
     g.set(globals::WAIT, wait)?;
     g.set(globals::TIME, lua.create_function(|lua, ()| Ok(host(lua).clock.get()))?)?;
+    crate::calls::install(lua)?;
 
     g.set(
         globals::PRINT,

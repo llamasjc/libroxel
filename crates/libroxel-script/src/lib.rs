@@ -20,6 +20,7 @@
 //! ```
 
 mod bindings;
+mod calls;
 mod items;
 pub mod names;
 mod services;

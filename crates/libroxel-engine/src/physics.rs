@@ -20,6 +20,13 @@ use libroxel_instance::{
 pub const GRAVITY: f32 = 196.2;
 /// Unanchored parts that fall below this height are destroyed.
 pub const FALLEN_PARTS_HEIGHT: f32 = -100.0;
+
+/// The height below which loose parts are destroyed: the workspace's
+/// FallenPartsDestroyHeight, or [`FALLEN_PARTS_HEIGHT`].
+pub fn fallen_parts_height(tree: &InstanceTree) -> f32 {
+    tree.get_number(tree.workspace(), Property::FallenPartsDestroyHeight)
+        .map_or(FALLEN_PARTS_HEIGHT, |h| h as f32)
+}
 /// The longest slice of time simulated in one go; longer frames are split.
 const MAX_SUBSTEP: f32 = 1.0 / 60.0;
 const MAX_SUBSTEPS: usize = 8;
@@ -364,6 +371,7 @@ impl Physics {
     pub fn step(&mut self, tree: &mut InstanceTree, dt: f32) -> StepResult {
         let mut bodies = self.collect_bodies(tree);
         let gravity = tree.get_number(tree.workspace(), Property::Gravity).map_or(GRAVITY, |g| g as f32);
+        let fallen_height = fallen_parts_height(tree);
         let live: HashSet<InstanceId> = bodies.iter().map(|b| b.id).collect();
         self.velocities.retain(|id, _| live.contains(id));
         self.grounded.clear();
@@ -383,7 +391,7 @@ impl Physics {
             if tree.get_vec3(body.id, Property::Position) != Some(body.pos) {
                 let _ = tree.set(body.id, Property::Position, PropertyValue::Vec3(body.pos));
             }
-            if body.pos.y < FALLEN_PARTS_HEIGHT {
+            if body.pos.y < fallen_height {
                 result.fell.push(body.id);
             }
         }

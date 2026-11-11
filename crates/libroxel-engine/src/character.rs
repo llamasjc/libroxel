@@ -286,6 +286,17 @@ impl Character {
         set(tree, root, Property::Transparency, PropertyValue::Number(1.0));
         let (head, limbs) = build_rig(tree, model, colors);
         let humanoid = make(tree, ClassKind::Humanoid, names::HUMANOID, model);
+        // New characters start with the starter player's walk speed and jump power.
+        if let Some(starter) = tree.service(ClassKind::StarterPlayer) {
+            for (from, to) in [
+                (Property::CharacterWalkSpeed, Property::WalkSpeed),
+                (Property::CharacterJumpPower, Property::JumpPower),
+            ] {
+                if let Some(n) = tree.get_number(starter, from) {
+                    set(tree, humanoid, to, PropertyValue::Number(n));
+                }
+            }
+        }
         let character = Character { model, root, head, humanoid, limbs };
         character.pose(tree, Pose::default());
         character
@@ -306,7 +317,7 @@ impl Character {
             || tree.get_number(self.humanoid, Property::Health).is_some_and(|h| h <= 0.0)
             || tree
                 .get_vec3(self.root, Property::Position)
-                .is_some_and(|p| p.y < crate::physics::FALLEN_PARTS_HEIGHT)
+                .is_some_and(|p| p.y < crate::physics::fallen_parts_height(tree))
     }
 
     /// Turns input into velocity. Call before [`Physics::step`].

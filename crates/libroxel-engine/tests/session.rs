@@ -638,3 +638,24 @@ fn a_respawned_guis_old_script_stops() {
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(log.iter().filter(|l| l.text == "hud started").count(), 2, "{log:?}");
 }
+
+#[test]
+fn starter_player_sets_speeds_and_the_fall_height_is_the_workspaces() {
+    let mut tree = world();
+    let starter = tree.service(ClassKind::StarterPlayer).unwrap();
+    tree.set(starter, Property::CharacterWalkSpeed, PropertyValue::Number(30.0)).unwrap();
+    tree.set(starter, Property::CharacterJumpPower, PropertyValue::Number(80.0)).unwrap();
+    let ws = tree.workspace();
+    tree.set(ws, Property::FallenPartsDestroyHeight, PropertyValue::Number(-20.0)).unwrap();
+    let rock = part(&mut tree, ClassKind::Part, "Rock", Vec3::new(200.0, -15.0, 0.0), Vec3::ONE);
+    tree.set(rock, Property::Anchored, PropertyValue::Bool(false)).unwrap();
+    let mut session = start_on(tree, true).unwrap();
+    let character = session.character().unwrap();
+    let tree = session.runtime().tree().clone();
+    assert_eq!(tree.borrow().get_number(character.humanoid, Property::WalkSpeed), Some(30.0));
+    assert_eq!(tree.borrow().get_number(character.humanoid, Property::JumpPower), Some(80.0));
+    for _ in 0..60 {
+        session.step(DT, CharacterInput::default());
+    }
+    assert!(tree.borrow().is_destroyed(rock).unwrap_or(true), "the rock fell below -20 and was removed");
+}

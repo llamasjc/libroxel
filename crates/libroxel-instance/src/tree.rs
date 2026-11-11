@@ -157,6 +157,8 @@ impl InstanceTree {
                 ClassKind::ServerScriptService => "ServerScriptService",
                 ClassKind::StarterPack => "StarterPack",
                 ClassKind::Teams => "Teams",
+                ClassKind::ServerStorage => "ServerStorage",
+                ClassKind::StarterPlayer => "StarterPlayer",
                 _ => unreachable!("every service has a name"),
             };
             let id = tree.alloc(InstanceData::new(class, name.into()));
@@ -411,7 +413,11 @@ impl InstanceTree {
                     | Property::Gravity
                     | Property::MaxSpeed
                     | Property::Torque
-                    | Property::TurnSpeed,
+                    | Property::TurnSpeed
+                    | Property::CharacterWalkSpeed
+                    | Property::CharacterJumpPower
+                    | Property::FogStart
+                    | Property::FogEnd,
                     PropertyValue::Number(n),
                 ) => PropertyValue::Number(n.max(0.0)),
                 (Property::LayoutOrder, PropertyValue::Number(n)) => PropertyValue::Number(n.round()),

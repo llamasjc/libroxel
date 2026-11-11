@@ -127,6 +127,20 @@ pub enum ClassKind {
     Seat,
     /// A seat that drives the parts welded to it.
     VehicleSeat,
+    /// Like a remote event, but the caller waits for the other side's answer.
+    RemoteFunction,
+    /// Like a bindable event, but the caller waits for the answer.
+    BindableFunction,
+    /// A value object holding a link to another instance.
+    ObjectValue,
+    /// A value object holding a 3D vector.
+    Vector3Value,
+    /// A value object holding a colour.
+    Color3Value,
+    /// A service for things only game scripts use, kept out of the world.
+    ServerStorage,
+    /// A service with the settings each player's character starts with.
+    StarterPlayer,
 }
 
 impl ClassKind {
@@ -178,6 +192,13 @@ impl ClassKind {
         ClassKind::WeldConstraint,
         ClassKind::Seat,
         ClassKind::VehicleSeat,
+        ClassKind::RemoteFunction,
+        ClassKind::BindableFunction,
+        ClassKind::ObjectValue,
+        ClassKind::Vector3Value,
+        ClassKind::Color3Value,
+        ClassKind::ServerStorage,
+        ClassKind::StarterPlayer,
     ];
 
     /// The services every tree has under its root, in order. They can't be
@@ -191,6 +212,8 @@ impl ClassKind {
         ClassKind::ServerScriptService,
         ClassKind::StarterPack,
         ClassKind::Teams,
+        ClassKind::ServerStorage,
+        ClassKind::StarterPlayer,
     ];
 
     /// Whether this class is one of the [`SERVICES`](Self::SERVICES).
@@ -282,7 +305,13 @@ impl ClassKind {
             Property::TeamColor,
             Property::Neutral,
         ];
-        const WORKSPACE: &[Property] = &[Property::Name, Property::Gravity];
+        const WORKSPACE: &[Property] =
+            &[Property::Name, Property::Gravity, Property::FallenPartsDestroyHeight];
+        const OBJECT: &[Property] = &[Property::Name, Property::ObjectValue];
+        const VECTOR3: &[Property] = &[Property::Name, Property::Vector3Value];
+        const COLOR3: &[Property] = &[Property::Name, Property::Color3Value];
+        const STARTER_PLAYER: &[Property] =
+            &[Property::Name, Property::CharacterWalkSpeed, Property::CharacterJumpPower];
         const PLAYERS: &[Property] = &[Property::Name, Property::RespawnTime, Property::CharacterAutoLoads];
         const WELD: &[Property] = &[Property::Name, Property::Part0, Property::Part1, Property::Enabled];
         const SEAT: &[Property] = &[
@@ -401,7 +430,15 @@ impl ClassKind {
             Property::AlwaysOnTop,
             Property::MaxDistance,
         ];
-        const LIGHTING: &[Property] = &[Property::Name, Property::ClockTime, Property::Brightness];
+        const LIGHTING: &[Property] = &[
+            Property::Name,
+            Property::ClockTime,
+            Property::Brightness,
+            Property::Ambient,
+            Property::FogColor,
+            Property::FogStart,
+            Property::FogEnd,
+        ];
         const HUMANOID: &[Property] = &[
             Property::Name,
             Property::Health,
@@ -443,6 +480,10 @@ impl ClassKind {
             ClassKind::WeldConstraint => WELD,
             ClassKind::Seat => SEAT,
             ClassKind::VehicleSeat => VEHICLE_SEAT,
+            ClassKind::ObjectValue => OBJECT,
+            ClassKind::Vector3Value => VECTOR3,
+            ClassKind::Color3Value => COLOR3,
+            ClassKind::StarterPlayer => STARTER_PLAYER,
             _ => COMMON,
         }
     }
@@ -531,6 +572,16 @@ impl ClassKind {
             Property::Torque => PropertyValue::Number(10.0),
             Property::TurnSpeed => PropertyValue::Number(1.0),
             Property::Throttle | Property::Steer => PropertyValue::Number(0.0),
+            Property::ObjectValue => PropertyValue::Ref(None),
+            Property::Vector3Value => PropertyValue::Vec3(Vec3::ZERO),
+            Property::Color3Value => PropertyValue::Color3(Color3::new(0.0, 0.0, 0.0)),
+            Property::CharacterWalkSpeed => PropertyValue::Number(16.0),
+            Property::CharacterJumpPower => PropertyValue::Number(50.0),
+            Property::Ambient => PropertyValue::Color3(Color3::new(0.5, 0.5, 0.5)),
+            Property::FogColor => PropertyValue::Color3(Color3::new(0.75, 0.75, 0.75)),
+            Property::FogStart => PropertyValue::Number(0.0),
+            Property::FogEnd => PropertyValue::Number(100_000.0),
+            Property::FallenPartsDestroyHeight => PropertyValue::Number(-100.0),
             Property::Size => PropertyValue::Vec3(Vec3::new(4.0, 1.0, 2.0)),
             Property::Color => PropertyValue::Color3(match self {
                 ClassKind::SpawnLocation => Color3::new(0.3, 0.55, 0.95),
@@ -596,6 +647,13 @@ impl ClassKind {
             ClassKind::WeldConstraint => "weld_constraint",
             ClassKind::Seat => "seat",
             ClassKind::VehicleSeat => "vehicle_seat",
+            ClassKind::RemoteFunction => "remote_function",
+            ClassKind::BindableFunction => "bindable_function",
+            ClassKind::ObjectValue => "object_value",
+            ClassKind::Vector3Value => "vector3_value",
+            ClassKind::Color3Value => "color3_value",
+            ClassKind::ServerStorage => "server_storage",
+            ClassKind::StarterPlayer => "starter_player",
         }
     }
 
