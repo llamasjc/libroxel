@@ -130,6 +130,15 @@
   one assembly ignore each other, and after the step each carried part is
   put back at its offset from the root. The offset is taken when the part
   joins, or again if a script moved it since.
+- **Speed.** Physics uses a broadphase: in worlds of more than 64 parts,
+  each box (grown by how far it can move this step) goes into a grid of
+  8-stud cells, and parts are only compared with others sharing a cell;
+  very large boxes such as baseplates are compared with everything.
+  Every instance has a *revision* that changes whenever a property does
+  (from one counter shared by all trees, so undo snapshots never reuse a
+  number); the renderer skips parts whose revision it has already shown.
+  `cargo run -p libroxel-engine --example bench -- 2000` times frames in a
+  world of 2000 parts.
 - **Seats and vehicles** live in `libroxel-engine/src/seat.rs`. A sitting
   character is carried like a welded part: physics holds it still and lets
   it pass through the seat's assembly, and after the step it is put on the
@@ -149,8 +158,8 @@
 
 ## Known limits
 
-- The ECS sync does a full pass over the workspace each frame; it will move
-  to the change journal once worlds get big.
+- The ECS sync still lists the workspace's parts each frame, though it
+  only copies the ones whose revision changed.
 - Loose parts never rotate, and cylinders collide as boxes.
 - A welded assembly collides with the world through its root part only;
   its carried parts stop other things but don't stop the assembly.

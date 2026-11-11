@@ -96,8 +96,9 @@ pub fn part_shape(tree: &InstanceTree, id: InstanceId) -> PartShape {
     }
 }
 
+/// Each part's entity, and the revision of the part it last showed.
 #[derive(Resource, Default)]
-struct PartEntities(HashMap<InstanceId, Entity>);
+struct PartEntities(HashMap<InstanceId, Entity>, HashMap<InstanceId, u64>);
 
 /// Mirrors the tree into the ECS and runs the play session each frame.
 /// Works headless; add [`RenderPlugin`] to draw.
@@ -156,15 +157,22 @@ fn sync_parts(
     let live: Vec<InstanceId> = tree.descendants_of_class(tree.workspace(), ClassKind::Part);
     let live_set: std::collections::HashSet<_> = live.iter().copied().collect();
 
-    entities.0.retain(|id, entity| {
+    let PartEntities(spawned, seen) = &mut *entities;
+    spawned.retain(|id, entity| {
         let keep = live_set.contains(id);
         if !keep {
             commands.entity(*entity).despawn();
         }
         keep
     });
+    seen.retain(|id, _| live_set.contains(id));
 
     for id in live {
+        // Unchanged since last frame: nothing to copy.
+        let revision = tree.revision(id).unwrap_or(0);
+        if spawned.contains_key(&id) && seen.get(&id) == Some(&revision) {
+            continue;
+        }
         let (Some(pos), Some(size)) =
             (tree.get_vec3(id, Property::Position), tree.get_vec3(id, Property::Size))
         else {
@@ -185,16 +193,17 @@ fn sync_parts(
         let name = PartName(tree.name(id).unwrap_or_default().to_owned());
         let geometry = PartGeometry(shape);
 
-        match entities.0.get(&id).and_then(|e| parts.get_mut(*e).ok()) {
+        match spawned.get(&id).and_then(|e| parts.get_mut(*e).ok()) {
             Some((mut t, mut a, mut n, mut g)) => {
                 t.set_if_neq(transform);
                 a.set_if_neq(appearance);
                 n.set_if_neq(name);
                 g.set_if_neq(geometry);
+                seen.insert(id, revision);
             }
-            None if !entities.0.contains_key(&id) => {
+            None if !spawned.contains_key(&id) => {
                 let entity = commands.spawn((PartLink(id), name, transform, appearance, geometry)).id();
-                entities.0.insert(id, entity);
+                spawned.insert(id, entity);
             }
             None => {} // spawned this frame; commands not applied yet
         }

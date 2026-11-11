@@ -70,6 +70,16 @@ struct InstanceData {
     attributes: std::collections::BTreeMap<String, PropertyValue>,
     /// Labels for grouping instances, kept sorted.
     tags: Vec<String>,
+    /// Changes whenever a property does (see [`InstanceTree::revision`]).
+    revision: u64,
+}
+
+/// Revisions come from one counter for every tree, so a revision number
+/// always means the same property values, even across undo snapshots.
+static NEXT_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_revision() -> u64 {
+    NEXT_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl InstanceData {
@@ -90,6 +100,7 @@ impl InstanceData {
             props,
             attributes: Default::default(),
             tags: Vec::new(),
+            revision: next_revision(),
         }
     }
 
@@ -416,9 +427,17 @@ impl InstanceTree {
             replace(slot, value)
         };
         if changed {
+            self.data_mut(id)?.revision = next_revision();
             self.changes.push(Change::PropertyChanged { id, property });
         }
         Ok(())
+    }
+
+    /// A number that changes every time one of `id`'s properties does, so
+    /// a mirror of the tree (like the renderer) can skip instances that
+    /// haven't changed since it last looked.
+    pub fn revision(&self, id: InstanceId) -> Result<u64> {
+        Ok(self.data(id)?.revision)
     }
 
     /// Every attribute on `id`, sorted by name.

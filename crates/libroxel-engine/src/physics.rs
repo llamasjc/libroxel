@@ -26,6 +26,12 @@ const MAX_SUBSTEPS: usize = 8;
 /// How far apart two boxes may be and still count as touching.
 const TOUCH_MARGIN: f32 = 0.05;
 const EPS: f32 = 1e-4;
+/// Worlds with at most this many parts skip the grid and compare every pair.
+const BROADPHASE_MIN: usize = 64;
+/// The size of a broadphase grid cell, in studs.
+const CELL: f32 = 8.0;
+/// Boxes covering more cells than this are compared with everything.
+const MAX_CELLS: i64 = 64;
 /// Moving boxes climb onto anything whose top is at most this far above their bottom.
 pub const STEP_HEIGHT: f32 = 0.6;
 
@@ -364,8 +370,9 @@ impl Physics {
 
         let substeps = ((dt / MAX_SUBSTEP).ceil() as usize).clamp(1, MAX_SUBSTEPS);
         let h = dt / substeps as f32;
+        let near = self.broadphase(&bodies, dt, gravity);
         for _ in 0..substeps {
-            self.integrate(&mut bodies, h, gravity);
+            self.integrate(&mut bodies, &near, h, gravity);
         }
 
         let mut result = StepResult::default();
@@ -384,9 +391,13 @@ impl Physics {
         // Touch detection: only pairs where something can move.
         let mut current = HashSet::new();
         for (i, a) in bodies.iter().enumerate() {
-            for b in &bodies[i + 1..] {
-                if (a.anchored && b.anchored) || self.ignores(a.id, b.id) {
-                    continue;
+            if a.anchored {
+                continue;
+            }
+            for &j in &near[i] {
+                let b = &bodies[j];
+                if (j < i && !b.anchored) || self.ignores(a.id, b.id) {
+                    continue; // a moving pair is checked once, from the lower index
                 }
                 if touching(a, b) {
                     current.insert(ordered(a.id, b.id));
@@ -403,7 +414,84 @@ impl Physics {
         result
     }
 
-    fn integrate(&mut self, bodies: &mut [Body], h: f32, gravity: f32) {
+    /// For each moving body, the bodies it could meet during a step of `dt`
+    /// seconds, in index order. Small worlds check everything; bigger ones
+    /// put boxes (grown by how far they can move) in a grid of cells and
+    /// only compare boxes that share a cell. Huge boxes, like a baseplate,
+    /// are compared with everything instead of filling thousands of cells.
+    fn broadphase(&self, bodies: &[Body], dt: f32, gravity: f32) -> Vec<Vec<usize>> {
+        let n = bodies.len();
+        if n <= BROADPHASE_MIN {
+            return (0..n)
+                .map(|i| if bodies[i].anchored { Vec::new() } else { (0..n).filter(|j| *j != i).collect() })
+                .collect();
+        }
+        // Each box grown by the most it could move this step.
+        let grown: Vec<(Vec3, Vec3)> = bodies
+            .iter()
+            .map(|b| {
+                let reach = if b.anchored {
+                    TOUCH_MARGIN + EPS
+                } else {
+                    let v = self.velocity(b.id);
+                    (v.length() + gravity.abs() * dt) * dt + STEP_HEIGHT + TOUCH_MARGIN + 1.0
+                };
+                let r = Vec3::new(reach, reach, reach);
+                (b.min() - r, b.max() + r)
+            })
+            .collect();
+        let cell_of = |v: f32| (v / CELL).floor() as i32;
+        let mut grid: HashMap<(i32, i32, i32), Vec<usize>> = HashMap::new();
+        let mut huge = Vec::new();
+        for (i, (lo, hi)) in grown.iter().enumerate() {
+            let (x0, y0, z0) = (cell_of(lo.x), cell_of(lo.y), cell_of(lo.z));
+            let (x1, y1, z1) = (cell_of(hi.x), cell_of(hi.y), cell_of(hi.z));
+            let cells = (x1 - x0 + 1) as i64 * (y1 - y0 + 1) as i64 * (z1 - z0 + 1) as i64;
+            if cells > MAX_CELLS {
+                huge.push(i);
+                continue;
+            }
+            for x in x0..=x1 {
+                for y in y0..=y1 {
+                    for z in z0..=z1 {
+                        grid.entry((x, y, z)).or_default().push(i);
+                    }
+                }
+            }
+        }
+        let meet = |a: &(Vec3, Vec3), b: &(Vec3, Vec3)| {
+            a.0.x <= b.1.x
+                && b.0.x <= a.1.x
+                && a.0.y <= b.1.y
+                && b.0.y <= a.1.y
+                && a.0.z <= b.1.z
+                && b.0.z <= a.1.z
+        };
+        let mut near = vec![Vec::new(); n];
+        for i in 0..n {
+            if bodies[i].anchored {
+                continue;
+            }
+            let (lo, hi) = grown[i];
+            let mut found = huge.clone();
+            for x in cell_of(lo.x)..=cell_of(hi.x) {
+                for y in cell_of(lo.y)..=cell_of(hi.y) {
+                    for z in cell_of(lo.z)..=cell_of(hi.z) {
+                        if let Some(list) = grid.get(&(x, y, z)) {
+                            found.extend_from_slice(list);
+                        }
+                    }
+                }
+            }
+            found.sort_unstable();
+            found.dedup();
+            found.retain(|&j| j != i && meet(&grown[i], &grown[j]));
+            near[i] = found;
+        }
+        near
+    }
+
+    fn integrate(&mut self, bodies: &mut [Body], near: &[Vec<usize>], h: f32, gravity: f32) {
         for i in 0..bodies.len() {
             if bodies[i].anchored {
                 continue;
@@ -427,7 +515,7 @@ impl Physics {
                 if !bodies[i].can_collide {
                     continue;
                 }
-                for j in 0..bodies.len() {
+                for &j in &near[i] {
                     if i == j
                         || !bodies[j].can_collide
                         || bodies[j].collider != Collider::Aabb
@@ -464,7 +552,7 @@ impl Physics {
             if bodies[i].can_collide {
                 for _ in 0..3 {
                     let mut pushed = false;
-                    for j in 0..bodies.len() {
+                    for &j in &near[i] {
                         let other = bodies[j];
                         if i == j
                             || !other.can_collide
@@ -528,6 +616,39 @@ mod tests {
         tree.set(id, Property::Size, PropertyValue::Vec3(size)).unwrap();
         tree.set(id, Property::Anchored, PropertyValue::Bool(anchored)).unwrap();
         id
+    }
+
+    #[test]
+    fn big_worlds_use_the_grid_and_still_collide() {
+        let mut tree = InstanceTree::new();
+        let floor =
+            add_part(&mut tree, "Floor", Vec3::new(0.0, -0.5, 0.0), Vec3::new(500.0, 1.0, 500.0), true);
+        let mut crates = Vec::new();
+        for i in 0..150 {
+            let (x, z) = ((i % 15) as f32 * 6.0 - 45.0, (i / 15) as f32 * 6.0 - 30.0);
+            crates.push(add_part(&mut tree, "Crate", Vec3::new(x, 6.0, z), Vec3::new(2.0, 2.0, 2.0), false));
+            // Scenery beside each crate, which the grid has to keep track of too.
+            add_part(&mut tree, "Rock", Vec3::new(x + 3.0, 1.0, z), Vec3::new(1.0, 2.0, 1.0), true);
+        }
+        // One crate drops onto a pillar instead of the floor.
+        let pillar =
+            add_part(&mut tree, "Pillar", Vec3::new(200.0, 5.0, 200.0), Vec3::new(2.0, 10.0, 2.0), true);
+        let perched =
+            add_part(&mut tree, "Perched", Vec3::new(200.0, 14.0, 200.0), Vec3::new(2.0, 2.0, 2.0), false);
+        assert!(tree.descendants(tree.workspace()).unwrap().len() > BROADPHASE_MIN);
+        let mut physics = Physics::default();
+        let mut touched = HashSet::new();
+        for _ in 0..120 {
+            touched.extend(physics.step(&mut tree, 1.0 / 60.0).touches);
+        }
+        for c in crates {
+            let y = tree.get_vec3(c, Property::Position).unwrap().y;
+            assert!((y - 1.0).abs() < 0.01, "landed on the floor: {y}");
+            assert!(touched.contains(&ordered(floor, c)));
+        }
+        let y = tree.get_vec3(perched, Property::Position).unwrap().y;
+        assert!((y - 11.0).abs() < 0.01, "landed on the pillar: {y}");
+        assert!(touched.contains(&ordered(pillar, perched)));
     }
 
     #[test]
