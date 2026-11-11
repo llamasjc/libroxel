@@ -254,6 +254,9 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `libroxel://coin`, `jump`, `boom`, `click`, `splash`, `chime` and `hum`
   are made by Libroxel. A sound inside a part gets quieter further from the
   camera. In the sample, coins ding, the TNT booms and the finish chimes.
+- **Tipping over:** a loose part resting on something tips over when its
+  middle hangs past the edge of what holds it up, turning about that edge,
+  and settles flat on whichever side it lands on.
 - **Tool swings:** using a held tool (clicking with it)
   swings the arm holding it up and down, with the tool in the hand.
 - **Scrolling frames:** `ScrollingFrame` has `CanvasSize` (`UDim2`),
@@ -477,8 +480,8 @@ end)
 
 **Not yet:** Terrain is blocky, not smooth, and water doesn't flow. Physics is simple: anchored parts can be rotated and shaped
 (ramps and balls work), but loose parts collide as the upright box around
-them and don't tip over by themselves (they spin only when something spins
-them). A hinge arm is carried by its hinge, so it blocks things but doesn't
+them. They tip over edges and settle flat, but a hard push doesn't knock a
+tall one over, and a turned part sits a little high on its box. A hinge arm is carried by its hinge, so it blocks things but doesn't
 push them, and wheels on hinges don't drive a car. Characters climb steps up to 0.6 studs.
 
 ## Contributing

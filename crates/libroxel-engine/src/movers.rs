@@ -262,7 +262,7 @@ pub fn apply(tree: &InstanceTree, welds: &Welds, physics: &mut Physics, dt: f32)
                 let target = vec(tree, id, Property::AngularVelocity);
                 let spin = physics.angular_velocity(e.root);
                 let most = number(tree, id, Property::MaxTorque) / inertia_of(tree, welds, e.root) * dt;
-                physics.set_angular_velocity(e.root, spin + clamp_length(target - spin, most));
+                physics.drive_spin(e.root, spin + clamp_length(target - spin, most));
             }
             ClassKind::BodyAngularVelocity => {
                 let Some(e) = parent_end(tree, welds, id) else { continue };
@@ -271,7 +271,7 @@ pub fn apply(tree: &InstanceTree, welds: &Welds, physics: &mut Physics, dt: f32)
                 let inertia = inertia_of(tree, welds, e.root);
                 let rate = (number(tree, id, Property::BodyPower) / inertia).min(1.0 / dt);
                 let most = vec(tree, id, Property::BodyMaxTorque) * (dt / inertia);
-                physics.set_angular_velocity(e.root, spin + clamp_axes((target - spin) * (rate * dt), most));
+                physics.drive_spin(e.root, spin + clamp_axes((target - spin) * (rate * dt), most));
             }
             _ => {}
         }

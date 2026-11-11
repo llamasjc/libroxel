@@ -217,6 +217,12 @@
   pausing, resuming and adjusting them, and tells the session when one has
   finished so `Ended` fires. Built-in sounds are synthesised into WAV bytes
   in code. Without Bevy's audio plugin the system does nothing.
+- **Tipping:** after the substeps, `Physics::tip` looks at each resting
+  loose part's lowest corners and the tops of what is just under it. If its
+  middle is outside where those meet, gravity spins it about the nearest
+  edge (and swings its middle round it); if it is held up and within 8° of
+  lying flat, it is laid exactly flat. Parts a spinner drives
+  (`Physics::drive_spin`), welded assemblies, balls and characters are skipped.
 - **Tool swings:** the script runtime notes each `Activated`; the session
   gives the holder's avatar a short `slash` timer, and `character::slash_angle`
   turns it into extra right-arm tilt that the pose and the tool handle share.
