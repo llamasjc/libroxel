@@ -3,16 +3,20 @@
 //! Build a world out of parts, attach scripts, and press Play to test it
 //! with a character. Stop puts everything back the way it was.
 //!
+//! It starts at a main menu that edits, plays, hosts and joins games, runs
+//! servers and the Hub. A game file (or `--sample`) on the command line
+//! skips the menu and opens it in the editor.
+//!
 //! ```text
-//! cargo run -p libroxel-editor                 # start with a blank world
-//! cargo run -p libroxel-editor -- my_game.lrx  # open a saved place
-//! cargo run -p libroxel-editor -- --sample     # open the sample obby
+//! cargo run -p libroxel-editor                 # the main menu
+//! cargo run -p libroxel-editor -- my_game.lrx  # edit a saved place
 //! ```
 
 mod browse;
 mod gui;
 mod history;
 mod images;
+mod menu;
 mod server;
 mod templates;
 mod terrain_tools;
@@ -100,6 +104,11 @@ pub struct Editor {
     pub tunnel: Option<Tunnel>,
     /// The Hub: Browse, the built-in Hub, and listing a hosted game.
     pub platform: browse::Platform,
+    /// The main menu, shown when the app starts.
+    pub menu: menu::Menu,
+    /// Playing a game started from the main menu: only the game shows, and
+    /// leaving it goes back to the menu.
+    pub player_mode: bool,
 }
 
 /// A game carried over the internet with a join code.
@@ -139,6 +148,8 @@ impl Default for Editor {
             focus_typing: false,
             tunnel: None,
             platform: browse::Platform::default(),
+            menu: menu::Menu::default(),
+            player_mode: false,
         }
     }
 }
@@ -184,7 +195,11 @@ fn main() {
                 std::process::exit(1);
             }
         },
-        None => templates::blank(),
+        None => {
+            // Started plainly: begin at the main menu.
+            editor.menu.open = true;
+            templates::blank()
+        }
     };
 
     App::new()

@@ -4,6 +4,8 @@ use std::cell::RefCell;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use libroxel_engine::net::DEFAULT_PORT;
@@ -113,50 +115,95 @@ fn server(args: &[String]) -> Result<(), String> {
     let Some(path) = flags.rest.first() else {
         return Err("usage: libroxel server <game.lrx> (see libroxel help)".into());
     };
-    let port = flags.number("--port", DEFAULT_PORT)?;
-    let max_players = flags.number("--max-players", 0u32)?;
     let text = std::fs::read_to_string(path).map_err(|e| format!("could not read {path}: {e}"))?;
-    let (tree, report) = place::load(&text).map_err(|e| format!("could not load {path}: {e}"))?;
-    for warning in report.warnings {
-        eprintln!("warning: {warning}");
-    }
     let game =
         Path::new(path).file_stem().map_or("Untitled game".into(), |s| s.to_string_lossy().into_owned());
-    let name = flags.get("--name").map_or_else(|| game.clone(), str::to_owned);
+    let settings = ServerSettings {
+        name: flags.get("--name").map_or_else(|| game.clone(), str::to_owned),
+        game,
+        text,
+        key: Path::new(path).with_file_name("server-identity.key"),
+        port: flags.number("--port", DEFAULT_PORT)?,
+        hub: if flags.has("--no-hub") {
+            HubUse::None
+        } else if let Some(address) = flags.get("--hub") {
+            HubUse::At(address.to_owned())
+        } else {
+            HubUse::Own
+        },
+        official: flags.has("--official"),
+        max_players: flags.number("--max-players", 0u32)?,
+    };
+    run(settings, &mut |line| println!("{line}"), &AtomicBool::new(false))
+}
 
+/// Which Hub a server lists itself on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HubUse {
+    /// Run one here (or use the one this computer already runs).
+    Own,
+    At(String),
+    None,
+}
+
+/// Everything a server needs to know to start.
+#[derive(Debug, Clone)]
+pub struct ServerSettings {
+    /// The game's name, as Browse shows it.
+    pub game: String,
+    /// The server's name in Browse.
+    pub name: String,
+    /// The saved place to host.
+    pub text: String,
+    /// Where the server keeps its identity, so its join code stays the same.
+    pub key: PathBuf,
+    pub port: u16,
+    pub hub: HubUse,
+    pub official: bool,
+    pub max_players: u32,
+}
+
+/// Hosts a game with no window until `stop` is set, telling `say` what happens.
+pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicBool) -> Result<(), String> {
+    let ServerSettings { game, name, text, key, port, hub, official, max_players } = settings;
+    let (tree, report) = place::load(&text).map_err(|e| format!("could not load {game}: {e}"))?;
+    for warning in report.warnings {
+        say(format!("warning: {warning}"));
+    }
     let mut session = PlaySession::host(Rc::new(RefCell::new(tree)), port, None, false)?;
-    let key = Path::new(path).with_file_name("server-identity.key");
     let identity =
         Identity::load_or_create(&key).map_err(|e| format!("could not load {}: {e}", key.display()))?;
     let tunnel = HostTunnel::start(&identity, Network::Internet, port)?;
-    println!("Hosting {path} on port {port}. Getting a join code…");
+    say(format!("Hosting {game} on port {port}. Getting a join code…"));
 
     // A Hub of our own unless told to use another one (or none).
     let mut _own_hub = None;
-    let hub = if flags.has("--no-hub") {
-        None
-    } else if let Some(address) = flags.get("--hub") {
-        Some(HubClient::new(address))
-    } else {
-        let hub_port = libroxel_hub::DEFAULT_PORT;
-        match libroxel_hub::start(
-            SocketAddr::from(([0, 0, 0, 0], hub_port)),
-            Some(&data_dir().join("hub.sqlite")),
-        ) {
-            Ok(running) => {
-                println!("Running a Hub on port {hub_port}: players add this computer's address in Browse.");
-                let client = HubClient::new(&running.url());
-                _own_hub = Some(running);
-                Some(client)
-            }
-            Err(e) => {
-                // Usually another Hub on this computer already has the port.
-                println!("Using the Hub already on this computer ({e}).");
-                Some(HubClient::new(&format!("127.0.0.1:{hub_port}")))
+    let hub = match hub {
+        HubUse::None => None,
+        HubUse::At(address) => Some(HubClient::new(&address)),
+        HubUse::Own => {
+            let hub_port = libroxel_hub::DEFAULT_PORT;
+            match libroxel_hub::start(
+                SocketAddr::from(([0, 0, 0, 0], hub_port)),
+                Some(&data_dir().join("hub.sqlite")),
+            ) {
+                Ok(running) => {
+                    say(format!(
+                        "Running a Hub on port {hub_port}: players add this computer's address in Browse."
+                    ));
+                    let client = HubClient::new(&running.url());
+                    _own_hub = Some(running);
+                    Some(client)
+                }
+                Err(_) => {
+                    // Usually another Hub on this computer already has the port.
+                    say("Listing it on the Hub this computer already runs.".into());
+                    Some(HubClient::new(&format!("127.0.0.1:{hub_port}")))
+                }
             }
         }
     };
-    let kind = if flags.has("--official") { HostKind::Official } else { HostKind::Community };
+    let kind = if official { HostKind::Official } else { HostKind::Community };
     let announcer = hub.map(|hub| {
         Announcer::start(
             hub,
@@ -169,17 +216,17 @@ fn server(args: &[String]) -> Result<(), String> {
     let mut next = Instant::now();
     let mut announced = false;
     let mut hub_said = None;
-    loop {
+    while !stop.load(Ordering::Relaxed) {
         session.step(frame.as_secs_f32(), CharacterInput::default());
         if !announced {
             if let Some(code) = tunnel.code() {
-                println!("Join code (paste it into Join, or find this server in Browse):\n\n{code}\n");
+                say(format!("Join code (paste it into Join, or find this server in Browse):\n\n{code}\n"));
                 if let Some(announcer) = &announcer {
                     announcer.update(|l| l.code = Some(code));
                 }
                 announced = true;
             } else if let Some(error) = tunnel.error() {
-                println!("No join code, so only this network can join: {error}");
+                say(format!("No join code, so only this network can join: {error}"));
                 announced = true;
             }
         }
@@ -189,7 +236,7 @@ fn server(args: &[String]) -> Result<(), String> {
             let said = announcer.status();
             if said != hub_said {
                 if let Some(said) = &said {
-                    println!("Hub: {said}");
+                    say(format!("Hub: {said}"));
                 }
                 hub_said = said;
             }
@@ -200,7 +247,7 @@ fn server(args: &[String]) -> Result<(), String> {
                 LogLevel::Warn => "warning: ",
                 LogLevel::Error => "error: ",
             };
-            println!("[{:8.2}] {level}{}", line.time, line.text);
+            say(format!("[{:8.2}] {level}{}", line.time, line.text));
         }
         next += frame;
         let now = Instant::now();
@@ -209,5 +256,54 @@ fn server(args: &[String]) -> Result<(), String> {
         } else {
             next = now;
         }
+    }
+    say("Server stopped.".into());
+    Ok(())
+}
+
+/// A server running inside the app, on a thread of its own.
+pub struct BackgroundServer {
+    pub game: String,
+    pub port: u16,
+    lines: Arc<Mutex<Vec<String>>>,
+    stop: Arc<AtomicBool>,
+    done: Arc<AtomicBool>,
+}
+
+impl BackgroundServer {
+    pub fn start(settings: ServerSettings) -> Self {
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(false));
+        let (game, port) = (settings.game.clone(), settings.port);
+        let (l, s, d) = (lines.clone(), stop.clone(), done.clone());
+        std::thread::spawn(move || {
+            let mut say = |line: String| l.lock().unwrap_or_else(|e| e.into_inner()).push(line);
+            if let Err(e) = run(settings, &mut say, &s) {
+                say(format!("error: {e}"));
+            }
+            d.store(true, Ordering::Relaxed);
+        });
+        Self { game, port, lines, stop, done }
+    }
+
+    /// Everything the server has said so far.
+    pub fn lines(&self) -> Vec<String> {
+        self.lines.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Whether it has stopped (asked to, or because it failed).
+    pub fn finished(&self) -> bool {
+        self.done.load(Ordering::Relaxed)
+    }
+
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Drop for BackgroundServer {
+    fn drop(&mut self) {
+        self.stop();
     }
 }

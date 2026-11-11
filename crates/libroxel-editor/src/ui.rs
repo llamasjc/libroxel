@@ -278,6 +278,26 @@ pub fn editor_ui(
     });
     editor.platform.tick(hosting);
 
+    // A game played from the main menu ended: back to the menu.
+    if editor.player_mode && engine.session.is_none() {
+        editor.player_mode = false;
+        editor.menu.open = true;
+        editor.menu.scanned = false;
+    }
+    if editor.menu.open {
+        capture.pointer = true;
+        capture.keyboard = true;
+        let mut picks: Vec<crate::menu::Pick> =
+            editor.menu.show(&ctx, &mut editor.platform).into_iter().collect();
+        if let Some((code, name)) = editor.platform.window(&ctx) {
+            picks.push(crate::menu::Pick::Join { code, name });
+        }
+        for pick in picks {
+            menu_pick(pick, engine, editor, now);
+        }
+        return Ok(());
+    }
+
     shortcuts(&ctx, editor, playing, &mut actions);
 
     let mut root = egui::Ui::new(
@@ -286,31 +306,35 @@ pub fn editor_ui(
         egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(ctx.viewport_rect()),
     );
 
-    egui::Panel::top("menu").show(&mut root, |ui| {
-        menu_bar(ui, editor, playing, &mut actions);
-    });
+    if !editor.player_mode {
+        egui::Panel::top("menu").show(&mut root, |ui| {
+            menu_bar(ui, editor, playing, &mut actions);
+        });
+    }
     egui::Panel::top("toolbar").show(&mut root, |ui| {
         toolbar(ui, editor, engine.session.as_ref(), &mut actions);
     });
-    egui::Panel::left("explorer").resizable(true).default_size(260.0).show(&mut root, |ui| {
-        ui.heading("Explorer");
-        ui.separator();
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            let tree = tree_rc.borrow();
-            explorer_node(ui, &tree, tree.root(), editor, &mut actions, 0);
-            editor.reveal_selection = false;
+    if !editor.player_mode {
+        egui::Panel::left("explorer").resizable(true).default_size(260.0).show(&mut root, |ui| {
+            ui.heading("Explorer");
+            ui.separator();
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                let tree = tree_rc.borrow();
+                explorer_node(ui, &tree, tree.root(), editor, &mut actions, 0);
+                editor.reveal_selection = false;
+            });
         });
-    });
-    egui::Panel::right("properties").resizable(true).default_size(300.0).show(&mut root, |ui| {
-        ui.heading("Properties");
-        ui.separator();
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            properties(ui, editor, &mut tree_rc.borrow_mut(), now, playing, &mut actions);
+        egui::Panel::right("properties").resizable(true).default_size(300.0).show(&mut root, |ui| {
+            ui.heading("Properties");
+            ui.separator();
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                properties(ui, editor, &mut tree_rc.borrow_mut(), now, playing, &mut actions);
+            });
         });
-    });
-    egui::Panel::bottom("output").resizable(true).default_size(170.0).show(&mut root, |ui| {
-        output(ui, engine, editor, playing, &mut actions);
-    });
+        egui::Panel::bottom("output").resizable(true).default_size(170.0).show(&mut root, |ui| {
+            output(ui, engine, editor, playing, &mut actions);
+        });
+    }
 
     // The space left over is the 3D view.
     let mut gizmo_hot = false;
@@ -720,6 +744,11 @@ fn shortcuts(ctx: &egui::Context, editor: &mut Editor, playing: bool, actions: &
 fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut Vec<Action>) {
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button("File", |ui| {
+            if ui.add_enabled(!playing, egui::Button::new("Main menu")).clicked() {
+                editor.menu.open = true;
+                editor.menu.scanned = false;
+            }
+            ui.separator();
             if ui.button("New").clicked() {
                 actions.push(Action::New);
             }
@@ -820,8 +849,8 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
     let playing = session.is_some();
     ui.horizontal(|ui| {
         if playing {
-            if ui.button(RichText::new("⏹ Stop").strong().color(Color32::from_rgb(255, 120, 110))).clicked()
-            {
+            let stop = if editor.player_mode { "⏹ Leave game" } else { "⏹ Stop" };
+            if ui.button(RichText::new(stop).strong().color(Color32::from_rgb(255, 120, 110))).clicked() {
                 actions.push(Action::Stop);
             }
         } else {
@@ -875,6 +904,9 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
                     ui.label("🔗 Joined");
                 }
             }
+        }
+        if editor.player_mode {
+            return;
         }
         ui.separator();
         ui.selectable_value(&mut editor.tool, Tool::Select, "🖱 Select");
@@ -2074,6 +2106,60 @@ fn new_instance(
     }
     tree.set_parent(id, Some(parent)).ok()?;
     Some(id)
+}
+
+/// Does what a main menu button asked for.
+fn menu_pick(pick: crate::menu::Pick, engine: &mut EngineState, editor: &mut Editor, now: f64) {
+    use crate::menu::{Game, Pick};
+    let open = |game: &Game, engine: &mut EngineState, editor: &mut Editor| -> bool {
+        match game {
+            Game::Sample => apply(Action::OpenSample, engine, editor, now),
+            Game::Blank => apply(Action::New, engine, editor, now),
+            Game::File(path) => {
+                apply(Action::Open(path.clone()), engine, editor, now);
+                if editor.file.as_ref() != Some(path) {
+                    editor.menu.error = Some(format!("Could not open {}.", path.display()));
+                    return false;
+                }
+            }
+        }
+        true
+    };
+    let start = |action: Action, engine: &mut EngineState, editor: &mut Editor| {
+        apply(action, engine, editor, now);
+        match engine.session.is_some() {
+            true => {
+                editor.player_mode = true;
+                editor.menu.open = false;
+            }
+            false => {
+                let why = engine.log.last().map(|l| l.text.clone()).unwrap_or_default();
+                editor.menu.error = Some(format!("Could not start: {why}"));
+            }
+        }
+    };
+    match pick {
+        Pick::Edit(game) => {
+            if open(&game, engine, editor) {
+                editor.menu.open = false;
+            }
+        }
+        Pick::Play(game) => {
+            if open(&game, engine, editor) {
+                start(Action::Play, engine, editor);
+            }
+        }
+        Pick::Host(game) => {
+            if open(&game, engine, editor) {
+                start(Action::Host, engine, editor);
+            }
+        }
+        Pick::Join { code, name } => {
+            apply(Action::New, engine, editor, now);
+            start(Action::Join { address: code, name }, engine, editor);
+        }
+        Pick::Browse => editor.platform.open = true,
+    }
 }
 
 fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64) {

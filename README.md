@@ -31,10 +31,7 @@ On Debian or Ubuntu the equivalent is
 Then:
 
 ```sh
-cargo run -p libroxel-editor                      # the app: edit, play, host, browse
-cargo run -p libroxel-editor -- --sample          # the same, with the sample obby open
-cargo run -p libroxel-editor -- server my_game.lrx  # host a game with no window (and a Hub)
-cargo run -p libroxel-editor -- hub               # run only a Hub
+cargo run -p libroxel-editor                      # the libroxel app, starting at its main menu
 cargo run -p libroxel-proto -- my_game.lrx        # play a saved game without the editor
 cargo test --workspace                            # every test, no GPU needed
 ```
@@ -136,9 +133,17 @@ The first build compiles Bevy and takes a while. After that it is quick.
   too, and `libroxel hub` runs only a Hub. Games you host are listed on the
   Hub that Browse points at. Set `LIBROXEL_HUB=host:port` to use another
   Hub from the start.
-- **One app:** the build is a single `libroxel` program. `libroxel` opens
-  the editor, `libroxel server <game.lrx>` hosts without a window,
-  `libroxel hub` runs a Hub, and `libroxel help` lists the options.
+- **One app, one main menu:** the build is a single `libroxel` program
+  and it starts at a main menu. Pick a game (the sample, a new world, or
+  one of your saved games) and **✏ Edit**, **▶ Play** or **🌐 Host and
+  play** it; paste a join code (or an address) to **🔗 Join** a friend;
+  **🌍 Browse games** to find hosted ones; **🖥 Start server** to host a game
+  in the background with no player of your own, showing its join code; and
+  turn this computer's Hub on or off. Games played from the menu show only
+  the game: **⏹ Leave game** (or Esc) goes back to the menu, and **File →
+  Main menu** does from the editor. (For scripts and servers without a
+  screen, `libroxel server <game.lrx>`, `libroxel hub` and `libroxel help`
+  still work.)
 - **Undo/redo** with Ctrl+Z and Ctrl+Y. **Save** with Ctrl+S. Games are
   saved as `.lrx` files in `~/Projects/libroxel-games/` by default.
 

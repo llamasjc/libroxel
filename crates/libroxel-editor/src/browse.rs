@@ -59,14 +59,32 @@ impl Platform {
             platform.hub_address = address;
             return platform;
         }
+        platform.start_hub();
+        platform
+    }
+
+    /// Runs a Hub on this computer, if it isn't already.
+    pub fn start_hub(&mut self) {
+        if self.own_hub.is_some() {
+            return;
+        }
         let addr = SocketAddr::from(([0, 0, 0, 0], libroxel_hub::DEFAULT_PORT));
         match libroxel_hub::start(addr, Some(&data_dir().join("hub.sqlite"))) {
-            Ok(hub) => platform.own_hub = Some(hub),
+            Ok(hub) => {
+                self.own_hub = Some(hub);
+                self.own_hub_note = None;
+            }
             // Usually another Libroxel on this computer already runs one,
             // and that Hub works just as well.
-            Err(e) => platform.own_hub_note = Some(e),
+            Err(e) => self.own_hub_note = Some(e),
         }
-        platform
+    }
+
+    /// Stops the Hub this app runs (games listed on it drop off).
+    pub fn stop_hub(&mut self) {
+        if self.own_hub.take().is_some() {
+            self.own_hub_note = Some("You stopped it.".into());
+        }
     }
 
     fn client(&self) -> HubClient {
