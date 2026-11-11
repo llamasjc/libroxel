@@ -20,6 +20,7 @@ mod math;
 pub mod place;
 mod property;
 mod tree;
+pub mod voxels;
 
 pub use enums::{
     ActuatorType, CameraType, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection, KeyCode,
@@ -168,6 +169,9 @@ pub enum ClassKind {
     AngularVelocity,
     /// Inside a part: the older way to make it spin at AngularVelocity.
     BodyAngularVelocity,
+    /// In the workspace: ground made of one-stud cubes, built by scripts
+    /// (FillBlock, FillBall) or the editor's terrain tools.
+    Terrain,
     /// Inside a part: a picture stretched over one Face.
     Decal,
     /// Inside a part: a picture tiled over one Face, StudsPerTileU by StudsPerTileV.
@@ -268,6 +272,7 @@ impl ClassKind {
         ClassKind::HingeConstraint,
         ClassKind::AngularVelocity,
         ClassKind::BodyAngularVelocity,
+        ClassKind::Terrain,
         ClassKind::Decal,
         ClassKind::Texture,
         ClassKind::ParticleEmitter,
@@ -477,6 +482,7 @@ impl ClassKind {
             Property::AngularVelocity,
             Property::MaxTorque,
         ];
+        const TERRAIN: &[Property] = &[Property::Name];
         const DECAL: &[Property] = &[
             Property::Name,
             Property::Texture,
@@ -796,6 +802,7 @@ impl ClassKind {
             ClassKind::HingeConstraint => HINGE,
             ClassKind::AngularVelocity => ANGULAR_VELOCITY,
             ClassKind::BodyAngularVelocity => BODY_ANGULAR_VELOCITY,
+            ClassKind::Terrain => TERRAIN,
             ClassKind::Decal => DECAL,
             ClassKind::Texture => TEXTURE,
             ClassKind::ParticleEmitter => PARTICLES,
@@ -1091,6 +1098,7 @@ impl ClassKind {
             ClassKind::HingeConstraint => "hinge_constraint",
             ClassKind::AngularVelocity => "angular_velocity",
             ClassKind::BodyAngularVelocity => "body_angular_velocity",
+            ClassKind::Terrain => "terrain",
             ClassKind::Decal => "decal",
             ClassKind::Texture => "texture",
             ClassKind::ParticleEmitter => "particle_emitter",

@@ -144,7 +144,7 @@ fn step_session(mut engine: NonSendMut<EngineState>, time: Res<Time>, input: Res
     engine.emits.extend(session.take_emits());
 }
 
-fn to_bevy(v: libroxel_instance::Vec3) -> Vec3 {
+pub(crate) fn to_bevy(v: libroxel_instance::Vec3) -> Vec3 {
     Vec3::new(v.x, v.y, v.z)
 }
 
@@ -237,6 +237,7 @@ impl Plugin for RenderPlugin {
             // drawn later this frame line up with where the camera is now.
             .add_systems(Update, (follow_camera, refresh_camera_global).chain().after(EngineSet::Sync))
             .add_systems(Update, (sync_lights, draw_blasts, sync_ropes, sync_decals).after(EngineSet::Sync))
+            .add_systems(Update, crate::terrain_view::sync_terrain.after(EngineSet::Sync))
             .add_systems(Update, update_lighting.after(EngineSet::Sync))
             .add_plugins(crate::effects::EffectsPlugin);
     }
@@ -266,10 +267,13 @@ impl PartMeshes {
 
 /// Generated surface textures for the textured materials.
 #[derive(Resource)]
-struct MaterialTextures {
+pub(crate) struct MaterialTextures {
     wood: Handle<Image>,
     brick: Handle<Image>,
     grass: Handle<Image>,
+    sand: Handle<Image>,
+    rock: Handle<Image>,
+    snow: Handle<Image>,
 }
 
 /// A unit ramp: full height at +Z, sloping down to -Z.
@@ -376,7 +380,21 @@ fn material_textures(images: &mut Assets<Image>) -> MaterialTextures {
         }
     });
     let grass = make_texture(|x, y| 0.68 + noise(x / 2, y / 2, 17) * 0.3);
-    MaterialTextures { wood: images.add(wood), brick: images.add(brick), grass: images.add(grass) }
+    let sand = make_texture(|x, y| 0.82 + noise(x, y, 23) * 0.14);
+    let rock = make_texture(|x, y| {
+        // Big blotches with cracks between them.
+        let blotch = noise(x / 6, y / 6, 29) * 0.25 + noise(x / 2, y / 2, 31) * 0.1;
+        let crack = (x + y / 3) % 13 == 0 || (y + x / 4) % 11 == 0;
+        if crack { 0.55 } else { 0.68 + blotch }
+    });
+    MaterialTextures {
+        wood: images.add(wood),
+        brick: images.add(brick),
+        grass: images.add(grass.clone()),
+        sand: images.add(sand),
+        rock: images.add(rock),
+        snow: images.add(grass),
+    }
 }
 
 /// How the camera moves.
@@ -534,7 +552,7 @@ fn update_lighting(
     }
 }
 
-fn material_for(appearance: &PartAppearance, textures: &MaterialTextures) -> StandardMaterial {
+pub(crate) fn material_for(appearance: &PartAppearance, textures: &MaterialTextures) -> StandardMaterial {
     let mut alpha = (1.0 - appearance.transparency).clamp(0.0, 1.0);
     if appearance.material == Material::Glass {
         alpha = alpha.min(0.45);
@@ -567,6 +585,19 @@ fn material_for(appearance: &PartAppearance, textures: &MaterialTextures) -> Sta
             material.base_color_texture = Some(textures.grass.clone());
             material.perceptual_roughness = 1.0;
         }
+        Material::Sand => {
+            material.base_color_texture = Some(textures.sand.clone());
+            material.perceptual_roughness = 1.0;
+        }
+        Material::Rock => {
+            material.base_color_texture = Some(textures.rock.clone());
+            material.perceptual_roughness = 0.95;
+        }
+        Material::Snow => {
+            material.base_color_texture = Some(textures.snow.clone());
+            material.perceptual_roughness = 0.6;
+        }
+        Material::Air => {}
     }
     material
 }

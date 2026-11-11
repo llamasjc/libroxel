@@ -13,6 +13,7 @@ mod gui;
 mod history;
 mod images;
 mod templates;
+mod terrain_tools;
 mod ui;
 mod viewport;
 
@@ -35,6 +36,8 @@ pub enum Tool {
     Move,
     Scale,
     Rotate,
+    /// Add, dig or paint terrain where you click.
+    Terrain,
 }
 
 /// Which file dialog is open.
@@ -88,6 +91,9 @@ pub struct Editor {
     /// still needs to take the keyboard.
     pub typing: Option<InstanceId>,
     pub focus_typing: bool,
+    /// The terrain brush, and when it may next be used while held down.
+    pub brush: terrain_tools::Brush,
+    pub brush_ready: f64,
 }
 
 impl Default for Editor {
@@ -115,6 +121,8 @@ impl Default for Editor {
             new_tag: String::new(),
             typing: None,
             focus_typing: false,
+            brush: Default::default(),
+            brush_ready: 0.0,
         }
     }
 }

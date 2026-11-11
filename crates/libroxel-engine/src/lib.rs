@@ -15,6 +15,7 @@ pub mod physics;
 pub mod pictures;
 pub mod seat;
 pub mod session;
+mod terrain_view;
 pub mod view;
 pub mod weld;
 

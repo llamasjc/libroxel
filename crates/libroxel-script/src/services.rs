@@ -431,7 +431,17 @@ fn workspace_raycast(
             RaycastFilterType::Exclude => !listed(part),
             RaycastFilterType::Include => listed(part),
         });
-        hit.map(|hit| RaycastResult { hit, material: tree.get_enum(hit.part, Property::Material) })
+        hit.map(|hit| {
+            let material = match tree.voxels(hit.part) {
+                // Terrain: the material of the cell the ray went into.
+                Ok(v) if !v.is_empty() => {
+                    let (x, y, z) = libroxel_instance::voxels::cell_at(hit.position - hit.normal * 0.5);
+                    v.get(x, y, z).map(libroxel_instance::EnumValue::Material)
+                }
+                _ => tree.get_enum(hit.part, Property::Material),
+            };
+            RaycastResult { hit, material }
+        })
     };
     match hit {
         Some(result) => Ok(Value::UserData(lua.create_userdata(result)?)),

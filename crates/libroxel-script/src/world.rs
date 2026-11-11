@@ -109,6 +109,10 @@ pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> m
         extras::CURRENT_CAMERA if class == ClassKind::Workspace => {
             Value::UserData(push_instance(lua, current_camera(lua)?)?)
         }
+        extras::TERRAIN if class == ClassKind::Workspace => {
+            let terrain = host(lua).tree.borrow_mut().terrain_or_make().map_err(tree_err)?;
+            Value::UserData(push_instance(lua, terrain)?)
+        }
         extras::ASSEMBLY_LINEAR_VELOCITY if class.is_physical() => {
             Value::UserData(lua.create_userdata(LuaVector3(velocity(lua, id)))?)
         }

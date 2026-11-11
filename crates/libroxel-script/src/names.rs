@@ -231,10 +231,24 @@ pub mod random {
     pub const TYPE_NAME: &str = "Random";
 }
 
+/// Terrain methods.
+pub mod terrain {
+    /// Fills a box (a CFrame and a size) with a material.
+    pub const FILL_BLOCK: &str = "FillBlock";
+    /// Fills a ball (a centre and a radius) with a material.
+    pub const FILL_BALL: &str = "FillBall";
+    /// Fills an upright cylinder (a CFrame, a height and a radius) with a material.
+    pub const FILL_CYLINDER: &str = "FillCylinder";
+    /// Empties all of it.
+    pub const CLEAR: &str = "Clear";
+}
+
 /// Members that some classes have beyond their saved properties.
 pub mod extras {
     /// Workspace: the camera the player sees through.
     pub const CURRENT_CAMERA: &str = "CurrentCamera";
+    /// Workspace: its terrain (made the first time it's asked for).
+    pub const TERRAIN: &str = "Terrain";
     /// Part: how fast it is moving, in studs per second.
     pub const ASSEMBLY_LINEAR_VELOCITY: &str = "AssemblyLinearVelocity";
     /// Part: how fast it is spinning, in radians per second about each axis.
@@ -470,6 +484,10 @@ pub fn enum_item_name(value: EnumValue) -> &'static str {
             Material::Wood => "Wood",
             Material::Brick => "Brick",
             Material::Grass => "Grass",
+            Material::Sand => "Sand",
+            Material::Rock => "Rock",
+            Material::Snow => "Snow",
+            Material::Air => "Air",
         },
         EnumValue::EasingStyle(e) => match e {
             EasingStyle::Linear => "Linear",
@@ -774,6 +792,7 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::HingeConstraint => "HingeConstraint",
         ClassKind::AngularVelocity => "AngularVelocity",
         ClassKind::BodyAngularVelocity => "BodyAngularVelocity",
+        ClassKind::Terrain => "Terrain",
         ClassKind::Decal => "Decal",
         ClassKind::Texture => "Texture",
         ClassKind::BodyPosition => "BodyPosition",

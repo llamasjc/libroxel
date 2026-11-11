@@ -181,6 +181,16 @@
   are drawn by `view::sync_ropes` as thin rods. `AngularVelocity` and
   `BodyAngularVelocity` change the root's angular velocity the same way,
   using a rough moment of inertia for the assembly.
+- **Terrain** is a `Terrain` instance whose cells live beside its
+  properties (`libroxel-instance/src/voxels.rs`): chunks of 16³ one-byte
+  cells, a code per material, saved and sent as run-length text.
+  `InstanceTree::edit_voxels` bumps the terrain's revision and journals a
+  `VoxelsChanged`, so the replicator resends the cells (as `x`) and the
+  renderer notices. Physics adds the cells near each moving body as anchored
+  boxes (runs along X merged) that can be climbed one stud at a time
+  (`TERRAIN_STEP`). Rays step through cells with a grid walk.
+  `terrain_view.rs` draws a mesh per chunk and material from the faces that
+  look onto air, rebuilding only chunks whose cells (or neighbours) changed.
 - **Hinges** live in `libroxel-engine/src/hinge.rs`. Each enabled
   `HingeConstraint` has a base (Attachment0's part, unless only the other
   side is anchored) and an arm (the other part and everything welded to it).

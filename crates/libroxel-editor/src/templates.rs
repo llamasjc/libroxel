@@ -806,6 +806,11 @@ pub fn sample_obby() -> InstanceTree {
     tree.set(spawn, Property::Position, PropertyValue::Vec3(Vec3::new(0.0, 0.5, 0.0))).unwrap();
     tree.set(spawn, Property::Size, PropertyValue::Vec3(Vec3::new(6.0, 1.0, 6.0))).unwrap();
 
+    // A grassy hill with a snowy top behind the start, made of terrain.
+    let terrain = tree.terrain_or_make().expect("the workspace can hold terrain");
+    tree.edit_voxels(terrain, |v| crate::terrain_tools::hill(v, Vec3::new(30.0, 0.0, -50.0), 22.0, 14.0, 5))
+        .expect("terrain exists");
+
     // A signpost pointing the way.
     let sign_post = block(&mut tree, start, "SignPost", [5.0, 1.5, -6.0], [0.4, 3.0, 0.4], [150, 105, 65]);
     material(&mut tree, sign_post, Material::Wood);
@@ -1934,6 +1939,21 @@ mod tests {
         assert!(bounce.1 - bounce.0 > 1.0, "the weight bounces: {bounce:?}");
         let log = session.take_log();
         assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
+    }
+
+    #[test]
+    fn the_sample_has_a_terrain_hill_to_climb() {
+        let tree = sample_obby();
+        let down = Vec3::new(0.0, -100.0, 0.0);
+        let terrain = tree.terrain().unwrap();
+        let hit = libroxel_instance::geometry::raycast(&tree, Vec3::new(30.0, 60.0, -50.0), down, |_| true)
+            .unwrap();
+        assert_eq!(hit.part, terrain);
+        assert!(hit.position.y > 8.0, "{:?}", hit.position);
+        // It survives saving.
+        let (back, _) =
+            libroxel_instance::place::load(&libroxel_instance::place::save(&tree).unwrap()).unwrap();
+        assert_eq!(back.voxels(back.terrain().unwrap()).unwrap(), tree.voxels(terrain).unwrap());
     }
 
     #[test]

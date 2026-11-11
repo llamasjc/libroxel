@@ -826,6 +826,7 @@ impl UserData for LuaInstance {
         crate::world::add_instance_methods(methods);
         crate::calls::add_instance_methods(methods);
         crate::effects::add_instance_methods(methods);
+        crate::terrain::add_instance_methods(methods);
         methods.add_method(names::methods::TAKE_DAMAGE, |lua, this, amount: f64| {
             require_class(lua, this.0, ClassKind::Humanoid, names::methods::TAKE_DAMAGE)?;
             let host = host(lua);

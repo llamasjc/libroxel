@@ -32,6 +32,11 @@ pub enum Material {
     Wood,
     Brick,
     Grass,
+    Sand,
+    Rock,
+    Snow,
+    /// Nothing: filling terrain with air empties it.
+    Air,
 }
 
 /// The shape of an animation curve.
@@ -471,6 +476,10 @@ impl EnumKind {
                 E::Material(Material::Wood),
                 E::Material(Material::Brick),
                 E::Material(Material::Grass),
+                E::Material(Material::Sand),
+                E::Material(Material::Rock),
+                E::Material(Material::Snow),
+                E::Material(Material::Air),
             ],
             EnumKind::EasingStyle => &[
                 E::EasingStyle(EasingStyle::Linear),
@@ -606,6 +615,10 @@ impl EnumValue {
                 Material::Wood => "wood",
                 Material::Brick => "brick",
                 Material::Grass => "grass",
+                Material::Sand => "sand",
+                Material::Rock => "rock",
+                Material::Snow => "snow",
+                Material::Air => "air",
             },
             EnumValue::EasingStyle(e) => match e {
                 EasingStyle::Linear => "linear",

@@ -44,6 +44,8 @@ const CELL: f32 = 8.0;
 const MAX_CELLS: i64 = 64;
 /// Moving boxes climb onto anything whose top is at most this far above their bottom.
 pub const STEP_HEIGHT: f32 = 0.6;
+/// Terrain is made of one-stud steps, so moving things climb those.
+pub const TERRAIN_STEP: f32 = 1.05;
 
 /// Turns an orientation in degrees (Y, then X, then Z) into a rotation.
 pub fn orientation_quat(degrees: Vec3) -> Quat {
@@ -91,6 +93,8 @@ struct Body {
     held: bool,
     can_collide: bool,
     collider: Collider,
+    /// How high a ledge on this body moving things climb onto without stopping.
+    climb: f32,
 }
 
 impl Body {
@@ -380,7 +384,45 @@ impl Physics {
         self.grounded.contains(&id)
     }
 
-    fn collect_bodies(&self, tree: &InstanceTree) -> Vec<Body> {
+    fn collect_bodies(&self, tree: &InstanceTree, dt: f32, gravity: f32) -> Vec<Body> {
+        let mut bodies = self.part_bodies(tree);
+        self.add_terrain(tree, &mut bodies, dt, gravity);
+        bodies
+    }
+
+    /// Terrain cells near anything that moves, as boxes (runs of cells merged).
+    fn add_terrain(&self, tree: &InstanceTree, bodies: &mut Vec<Body>, dt: f32, gravity: f32) {
+        let Some(terrain) = tree.terrain() else { return };
+        let Ok(voxels) = tree.voxels(terrain) else { return };
+        if voxels.is_empty() {
+            return;
+        }
+        let mut seen = HashSet::new();
+        let mut found = Vec::new();
+        for body in bodies.iter().filter(|b| !b.anchored) {
+            let v = self.velocity(body.id);
+            let reach = (v.length() + gravity.abs() * dt) * dt + TERRAIN_STEP + 1.0;
+            let r = Vec3::new(reach, reach, reach);
+            for (lo, hi) in voxels.boxes_in(body.min() - r, body.max() + r) {
+                let key = (lo.x.to_bits(), lo.y.to_bits(), lo.z.to_bits(), hi.x.to_bits());
+                if seen.insert(key) {
+                    found.push(Body {
+                        id: terrain,
+                        pos: (lo + hi) * 0.5,
+                        half: (hi - lo) * 0.5,
+                        anchored: true,
+                        held: false,
+                        can_collide: true,
+                        collider: Collider::Aabb,
+                        climb: TERRAIN_STEP,
+                    });
+                }
+            }
+        }
+        bodies.extend(found);
+    }
+
+    fn part_bodies(&self, tree: &InstanceTree) -> Vec<Body> {
         tree.descendants_of_class(tree.workspace(), ClassKind::Part)
             .into_iter()
             .filter_map(|id| {
@@ -408,6 +450,7 @@ impl Physics {
                     held: self.held.contains(&id),
                     can_collide: tree.get_bool(id, Property::CanCollide)?,
                     collider,
+                    climb: STEP_HEIGHT,
                 })
             })
             .collect()
@@ -415,8 +458,8 @@ impl Physics {
 
     /// Advances the simulation by `dt` seconds.
     pub fn step(&mut self, tree: &mut InstanceTree, dt: f32) -> StepResult {
-        let mut bodies = self.collect_bodies(tree);
         let gravity = tree.get_number(tree.workspace(), Property::Gravity).map_or(GRAVITY, |g| g as f32);
+        let mut bodies = self.collect_bodies(tree, dt, gravity);
         let fallen_height = fallen_parts_height(tree);
         let live: HashSet<InstanceId> = bodies.iter().map(|b| b.id).collect();
         self.velocities.retain(|id, _| live.contains(id));
@@ -596,7 +639,7 @@ impl Physics {
                     let other = bodies[j];
                     // Walk up small ledges (like the top of a ramp) instead of stopping.
                     let rise = other.max().y - bodies[i].min().y;
-                    if ax != 1 && rise > 0.0 && rise <= STEP_HEIGHT {
+                    if ax != 1 && rise > 0.0 && rise <= other.climb {
                         bodies[i].pos.y += rise + EPS;
                         continue;
                     }

@@ -58,7 +58,7 @@ pub fn gizmo(
     use transform_gizmo_egui::{GizmoConfig, GizmoExt, GizmoMode, GizmoOrientation, GizmoResult};
 
     let Some(id) = editor.selection else { return false };
-    if editor.tool == Tool::Select || !editing_allowed {
+    if matches!(editor.tool, Tool::Select | Tool::Terrain) || !editing_allowed {
         return false;
     }
     let (Some(pos), Some(size)) = (tree.get_vec3(id, Property::Position), tree.get_vec3(id, Property::Size))

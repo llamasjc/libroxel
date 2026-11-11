@@ -1,4 +1,5 @@
-//! Ray tests against the parts in a tree, for picking and script raycasts.
+//! Ray tests against the parts and terrain in a tree, for picking and
+//! script raycasts.
 
 use crate::{ClassKind, EnumValue, InstanceId, InstanceTree, PartShape, Property, Rotation, Vec3};
 
@@ -14,7 +15,8 @@ pub struct RayHit {
 
 /// Casts a ray from `origin` along `direction` (whose length is the ray's
 /// reach) against every part in the workspace that `keep` accepts, and
-/// returns the nearest hit. Parts the ray starts inside are not hit.
+/// returns the nearest hit. Terrain is hit too (its `part` is the
+/// terrain) if `keep` accepts it. Parts the ray starts inside are not hit.
 pub fn raycast(
     tree: &InstanceTree,
     origin: Vec3,
@@ -50,6 +52,12 @@ pub fn raycast(
         }
         best =
             Some(RayHit { part, position: origin + dir * t, normal: rot.apply(local_normal), distance: t });
+    }
+    if let Some(terrain) = tree.terrain().filter(|t| keep(*t))
+        && let Ok(voxels) = tree.voxels(terrain)
+        && let Some((t, normal, _)) = voxels.raycast(origin, dir, best.map_or(reach, |b| b.distance))
+    {
+        best = Some(RayHit { part: terrain, position: origin + dir * t, normal, distance: t });
     }
     best
 }

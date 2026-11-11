@@ -69,14 +69,20 @@ The first build compiles Bevy and takes a while. After that it is quick.
   **Insert → Go-kart** drops in a ready-to-drive kart.
 - **Properties** (right) edits the selection: name, position, orientation,
   size, shape, colour, material, anchored, can-collide, transparency, and so on.
-- **Parts** come in four shapes (block, ball, cylinder, wedge) and eight
-  materials (plastic, smooth plastic, neon, metal, glass, wood, brick, grass).
+- **Parts** come in four shapes (block, ball, cylinder, wedge) and eleven
+  materials (plastic, smooth plastic, neon, metal, glass, wood, brick, grass,
+  sand, rock, snow).
   Insert them from **+ Part** or the Insert menu.
 - **Viewport:** hold the right mouse button and use WASD/QE to fly (Shift is
   faster), scroll to move forward. Click a part to select it, then drag the
   handles to move, resize or rotate it (Ctrl+1 to Ctrl+4 switch tools, and
   Ctrl+R turns the selection 90°). The two snap boxes set the grid step and
   the rotation step.
+- **Terrain tool** (🗻 Terrain, Ctrl+5): click and drag in the view to Add,
+  Dig or Paint terrain with the chosen material and brush size. **Make a
+  hill** builds a grassy hill (sandy edge, rock inside, snowy top) where the
+  view is looking, and **Clear terrain** empties it. Brush strokes undo
+  like any other edit.
 - **Play / Stop:** Play starts every Script, then you join as `Player1` and
   your character spawns at the first SpawnLocation. If scripts give you a
   `leaderstats` folder, the leaderboard shows it in the top-right corner. Walk with WASD, jump with Space, turn the camera with
@@ -204,6 +210,14 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `smile`, `star`, `arrow` and `checker`.
   `ImageColor3` tints it, `ImageTransparency` fades it, and `ScaleType` is
   `Stretch`, `Fit` or `Crop`. Joined computers need the same files.
+- **Terrain:** `workspace.Terrain` is ground made of one-stud cubes, each
+  grass, sand, rock, snow or another material. `Terrain:FillBlock(cframe,
+  size, material)`, `FillBall(centre, radius, material)` and
+  `FillCylinder(cframe, height, radius, material)` fill it, filling with
+  `Enum.Material.Air` digs, and `Clear()` empties it. Characters walk up
+  one-stud steps, things land on it and fall into holes, `workspace:Raycast`
+  hits it (with the cell's `Material`), it's saved in the game file, and
+  joined computers get it. The sample has a hill behind the start.
 - **Pictures on parts:** a `Decal` inside a part stretches the PNG named by
   `Texture` over one `Face` (`Enum.NormalId`: Front, Back, Left, Right,
   Top, Bottom), and a `Texture` repeats it every `StudsPerTileU` by
@@ -429,7 +443,7 @@ door.ClickDetector.MouseClick:Connect(function(player)
 end)
 ```
 
-**Not yet:** tool animations, sounds, and terrain and voxels. Physics is simple: anchored parts can be rotated and shaped
+**Not yet:** tool animations, sounds, and water in terrain (terrain is blocky, not smooth). Physics is simple: anchored parts can be rotated and shaped
 (ramps and balls work), but loose parts collide as the upright box around
 them and don't tip over by themselves (they spin only when something spins
 them). A hinge arm is carried by its hinge, so it blocks things but doesn't

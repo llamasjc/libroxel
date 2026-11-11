@@ -197,6 +197,10 @@ fn node_to_json(tree: &InstanceTree, id: InstanceId, refs: &RefIds) -> Result<Va
     if !tags.is_empty() {
         node.insert("tags".into(), json!(tags));
     }
+    let voxels = tree.voxels(id)?;
+    if !voxels.is_empty() {
+        node.insert("voxels".into(), json!(voxels.encode()));
+    }
     if !children.is_empty() {
         node.insert("children".into(), Value::Array(children));
     }
@@ -292,6 +296,9 @@ fn load_node(
             tree.add_tag(id, tag)?;
         }
     }
+    if let Some(text) = obj.get("voxels").and_then(Value::as_str) {
+        tree.edit_voxels(id, |v| *v = crate::voxels::Voxels::decode(text))?;
+    }
     if let Some(children) = obj.get("children").and_then(Value::as_array) {
         for child in children {
             load_node(tree, child, id, report, refs)?;
@@ -332,6 +339,28 @@ pub fn load(text: &str) -> Result<(InstanceTree, LoadReport), PlaceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terrain_cells_are_saved() {
+        let mut tree = InstanceTree::new();
+        let terrain = tree.terrain_or_make().unwrap();
+        let axes = [Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)];
+        tree.edit_voxels(terrain, |v| {
+            v.fill_block(
+                Vec3::new(0.0, -2.0, 0.0),
+                axes,
+                Vec3::new(40.0, 4.0, 40.0),
+                Some(crate::Material::Grass),
+            )
+        })
+        .unwrap();
+        let text = save(&tree).unwrap();
+        let (back, report) = load(&text).unwrap();
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        let t = back.terrain().unwrap();
+        assert_eq!(back.voxels(t).unwrap().get(-20, -4, 19), Some(crate::Material::Grass));
+        assert_eq!(back.voxels(t).unwrap().encode(), tree.voxels(terrain).unwrap().encode());
+    }
 
     #[test]
     fn round_trip() {

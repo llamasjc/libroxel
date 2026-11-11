@@ -35,6 +35,11 @@ enum Action {
     Stop,
     Undo,
     Redo,
+    /// Use the terrain brush where a ray met something.
+    Brush(libroxel_instance::Vec3, libroxel_instance::Vec3),
+    /// Make a hill around a point on the ground.
+    MakeHill(libroxel_instance::Vec3),
+    ClearTerrain,
     Insert(ClassKind),
     InsertShape(PartShape),
     InsertInto(ClassKind, InstanceId),
@@ -199,8 +204,9 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::SpringConstraint => "🌀",
         ClassKind::HingeConstraint => "🚪",
         ClassKind::AngularVelocity | ClassKind::BodyAngularVelocity => "🔄",
+        ClassKind::Terrain => "🗻",
         ClassKind::Decal => "🏷",
-        ClassKind::Texture => "🧱",
+        ClassKind::Texture => "🏁",
         ClassKind::ParticleEmitter | ClassKind::Sparkles => "✨",
         ClassKind::Fire => "🔥",
         ClassKind::Smoke => "☁",
@@ -451,8 +457,49 @@ pub fn editor_ui(
         });
     }
 
-    // Click to select.
-    let clicked = ctx.input(|i| i.pointer.primary_clicked());
+    // The terrain brush works while the mouse is held down.
+    if editor.tool == Tool::Terrain
+        && !playing
+        && over_view
+        && gui_hit.is_none()
+        && now >= editor.brush_ready
+        && ctx.input(|i| i.pointer.primary_down())
+        && let (Some(pos), Ok((cam, gt, _, _))) = (pointer, cameras.single())
+        && let Ok(ray) = cam.viewport_to_world(gt, Vec2::new(pos.x, pos.y))
+    {
+        let dir = ray.direction.as_vec3() * 10_000.0;
+        let from = libroxel_instance::Vec3::new(ray.origin.x, ray.origin.y, ray.origin.z);
+        let to = libroxel_instance::Vec3::new(dir.x, dir.y, dir.z);
+        if let Some(hit) = libroxel_instance::geometry::raycast(&tree_rc.borrow(), from, to, |_| true) {
+            actions.push(Action::Brush(hit.position, hit.normal));
+            editor.brush_ready = now + 0.08;
+        }
+    }
+    // Asking for a hill: put it where the middle of the view looks at the ground.
+    for action in actions.iter_mut() {
+        if let Action::MakeHill(at) = action
+            && let Ok((cam, gt, _, _)) = cameras.single()
+            && let Some(size) = cam.logical_viewport_size()
+        {
+            let middle = cam.logical_viewport_rect().map_or(size / 2.0, |r| r.center());
+            if let Ok(ray) = cam.viewport_to_world(gt, middle) {
+                let dir = ray.direction.as_vec3();
+                let from = libroxel_instance::Vec3::new(ray.origin.x, ray.origin.y, ray.origin.z);
+                let reach = libroxel_instance::Vec3::new(dir.x, dir.y, dir.z) * 2000.0;
+                *at = match libroxel_instance::geometry::raycast(&tree_rc.borrow(), from, reach, |_| true) {
+                    Some(hit) => hit.position,
+                    // Nothing there: wherever the view meets the ground plane.
+                    None if dir.y < -0.05 => {
+                        from + libroxel_instance::Vec3::new(dir.x, dir.y, dir.z) * (-from.y / dir.y)
+                    }
+                    None => libroxel_instance::Vec3::ZERO,
+                };
+            }
+        }
+    }
+
+    // Click to select (the terrain tool uses clicks for itself).
+    let clicked = ctx.input(|i| i.pointer.primary_clicked()) && editor.tool != Tool::Terrain;
     let on_prompt = prompt_hit.filter(|(_, r)| pointer.is_some_and(|p| r.contains(p)));
     if clicked
         && over_view
@@ -633,6 +680,7 @@ fn shortcuts(ctx: &egui::Context, editor: &mut Editor, playing: bool, actions: &
             (Key::Num2, Tool::Move),
             (Key::Num3, Tool::Scale),
             (Key::Num4, Tool::Rotate),
+            (Key::Num5, Tool::Terrain),
         ] {
             if i.consume_shortcut(&cmd(key)) {
                 editor.tool = tool;
@@ -790,6 +838,10 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
         ui.selectable_value(&mut editor.tool, Tool::Move, "✥ Move");
         ui.selectable_value(&mut editor.tool, Tool::Scale, "⤢ Resize");
         ui.selectable_value(&mut editor.tool, Tool::Rotate, "⟳ Rotate");
+        if !playing {
+            ui.selectable_value(&mut editor.tool, Tool::Terrain, "🗻 Terrain")
+                .on_hover_text("Add, dig or paint terrain by clicking and dragging in the view");
+        }
         ui.separator();
         ui.label("Snap");
         egui::ComboBox::from_id_salt("snap")
@@ -829,6 +881,41 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
         if playing {
             ui.separator();
             ui.label(RichText::new("Playing: edits are undone when you stop").italics());
+        }
+    });
+    if editor.tool == Tool::Terrain && !playing {
+        terrain_bar(ui, editor, actions);
+    }
+}
+
+/// The terrain tool's options, under the toolbar.
+fn terrain_bar(ui: &mut egui::Ui, editor: &mut Editor, actions: &mut Vec<Action>) {
+    use crate::terrain_tools::BrushMode;
+    ui.horizontal(|ui| {
+        ui.label("🗻 Terrain:");
+        let brush = &mut editor.brush;
+        ui.selectable_value(&mut brush.mode, BrushMode::Add, "Add");
+        ui.selectable_value(&mut brush.mode, BrushMode::Dig, "Dig");
+        ui.selectable_value(&mut brush.mode, BrushMode::Paint, "Paint");
+        ui.separator();
+        egui::ComboBox::from_id_salt("terrain-material")
+            .selected_text(libroxel_script::names::enum_item_name(EnumValue::Material(brush.material)))
+            .show_ui(ui, |ui| {
+                for &m in libroxel_instance::voxels::TERRAIN_MATERIALS {
+                    ui.selectable_value(
+                        &mut brush.material,
+                        m,
+                        libroxel_script::names::enum_item_name(EnumValue::Material(m)),
+                    );
+                }
+            });
+        ui.add(egui::Slider::new(&mut brush.size, 1.0..=32.0).text("studs across"));
+        ui.separator();
+        if ui.button("Make a hill").on_hover_text("A grassy hill where the view is looking").clicked() {
+            actions.push(Action::MakeHill(libroxel_instance::Vec3::ZERO));
+        }
+        if ui.button("Clear terrain").clicked() {
+            actions.push(Action::ClearTerrain);
         }
     });
 }
@@ -1134,6 +1221,9 @@ fn properties(
         ),
         ClassKind::AngularVelocity => Some(
             "While playing, spins Attachment0's part at AngularVelocity (radians a second about X, Y              and Z), with up to MaxTorque. Unanchor the part first.",
+        ),
+        ClassKind::Terrain => Some(
+            "Ground made of one-stud cubes. Pick the Terrain tool (5) to add, dig or paint it by              dragging in the view, or to make a hill. Scripts use workspace.Terrain:FillBlock,              FillBall and FillCylinder (Enum.Material.Air digs) and Clear.",
         ),
         ClassKind::Decal | ClassKind::Texture => Some(
             "Put one inside a part to show a PNG picture on one Face of it. A Decal stretches the \
@@ -2184,6 +2274,41 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             let model = crate::templates::kart(&mut tree, ws, at, 0.0, [60, 120, 220]);
             editor.selection = Some(model);
         }
+        Action::Brush(point, normal) if !playing => {
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            editor.history.begin_edit(&tree, now);
+            let Ok(terrain) = tree.terrain_or_make() else { return };
+            let brush = editor.brush;
+            if tree
+                .edit_voxels(terrain, |v| crate::terrain_tools::apply_brush(v, brush, point, normal))
+                .ok()
+                .flatten()
+                > Some(0)
+            {
+                editor.dirty = true;
+            }
+        }
+        Action::MakeHill(at) if !playing => {
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            editor.history.begin_edit(&tree, now);
+            let Ok(terrain) = tree.terrain_or_make() else { return };
+            let seed = (now * 1000.0) as u32;
+            let ground = libroxel_instance::Vec3::new(at.x, at.y.round(), at.z);
+            let _ = tree.edit_voxels(terrain, |v| crate::terrain_tools::hill(v, ground, 24.0, 12.0, seed));
+            editor.dirty = true;
+        }
+        Action::ClearTerrain if !playing => {
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            if let Some(terrain) = tree.terrain() {
+                editor.history.begin_edit(&tree, now);
+                let _ = tree.edit_voxels(terrain, |v| v.clear());
+                editor.dirty = true;
+            }
+        }
+        Action::Brush(..) | Action::MakeHill(_) | Action::ClearTerrain => {}
         Action::InsertShape(shape) => {
             let tree_rc = engine.tree.clone();
             let mut tree = tree_rc.borrow_mut();

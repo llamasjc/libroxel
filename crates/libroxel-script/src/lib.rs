@@ -26,6 +26,7 @@ mod items;
 pub mod names;
 mod net;
 mod services;
+mod terrain;
 mod types;
 mod world;
 

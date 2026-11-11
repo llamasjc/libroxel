@@ -199,6 +199,8 @@ struct Sent {
     props: Vec<(Property, PropertyValue)>,
     attributes: BTreeMap<String, PropertyValue>,
     tags: Vec<String>,
+    /// The terrain cells' version (0 for anything without cells).
+    voxels: u64,
 }
 
 fn snapshot(tree: &InstanceTree, id: InstanceId) -> Option<Sent> {
@@ -216,6 +218,7 @@ fn snapshot(tree: &InstanceTree, id: InstanceId) -> Option<Sent> {
         props,
         attributes: tree.attributes(id).ok()?.clone(),
         tags: tree.tags(id).ok()?.to_vec(),
+        voxels: tree.voxels(id).ok()?.version(),
     })
 }
 
@@ -281,7 +284,9 @@ impl Replicator {
         if old.is_none_or(|old| old.revision != revision || old.parent != parent)
             && let Some(now) = snapshot(tree, id)
         {
-            if let Some(op) = Self::op(class, id, old, &now, service) {
+            let voxels = (class == ClassKind::Terrain)
+                .then(|| tree.voxels(id).map(|v| v.encode()).unwrap_or_default());
+            if let Some(op) = Self::op(class, id, old, &now, service, voxels) {
                 ops.push(op);
             }
             self.sent.insert(id, now);
@@ -292,7 +297,14 @@ impl Replicator {
     }
 
     /// The operation that brings `old` (nothing, for a new instance) to `now`.
-    fn op(class: ClassKind, id: InstanceId, old: Option<&Sent>, now: &Sent, service: bool) -> Option<Json> {
+    fn op(
+        class: ClassKind,
+        id: InstanceId,
+        old: Option<&Sent>,
+        now: &Sent,
+        service: bool,
+        voxels: Option<String>,
+    ) -> Option<Json> {
         let mut op = Map::new();
         let mut props = Map::new();
         for (property, value) in &now.props {
@@ -337,6 +349,9 @@ impl Replicator {
         }
         if old.map_or(!now.tags.is_empty(), |o| o.tags != now.tags) {
             op.insert("g".into(), json!(now.tags));
+        }
+        if let Some(text) = voxels.filter(|_| old.map_or(now.voxels != 0, |o| o.voxels != now.voxels)) {
+            op.insert("x".into(), json!(text));
         }
         // An update that changes nothing isn't worth sending.
         (op.len() > 1 || op.contains_key("c")).then_some(Json::Object(op))
@@ -425,6 +440,9 @@ impl Joined {
             for (name, value) in attributes {
                 let _ = tree.set_attribute(id, name, place::attribute_from_json(value));
             }
+        }
+        if let Some(text) = op.get("x").and_then(Json::as_str) {
+            let _ = tree.edit_voxels(id, |v| *v = libroxel_instance::voxels::Voxels::decode(text));
         }
         if let Some(tags) = op.get("g").and_then(Json::as_array) {
             let want: Vec<&str> = tags.iter().filter_map(Json::as_str).collect();

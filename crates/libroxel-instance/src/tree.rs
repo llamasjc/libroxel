@@ -40,12 +40,30 @@ impl fmt::Display for InstanceId {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Change {
     Created(InstanceId),
-    Reparented { id: InstanceId, old_parent: Option<InstanceId>, new_parent: Option<InstanceId> },
-    PropertyChanged { id: InstanceId, property: Property },
+    Reparented {
+        id: InstanceId,
+        old_parent: Option<InstanceId>,
+        new_parent: Option<InstanceId>,
+    },
+    PropertyChanged {
+        id: InstanceId,
+        property: Property,
+    },
     Destroyed(InstanceId),
-    AttributeChanged { id: InstanceId, name: String },
-    TagAdded { id: InstanceId, tag: String },
-    TagRemoved { id: InstanceId, tag: String },
+    AttributeChanged {
+        id: InstanceId,
+        name: String,
+    },
+    TagAdded {
+        id: InstanceId,
+        tag: String,
+    },
+    TagRemoved {
+        id: InstanceId,
+        tag: String,
+    },
+    /// A terrain's cells changed.
+    VoxelsChanged(InstanceId),
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -82,6 +100,8 @@ struct InstanceData {
     attributes: std::collections::BTreeMap<String, PropertyValue>,
     /// Labels for grouping instances, kept sorted.
     tags: Vec<String>,
+    /// A terrain's cells (empty for everything else).
+    voxels: crate::voxels::Voxels,
     /// Changes whenever a property does (see [`InstanceTree::revision`]).
     revision: u64,
 }
@@ -112,6 +132,7 @@ impl InstanceData {
             props,
             attributes: Default::default(),
             tags: Vec::new(),
+            voxels: Default::default(),
             revision: next_revision(),
         }
     }
@@ -517,6 +538,45 @@ impl InstanceTree {
             self.changes.push(Change::AttributeChanged { id, name: name.to_owned() });
         }
         Ok(())
+    }
+
+    /// A terrain's cells.
+    pub fn voxels(&self, id: InstanceId) -> Result<&crate::voxels::Voxels> {
+        Ok(&self.data(id)?.voxels)
+    }
+
+    /// Changes a terrain's cells. Anything but a terrain is left alone.
+    pub fn edit_voxels<R>(
+        &mut self,
+        id: InstanceId,
+        edit: impl FnOnce(&mut crate::voxels::Voxels) -> R,
+    ) -> Result<Option<R>> {
+        let data = self.data_mut(id)?;
+        if data.class != ClassKind::Terrain {
+            return Ok(None);
+        }
+        let before = data.voxels.version();
+        let out = edit(&mut data.voxels);
+        if data.voxels.version() != before {
+            data.revision = next_revision();
+            self.changes.push(Change::VoxelsChanged(id));
+        }
+        Ok(Some(out))
+    }
+
+    /// The workspace's terrain, if it has one.
+    pub fn terrain(&self) -> Option<InstanceId> {
+        self.find_first_child_of_class(self.workspace, ClassKind::Terrain).ok().flatten()
+    }
+
+    /// The workspace's terrain, made if there isn't one yet.
+    pub fn terrain_or_make(&mut self) -> Result<InstanceId> {
+        if let Some(t) = self.terrain() {
+            return Ok(t);
+        }
+        let t = self.create(ClassKind::Terrain, "Terrain")?;
+        self.set_parent(t, Some(self.workspace))?;
+        Ok(t)
     }
 
     /// The tags on `id`, sorted.
