@@ -3815,6 +3815,7 @@ dependencies = [
  "libroxel-engine",
  "libroxel-instance",
  "libroxel-script",
+ "serde_json",
  "transform-gizmo-egui",
 ]
 
@@ -3850,6 +3851,7 @@ version = "0.0.1"
 dependencies = [
  "libroxel-instance",
  "mlua",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

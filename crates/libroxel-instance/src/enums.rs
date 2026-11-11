@@ -60,6 +60,139 @@ pub enum EasingDirection {
     InOut,
 }
 
+/// A key on the keyboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum KeyCode {
+    A,
+    B,
+    C,
+    D,
+    #[default]
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
+    Zero,
+    One,
+    Two,
+    Three,
+    Four,
+    Five,
+    Six,
+    Seven,
+    Eight,
+    Nine,
+    Space,
+    Return,
+    Tab,
+    Backspace,
+    Escape,
+    LeftShift,
+    RightShift,
+    LeftControl,
+    RightControl,
+    LeftAlt,
+    RightAlt,
+    Up,
+    Down,
+    Left,
+    Right,
+    /// Not a key: the code an input event has when it came from the mouse.
+    Unknown,
+}
+
+/// What kind of input an input event came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum UserInputType {
+    #[default]
+    Keyboard,
+    MouseButton1,
+    MouseButton2,
+}
+
+/// Whether a raycast's filter list is skipped or is the only thing hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum RaycastFilterType {
+    #[default]
+    Exclude,
+    Include,
+}
+
+impl KeyCode {
+    pub const ALL: &[KeyCode] = &[
+        KeyCode::A,
+        KeyCode::B,
+        KeyCode::C,
+        KeyCode::D,
+        KeyCode::E,
+        KeyCode::F,
+        KeyCode::G,
+        KeyCode::H,
+        KeyCode::I,
+        KeyCode::J,
+        KeyCode::K,
+        KeyCode::L,
+        KeyCode::M,
+        KeyCode::N,
+        KeyCode::O,
+        KeyCode::P,
+        KeyCode::Q,
+        KeyCode::R,
+        KeyCode::S,
+        KeyCode::T,
+        KeyCode::U,
+        KeyCode::V,
+        KeyCode::W,
+        KeyCode::X,
+        KeyCode::Y,
+        KeyCode::Z,
+        KeyCode::Zero,
+        KeyCode::One,
+        KeyCode::Two,
+        KeyCode::Three,
+        KeyCode::Four,
+        KeyCode::Five,
+        KeyCode::Six,
+        KeyCode::Seven,
+        KeyCode::Eight,
+        KeyCode::Nine,
+        KeyCode::Space,
+        KeyCode::Return,
+        KeyCode::Tab,
+        KeyCode::Backspace,
+        KeyCode::Escape,
+        KeyCode::LeftShift,
+        KeyCode::RightShift,
+        KeyCode::LeftControl,
+        KeyCode::RightControl,
+        KeyCode::LeftAlt,
+        KeyCode::RightAlt,
+        KeyCode::Up,
+        KeyCode::Down,
+        KeyCode::Left,
+        KeyCode::Right,
+        KeyCode::Unknown,
+    ];
+}
+
 impl EasingStyle {
     /// The eased-in curve: 0 at 0, 1 at 1.
     fn ease_in(self, t: f32) -> f32 {
@@ -134,6 +267,9 @@ pub enum EnumKind {
     Material,
     EasingStyle,
     EasingDirection,
+    KeyCode,
+    UserInputType,
+    RaycastFilterType,
 }
 
 /// A value from one of the enumerations.
@@ -143,11 +279,76 @@ pub enum EnumValue {
     Material(Material),
     EasingStyle(EasingStyle),
     EasingDirection(EasingDirection),
+    KeyCode(KeyCode),
+    UserInputType(UserInputType),
+    RaycastFilterType(RaycastFilterType),
 }
 
+const KEY_CODES: &[EnumValue] = &[
+    EnumValue::KeyCode(KeyCode::A),
+    EnumValue::KeyCode(KeyCode::B),
+    EnumValue::KeyCode(KeyCode::C),
+    EnumValue::KeyCode(KeyCode::D),
+    EnumValue::KeyCode(KeyCode::E),
+    EnumValue::KeyCode(KeyCode::F),
+    EnumValue::KeyCode(KeyCode::G),
+    EnumValue::KeyCode(KeyCode::H),
+    EnumValue::KeyCode(KeyCode::I),
+    EnumValue::KeyCode(KeyCode::J),
+    EnumValue::KeyCode(KeyCode::K),
+    EnumValue::KeyCode(KeyCode::L),
+    EnumValue::KeyCode(KeyCode::M),
+    EnumValue::KeyCode(KeyCode::N),
+    EnumValue::KeyCode(KeyCode::O),
+    EnumValue::KeyCode(KeyCode::P),
+    EnumValue::KeyCode(KeyCode::Q),
+    EnumValue::KeyCode(KeyCode::R),
+    EnumValue::KeyCode(KeyCode::S),
+    EnumValue::KeyCode(KeyCode::T),
+    EnumValue::KeyCode(KeyCode::U),
+    EnumValue::KeyCode(KeyCode::V),
+    EnumValue::KeyCode(KeyCode::W),
+    EnumValue::KeyCode(KeyCode::X),
+    EnumValue::KeyCode(KeyCode::Y),
+    EnumValue::KeyCode(KeyCode::Z),
+    EnumValue::KeyCode(KeyCode::Zero),
+    EnumValue::KeyCode(KeyCode::One),
+    EnumValue::KeyCode(KeyCode::Two),
+    EnumValue::KeyCode(KeyCode::Three),
+    EnumValue::KeyCode(KeyCode::Four),
+    EnumValue::KeyCode(KeyCode::Five),
+    EnumValue::KeyCode(KeyCode::Six),
+    EnumValue::KeyCode(KeyCode::Seven),
+    EnumValue::KeyCode(KeyCode::Eight),
+    EnumValue::KeyCode(KeyCode::Nine),
+    EnumValue::KeyCode(KeyCode::Space),
+    EnumValue::KeyCode(KeyCode::Return),
+    EnumValue::KeyCode(KeyCode::Tab),
+    EnumValue::KeyCode(KeyCode::Backspace),
+    EnumValue::KeyCode(KeyCode::Escape),
+    EnumValue::KeyCode(KeyCode::LeftShift),
+    EnumValue::KeyCode(KeyCode::RightShift),
+    EnumValue::KeyCode(KeyCode::LeftControl),
+    EnumValue::KeyCode(KeyCode::RightControl),
+    EnumValue::KeyCode(KeyCode::LeftAlt),
+    EnumValue::KeyCode(KeyCode::RightAlt),
+    EnumValue::KeyCode(KeyCode::Up),
+    EnumValue::KeyCode(KeyCode::Down),
+    EnumValue::KeyCode(KeyCode::Left),
+    EnumValue::KeyCode(KeyCode::Right),
+    EnumValue::KeyCode(KeyCode::Unknown),
+];
+
 impl EnumKind {
-    pub const ALL: &[EnumKind] =
-        &[EnumKind::Shape, EnumKind::Material, EnumKind::EasingStyle, EnumKind::EasingDirection];
+    pub const ALL: &[EnumKind] = &[
+        EnumKind::Shape,
+        EnumKind::Material,
+        EnumKind::EasingStyle,
+        EnumKind::EasingDirection,
+        EnumKind::KeyCode,
+        EnumKind::UserInputType,
+        EnumKind::RaycastFilterType,
+    ];
 
     /// Every value of this enumeration, in a stable order.
     pub fn items(self) -> &'static [EnumValue] {
@@ -187,6 +388,16 @@ impl EnumKind {
                 E::EasingDirection(EasingDirection::Out),
                 E::EasingDirection(EasingDirection::InOut),
             ],
+            EnumKind::KeyCode => KEY_CODES,
+            EnumKind::UserInputType => &[
+                E::UserInputType(UserInputType::Keyboard),
+                E::UserInputType(UserInputType::MouseButton1),
+                E::UserInputType(UserInputType::MouseButton2),
+            ],
+            EnumKind::RaycastFilterType => &[
+                E::RaycastFilterType(RaycastFilterType::Exclude),
+                E::RaycastFilterType(RaycastFilterType::Include),
+            ],
         }
     }
 
@@ -197,6 +408,9 @@ impl EnumKind {
             EnumKind::Material => "enum:material",
             EnumKind::EasingStyle => "enum:easing_style",
             EnumKind::EasingDirection => "enum:easing_direction",
+            EnumKind::KeyCode => "enum:key_code",
+            EnumKind::UserInputType => "enum:user_input_type",
+            EnumKind::RaycastFilterType => "enum:raycast_filter_type",
         }
     }
 
@@ -213,6 +427,9 @@ impl EnumValue {
             EnumValue::Material(_) => EnumKind::Material,
             EnumValue::EasingStyle(_) => EnumKind::EasingStyle,
             EnumValue::EasingDirection(_) => EnumKind::EasingDirection,
+            EnumValue::KeyCode(_) => EnumKind::KeyCode,
+            EnumValue::UserInputType(_) => EnumKind::UserInputType,
+            EnumValue::RaycastFilterType(_) => EnumKind::RaycastFilterType,
         }
     }
 
@@ -257,6 +474,69 @@ impl EnumValue {
                 EasingDirection::In => "in",
                 EasingDirection::Out => "out",
                 EasingDirection::InOut => "in_out",
+            },
+            EnumValue::KeyCode(k) => match k {
+                KeyCode::A => "a",
+                KeyCode::B => "b",
+                KeyCode::C => "c",
+                KeyCode::D => "d",
+                KeyCode::E => "e",
+                KeyCode::F => "f",
+                KeyCode::G => "g",
+                KeyCode::H => "h",
+                KeyCode::I => "i",
+                KeyCode::J => "j",
+                KeyCode::K => "k",
+                KeyCode::L => "l",
+                KeyCode::M => "m",
+                KeyCode::N => "n",
+                KeyCode::O => "o",
+                KeyCode::P => "p",
+                KeyCode::Q => "q",
+                KeyCode::R => "r",
+                KeyCode::S => "s",
+                KeyCode::T => "t",
+                KeyCode::U => "u",
+                KeyCode::V => "v",
+                KeyCode::W => "w",
+                KeyCode::X => "x",
+                KeyCode::Y => "y",
+                KeyCode::Z => "z",
+                KeyCode::Zero => "zero",
+                KeyCode::One => "one",
+                KeyCode::Two => "two",
+                KeyCode::Three => "three",
+                KeyCode::Four => "four",
+                KeyCode::Five => "five",
+                KeyCode::Six => "six",
+                KeyCode::Seven => "seven",
+                KeyCode::Eight => "eight",
+                KeyCode::Nine => "nine",
+                KeyCode::Space => "space",
+                KeyCode::Return => "return",
+                KeyCode::Tab => "tab",
+                KeyCode::Backspace => "backspace",
+                KeyCode::Escape => "escape",
+                KeyCode::LeftShift => "left_shift",
+                KeyCode::RightShift => "right_shift",
+                KeyCode::LeftControl => "left_control",
+                KeyCode::RightControl => "right_control",
+                KeyCode::LeftAlt => "left_alt",
+                KeyCode::RightAlt => "right_alt",
+                KeyCode::Up => "up",
+                KeyCode::Down => "down",
+                KeyCode::Left => "left",
+                KeyCode::Right => "right",
+                KeyCode::Unknown => "unknown",
+            },
+            EnumValue::UserInputType(t) => match t {
+                UserInputType::Keyboard => "keyboard",
+                UserInputType::MouseButton1 => "mouse_button1",
+                UserInputType::MouseButton2 => "mouse_button2",
+            },
+            EnumValue::RaycastFilterType(t) => match t {
+                RaycastFilterType::Exclude => "exclude",
+                RaycastFilterType::Include => "include",
             },
         }
     }

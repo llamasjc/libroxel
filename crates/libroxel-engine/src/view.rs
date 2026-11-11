@@ -211,7 +211,7 @@ pub struct RenderPlugin;
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_scene)
-            .add_systems(Update, (camera_controls, play_input).chain().in_set(EngineSet::Input))
+            .add_systems(Update, (camera_controls, play_input, forward_keys).chain().in_set(EngineSet::Input))
             .add_systems(PostUpdate, (attach_visuals, update_materials, update_meshes).chain())
             .add_systems(PostUpdate, follow_camera.before(TransformSystems::Propagate))
             .add_systems(Update, update_lighting.after(EngineSet::Sync));
@@ -610,6 +610,85 @@ fn camera_controls(
             }
         }
     }
+}
+
+/// The script-facing key for a Bevy key, if scripts know it.
+pub fn script_key(key: KeyCode) -> Option<libroxel_instance::KeyCode> {
+    use libroxel_instance::KeyCode as K;
+    Some(match key {
+        KeyCode::KeyA => K::A,
+        KeyCode::KeyB => K::B,
+        KeyCode::KeyC => K::C,
+        KeyCode::KeyD => K::D,
+        KeyCode::KeyE => K::E,
+        KeyCode::KeyF => K::F,
+        KeyCode::KeyG => K::G,
+        KeyCode::KeyH => K::H,
+        KeyCode::KeyI => K::I,
+        KeyCode::KeyJ => K::J,
+        KeyCode::KeyK => K::K,
+        KeyCode::KeyL => K::L,
+        KeyCode::KeyM => K::M,
+        KeyCode::KeyN => K::N,
+        KeyCode::KeyO => K::O,
+        KeyCode::KeyP => K::P,
+        KeyCode::KeyQ => K::Q,
+        KeyCode::KeyR => K::R,
+        KeyCode::KeyS => K::S,
+        KeyCode::KeyT => K::T,
+        KeyCode::KeyU => K::U,
+        KeyCode::KeyV => K::V,
+        KeyCode::KeyW => K::W,
+        KeyCode::KeyX => K::X,
+        KeyCode::KeyY => K::Y,
+        KeyCode::KeyZ => K::Z,
+        KeyCode::Digit0 => K::Zero,
+        KeyCode::Digit1 => K::One,
+        KeyCode::Digit2 => K::Two,
+        KeyCode::Digit3 => K::Three,
+        KeyCode::Digit4 => K::Four,
+        KeyCode::Digit5 => K::Five,
+        KeyCode::Digit6 => K::Six,
+        KeyCode::Digit7 => K::Seven,
+        KeyCode::Digit8 => K::Eight,
+        KeyCode::Digit9 => K::Nine,
+        KeyCode::Space => K::Space,
+        KeyCode::Enter => K::Return,
+        KeyCode::Tab => K::Tab,
+        KeyCode::Backspace => K::Backspace,
+        KeyCode::Escape => K::Escape,
+        KeyCode::ShiftLeft => K::LeftShift,
+        KeyCode::ShiftRight => K::RightShift,
+        KeyCode::ControlLeft => K::LeftControl,
+        KeyCode::ControlRight => K::RightControl,
+        KeyCode::AltLeft => K::LeftAlt,
+        KeyCode::AltRight => K::RightAlt,
+        KeyCode::ArrowUp => K::Up,
+        KeyCode::ArrowDown => K::Down,
+        KeyCode::ArrowLeft => K::Left,
+        KeyCode::ArrowRight => K::Right,
+        _ => return None,
+    })
+}
+
+/// Passes key presses and releases to the play session's scripts and prompts.
+fn forward_keys(
+    mut engine: NonSendMut<EngineState>,
+    capture: Res<InputCapture>,
+    keys: Res<ButtonInput<KeyCode>>,
+) {
+    let engine = &mut *engine;
+    let Some(session) = engine.session.as_mut() else { return };
+    if !capture.keyboard {
+        for key in keys.get_just_pressed().filter_map(|k| script_key(*k)) {
+            session.input_began(libroxel_script::UserInput::Key(key), false);
+        }
+    }
+    // Releases always go through, so nothing is left held down.
+    for key in keys.get_just_released().filter_map(|k| script_key(*k)) {
+        session.input_ended(libroxel_script::UserInput::Key(key), false);
+    }
+    engine.log.extend(session.take_log());
 }
 
 /// WASD relative to where the camera faces, Space to jump.

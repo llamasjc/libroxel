@@ -52,6 +52,13 @@ pub enum Property {
     /// Hours since midnight, 0 to 24.
     ClockTime,
     Brightness,
+    /// On a prompt: what it does ("Open") and what it's on ("Door").
+    ActionText,
+    ObjectText,
+    /// On a prompt: the key that triggers it.
+    KeyboardKeyCode,
+    /// On a prompt: how long the key must be held, in seconds.
+    HoldDuration,
 }
 
 /// The value of a property.
@@ -90,7 +97,12 @@ impl Property {
     /// The kind of value this property holds, as [`PropertyValue::kind_name`] spells it.
     pub fn expected_kind(self) -> &'static str {
         match self {
-            Property::Name | Property::Source | Property::StringValue | Property::Text => "string",
+            Property::Name
+            | Property::Source
+            | Property::StringValue
+            | Property::Text
+            | Property::ActionText
+            | Property::ObjectText => "string",
             Property::Position | Property::Size | Property::Orientation => "Vec3",
             Property::Color | Property::BackgroundColor | Property::TextColor => "Color3",
             Property::Anchored
@@ -106,7 +118,9 @@ impl Property {
             | Property::TextSize
             | Property::MaxActivationDistance
             | Property::ClockTime
-            | Property::Brightness => "number",
+            | Property::Brightness
+            | Property::HoldDuration => "number",
+            Property::KeyboardKeyCode => EnumKind::KeyCode.kind_name(),
             Property::Transparency
             | Property::Health
             | Property::MaxHealth
@@ -125,6 +139,7 @@ impl Property {
         match self {
             Property::Shape => Some(EnumKind::Shape),
             Property::Material => Some(EnumKind::Material),
+            Property::KeyboardKeyCode => Some(EnumKind::KeyCode),
             _ => None,
         }
     }
@@ -166,6 +181,10 @@ impl Property {
         Property::MaxActivationDistance,
         Property::ClockTime,
         Property::Brightness,
+        Property::ActionText,
+        Property::ObjectText,
+        Property::KeyboardKeyCode,
+        Property::HoldDuration,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -206,6 +225,10 @@ impl Property {
             Property::MaxActivationDistance => "max_activation_distance",
             Property::ClockTime => "clock_time",
             Property::Brightness => "brightness",
+            Property::ActionText => "action_text",
+            Property::ObjectText => "object_text",
+            Property::KeyboardKeyCode => "keyboard_key_code",
+            Property::HoldDuration => "hold_duration",
         }
     }
 

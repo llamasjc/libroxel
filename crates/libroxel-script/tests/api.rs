@@ -592,3 +592,193 @@ fn only_world_and_server_scripts_start() {
     assert!(rt.run_tree_scripts().is_empty());
     assert_eq!(printed(&rt), vec!["InWorld", "OnServer"]);
 }
+
+fn add_player(rt: &ScriptRuntime, name: &str) -> libroxel_instance::InstanceId {
+    let mut tree = rt.tree().borrow_mut();
+    let players = tree.service(ClassKind::Players).unwrap();
+    let player = tree.create(ClassKind::Player, name).unwrap();
+    tree.set_parent(player, Some(players)).unwrap();
+    player
+}
+
+#[test]
+fn raycasts_find_parts_and_respect_filters() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local floor = Instance.new("Part", workspace)
+        floor.Name = "Floor"
+        floor.Size = Vector3.new(20, 2, 20)
+        floor.Material = Enum.Material.Grass
+        local box = Instance.new("Part", workspace)
+        box.Name = "Box"
+        box.Position = Vector3.new(0, 4, 0)
+        box.Size = Vector3.new(2, 2, 2)
+
+        local down = Vector3.new(0, -100, 0)
+        local hit = workspace:Raycast(Vector3.new(0, 20, 0), down)
+        print(hit.Instance.Name, hit.Position, hit.Normal, hit.Distance)
+
+        local params = RaycastParams.new()
+        params.FilterDescendantsInstances = { box }
+        print(params.FilterType)
+        hit = workspace:Raycast(Vector3.new(0, 20, 0), down, params)
+        print(hit.Instance.Name, hit.Material, hit.Position.Y)
+
+        params.FilterType = Enum.RaycastFilterType.Include
+        print(workspace:Raycast(Vector3.new(5, 20, 0), down, params))
+        print(workspace:Raycast(Vector3.new(0, 20, 0), Vector3.new(0, -5, 0)))
+    "#,
+    );
+    assert_eq!(
+        printed(&rt),
+        vec![
+            "Box 0, 5, 0 0, 1, 0 15",
+            "Enum.RaycastFilterType.Exclude",
+            "Floor Enum.Material.Grass 1",
+            "nil",
+            "nil",
+        ]
+    );
+}
+
+#[test]
+fn user_input_service_reports_keys_and_clicks() {
+    use libroxel_instance::KeyCode;
+    use libroxel_script::UserInput;
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local UserInputService = game:GetService("UserInputService")
+        UserInputService.InputBegan:Connect(function(input, processed)
+            print("began", input.KeyCode, input.UserInputType, processed)
+            print("down?", UserInputService:IsKeyDown(Enum.KeyCode.F))
+        end)
+        UserInputService.InputEnded:Connect(function(input)
+            print("ended", input.KeyCode.Name, UserInputService:IsKeyDown(Enum.KeyCode.F))
+        end)
+    "#,
+    );
+    assert!(rt.input_began(UserInput::Key(KeyCode::F), false).is_empty());
+    assert!(rt.input_ended(UserInput::Key(KeyCode::F), false).is_empty());
+    assert!(rt.input_began(UserInput::MouseButton1, true).is_empty());
+    assert_eq!(
+        printed(&rt),
+        vec![
+            "began Enum.KeyCode.F Enum.UserInputType.Keyboard false",
+            "down? true",
+            "ended F false",
+            "began Enum.KeyCode.Unknown Enum.UserInputType.MouseButton1 true",
+            "down? false",
+        ]
+    );
+}
+
+#[test]
+fn remote_and_bindable_events_carry_values() {
+    let rt = runtime();
+    add_player(&rt, "Sam");
+    run(
+        &rt,
+        r##"
+        local remote = Instance.new("RemoteEvent", game:GetService("ReplicatedStorage"))
+        local bindable = Instance.new("BindableEvent", workspace)
+        remote.OnServerEvent:Connect(function(player, a, b)
+            print("server got", player.Name, a, b.x)
+            remote:FireClient(player, "thanks")
+        end)
+        remote.OnClientEvent:Connect(function(message) print("client got", message) end)
+        bindable.Event:Connect(function(...) print("bindable", select("#", ...), ...) end)
+
+        remote:FireServer("hello", { x = 5 })
+        remote:FireAllClients("everyone")
+        bindable:Fire(1, nil, "three")
+        print(pcall(function() bindable:FireServer() end))
+    "##,
+    );
+    let out = printed(&rt);
+    assert_eq!(
+        &out[..4],
+        ["server got Sam hello 5", "client got thanks", "client got everyone", "bindable 3 1 nil three"]
+    );
+    assert!(out[4].starts_with("false") && out[4].contains("FireServer is not a valid member"), "{out:?}");
+}
+
+#[test]
+fn data_stores_save_and_load() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local store = game:GetService("DataStoreService"):GetDataStore("PlayerData")
+        print(store:GetAsync("coins_1"))
+        store:SetAsync("coins_1", 12)
+        store:SetAsync("profile_1", { name = "Sam", badges = { "first", "fast" } })
+        print(store:IncrementAsync("coins_1", 3), store:IncrementAsync("visits"))
+        print(store:UpdateAsync("coins_1", function(old) return old * 2 end))
+        print(store:UpdateAsync("coins_1", function() return nil end))
+        print(store:RemoveAsync("visits"), store:GetAsync("visits"))
+        print(pcall(function() store:SetAsync("bad", workspace) end))
+    "#,
+    );
+    let out = printed(&rt);
+    assert_eq!(&out[..4], ["nil", "15 1", "30", "30"]);
+    assert_eq!(out[4], "1 nil");
+    assert!(out[5].starts_with("false") && out[5].contains("can't be saved"), "{out:?}");
+
+    // A new runtime sees what the first one saved.
+    let saved = rt.save_data();
+    let rt2 = runtime();
+    rt2.load_data(&saved).unwrap();
+    run(
+        &rt2,
+        r#"
+        local store = game:GetService("DataStoreService"):GetDataStore("PlayerData")
+        local profile = store:GetAsync("profile_1")
+        print(store:GetAsync("coins_1"), profile.name, profile.badges[2], #profile.badges)
+    "#,
+    );
+    assert_eq!(printed(&rt2), vec!["30 Sam fast 2"]);
+}
+
+#[test]
+fn debris_and_prompts() {
+    let rt = runtime();
+    let player = add_player(&rt, "Sam");
+    let prompt = {
+        let mut tree = rt.tree().borrow_mut();
+        let part = tree.create(ClassKind::Part, "Chest").unwrap();
+        let ws = tree.workspace();
+        tree.set_parent(part, Some(ws)).unwrap();
+        let prompt = tree.create(ClassKind::ProximityPrompt, "ProximityPrompt").unwrap();
+        tree.set_parent(prompt, Some(part)).unwrap();
+        prompt
+    };
+    run(
+        &rt,
+        r#"
+        local prompt = workspace.Chest.ProximityPrompt
+        print(prompt.ActionText, prompt.KeyboardKeyCode, prompt.MaxActivationDistance, prompt.HoldDuration)
+        prompt.ActionText = "Open"
+        prompt.Triggered:Connect(function(player) print(player.Name, "opened it") end)
+        prompt.TriggerEnded:Connect(function(player) print(player.Name, "let go") end)
+
+        local spark = Instance.new("Part", workspace)
+        spark.Name = "Spark"
+        game:GetService("Debris"):AddItem(spark, 0.5)
+    "#,
+    );
+    assert!(rt.prompt_triggered(prompt, player).is_empty());
+    assert!(rt.prompt_trigger_ended(prompt, player).is_empty());
+    assert_eq!(printed(&rt), vec!["Interact Enum.KeyCode.E 10 0", "Sam opened it", "Sam let go"]);
+    rt.step(0.25);
+    let spark = |rt: &ScriptRuntime| {
+        let tree = rt.tree().borrow();
+        tree.find_first_child(tree.workspace(), "Spark").unwrap().is_some()
+    };
+    assert!(spark(&rt));
+    rt.step(0.3);
+    assert!(!spark(&rt));
+}

@@ -1,7 +1,7 @@
 //! A play session: what runs between pressing Play and Stop.
 
-use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property, PropertyValue};
-use libroxel_script::{OutputLevel, ScriptRuntime, SharedTree};
+use libroxel_instance::{ClassKind, EnumValue, InstanceId, InstanceTree, KeyCode, Property, PropertyValue};
+use libroxel_script::{OutputLevel, ScriptRuntime, SharedTree, UserInput};
 
 use crate::character::{Character, CharacterInput};
 use crate::physics::Physics;
@@ -27,6 +27,26 @@ pub struct LogEntry {
     pub text: String,
 }
 
+/// The proximity prompt the player can use right now.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ActivePrompt {
+    pub prompt: InstanceId,
+    /// The part it is in, which the prompt is drawn beside.
+    pub part: InstanceId,
+    pub key: KeyCode,
+    /// How far through holding the key the player is, 0 to 1.
+    pub progress: f32,
+}
+
+/// A prompt key being held down.
+#[derive(Debug, Clone, Copy)]
+struct PromptHold {
+    prompt: InstanceId,
+    key: KeyCode,
+    held: f32,
+    triggered: bool,
+}
+
 /// Scripts, physics and a character, all running against one tree.
 pub struct PlaySession {
     runtime: ScriptRuntime,
@@ -38,6 +58,7 @@ pub struct PlaySession {
     player_gui: Option<InstanceId>,
     respawn_in: Option<f32>,
     log: Vec<LogEntry>,
+    hold: Option<PromptHold>,
 }
 
 impl PlaySession {
@@ -47,6 +68,17 @@ impl PlaySession {
     /// then their character spawns, so scripts see the same order as in a
     /// real game.
     pub fn start(tree: SharedTree, with_character: bool) -> Result<Self, String> {
+        Self::start_inner(tree, with_character, None)
+    }
+
+    /// Like [`start`](Self::start) with a character, with data stores
+    /// holding `saved_data` (JSON from an earlier session's
+    /// [`save_data`](Self::save_data)) before any script runs.
+    pub fn start_with_data(tree: SharedTree, saved_data: &str) -> Result<Self, String> {
+        Self::start_inner(tree, true, Some(saved_data))
+    }
+
+    fn start_inner(tree: SharedTree, with_character: bool, saved_data: Option<&str>) -> Result<Self, String> {
         let runtime = ScriptRuntime::new(tree.clone()).map_err(|e| format!("could not start Luau: {e}"))?;
         let mut session = Self {
             runtime,
@@ -56,7 +88,17 @@ impl PlaySession {
             player_gui: None,
             respawn_in: None,
             log: Vec::new(),
+            hold: None,
         };
+        if let Some(json) = saved_data
+            && let Err(err) = session.runtime.load_data(json)
+        {
+            session.log.push(LogEntry {
+                level: LogLevel::Warn,
+                time: 0.0,
+                text: format!("Saved data could not be read, starting fresh: {err}"),
+            });
+        }
         let errors = session.runtime.run_tree_scripts();
         session.collect(errors);
         if with_character {
@@ -179,6 +221,126 @@ impl PlaySession {
         true
     }
 
+    /// What data stores hold now, as JSON.
+    pub fn save_data(&self) -> String {
+        self.runtime.save_data()
+    }
+
+    /// Ends the session: the player leaves (firing the leave event, where
+    /// games usually save), so call this before throwing the session away.
+    pub fn stop(&mut self) {
+        if let Some(player) = self.player.take() {
+            let errors = self.runtime.player_removing(player);
+            self.collect(errors);
+        }
+    }
+
+    /// A key or mouse button went down. `processed` means the game's UI used
+    /// it already (for example, a click on a button), so prompts ignore it.
+    pub fn input_began(&mut self, input: UserInput, processed: bool) {
+        let errors = self.runtime.input_began(input, processed);
+        self.collect(errors);
+        if let (UserInput::Key(key), false) = (input, processed)
+            && let Some(active) = self.active_prompt()
+            && active.key == key
+        {
+            self.hold = Some(PromptHold { prompt: active.prompt, key, held: 0.0, triggered: false });
+            self.advance_hold(0.0);
+        }
+    }
+
+    /// A key or mouse button came back up.
+    pub fn input_ended(&mut self, input: UserInput, processed: bool) {
+        let errors = self.runtime.input_ended(input, processed);
+        self.collect(errors);
+        if let (UserInput::Key(key), Some(hold)) = (input, self.hold)
+            && hold.key == key
+        {
+            self.release_hold();
+        }
+    }
+
+    /// Uses a prompt straight away, as when the player clicks it.
+    pub fn trigger_prompt(&mut self, prompt: InstanceId) {
+        let Some(player) = self.player else { return };
+        if self.active_prompt().is_none_or(|a| a.prompt != prompt) {
+            return;
+        }
+        let mut errors = self.runtime.prompt_triggered(prompt, player);
+        errors.extend(self.runtime.prompt_trigger_ended(prompt, player));
+        self.collect(errors);
+    }
+
+    /// The nearest enabled prompt in reach of the character, if any.
+    pub fn active_prompt(&self) -> Option<ActivePrompt> {
+        let character = self.character?;
+        let tree = self.runtime.tree().borrow();
+        if character.is_dead(&tree) {
+            return None;
+        }
+        let from = tree.get_vec3(character.root, Property::Position)?;
+        let mut best: Option<(f32, ActivePrompt)> = None;
+        for prompt in tree.descendants_of_class(tree.workspace(), ClassKind::ProximityPrompt) {
+            if tree.get_bool(prompt, Property::Enabled) == Some(false) {
+                continue;
+            }
+            let Some(part) = tree.parent(prompt).ok().flatten() else { continue };
+            let Some(at) = tree.get_vec3(part, Property::Position) else { continue };
+            let distance = (at - from).length();
+            let reach = tree.get_number(prompt, Property::MaxActivationDistance).unwrap_or(10.0) as f32;
+            if distance > reach || best.is_some_and(|(d, _)| d <= distance) {
+                continue;
+            }
+            let key = match tree.get_enum(prompt, Property::KeyboardKeyCode) {
+                Some(EnumValue::KeyCode(k)) => k,
+                _ => KeyCode::E,
+            };
+            let duration = tree.get_number(prompt, Property::HoldDuration).unwrap_or(0.0) as f32;
+            let progress = match self.hold {
+                Some(h) if h.prompt == prompt && duration > 0.0 => (h.held / duration).min(1.0),
+                Some(h) if h.prompt == prompt => 1.0,
+                _ => 0.0,
+            };
+            best = Some((distance, ActivePrompt { prompt, part, key, progress }));
+        }
+        best.map(|(_, a)| a)
+    }
+
+    /// Moves a held prompt on by `dt`, triggering it once the hold is long enough.
+    fn advance_hold(&mut self, dt: f32) {
+        let Some(mut hold) = self.hold else { return };
+        if self.active_prompt().is_none_or(|a| a.prompt != hold.prompt) {
+            // Walked away or the prompt was turned off.
+            self.release_hold();
+            return;
+        }
+        hold.held += dt;
+        let duration =
+            self.runtime.tree().borrow().get_number(hold.prompt, Property::HoldDuration).unwrap_or(0.0)
+                as f32;
+        if !hold.triggered
+            && hold.held >= duration
+            && let Some(player) = self.player
+        {
+            hold.triggered = true;
+            self.hold = Some(hold);
+            let errors = self.runtime.prompt_triggered(hold.prompt, player);
+            self.collect(errors);
+        } else {
+            self.hold = Some(hold);
+        }
+    }
+
+    fn release_hold(&mut self) {
+        if let Some(hold) = self.hold.take()
+            && hold.triggered
+            && let Some(player) = self.player
+        {
+            let errors = self.runtime.prompt_trigger_ended(hold.prompt, player);
+            self.collect(errors);
+        }
+    }
+
     pub fn runtime(&self) -> &ScriptRuntime {
         &self.runtime
     }
@@ -224,6 +386,7 @@ impl PlaySession {
         self.collect(errors);
         let errors = self.runtime.step(dt as f64);
         self.collect(errors);
+        self.advance_hold(dt);
 
         let tree = self.runtime.tree().clone();
         let result = {

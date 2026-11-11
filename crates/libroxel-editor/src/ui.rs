@@ -40,6 +40,12 @@ enum Action {
     ClickButton(InstanceId),
     /// While playing: the player clicked a part in the world.
     ClickPart(InstanceId),
+    /// While playing: the player clicked a proximity prompt.
+    TriggerPrompt(InstanceId),
+    /// While playing: a mouse button went down (true) or up over the view.
+    Mouse(libroxel_script::UserInput, bool, bool),
+    /// Forget the current game's saved data.
+    ClearData,
     Reparent(InstanceId, InstanceId),
     OpenScript(InstanceId),
     Rename(InstanceId, String),
@@ -60,6 +66,9 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::StringValue,
     ClassKind::BoolValue,
     ClassKind::ClickDetector,
+    ClassKind::ProximityPrompt,
+    ClassKind::RemoteEvent,
+    ClassKind::BindableEvent,
     ClassKind::ScreenGui,
     ClassKind::Frame,
     ClassKind::TextLabel,
@@ -99,6 +108,9 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::ClickDetector => "👆",
         ClassKind::Lighting => "☀",
         ClassKind::ServerScriptService => "⚙",
+        ClassKind::ProximityPrompt => "💬",
+        ClassKind::RemoteEvent => "📡",
+        ClassKind::BindableEvent => "🔔",
     }
 }
 
@@ -180,6 +192,7 @@ pub fn editor_ui(
     // The space left over is the 3D view.
     let mut gizmo_hot = false;
     let mut gui_hit: gui::GuiHit = None;
+    let mut prompt_hit: Option<(InstanceId, egui::Rect)> = None;
     let gui_root = if playing {
         engine.session.as_ref().and_then(|s| s.player_gui())
     } else {
@@ -202,6 +215,30 @@ pub fn editor_ui(
                 let selected = if playing { None } else { editor.selection };
                 gui_hit = gui::draw(ui, &tree_rc.borrow(), root, ui.max_rect(), selected);
             }
+            if let (Some(active), Ok((cam, gt, _, _))) =
+                (engine.session.as_ref().and_then(|s| s.active_prompt()), cameras.single())
+            {
+                let tree = tree_rc.borrow();
+                // Just above the part, so the character doesn't hide it.
+                let at = tree
+                    .get_vec3(active.part, Property::Position)
+                    .zip(tree.get_vec3(active.part, Property::Size))
+                    .map(|(p, s)| Vec3::new(p.x, p.y + s.y / 2.0 + 1.5, p.z));
+                if let Some(at) = at
+                    && let Ok(screen) = cam.world_to_viewport(gt, at)
+                {
+                    let key = names::enum_item_name(EnumValue::KeyCode(active.key));
+                    let rect = gui::draw_prompt(
+                        ui,
+                        &tree,
+                        active.prompt,
+                        key,
+                        active.progress,
+                        egui::pos2(screen.x, screen.y),
+                    );
+                    prompt_hit = Some((active.prompt, rect));
+                }
+            }
             hud(ui, playing);
             if playing {
                 leaderboard(ui, &tree_rc.borrow());
@@ -223,8 +260,28 @@ pub fn editor_ui(
     capture.keyboard = ctx.egui_wants_keyboard_input();
     editor.gizmo_active = gizmo_hot;
 
+    // Mouse buttons for the input service, while playing.
+    if playing && over_view {
+        let on_ui =
+            gui_hit.is_some() || prompt_hit.is_some_and(|(_, r)| pointer.is_some_and(|p| r.contains(p)));
+        ctx.input(|i| {
+            for (button, input) in [
+                (egui::PointerButton::Primary, libroxel_script::UserInput::MouseButton1),
+                (egui::PointerButton::Secondary, libroxel_script::UserInput::MouseButton2),
+            ] {
+                if i.pointer.button_pressed(button) {
+                    actions.push(Action::Mouse(input, true, on_ui));
+                }
+                if i.pointer.button_released(button) {
+                    actions.push(Action::Mouse(input, false, on_ui));
+                }
+            }
+        });
+    }
+
     // Click to select.
     let clicked = ctx.input(|i| i.pointer.primary_clicked());
+    let on_prompt = prompt_hit.filter(|(_, r)| pointer.is_some_and(|p| r.contains(p)));
     if clicked
         && over_view
         && !gizmo_hot
@@ -232,6 +289,11 @@ pub fn editor_ui(
         && let Ok(ray) = cam.viewport_to_world(gt, Vec2::new(pos.x, pos.y))
     {
         match gui_hit {
+            _ if on_prompt.is_some() => {
+                if let Some((prompt, _)) = on_prompt {
+                    actions.push(Action::TriggerPrompt(prompt));
+                }
+            }
             Some((id, ClassKind::TextButton)) if playing => actions.push(Action::ClickButton(id)),
             Some(_) if playing => {}
             Some((id, _)) => {
@@ -347,6 +409,13 @@ fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
             }
             if ui.button("Open sample obby").clicked() {
                 actions.push(Action::OpenSample);
+            }
+            if ui
+                .add_enabled(!playing, egui::Button::new("Clear saved data"))
+                .on_hover_text("Forget what this game's data stores saved in earlier play tests")
+                .clicked()
+            {
+                actions.push(Action::ClearData);
             }
             if ui.button("Open…").clicked() {
                 let path = games_dir().join("untitled.lrx").display().to_string();
@@ -665,6 +734,17 @@ fn properties(
              if their character is close enough.",
         ),
         ClassKind::Lighting => Some("ClockTime sets the time of day: 6 is sunrise, 12 noon, 18 sunset."),
+        ClassKind::ProximityPrompt => Some(
+            "Put this inside a part. While playing, walking close shows a prompt; pressing its key (or \
+             clicking it) fires `Triggered` with the player. HoldDuration makes the player hold the key.",
+        ),
+        ClassKind::RemoteEvent => Some(
+            "Local scripts call `FireServer(...)` and game scripts hear `OnServerEvent(player, ...)`. \
+             Game scripts call `FireClient(player, ...)` or `FireAllClients(...)` and local scripts hear `OnClientEvent`.",
+        ),
+        ClassKind::BindableEvent => {
+            Some("Any script can call `Fire(...)`; everything connected to `Event` gets the same values.")
+        }
         _ => None,
     };
     if let Some(hint) = hint {
@@ -1006,8 +1086,35 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
 // Applying actions
 // ---------------------------------------------------------------------------
 
+/// Where play tests keep the current game's saved data: beside its file.
+fn data_path(editor: &Editor) -> PathBuf {
+    match &editor.file {
+        Some(file) => file.with_extension("data.json"),
+        None => games_dir().join("unsaved.data.json"),
+    }
+}
+
+/// Ends the play session, if there is one: the player leaves, then saved
+/// data is written. Returns whether a session was running.
+fn end_session(engine: &mut EngineState, editor: &Editor) -> bool {
+    let Some(mut session) = engine.session.take() else { return false };
+    session.stop();
+    let lines = session.take_log();
+    engine.log.extend(lines);
+    let json = session.save_data();
+    let path = data_path(editor);
+    if json.trim() != "{}" || path.exists() {
+        let written =
+            path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&path, json));
+        if let Err(e) = written {
+            log(engine, LogLevel::Error, format!("Could not keep saved data: {e}"));
+        }
+    }
+    true
+}
+
 fn replace_world(engine: &mut EngineState, editor: &mut Editor, tree: InstanceTree, file: Option<PathBuf>) {
-    if engine.session.take().is_some() {
+    if end_session(engine, editor) {
         editor.edit_snapshot = None;
     }
     *engine.tree.borrow_mut() = tree;
@@ -1129,7 +1236,11 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             }
             editor.history.tick(f64::INFINITY, false);
             editor.edit_snapshot = Some(engine.tree.borrow().clone());
-            match PlaySession::start(engine.tree.clone(), true) {
+            let started = match std::fs::read_to_string(data_path(editor)) {
+                Ok(json) => PlaySession::start_with_data(engine.tree.clone(), &json),
+                Err(_) => PlaySession::start(engine.tree.clone(), true),
+            };
+            match started {
                 Ok(mut session) => {
                     let lines = session.take_log();
                     engine.session = Some(session);
@@ -1145,7 +1256,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             }
         }
         Action::Stop => {
-            if engine.session.take().is_some() {
+            if end_session(engine, editor) {
                 if let Some(snapshot) = editor.edit_snapshot.take() {
                     *engine.tree.borrow_mut() = snapshot;
                 }
@@ -1182,6 +1293,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             let parent = match class {
                 ClassKind::ModuleScript => tree.service(ClassKind::ReplicatedStorage).unwrap_or(parent),
                 ClassKind::ScreenGui => tree.service(ClassKind::StarterGui).unwrap_or(parent),
+                ClassKind::RemoteEvent => tree.service(ClassKind::ReplicatedStorage).unwrap_or(parent),
                 c if c.is_gui_object() => gui_parent(&mut tree, editor.selection).unwrap_or(parent),
                 _ => parent,
             };
@@ -1190,6 +1302,8 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                 ClassKind::Script
                     | ClassKind::LocalScript
                     | ClassKind::ClickDetector
+                    | ClassKind::ProximityPrompt
+                    | ClassKind::BindableEvent
                     | ClassKind::ModuleScript
                     | ClassKind::IntValue
                     | ClassKind::NumberValue
@@ -1306,6 +1420,30 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
         Action::ClickButton(id) => {
             if let Some(session) = engine.session.as_mut() {
                 session.click_button(id);
+            }
+        }
+        Action::TriggerPrompt(id) => {
+            if let Some(session) = engine.session.as_mut() {
+                session.trigger_prompt(id);
+            }
+        }
+        Action::Mouse(input, down, processed) => {
+            if let Some(session) = engine.session.as_mut() {
+                if down {
+                    session.input_began(input, processed);
+                } else {
+                    session.input_ended(input, processed);
+                }
+            }
+        }
+        Action::ClearData => {
+            let path = data_path(editor);
+            match std::fs::remove_file(&path) {
+                Ok(()) => log(engine, LogLevel::Info, format!("Cleared saved data ({})", path.display())),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    log(engine, LogLevel::Info, "This game has no saved data yet")
+                }
+                Err(e) => log(engine, LogLevel::Error, format!("Could not clear saved data: {e}")),
             }
         }
         Action::ClickPart(id) => {

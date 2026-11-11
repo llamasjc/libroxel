@@ -12,6 +12,7 @@ authors.workspace = true
 libroxel-instance.workspace = true
 mlua.workspace = true
 thiserror.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

@@ -376,6 +376,9 @@ impl InstanceTree {
                     PropertyValue::Number(n.round())
                 }
                 (Property::ClockTime, PropertyValue::Number(n)) => PropertyValue::Number(n.rem_euclid(24.0)),
+                (Property::HoldDuration | Property::MaxActivationDistance, PropertyValue::Number(n)) => {
+                    PropertyValue::Number(n.max(0.0))
+                }
                 (_, v) => v,
             };
             replace(slot, value)

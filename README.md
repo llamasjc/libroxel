@@ -11,7 +11,7 @@ and the engine runs on [Bevy](https://bevy.org).
 
 ![The Libroxel editor](docs/editor.png)
 
-![Playing the sample obby, with the leaderboard and an on-screen coin counter](docs/playing.png)
+![Playing the sample obby: the leaderboard, the coin counter and a "hold E" prompt](docs/playing.png)
 
 ## Getting started
 
@@ -43,8 +43,9 @@ The first build compiles Bevy and takes a while. After that it is quick.
 - **File → Open sample obby** loads a small obstacle course with a wooden
   ramp, spinning coins, lava, fading platforms, a lift and a finish pad, plus
   a leaderboard that counts coins and deaths, an on-screen coin counter, a
-  day/night button and a vault whose door opens when you click it. Press
-  **▶ Play** (or F5) to try it.
+  day/night button, a vault whose door opens when you click it, and a stand
+  where you hold E to buy a speed boost. Coins are saved between play tests.
+  Press **▶ Play** (or F5) to try it.
 - **Explorer** (left) shows the instance tree. Click to select, double-click
   a script to edit it, drag one item onto another to move it inside, and
   right-click for Insert, Rename, Duplicate and Delete.
@@ -67,6 +68,9 @@ The first build compiles Bevy and takes a while. After that it is quick.
   while you edit, so you can click one to select it and lay it out with
   Position, Size and AnchorPoint. While playing, every player gets a copy,
   buttons can be clicked, and parts with a `ClickDetector` can be clicked too.
+- **Saved data:** what a game's data stores save during a play test is kept
+  beside the game's file (as `<name>.data.json`) and loaded next time you
+  press Play. **File → Clear saved data** forgets it.
 - **Output** (bottom) shows `print`, `warn` and script errors. While playing
   you can type Luau into its command bar and press Enter.
 - **Undo/redo** with Ctrl+Z and Ctrl+Y. **Save** with Ctrl+S. Games are
@@ -92,12 +96,13 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
 
 - **Globals:** `game`, `workspace`, `script`, `Instance.new(class, parent?)`,
   `Vector3.new/zero/one`, `Vector2`, `Color3.new/fromRGB`, `CFrame`, `UDim2`,
-  `TweenInfo`, `Enum`, `require`, `print`, `warn`, `time()`, `task.wait`,
+  `TweenInfo`, `RaycastParams`, `Enum`, `require`, `print`, `warn`, `time()`, `task.wait`,
   `task.spawn`, `task.delay`, and `wait`.
 - **Classes:** `Part`, `SpawnLocation`, `Model`, `Folder`, `Script`,
   `LocalScript`, `ModuleScript`, `Humanoid`, `IntValue`, `NumberValue`,
-  `StringValue`, `BoolValue`, `ClickDetector`, `ScreenGui`, `Frame`,
-  `TextLabel`, `TextButton`, plus the built-in `Workspace`, `Players` (with
+  `StringValue`, `BoolValue`, `ClickDetector`, `ProximityPrompt`,
+  `RemoteEvent`, `BindableEvent`, `ScreenGui`, `Frame`, `TextLabel`,
+  `TextButton`, plus the built-in `Workspace`, `Players` (with
   one `Player` each, holding a `PlayerGui`), `ReplicatedStorage`,
   `ServerScriptService`, `StarterGui` and `Lighting`.
 - **Instance members:** `Name`, `ClassName`, `Parent`, `FindFirstChild`,
@@ -126,8 +131,30 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
 - **Clicking parts:** a `ClickDetector` inside a part fires
   `MouseClick(player)` when the player clicks the part from within
   `MaxActivationDistance` studs.
+- **Proximity prompts:** a `ProximityPrompt` inside a part shows a "press E"
+  bubble when the player is within `MaxActivationDistance`. It has
+  `ActionText`, `ObjectText`, `KeyboardKeyCode`, `HoldDuration` and
+  `Enabled`, and fires `Triggered(player)` and `TriggerEnded(player)`.
 - **Lighting:** `ClockTime` (0 to 24) moves the sun and colours the sky, and
   `Brightness` sets how strong the sun is.
+- **Input:** `UserInputService.InputBegan` and `InputEnded` fire with an input
+  object (`KeyCode`, `UserInputType`) and whether the game's UI already used
+  it. `IsKeyDown(Enum.KeyCode.X)` and `IsMouseButtonPressed` check what is
+  held.
+- **Raycasts:** `workspace:Raycast(origin, direction, params?)` returns the
+  first part hit, with `Instance`, `Position`, `Normal`, `Distance` and
+  `Material`, or nil. `RaycastParams` has `FilterDescendantsInstances` and
+  `FilterType` (`Enum.RaycastFilterType.Exclude` or `Include`). Every part
+  shape is hit exactly.
+- **Remote and bindable events:** a `RemoteEvent`'s `FireServer(...)` reaches
+  `OnServerEvent(player, ...)`; `FireClient(player, ...)` and
+  `FireAllClients(...)` reach `OnClientEvent(...)`. A `BindableEvent`'s
+  `Fire(...)` reaches its `Event`. With one player on one computer these
+  arrive straight away and tables are passed as they are, not copied.
+- **Saved data:** `DataStoreService:GetDataStore(name)` gives a store with
+  `GetAsync`, `SetAsync`, `UpdateAsync`, `IncrementAsync` and `RemoveAsync`.
+  Values can be nil, booleans, numbers, strings, and tables of those.
+- **Debris:** `Debris:AddItem(instance, seconds)` destroys it later.
 - **Part properties and events:** `Position`, `Orientation` (degrees),
   `Size`, `Shape` (`Enum.PartType`), `Color`, `Material` (`Enum.Material`),
   `Anchored`, `CanCollide`, `Transparency`, and the `Touched` event. Enum
@@ -187,8 +214,8 @@ door.ClickDetector.MouseClick:Connect(function(player)
 end)
 ```
 
-**Not yet:** images and other GUI objects, sounds, terrain and voxels, multiplayer, and
-data saving. Physics is simple: anchored parts can be rotated and shaped
+**Not yet:** images and other GUI objects, sounds, terrain and voxels, and
+multiplayer (so remote events never cross a network). Physics is simple: anchored parts can be rotated and shaped
 (ramps and balls work), but loose parts are upright boxes that fall and
 stack without tipping over. Characters climb steps up to 0.6 studs.
 

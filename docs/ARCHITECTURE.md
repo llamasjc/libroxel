@@ -61,6 +61,18 @@
   test, pushing out along the shortest direction (straight up on gentle
   slopes, so characters don't slide). Touches are pairs that start
   overlapping, where at least one part can move.
+- **Input and prompts.** The Bevy side passes key presses and releases to
+  the session, and the editor passes mouse buttons (marked as used when they
+  land on a GUI). The session forwards them to `UserInputService` and keeps
+  track of the nearest proximity prompt in reach, how long its key has been
+  held, and fires `Triggered` once the hold is long enough.
+- **Raycasts** live in `libroxel-instance::geometry`, so scripts and the
+  editor's picking share one exact test per shape (box planes, a wedge's
+  slope, a sphere, a cylinder along X), done in the part's own space.
+- **Saved data.** Data stores are an in-memory map of store, key and JSON
+  value inside the runtime. A session can start with saved JSON and hands it
+  back when it stops (after `PlayerRemoving`, so games can save on leave);
+  the editor keeps it in a file beside the game.
 - **Threading.** The Luau VM is single-threaded, so the engine state is a
   Bevy non-send resource and the tree is shared as `Rc<RefCell<_>>`.
 

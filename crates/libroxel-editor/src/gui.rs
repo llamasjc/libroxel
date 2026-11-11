@@ -112,3 +112,57 @@ fn draw_children(
         draw_children(painter, tree, child, r, pointer, selected, hit);
     }
 }
+
+/// Draws a proximity prompt bubble centred at `at`: the key to press, what
+/// it does and what it's on, and a bar while the key is held. Returns its
+/// rectangle, which can be clicked to use the prompt.
+pub fn draw_prompt(
+    ui: &egui::Ui,
+    tree: &InstanceTree,
+    prompt: InstanceId,
+    key: &str,
+    progress: f32,
+    at: Pos2,
+) -> Rect {
+    let action = tree.get_string(prompt, Property::ActionText).unwrap_or_default();
+    let object = tree.get_string(prompt, Property::ObjectText).unwrap_or_default();
+    let rect = Rect::from_center_size(at, egui::vec2(200.0, 56.0));
+    let painter = ui.painter();
+    painter.rect_filled(rect, 8.0, Color32::from_black_alpha(170));
+    let key_box = Rect::from_center_size(rect.left_center() + egui::vec2(30.0, 0.0), egui::vec2(36.0, 36.0));
+    painter.rect_filled(key_box, 6.0, Color32::from_gray(235));
+    painter.text(
+        key_box.center(),
+        Align2::CENTER_CENTER,
+        key,
+        FontId::proportional(18.0),
+        Color32::from_gray(20),
+    );
+    if progress > 0.0 && progress < 1.0 {
+        // A bar along the bottom of the bubble fills up while the key is held.
+        let bar = Rect::from_min_size(
+            rect.left_bottom() + egui::vec2(8.0, -6.0),
+            egui::vec2((rect.width() - 16.0) * progress, 4.0),
+        );
+        painter.rect_filled(bar, 1.0, Color32::from_rgb(255, 215, 60));
+    }
+    let text_x = key_box.right() + 12.0;
+    if !object.is_empty() {
+        painter.text(
+            egui::pos2(text_x, rect.center().y - 9.0),
+            Align2::LEFT_CENTER,
+            &object,
+            FontId::proportional(12.0),
+            Color32::from_gray(200),
+        );
+    }
+    let action_y = if object.is_empty() { 0.0 } else { 8.0 };
+    painter.text(
+        egui::pos2(text_x, rect.center().y + action_y),
+        Align2::LEFT_CENTER,
+        action,
+        FontId::proportional(17.0),
+        Color32::WHITE,
+    );
+    rect
+}

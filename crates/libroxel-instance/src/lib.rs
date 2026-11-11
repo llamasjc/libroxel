@@ -15,12 +15,16 @@
 //! reused.
 
 mod enums;
+pub mod geometry;
 mod math;
 pub mod place;
 mod property;
 mod tree;
 
-pub use enums::{EasingDirection, EasingStyle, EnumKind, EnumValue, Material, PartShape};
+pub use enums::{
+    EasingDirection, EasingStyle, EnumKind, EnumValue, KeyCode, Material, PartShape, RaycastFilterType,
+    UserInputType,
+};
 pub use math::{CFrame, Color3, Rotation, UDim2, Vec2, Vec3};
 pub use property::{Property, PropertyValue};
 pub use tree::{Change, InstanceId, InstanceTree, TreeError};
@@ -85,6 +89,12 @@ pub enum ClassKind {
     ServerScriptService,
     /// A script that runs for one player: inside their GUI or character.
     LocalScript,
+    /// Sends messages between the game's scripts and a player's local scripts.
+    RemoteEvent,
+    /// Sends messages from one script to others.
+    BindableEvent,
+    /// Inside a part: shows a "press a key" prompt when a player is near.
+    ProximityPrompt,
 }
 
 impl ClassKind {
@@ -117,6 +127,9 @@ impl ClassKind {
         ClassKind::ClickDetector,
         ClassKind::ServerScriptService,
         ClassKind::LocalScript,
+        ClassKind::RemoteEvent,
+        ClassKind::BindableEvent,
+        ClassKind::ProximityPrompt,
     ];
 
     /// The services every tree has under its root, in order. They can't be
@@ -223,6 +236,15 @@ impl ClassKind {
             Property::TextSize,
         ];
         const CLICK: &[Property] = &[Property::Name, Property::MaxActivationDistance];
+        const PROMPT: &[Property] = &[
+            Property::Name,
+            Property::ActionText,
+            Property::ObjectText,
+            Property::KeyboardKeyCode,
+            Property::HoldDuration,
+            Property::MaxActivationDistance,
+            Property::Enabled,
+        ];
         const LIGHTING: &[Property] = &[Property::Name, Property::ClockTime, Property::Brightness];
         const HUMANOID: &[Property] = &[
             Property::Name,
@@ -244,6 +266,7 @@ impl ClassKind {
             ClassKind::Frame | ClassKind::GuiObject => FRAME,
             ClassKind::TextLabel | ClassKind::TextButton => TEXT,
             ClassKind::ClickDetector => CLICK,
+            ClassKind::ProximityPrompt => PROMPT,
             ClassKind::Lighting => LIGHTING,
             _ => COMMON,
         }
@@ -282,7 +305,14 @@ impl ClassKind {
             }),
             Property::TextColor => PropertyValue::Color3(Color3::from_rgb8(27, 42, 53)),
             Property::TextSize => PropertyValue::Number(14.0),
-            Property::MaxActivationDistance => PropertyValue::Number(32.0),
+            Property::MaxActivationDistance => PropertyValue::Number(match self {
+                ClassKind::ProximityPrompt => 10.0,
+                _ => 32.0,
+            }),
+            Property::ActionText => PropertyValue::String("Interact".into()),
+            Property::ObjectText => PropertyValue::String(String::new()),
+            Property::KeyboardKeyCode => PropertyValue::Enum(EnumValue::KeyCode(KeyCode::E)),
+            Property::HoldDuration => PropertyValue::Number(0.0),
             Property::ClockTime => PropertyValue::Number(14.0),
             Property::Brightness => PropertyValue::Number(2.0),
             Property::Size => PropertyValue::Vec3(Vec3::new(4.0, 1.0, 2.0)),
@@ -330,6 +360,9 @@ impl ClassKind {
             ClassKind::ClickDetector => "click_detector",
             ClassKind::ServerScriptService => "server_script_service",
             ClassKind::LocalScript => "local_script",
+            ClassKind::RemoteEvent => "remote_event",
+            ClassKind::BindableEvent => "bindable_event",
+            ClassKind::ProximityPrompt => "proximity_prompt",
         }
     }
 

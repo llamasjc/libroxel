@@ -11,7 +11,8 @@
 //! See `CONTRIBUTING.md` for the clean-room rules.
 
 use libroxel_instance::{
-    ClassKind, EasingDirection, EasingStyle, EnumKind, EnumValue, Material, PartShape, Property,
+    ClassKind, EasingDirection, EasingStyle, EnumKind, EnumValue, KeyCode, Material, PartShape, Property,
+    RaycastFilterType, UserInputType,
 };
 
 /// Global variables installed into every script.
@@ -39,6 +40,7 @@ pub mod globals {
     pub const VECTOR2: &str = "Vector2";
     pub const UDIM2: &str = "UDim2";
     pub const TWEEN_INFO: &str = "TweenInfo";
+    pub const RAYCAST_PARAMS: &str = "RaycastParams";
 }
 
 /// Members of the scheduling library.
@@ -75,6 +77,20 @@ pub mod events {
     pub const MOUSE_CLICK: &str = "MouseClick";
     /// On a tween: fires when it finishes playing.
     pub const COMPLETED: &str = "Completed";
+    /// On a proximity prompt: fires with the player when they press (or finish holding) its key.
+    pub const TRIGGERED: &str = "Triggered";
+    /// On a proximity prompt: fires with the player when they let go of its key.
+    pub const TRIGGER_ENDED: &str = "TriggerEnded";
+    /// On a remote event, for game scripts: fires with the player, then what they sent.
+    pub const ON_SERVER_EVENT: &str = "OnServerEvent";
+    /// On a remote event, for local scripts: fires with what the game sent.
+    pub const ON_CLIENT_EVENT: &str = "OnClientEvent";
+    /// On a bindable event: fires with whatever was passed to `Fire`.
+    pub const EVENT: &str = "Event";
+    /// On the input service: fires with an input object when a key or button goes down.
+    pub const INPUT_BEGAN: &str = "InputBegan";
+    /// On the input service: fires with an input object when a key or button comes up.
+    pub const INPUT_ENDED: &str = "InputEnded";
 }
 
 /// Methods that only some classes have.
@@ -101,6 +117,57 @@ pub mod methods {
     pub const PIVOT_TO: &str = "PivotTo";
     /// Model: the CFrame of its first part.
     pub const GET_PIVOT: &str = "GetPivot";
+    /// Remote event, from a local script: sends to game scripts.
+    pub const FIRE_SERVER: &str = "FireServer";
+    /// Remote event, from a game script: sends to one player's local scripts.
+    pub const FIRE_CLIENT: &str = "FireClient";
+    /// Remote event, from a game script: sends to every player's local scripts.
+    pub const FIRE_ALL_CLIENTS: &str = "FireAllClients";
+    /// Bindable event: sends to everything listening.
+    pub const FIRE: &str = "Fire";
+    /// Workspace: the first part a ray hits.
+    pub const RAYCAST: &str = "Raycast";
+}
+
+/// Members of the input service and its input objects.
+pub mod user_input {
+    pub const IS_KEY_DOWN: &str = "IsKeyDown";
+    pub const IS_MOUSE_BUTTON_PRESSED: &str = "IsMouseButtonPressed";
+    pub const INPUT_OBJECT_TYPE_NAME: &str = "InputObject";
+    pub const KEY_CODE: &str = "KeyCode";
+    pub const USER_INPUT_TYPE: &str = "UserInputType";
+}
+
+/// Members of the saved-data service and its stores.
+pub mod data_store {
+    pub const GET_DATA_STORE: &str = "GetDataStore";
+    pub const GET_ASYNC: &str = "GetAsync";
+    pub const SET_ASYNC: &str = "SetAsync";
+    pub const UPDATE_ASYNC: &str = "UpdateAsync";
+    pub const INCREMENT_ASYNC: &str = "IncrementAsync";
+    pub const REMOVE_ASYNC: &str = "RemoveAsync";
+    pub const TYPE_NAME: &str = "DataStore";
+    /// Keys and store names may be at most this long.
+    pub const MAX_NAME_LEN: usize = 50;
+}
+
+/// Members of the clean-up service.
+pub mod debris {
+    /// Destroys an instance after some seconds (10 by default).
+    pub const ADD_ITEM: &str = "AddItem";
+}
+
+/// Members of raycast parameters and results.
+pub mod raycast {
+    pub const PARAMS_TYPE_NAME: &str = "RaycastParams";
+    pub const FILTER_DESCENDANTS_INSTANCES: &str = "FilterDescendantsInstances";
+    pub const FILTER_TYPE: &str = "FilterType";
+    pub const RESULT_TYPE_NAME: &str = "RaycastResult";
+    pub const INSTANCE: &str = "Instance";
+    pub const POSITION: &str = "Position";
+    pub const NORMAL: &str = "Normal";
+    pub const DISTANCE: &str = "Distance";
+    pub const MATERIAL: &str = "Material";
 }
 
 /// Members of tweens.
@@ -177,6 +244,9 @@ pub fn enum_name(kind: EnumKind) -> &'static str {
         EnumKind::Material => "Material",
         EnumKind::EasingStyle => "EasingStyle",
         EnumKind::EasingDirection => "EasingDirection",
+        EnumKind::KeyCode => "KeyCode",
+        EnumKind::UserInputType => "UserInputType",
+        EnumKind::RaycastFilterType => "RaycastFilterType",
     }
 }
 
@@ -221,6 +291,69 @@ pub fn enum_item_name(value: EnumValue) -> &'static str {
             EasingDirection::In => "In",
             EasingDirection::Out => "Out",
             EasingDirection::InOut => "InOut",
+        },
+        EnumValue::KeyCode(k) => match k {
+            KeyCode::A => "A",
+            KeyCode::B => "B",
+            KeyCode::C => "C",
+            KeyCode::D => "D",
+            KeyCode::E => "E",
+            KeyCode::F => "F",
+            KeyCode::G => "G",
+            KeyCode::H => "H",
+            KeyCode::I => "I",
+            KeyCode::J => "J",
+            KeyCode::K => "K",
+            KeyCode::L => "L",
+            KeyCode::M => "M",
+            KeyCode::N => "N",
+            KeyCode::O => "O",
+            KeyCode::P => "P",
+            KeyCode::Q => "Q",
+            KeyCode::R => "R",
+            KeyCode::S => "S",
+            KeyCode::T => "T",
+            KeyCode::U => "U",
+            KeyCode::V => "V",
+            KeyCode::W => "W",
+            KeyCode::X => "X",
+            KeyCode::Y => "Y",
+            KeyCode::Z => "Z",
+            KeyCode::Zero => "Zero",
+            KeyCode::One => "One",
+            KeyCode::Two => "Two",
+            KeyCode::Three => "Three",
+            KeyCode::Four => "Four",
+            KeyCode::Five => "Five",
+            KeyCode::Six => "Six",
+            KeyCode::Seven => "Seven",
+            KeyCode::Eight => "Eight",
+            KeyCode::Nine => "Nine",
+            KeyCode::Space => "Space",
+            KeyCode::Return => "Return",
+            KeyCode::Tab => "Tab",
+            KeyCode::Backspace => "Backspace",
+            KeyCode::Escape => "Escape",
+            KeyCode::LeftShift => "LeftShift",
+            KeyCode::RightShift => "RightShift",
+            KeyCode::LeftControl => "LeftControl",
+            KeyCode::RightControl => "RightControl",
+            KeyCode::LeftAlt => "LeftAlt",
+            KeyCode::RightAlt => "RightAlt",
+            KeyCode::Up => "Up",
+            KeyCode::Down => "Down",
+            KeyCode::Left => "Left",
+            KeyCode::Right => "Right",
+            KeyCode::Unknown => "Unknown",
+        },
+        EnumValue::UserInputType(t) => match t {
+            UserInputType::Keyboard => "Keyboard",
+            UserInputType::MouseButton1 => "MouseButton1",
+            UserInputType::MouseButton2 => "MouseButton2",
+        },
+        EnumValue::RaycastFilterType(t) => match t {
+            RaycastFilterType::Exclude => "Exclude",
+            RaycastFilterType::Include => "Include",
         },
     }
 }
@@ -289,6 +422,9 @@ pub mod color3 {
 pub mod services {
     pub const RUN_SERVICE: &str = "RunService";
     pub const TWEEN_SERVICE: &str = "TweenService";
+    pub const USER_INPUT_SERVICE: &str = "UserInputService";
+    pub const DATA_STORE_SERVICE: &str = "DataStoreService";
+    pub const DEBRIS: &str = "Debris";
     /// Fires once per frame with the frame's delta time in seconds.
     pub const HEARTBEAT: &str = "Heartbeat";
 }
@@ -337,6 +473,9 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::ClickDetector => "ClickDetector",
         ClassKind::ServerScriptService => "ServerScriptService",
         ClassKind::LocalScript => "LocalScript",
+        ClassKind::RemoteEvent => "RemoteEvent",
+        ClassKind::BindableEvent => "BindableEvent",
+        ClassKind::ProximityPrompt => "ProximityPrompt",
     }
 }
 
@@ -382,6 +521,10 @@ pub fn property_name(property: Property) -> &'static str {
         Property::MaxActivationDistance => "MaxActivationDistance",
         Property::ClockTime => "ClockTime",
         Property::Brightness => "Brightness",
+        Property::ActionText => "ActionText",
+        Property::ObjectText => "ObjectText",
+        Property::KeyboardKeyCode => "KeyboardKeyCode",
+        Property::HoldDuration => "HoldDuration",
     }
 }
 

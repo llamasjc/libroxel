@@ -117,7 +117,9 @@ end)
 "#;
 
 const FINISH_SCRIPT: &str = r#"
--- Celebrate when a player reaches the end.
+-- Celebrate when a player reaches the end, and tell everyone.
+local Debris = game:GetService("Debris")
+local notify = game:GetService("ReplicatedStorage"):WaitForChild("Notify")
 local pad = script.Parent
 local celebrated = false
 
@@ -128,6 +130,7 @@ pad.Touched:Connect(function(hit)
 	end
 	celebrated = true
 	print(hit.Parent.Name .. " finished the obby!")
+	notify:FireAllClients(hit.Parent.Name .. " finished the obby!")
 
 	-- Rain down some confetti blocks.
 	for i = 1, 30 do
@@ -137,9 +140,7 @@ pad.Touched:Connect(function(hit)
 		bit.Color = Color3.fromRGB(math.random(80, 255), math.random(80, 255), math.random(80, 255))
 		bit.CanCollide = false
 		bit.Parent = workspace
-		task.delay(4, function()
-			bit:Destroy()
-		end)
+		Debris:AddItem(bit, 4)
 	end
 
 	task.wait(5)
@@ -173,6 +174,33 @@ door.ClickDetector.MouseClick:Connect(function(player)
 end)
 "#;
 
+const SHOP_SCRIPT: &str = r#"
+-- Hold E at the stand to spend coins on a short speed boost.
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Stats = require(ReplicatedStorage.Stats)
+local notify = ReplicatedStorage:WaitForChild("Notify")
+local PRICE, BOOSTED_SPEED, SECONDS = 3, 32, 10
+
+script.Parent.ProximityPrompt.Triggered:Connect(function(player)
+	local humanoid = player.Character and player.Character:FindFirstChild("Humanoid")
+	if not humanoid then
+		return
+	end
+	if player.leaderstats.Coins.Value < PRICE then
+		notify:FireClient(player, "You need " .. PRICE .. " coins for a speed boost")
+		return
+	end
+	Stats.add(player, "Coins", -PRICE)
+	humanoid.WalkSpeed = BOOSTED_SPEED
+	notify:FireClient(player, "Speed boost for " .. SECONDS .. " seconds!")
+	task.delay(SECONDS, function()
+		if humanoid.Parent then
+			humanoid.WalkSpeed = 16
+		end
+	end)
+end)
+"#;
+
 const HUD_SCRIPT: &str = r#"
 -- Runs for the player: shows their coins and switches between day and night.
 local Players = game:GetService("Players")
@@ -196,6 +224,42 @@ button.MouseButton1Click:Connect(function()
 	local goal = if night then 21 else 14
 	TweenService:Create(Lighting, TweenInfo.new(2, Enum.EasingStyle.Sine), { ClockTime = goal }):Play()
 	button.Text = if night then "Make it day" else "Make it night"
+end)
+
+-- Messages from the game's scripts pop up for a few seconds.
+local message = hud.Message
+local shown = 0
+game:GetService("ReplicatedStorage"):WaitForChild("Notify").OnClientEvent:Connect(function(text)
+	shown += 1
+	local mine = shown
+	message.Text = text
+	message.Visible = true
+	task.wait(3)
+	if shown == mine then
+		message.Visible = false
+	end
+end)
+
+-- H shows or hides the help panel.
+local UserInputService = game:GetService("UserInputService")
+UserInputService.InputBegan:Connect(function(input, processed)
+	if not processed and input.KeyCode == Enum.KeyCode.H then
+		hud.Help.Visible = not hud.Help.Visible
+	end
+end)
+
+-- How high you are: cast a ray straight down, ignoring your own character.
+local height = hud.Height
+local params = RaycastParams.new()
+game:GetService("RunService").Heartbeat:Connect(function()
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root then
+		return
+	end
+	params.FilterDescendantsInstances = { character }
+	local hit = workspace:Raycast(root.Position, Vector3.new(0, -100, 0), params)
+	height.Text = if hit then string.format("Height: %d studs", math.floor(hit.Distance - 2 + 0.5)) else "Height: falling!"
 end)
 "#;
 
@@ -222,9 +286,11 @@ return Stats
 "#;
 
 const LEADERBOARD_SCRIPT: &str = r#"
--- Gives every player a leaderboard with Coins and Deaths.
+-- Gives every player a leaderboard with Coins and Deaths. Coins are saved
+-- between play tests (File > Clear saved data forgets them).
 local Players = game:GetService("Players")
 local Stats = require(game:GetService("ReplicatedStorage").Stats)
+local saves = game:GetService("DataStoreService"):GetDataStore("PlayerData")
 
 Players.PlayerAdded:Connect(function(player)
 	local leaderstats = Instance.new("Folder")
@@ -233,6 +299,7 @@ Players.PlayerAdded:Connect(function(player)
 
 	local coins = Instance.new("IntValue")
 	coins.Name = "Coins"
+	coins.Value = saves:GetAsync("coins_" .. player.UserId) or 0
 	coins.Parent = leaderstats
 
 	local deaths = Instance.new("IntValue")
@@ -244,6 +311,10 @@ Players.PlayerAdded:Connect(function(player)
 			Stats.add(player, "Deaths", 1)
 		end)
 	end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	saves:SetAsync("coins_" .. player.UserId, player.leaderstats.Coins.Value)
 end)
 "#;
 
@@ -345,7 +416,62 @@ pub fn sample_obby() -> InstanceTree {
     set(&mut tree, button, Property::TextColor, PropertyValue::Color3(white));
     set(&mut tree, button, Property::TextSize, PropertyValue::Number(18.0));
     set(&mut tree, button, Property::Text, PropertyValue::String("Make it night".into()));
+    let message = add(&mut tree, hud, ClassKind::TextLabel, "Message");
+    set(&mut tree, message, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.5, 0.0, 0.0, 60.0)));
+    set(&mut tree, message, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 360.0, 0.0, 36.0)));
+    set(&mut tree, message, Property::AnchorPoint, PropertyValue::Vec2(Vec2::new(0.5, 0.0)));
+    set(&mut tree, message, Property::BackgroundColor, PropertyValue::Color3(dark));
+    set(&mut tree, message, Property::BackgroundTransparency, PropertyValue::Number(0.2));
+    set(&mut tree, message, Property::TextColor, PropertyValue::Color3(white));
+    set(&mut tree, message, Property::TextSize, PropertyValue::Number(18.0));
+    set(&mut tree, message, Property::Text, PropertyValue::String(String::new()));
+    set(&mut tree, message, Property::Visible, PropertyValue::Bool(false));
+    let height = add(&mut tree, hud, ClassKind::TextLabel, "Height");
+    set(&mut tree, height, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(1.0, -12.0, 1.0, -36.0)));
+    set(&mut tree, height, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 160.0, 0.0, 28.0)));
+    set(&mut tree, height, Property::AnchorPoint, PropertyValue::Vec2(Vec2::new(1.0, 1.0)));
+    set(&mut tree, height, Property::BackgroundTransparency, PropertyValue::Number(1.0));
+    set(&mut tree, height, Property::TextColor, PropertyValue::Color3(white));
+    set(&mut tree, height, Property::TextSize, PropertyValue::Number(16.0));
+    set(&mut tree, height, Property::Text, PropertyValue::String("Height: 0 studs".into()));
+    let help = add(&mut tree, hud, ClassKind::Frame, "Help");
+    set(&mut tree, help, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.0, 12.0, 0.5, 0.0)));
+    set(&mut tree, help, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 230.0, 0.0, 120.0)));
+    set(&mut tree, help, Property::AnchorPoint, PropertyValue::Vec2(Vec2::new(0.0, 0.5)));
+    set(&mut tree, help, Property::BackgroundColor, PropertyValue::Color3(dark));
+    set(&mut tree, help, Property::BackgroundTransparency, PropertyValue::Number(0.3));
+    for (i, line) in [
+        "H: show or hide this help",
+        "E: use a prompt (hold it)",
+        "Click: doors and buttons",
+        "Coins are saved",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let label = add(&mut tree, help, ClassKind::TextLabel, &format!("Line{}", i + 1));
+        let y = 10.0 + i as f32 * 25.0;
+        set(&mut tree, label, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.0, 0.0, 0.0, y)));
+        set(&mut tree, label, Property::GuiSize, PropertyValue::UDim2(UDim2::new(1.0, 0.0, 0.0, 24.0)));
+        set(&mut tree, label, Property::BackgroundTransparency, PropertyValue::Number(1.0));
+        set(&mut tree, label, Property::TextColor, PropertyValue::Color3(white));
+        set(&mut tree, label, Property::TextSize, PropertyValue::Number(15.0));
+        set(&mut tree, label, Property::Text, PropertyValue::String((*line).into()));
+    }
     code(&mut tree, hud, ClassKind::LocalScript, "HudScript", HUD_SCRIPT);
+
+    // A remote event the game's scripts use to show messages on the HUD.
+    add(&mut tree, storage, ClassKind::RemoteEvent, "Notify");
+
+    // A stand that sells a speed boost: walk up and hold E.
+    let shop = block(&mut tree, ws, "SpeedShop", [6.0, 1.0, -5.0], [3.0, 2.0, 3.0], [60, 200, 120]);
+    material(&mut tree, shop, Material::Neon);
+    let prompt = add(&mut tree, shop, ClassKind::ProximityPrompt, "ProximityPrompt");
+    set(&mut tree, prompt, Property::ActionText, PropertyValue::String("Buy speed".into()));
+    set(&mut tree, prompt, Property::ObjectText, PropertyValue::String("Speed boost: 3 coins".into()));
+    set(&mut tree, prompt, Property::HoldDuration, PropertyValue::Number(0.5));
+    set(&mut tree, prompt, Property::MaxActivationDistance, PropertyValue::Number(8.0));
+    script(&mut tree, shop, "Shop", SHOP_SCRIPT);
 
     let coins = add(&mut tree, ws, ClassKind::Folder, "Coins");
     let coin_spots: [[f32; 3]; 7] = [
@@ -519,5 +645,90 @@ mod tests {
         assert_eq!(leaderstat(&session, "Coins"), 1.0, "{log:?}");
         assert_eq!(get(&session, label, Property::Text), PropertyValue::String("Coins: 1".into()));
         assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
+    }
+
+    #[test]
+    fn shop_prompt_messages_keys_and_saved_coins() {
+        use libroxel_instance::KeyCode;
+        use libroxel_script::UserInput;
+        let frame = |s: &mut libroxel_engine::PlaySession, n: usize| {
+            for _ in 0..n {
+                s.step(1.0 / 60.0, CharacterInput::default());
+            }
+        };
+        // Start with 5 saved coins, as if from an earlier play test.
+        let shared = std::rc::Rc::new(std::cell::RefCell::new(sample_obby()));
+        let mut session =
+            libroxel_engine::PlaySession::start_with_data(shared, r#"{"PlayerData": {"coins_1": 5}}"#)
+                .unwrap();
+        frame(&mut session, 10);
+        assert_eq!(leaderstat(&session, "Coins"), 5.0);
+        let (hud, shop) = {
+            let tree = session.runtime().tree().borrow();
+            let hud = tree.find_first_child(session.player_gui().unwrap(), "HUD").unwrap().unwrap();
+            (hud, tree.find_first_child(tree.workspace(), "SpeedShop").unwrap().unwrap())
+        };
+        let child = |s: &libroxel_engine::PlaySession, name: &str| {
+            let tree = s.runtime().tree().borrow();
+            tree.find_first_child(hud, name).unwrap().unwrap()
+        };
+        let get = |s: &libroxel_engine::PlaySession, id, p| s.runtime().tree().borrow().get(id, p).unwrap();
+        assert_eq!(
+            get(&session, child(&session, "Height"), Property::Text),
+            PropertyValue::String("Height: 0 studs".into())
+        );
+
+        // Out of reach at the spawn, so no prompt. Walk over to the stand.
+        assert!(session.active_prompt().is_none());
+        session
+            .runtime()
+            .run("move", "workspace.Player1.HumanoidRootPart.Position = workspace.SpeedShop.Position + Vector3.new(-3, 2, 0)")
+            .unwrap();
+        frame(&mut session, 5);
+        let active = session.active_prompt().expect("the shop prompt shows");
+        assert_eq!((active.part, active.key), (shop, KeyCode::E));
+
+        // Holding E for half a second buys the boost.
+        session.input_began(UserInput::Key(KeyCode::E), false);
+        frame(&mut session, 15);
+        assert_eq!(leaderstat(&session, "Coins"), 5.0, "not held long enough yet");
+        let progress = session.active_prompt().unwrap().progress;
+        assert!((0.4..0.6).contains(&progress), "{progress}");
+        frame(&mut session, 20);
+        session.input_ended(UserInput::Key(KeyCode::E), false);
+        frame(&mut session, 2);
+        assert_eq!(leaderstat(&session, "Coins"), 2.0);
+        let humanoid = session.character().unwrap().humanoid;
+        assert_eq!(get(&session, humanoid, Property::WalkSpeed), PropertyValue::Number(32.0));
+        let message = child(&session, "Message");
+        assert_eq!(get(&session, message, Property::Visible), PropertyValue::Bool(true));
+        assert_eq!(
+            get(&session, message, Property::Text),
+            PropertyValue::String("Speed boost for 10 seconds!".into())
+        );
+
+        // Not enough coins the second time.
+        session.input_began(UserInput::Key(KeyCode::E), false);
+        frame(&mut session, 40);
+        session.input_ended(UserInput::Key(KeyCode::E), false);
+        frame(&mut session, 1);
+        assert_eq!(leaderstat(&session, "Coins"), 2.0);
+        assert_eq!(
+            get(&session, message, Property::Text),
+            PropertyValue::String("You need 3 coins for a speed boost".into())
+        );
+
+        // H toggles the help panel.
+        let help = child(&session, "Help");
+        session.input_began(UserInput::Key(KeyCode::H), false);
+        session.input_ended(UserInput::Key(KeyCode::H), false);
+        assert_eq!(get(&session, help, Property::Visible), PropertyValue::Bool(false));
+
+        // Leaving saves the coins.
+        session.stop();
+        let saved: serde_json::Value = serde_json::from_str(&session.save_data()).unwrap();
+        assert_eq!(saved["PlayerData"]["coins_1"], 2.0);
+        let errors: Vec<_> = session.take_log().into_iter().filter(|l| l.level == LogLevel::Error).collect();
+        assert!(errors.is_empty(), "{errors:?}");
     }
 }

@@ -2,8 +2,8 @@
 
 use bevy::prelude::*;
 use libroxel_engine::physics::orientation_quat;
-use libroxel_engine::view::{EngineState, part_shape};
-use libroxel_instance::{ClassKind, InstanceId, InstanceTree, PartShape, Property, PropertyValue};
+use libroxel_engine::view::EngineState;
+use libroxel_instance::{InstanceId, InstanceTree, Property, PropertyValue};
 use transform_gizmo_egui::mint;
 
 use crate::{Editor, Tool};
@@ -16,60 +16,13 @@ fn from_bevy(v: Vec3) -> libroxel_instance::Vec3 {
     libroxel_instance::Vec3::new(v.x, v.y, v.z)
 }
 
-/// The nearest part under a ray, if any.
+/// The nearest visible part under a ray, if any.
 pub fn pick(tree: &InstanceTree, ray: Ray3d) -> Option<InstanceId> {
-    let origin = ray.origin;
-    let dir = ray.direction.as_vec3();
-    let mut best: Option<(f32, InstanceId)> = None;
-    for id in tree.descendants_of_class(tree.workspace(), ClassKind::Part) {
-        let (Some(pos), Some(size)) =
-            (tree.get_vec3(id, Property::Position), tree.get_vec3(id, Property::Size))
-        else {
-            continue;
-        };
-        if tree.get_number(id, Property::Transparency).unwrap_or(0.0) >= 1.0 {
-            continue;
-        }
-        // Work in the part's own space, where it is an upright box.
-        let rotation = orientation_quat(tree.get_vec3(id, Property::Orientation).unwrap_or_default());
-        let inverse = rotation.inverse();
-        let local_origin = inverse * (origin - to_bevy(pos));
-        let local_dir = inverse * dir;
-        let half = to_bevy(size) / 2.0;
-        let hit = if part_shape(tree, id) == PartShape::Ball {
-            ray_sphere(local_origin, local_dir, half.min_element())
-        } else {
-            ray_box(local_origin, local_dir, half)
-        };
-        if let Some(t) = hit
-            && best.is_none_or(|(bt, _)| t < bt)
-        {
-            best = Some((t, id));
-        }
-    }
-    best.map(|(_, id)| id)
-}
-
-/// Distance along the ray to a box centred on the origin (slab test).
-fn ray_box(origin: Vec3, dir: Vec3, half: Vec3) -> Option<f32> {
-    let inv = Vec3::new(1.0 / dir.x, 1.0 / dir.y, 1.0 / dir.z);
-    let t1 = (-half - origin) * inv;
-    let t2 = (half - origin) * inv;
-    let near = t1.min(t2).max_element();
-    let far = t1.max(t2).min_element();
-    (far >= near.max(0.0)).then(|| near.max(0.0))
-}
-
-/// Distance along the ray to a sphere centred on the origin.
-fn ray_sphere(origin: Vec3, dir: Vec3, radius: f32) -> Option<f32> {
-    let b = origin.dot(dir);
-    let c = origin.length_squared() - radius * radius;
-    let disc = b * b - c;
-    if disc < 0.0 {
-        return None;
-    }
-    let far = -b + disc.sqrt();
-    (far >= 0.0).then(|| (-b - disc.sqrt()).max(0.0))
+    let dir = ray.direction.as_vec3() * 10_000.0;
+    libroxel_instance::geometry::raycast(tree, from_bevy(ray.origin), from_bevy(dir), |id| {
+        tree.get_number(id, Property::Transparency).unwrap_or(0.0) < 1.0
+    })
+    .map(|hit| hit.part)
 }
 
 fn row_matrix(m: Mat4) -> mint::RowMatrix4<f64> {
@@ -226,6 +179,7 @@ pub fn frame_selection(tree: &InstanceTree, id: InstanceId, transform: &mut Tran
 #[cfg(test)]
 mod tests {
     use super::*;
+    use libroxel_instance::{ClassKind, PartShape};
 
     #[test]
     fn orientation_round_trips_through_quaternions() {

@@ -41,6 +41,13 @@ pub(crate) enum SignalKind {
     ButtonActivated(InstanceId),
     MouseClick(InstanceId),
     TweenCompleted(u64),
+    PromptTriggered(InstanceId),
+    PromptTriggerEnded(InstanceId),
+    ServerEvent(InstanceId),
+    ClientEvent(InstanceId),
+    BindableEvent(InstanceId),
+    InputBegan,
+    InputEnded,
 }
 
 impl SignalKind {
@@ -75,26 +82,33 @@ struct Waiting {
 }
 
 /// Host state stored in the VM's app data.
-struct Host {
-    tree: SharedTree,
+pub(crate) struct Host {
+    pub(crate) tree: SharedTree,
     connections: RefCell<Vec<Connection>>,
     next_connection: Cell<u64>,
     output: RefCell<Vec<OutputLine>>,
     errors: RefCell<Vec<ScriptError>>,
     current_script: RefCell<String>,
-    clock: Cell<f64>,
+    pub(crate) clock: Cell<f64>,
     waiting: RefCell<Vec<Waiting>>,
     /// When the running thread must have yielded by. Checked by the VM's interrupt.
     deadline: Rc<Cell<Option<Instant>>>,
     tweens: RefCell<Vec<TweenState>>,
     next_tween: Cell<u64>,
+    /// Keys and mouse buttons held down right now.
+    pub(crate) inputs_down: RefCell<std::collections::HashSet<crate::UserInput>>,
+    /// Saved data: store name, then key, then value.
+    pub(crate) data: RefCell<crate::services::DataStores>,
+    pub(crate) data_changed: Cell<bool>,
+    /// Instances to destroy, and when.
+    pub(crate) debris: RefCell<Vec<(InstanceId, f64)>>,
 }
 
-fn host(lua: &Lua) -> mlua::AppDataRef<'_, Host> {
+pub(crate) fn host(lua: &Lua) -> mlua::AppDataRef<'_, Host> {
     lua.app_data_ref::<Host>().expect("libroxel host state is installed")
 }
 
-fn tree_err(err: TreeError) -> mlua::Error {
+pub(crate) fn tree_err(err: TreeError) -> mlua::Error {
     mlua::Error::runtime(describe_tree_error(err))
 }
 
@@ -173,7 +187,7 @@ fn spawn(lua: &Lua, func: Function, args: MultiValue, script: &str) -> mlua::Res
 pub(crate) struct LuaVector3(pub Vec3);
 
 #[derive(Debug, Clone, Copy)]
-struct LuaColor3(Color3);
+pub(crate) struct LuaColor3(pub(crate) Color3);
 
 pub(crate) fn as_vector3(value: &Value) -> Option<Vec3> {
     match value {
@@ -276,7 +290,7 @@ impl UserData for LuaColor3 {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct LuaEnumItem(EnumValue);
+pub(crate) struct LuaEnumItem(pub(crate) EnumValue);
 
 impl UserData for LuaEnumItem {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
@@ -307,7 +321,7 @@ impl UserData for LuaEnumItem {
 }
 
 /// Reads an enum value of `kind` from a script value: an item, its name, or its number.
-fn as_enum(kind: EnumKind, value: &Value) -> Option<EnumValue> {
+pub(crate) fn as_enum(kind: EnumKind, value: &Value) -> Option<EnumValue> {
     match value {
         Value::UserData(ud) => ud.borrow::<LuaEnumItem>().ok().map(|e| e.0).filter(|e| e.kind() == kind),
         Value::String(s) => names::enum_item_from_name(kind, &s.to_string_lossy()),
@@ -322,11 +336,11 @@ fn as_enum(kind: EnumKind, value: &Value) -> Option<EnumValue> {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy)]
-struct LuaInstance(InstanceId);
+pub(crate) struct LuaInstance(pub(crate) InstanceId);
 
 /// Returns the one userdata for `id`, so the same instance is always the
 /// same Lua value (it works as a table key and with `rawequal`).
-fn push_instance(lua: &Lua, id: InstanceId) -> mlua::Result<AnyUserData> {
+pub(crate) fn push_instance(lua: &Lua, id: InstanceId) -> mlua::Result<AnyUserData> {
     let cache: Table = lua.named_registry_value(INSTANCE_CACHE)?;
     let key = id.to_string();
     if let Some(existing) = cache.raw_get::<Option<AnyUserData>>(key.as_str())? {
@@ -337,7 +351,7 @@ fn push_instance(lua: &Lua, id: InstanceId) -> mlua::Result<AnyUserData> {
     Ok(ud)
 }
 
-fn as_instance(value: &Value) -> Option<InstanceId> {
+pub(crate) fn as_instance(value: &Value) -> Option<InstanceId> {
     match value {
         Value::UserData(ud) => ud.borrow::<LuaInstance>().ok().map(|i| i.0),
         _ => None,
@@ -392,7 +406,7 @@ fn property_from_lua(property: Property, value: &Value) -> Option<PropertyValue>
     })
 }
 
-fn not_a_member(lua: &Lua, id: InstanceId, key: &str) -> mlua::Error {
+pub(crate) fn not_a_member(lua: &Lua, id: InstanceId, key: &str) -> mlua::Error {
     let host = host(lua);
     let tree = host.tree.borrow();
     let name = tree.name(id).unwrap_or("?").to_owned();
@@ -404,12 +418,12 @@ fn class_arg(name: &str) -> mlua::Result<ClassKind> {
         .ok_or_else(|| mlua::Error::runtime(format!("{name} is not a valid class name")))
 }
 
-fn class_of(lua: &Lua, id: InstanceId) -> mlua::Result<ClassKind> {
+pub(crate) fn class_of(lua: &Lua, id: InstanceId) -> mlua::Result<ClassKind> {
     host(lua).tree.borrow().class(id).map_err(tree_err)
 }
 
 /// Fails with "not a valid member" unless `id` is a `class`.
-fn require_class(lua: &Lua, id: InstanceId, class: ClassKind, member: &str) -> mlua::Result<()> {
+pub(crate) fn require_class(lua: &Lua, id: InstanceId, class: ClassKind, member: &str) -> mlua::Result<()> {
     if class_of(lua, id)?.is_a(class) { Ok(()) } else { Err(not_a_member(lua, id, member)) }
 }
 
@@ -427,6 +441,11 @@ fn instance_event(class: ClassKind, id: InstanceId, key: &str) -> Option<SignalK
         MOUSE_BUTTON1_CLICK if class == ClassKind::TextButton => SignalKind::ButtonClicked(id),
         ACTIVATED if class == ClassKind::TextButton => SignalKind::ButtonActivated(id),
         MOUSE_CLICK if class == ClassKind::ClickDetector => SignalKind::MouseClick(id),
+        TRIGGERED if class == ClassKind::ProximityPrompt => SignalKind::PromptTriggered(id),
+        TRIGGER_ENDED if class == ClassKind::ProximityPrompt => SignalKind::PromptTriggerEnded(id),
+        ON_SERVER_EVENT if class == ClassKind::RemoteEvent => SignalKind::ServerEvent(id),
+        ON_CLIENT_EVENT if class == ClassKind::RemoteEvent => SignalKind::ClientEvent(id),
+        EVENT if class == ClassKind::BindableEvent => SignalKind::BindableEvent(id),
         _ => return None,
     })
 }
@@ -521,6 +540,9 @@ impl UserData for LuaInstance {
             if name == names::services::TWEEN_SERVICE {
                 return Ok(Value::UserData(lua.create_userdata(TweenService)?));
             }
+            if let Some(service) = crate::services::get_service(lua, &name)? {
+                return Ok(service);
+            }
             let service = names::class_from_name(&name).and_then(|c| host(lua).tree.borrow().service(c));
             match service {
                 Some(id) => Ok(Value::UserData(push_instance(lua, id)?)),
@@ -610,6 +632,7 @@ impl UserData for LuaInstance {
             }
             Ok(())
         });
+        crate::services::add_instance_methods(methods);
         methods.add_method(names::methods::TAKE_DAMAGE, |lua, this, amount: f64| {
             require_class(lua, this.0, ClassKind::Humanoid, names::methods::TAKE_DAMAGE)?;
             let host = host(lua);
@@ -1043,7 +1066,7 @@ fn step_tweens(lua: &Lua, dt: f64) {
 }
 
 #[derive(Clone, Copy)]
-struct Signal(SignalKind);
+pub(crate) struct Signal(pub(crate) SignalKind);
 
 impl UserData for Signal {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
@@ -1113,7 +1136,7 @@ impl UserData for ConnectionHandle {
     }
 }
 
-fn fire(lua: &Lua, signal: SignalKind, args: impl Fn() -> mlua::Result<MultiValue>) {
+pub(crate) fn fire(lua: &Lua, signal: SignalKind, args: impl Fn() -> mlua::Result<MultiValue>) {
     // Snapshot handlers first: a handler may connect or disconnect others.
     let handlers: Vec<(String, mlua::Result<Function>)> = host(lua)
         .connections
@@ -1231,6 +1254,10 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         waiting: RefCell::new(Vec::new()),
         tweens: RefCell::new(Vec::new()),
         next_tween: Cell::new(1),
+        inputs_down: RefCell::new(Default::default()),
+        data: RefCell::new(Default::default()),
+        data_changed: Cell::new(false),
+        debris: RefCell::new(Vec::new()),
     });
 
     // Weak-valued cache so each instance has exactly one userdata.
@@ -1346,6 +1373,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     lua.set_named_registry_value(SIGNAL_WAIT_FN, signal_wait)?;
     crate::types::install(lua)?;
     install_tween_info(lua)?;
+    crate::services::install(lua)?;
     lua.set_named_registry_value(WAIT_FOR_CHILD_FN, wait_for_child)?;
     g.set(globals::REQUIRE, require)?;
 
@@ -1483,6 +1511,7 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
         }
     }
     step_tweens(lua, dt);
+    crate::services::step_debris(lua, now);
     fire(lua, SignalKind::Heartbeat, || Ok(std::iter::once(Value::Number(dt)).collect()));
     take_errors(lua)
 }

@@ -21,12 +21,13 @@
 
 mod bindings;
 pub mod names;
+mod services;
 mod types;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use libroxel_instance::{InstanceId, InstanceTree};
+use libroxel_instance::{InstanceId, InstanceTree, KeyCode};
 use mlua::Lua;
 
 pub use mlua;
@@ -57,6 +58,14 @@ pub enum OutputLevel {
 pub struct OutputLine {
     pub level: OutputLevel,
     pub text: String,
+}
+
+/// A key or mouse button, as the input service reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UserInput {
+    Key(KeyCode),
+    MouseButton1,
+    MouseButton2,
 }
 
 /// A sandboxed Luau VM bound to an instance tree.
@@ -152,6 +161,37 @@ impl ScriptRuntime {
     /// Fires `humanoid`'s death event.
     pub fn humanoid_died(&self, humanoid: InstanceId) -> Vec<ScriptError> {
         bindings::fire_plain(&self.lua, bindings::SignalKind::Died(humanoid))
+    }
+
+    /// A key or mouse button went down. `processed` is true when the
+    /// game's own UI used it (for example, a click on a GUI button).
+    pub fn input_began(&self, input: UserInput, processed: bool) -> Vec<ScriptError> {
+        services::input(&self.lua, input, true, processed)
+    }
+
+    /// A key or mouse button came back up.
+    pub fn input_ended(&self, input: UserInput, processed: bool) -> Vec<ScriptError> {
+        services::input(&self.lua, input, false, processed)
+    }
+
+    /// Fires a proximity prompt's `Triggered` event with the player who used it.
+    pub fn prompt_triggered(&self, prompt: InstanceId, player: InstanceId) -> Vec<ScriptError> {
+        services::prompt(&self.lua, prompt, player, false)
+    }
+
+    /// Fires a proximity prompt's `TriggerEnded` event when the player lets go.
+    pub fn prompt_trigger_ended(&self, prompt: InstanceId, player: InstanceId) -> Vec<ScriptError> {
+        services::prompt(&self.lua, prompt, player, true)
+    }
+
+    /// Replaces the saved data that data stores read from, with JSON from [`save_data`](Self::save_data).
+    pub fn load_data(&self, json: &str) -> Result<(), String> {
+        services::load_data(&self.lua, json)
+    }
+
+    /// Everything data stores hold, as JSON to keep between play sessions.
+    pub fn save_data(&self) -> String {
+        services::save_data(&self.lua)
     }
 
     /// Seconds of game time so far (the sum of every `step`).
