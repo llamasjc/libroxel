@@ -83,3 +83,32 @@ fn a_tilted_block_lands_on_a_side() {
     assert_eq!(plank_turn, Vec3::ZERO);
     assert!((plank_pos.y - 4.0).abs() < 0.1, "{plank_pos:?}");
 }
+
+#[test]
+fn a_hard_shove_knocks_a_tall_part_over() {
+    let mut tree = world();
+    let tall = part(&mut tree, "Tall", Vec3::new(20.0, 4.0, 0.0), Vec3::new(1.0, 8.0, 1.0), false);
+    let squat = part(&mut tree, "Squat", Vec3::new(30.0, 1.0, 0.0), Vec3::new(4.0, 2.0, 4.0), false);
+    // Something slams into both, sideways.
+    let shove = tree.create(ClassKind::Script, "Shove").unwrap();
+    tree.set(
+        shove,
+        Property::Source,
+        PropertyValue::String(
+            "task.wait(0.1)\nfor _, name in {'Tall', 'Squat'} do\n\tworkspace[name].AssemblyLinearVelocity = Vector3.new(30, 0, 0)\nend".into(),
+        ),
+    )
+    .unwrap();
+    tree.set_parent(shove, Some(tree.workspace())).unwrap();
+    let mut session = start_on(tree, false).unwrap();
+    let shared = session.runtime().tree().clone();
+    for _ in 0..240 {
+        session.step(DT, CharacterInput::default());
+    }
+    let t = shared.borrow();
+    let (tall_at, tall_turn) =
+        (t.get_vec3(tall, Property::Position).unwrap(), t.get_vec3(tall, Property::Orientation).unwrap());
+    assert!(lies_flat(tall_turn) && tall_at.y < 1.0, "the tall one fell over: {tall_at:?} {tall_turn:?}");
+    let squat_turn = t.get_vec3(squat, Property::Orientation).unwrap();
+    assert_eq!(squat_turn, Vec3::ZERO, "the squat one just slid");
+}

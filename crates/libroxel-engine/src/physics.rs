@@ -49,6 +49,10 @@ pub const STEP_HEIGHT: f32 = 0.6;
 pub const TERRAIN_STEP: f32 = 1.05;
 /// A resting part within this many degrees of lying flat settles flat.
 const SETTLE_DEGREES: f32 = 8.0;
+/// A part rocking over faster than this (radians per second) isn't laid flat.
+const KNOCK_SPIN: f32 = 1.0;
+/// A tall part sliding faster than this (studs per second) starts to tip.
+const KNOCK_SPEED: f32 = 4.0;
 /// The fastest a part tips over, in radians per second.
 const MAX_TIP_SPIN: f32 = 8.0;
 
@@ -691,11 +695,33 @@ impl Physics {
                 && centre.z <= hi.z + margin;
             let spin = g(self.angular_velocity(id));
             if over {
+                let rocking = GVec3::new(spin.x, 0.0, spin.z);
+                // Turning further over (not back towards flat), fast enough to matter.
+                let tipping_away = spin.cross(up_axis).y < 0.0 && rocking.length() > KNOCK_SPIN;
                 // Held up: lay it flat if it is nearly there (or just landed).
-                if nearly_flat && (tilt > 1e-4 || spin.x != 0.0 || spin.z != 0.0) {
+                if nearly_flat && !tipping_away && (tilt > 1e-4 || rocking != GVec3::ZERO) {
                     let flat = (Quat::from_rotation_arc(up_axis, GVec3::Y) * q).normalize();
                     let _ = tree.set(id, Property::Orientation, PropertyValue::Vec3(degrees_of(flat)));
                     self.set_angular_velocity(id, Vec3::new(0.0, spin.y, 0.0));
+                }
+                // Shoved along the ground, its foot drags and its top keeps
+                // going: a tall enough part is knocked over.
+                let v = g(self.velocity(id));
+                let slide = GVec3::new(v.x, 0.0, v.z);
+                let speed = slide.length();
+                if nearly_flat && speed > KNOCK_SPEED {
+                    let dir = slide / speed;
+                    let (bmin, bmax) = (g(body.min()), g(body.max()));
+                    let tall = bmax.y - bmin.y;
+                    let wide = (bmax.x - bmin.x) * dir.x.abs() + (bmax.z - bmin.z) * dir.z.abs();
+                    if tall > wide * 1.2 {
+                        // The ground takes this much of its speed away this step.
+                        let lost = speed * (8.0 * dt).min(1.0);
+                        let kick = 3.0 * lost * (tall / 2.0) / (tall * tall + wide * wide);
+                        let spin = spin + GVec3::Y.cross(dir) * kick;
+                        self.set_angular_velocity(id, l(spin));
+                        self.tipping.insert(id);
+                    }
                 }
                 continue;
             }

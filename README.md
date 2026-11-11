@@ -491,8 +491,8 @@ end)
 
 **Not yet:** Terrain is blocky, not smooth, and water doesn't flow. Physics is simple: anchored parts can be rotated and shaped
 (ramps and balls work), but loose parts collide as the upright box around
-them. They tip over edges and settle flat, but a hard push doesn't knock a
-tall one over, and a turned part sits a little high on its box. Motor-hinged wheels steer only by turning at
+them. They tip over edges, tall ones fall when shoved hard, and they settle
+flat, but a turned part sits a little high on its box. Motor-hinged wheels steer only by turning at
 different speeds on each side, like a tank (there are no steering hinges yet). Characters climb steps up to 0.6 studs.
 
 ## Contributing
