@@ -27,8 +27,11 @@
   ReplicatedStorage (modules and templates), ServerScriptService (scripts
   outside the world), StarterGui (screen GUIs copied to each player) and
   Lighting (time of day). Saved places merge
-  into the services instead of creating new ones. Links between instances
-  (like a player's `Character`) are runtime-only and are not saved.
+  into the services instead of creating new ones. Links between saved
+  instances (like a weld's `Part0`) are saved as numbers: each instance
+  something links to gets a `ref_id`, and links are `{"ref": n}`. Links to
+  things that aren't saved (like a player's `Character`) are dropped.
+  `clone_subtree` points links inside the copy at the copies.
 - **Modules.** `require` is written in Luau so that a module can yield. It
   caches each module's single return value and detects require loops.
 - **Play sessions.** Pressing Play clones the tree, starts every `Script` in
@@ -119,6 +122,20 @@
 - **Teams.** Before `PlayerAdded` fires the session puts the player on the
   auto-assignable team with the fewest players. Spawning prefers a
   non-neutral spawn of the player's team colour, then a neutral spawn.
+- **Welds** live in `libroxel-engine/src/weld.rs`. Each step, enabled
+  welds in the workspace are grouped into assemblies (union-find). Each
+  assembly has one root, the part physics moves: its `HumanoidRootPart`,
+  else an anchored part, else the biggest. The other parts are carried: they
+  act anchored during the step (so things bump into them), the pairs inside
+  one assembly ignore each other, and after the step each carried part is
+  put back at its offset from the root. The offset is taken when the part
+  joins, or again if a script moved it since.
+- **Events from the change journal.** `fire_changes` turns reparenting into
+  `ChildAdded`/`ChildRemoved` on the parents and `DescendantAdded`/
+  `DescendantRemoving` on every watched ancestor (for the moved instance
+  and everything in it), destruction into `Destroying`, and a humanoid's
+  `Health` changing into `HealthChanged`. Physics reports pairs that stopped
+  touching for `TouchEnded`.
 - **Threading.** The Luau VM is single-threaded, so the engine state is a
   Bevy non-send resource and the tree is shared as `Rc<RefCell<_>>`.
 
@@ -127,4 +144,6 @@
 - The ECS sync does a full pass over the workspace each frame; it will move
   to the change journal once worlds get big.
 - Loose parts never rotate, and cylinders collide as boxes.
+- A welded assembly collides with the world through its root part only;
+  its carried parts stop other things but don't stop the assembly.
 - No networking.

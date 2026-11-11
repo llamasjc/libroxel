@@ -328,3 +328,158 @@ fn npcs_walk_where_they_are_sent_and_teams_pick_spawns() {
     assert!(log.iter().any(|l| l == "arrived true"), "{log:?}");
     assert!(log.iter().any(|l| l == "guard down"), "{log:?}");
 }
+
+#[test]
+fn welds_events_gravity_and_loading_characters() {
+    let mut tree = world();
+    script(
+        &mut tree,
+        "Setup",
+        r#"
+        local players = game:GetService("Players")
+        players.RespawnTime = 0.5
+        players.PlayerAdded:Connect(function(player)
+            player.CharacterRemoving:Connect(function(c) print("removing character", c.Name) end)
+            player.CharacterAdded:Connect(function(c)
+                c:WaitForChild("Humanoid").HealthChanged:Connect(function(h) print("health", h) end)
+            end)
+        end)
+        -- A cart: a loose base with a welded seat that rides along.
+        local base = Instance.new("Part")
+        base.Name = "Base"
+        base.Size = Vector3.new(4, 1, 4)
+        base.Position = Vector3.new(20, 5, 0)
+        base.Anchored = false
+        base.Parent = workspace
+        local seat = Instance.new("Part")
+        seat.Name = "Seat"
+        seat.Size = Vector3.new(2, 1, 2)
+        seat.Position = Vector3.new(20, 6, 0)
+        seat.Anchored = false
+        seat.Parent = workspace
+        local weld = Instance.new("WeldConstraint")
+        weld.Part0 = base
+        weld.Part1 = seat
+        weld.Parent = base
+
+        local folder = Instance.new("Folder", workspace)
+        folder.Name = "Bin"
+        folder.DescendantAdded:Connect(function(d) print("added", d.Name) end)
+        folder.DescendantRemoving:Connect(function(d) print("removing", d.Name) end)
+        folder.ChildRemoved:Connect(function(c) print("child removed", c.Name) end)
+        local box = Instance.new("Model")
+        box.Name = "Box"
+        local inner = Instance.new("Part", box)
+        inner.Name = "Inner"
+        inner.Anchored = true
+        inner.Position = Vector3.new(-30, 1, -30)
+        box.Destroying:Connect(function() print("box destroying") end)
+        task.wait(0.1)
+        box.Parent = folder
+        task.wait(0.1)
+        box:Destroy()
+
+        "#,
+    );
+    let mut session = start_on(tree, true).unwrap();
+    let tree = session.runtime().tree().clone();
+    for _ in 0..60 {
+        session.step(DT, CharacterInput::default());
+    }
+    let find = |name: &str| {
+        let t = tree.borrow();
+        t.find_first_child(t.workspace(), name).unwrap().unwrap()
+    };
+    let (base, seat) = (find("Base"), find("Seat"));
+    let base_pos = tree.borrow().get_vec3(base, Property::Position).unwrap();
+    let seat_pos = tree.borrow().get_vec3(seat, Property::Position).unwrap();
+    assert!((base_pos.y - 0.5).abs() < 0.05, "the base fell to the floor: {base_pos:?}");
+    assert!(
+        (seat_pos - base_pos - Vec3::new(0.0, 1.0, 0.0)).length() < 0.01,
+        "the seat rode along: {seat_pos:?}"
+    );
+
+    // Pushing the base moves the whole cart.
+    session.runtime().run("push", "workspace.Base.AssemblyLinearVelocity = Vector3.new(10, 0, 0)").unwrap();
+    for _ in 0..10 {
+        session.step(DT, CharacterInput::default());
+    }
+    let base_pos = tree.borrow().get_vec3(base, Property::Position).unwrap();
+    let seat_pos = tree.borrow().get_vec3(seat, Property::Position).unwrap();
+    assert!(base_pos.x > 20.5, "pushed: {base_pos:?}");
+    assert!((seat_pos.x - base_pos.x).abs() < 0.01, "together: {seat_pos:?}");
+
+    // Low gravity: a jump goes much higher.
+    session.runtime().run("moon", "workspace.Gravity = 30").unwrap();
+    let character = session.character().unwrap();
+    session.step(DT, CharacterInput { jump: true, ..Default::default() });
+    let mut peak: f32 = 0.0;
+    for _ in 0..90 {
+        session.step(DT, CharacterInput::default());
+        peak = peak.max(tree.borrow().get_vec3(character.root, Property::Position).unwrap().y);
+    }
+    assert!(peak > 20.0, "floaty jump: {peak}");
+    session.runtime().run("earth", "workspace.Gravity = 196.2").unwrap();
+
+    // LoadCharacter swaps the character at once; dying respawns after RespawnTime.
+    session.runtime().run("hurt", "workspace.Player1.Humanoid:TakeDamage(10)").unwrap();
+    session.step(DT, CharacterInput::default());
+    session.runtime().run("reload", "game:GetService('Players').Player1:LoadCharacter()").unwrap();
+    session.step(DT, CharacterInput::default());
+    let fresh = session.character().unwrap();
+    assert_ne!(fresh.model, character.model);
+    assert!(!tree.borrow().exists(character.model) || tree.borrow().is_destroyed(character.model).unwrap());
+    session.runtime().run("kill", "workspace.Player1.Humanoid.Health = 0").unwrap();
+    for _ in 0..40 {
+        session.step(DT, CharacterInput::default());
+    }
+    assert_ne!(session.character().unwrap().model, fresh.model, "respawned after half a second");
+
+    let log: Vec<String> = session.take_log().into_iter().map(|l| l.text).collect();
+    for line in [
+        "added Box",
+        "added Inner",
+        "removing Box",
+        "child removed Box",
+        "box destroying",
+        "health 90",
+        "removing character Player1",
+        "health 0",
+    ] {
+        assert!(log.iter().any(|l| l == line), "missing {line:?} in {log:?}");
+    }
+}
+
+#[test]
+fn characters_wait_for_load_character_when_auto_loading_is_off() {
+    let mut tree = world();
+    let players = tree.service(ClassKind::Players).unwrap();
+    tree.set(players, Property::CharacterAutoLoads, PropertyValue::Bool(false)).unwrap();
+    script(
+        &mut tree,
+        "Lobby",
+        r#"
+        game:GetService("Players").PlayerAdded:Connect(function(player)
+            task.wait(0.5)
+            player:LoadCharacter()
+        end)
+        "#,
+    );
+    let mut session = start_on(tree, true).unwrap();
+    assert!(session.character().is_none(), "no character until a script loads one");
+    for _ in 0..40 {
+        session.step(DT, CharacterInput::default());
+    }
+    assert!(session.character().is_some());
+    session.runtime().run("kill", "workspace.Player1.Humanoid.Health = 0").unwrap();
+    for _ in 0..((RESPAWN_DELAY / DT) as usize + 10) {
+        session.step(DT, CharacterInput::default());
+    }
+    let t = session.runtime().tree().clone();
+    let c = session.character().unwrap();
+    assert_eq!(
+        t.borrow().get_number(c.humanoid, Property::Health),
+        Some(0.0),
+        "stays dead without auto-loading"
+    );
+}

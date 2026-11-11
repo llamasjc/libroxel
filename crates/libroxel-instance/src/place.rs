@@ -120,7 +120,39 @@ fn attribute_from_json(value: &Value) -> Option<PropertyValue> {
     })
 }
 
-fn node_to_json(tree: &InstanceTree, id: InstanceId) -> Result<Value, TreeError> {
+/// Saved instances that something links to, numbered in the order they are saved.
+type RefIds = std::collections::HashMap<InstanceId, u64>;
+
+fn ref_targets(tree: &InstanceTree) -> RefIds {
+    let all = tree.descendants(tree.root()).unwrap_or_default();
+    let saved: std::collections::HashSet<InstanceId> = all.iter().copied().collect();
+    let mut wanted = std::collections::HashSet::new();
+    for &id in &all {
+        let Ok(class) = tree.class(id) else { continue };
+        for &property in class.properties() {
+            if let Some(target) = tree.get_ref(id, property).filter(|t| saved.contains(t)) {
+                wanted.insert(target);
+            }
+        }
+    }
+    // Number them in save order (depth first), so saving is repeatable.
+    let mut ids = RefIds::new();
+    let mut order = Vec::new();
+    fn walk(tree: &InstanceTree, id: InstanceId, out: &mut Vec<InstanceId>) {
+        for &child in tree.children(id).unwrap_or_default() {
+            out.push(child);
+            walk(tree, child, out);
+        }
+    }
+    walk(tree, tree.root(), &mut order);
+    for id in order.into_iter().filter(|id| wanted.contains(id)) {
+        let n = ids.len() as u64 + 1;
+        ids.insert(id, n);
+    }
+    ids
+}
+
+fn node_to_json(tree: &InstanceTree, id: InstanceId, refs: &RefIds) -> Result<Value, TreeError> {
     let class = tree.class(id)?;
     let mut props = Map::new();
     for &property in class.properties() {
@@ -128,8 +160,12 @@ fn node_to_json(tree: &InstanceTree, id: InstanceId) -> Result<Value, TreeError>
             continue;
         }
         let value = tree.get(id, property)?;
-        // Links point at runtime objects (like a player's character) and aren't saved.
-        if matches!(value, PropertyValue::Ref(_)) {
+        // Links are saved as the number of what they point at; links to
+        // things that aren't saved (like a player's character) are dropped.
+        if let PropertyValue::Ref(target) = value {
+            if let Some(n) = target.and_then(|t| refs.get(&t)) {
+                props.insert(property.file_name().into(), json!({ "ref": n }));
+            }
             continue;
         }
         // Only store what differs from the default, to keep files small and diffable.
@@ -138,11 +174,14 @@ fn node_to_json(tree: &InstanceTree, id: InstanceId) -> Result<Value, TreeError>
         }
     }
     let children =
-        tree.children(id)?.iter().map(|c| node_to_json(tree, *c)).collect::<Result<Vec<_>, _>>()?;
+        tree.children(id)?.iter().map(|c| node_to_json(tree, *c, refs)).collect::<Result<Vec<_>, _>>()?;
 
     let mut node = Map::new();
     node.insert("class".into(), json!(class.file_name()));
     node.insert("name".into(), json!(tree.name(id)?));
+    if let Some(n) = refs.get(&id) {
+        node.insert("ref_id".into(), json!(n));
+    }
     if !props.is_empty() {
         node.insert("properties".into(), Value::Object(props));
     }
@@ -164,8 +203,12 @@ fn node_to_json(tree: &InstanceTree, id: InstanceId) -> Result<Value, TreeError>
 
 /// Serialises everything under the root as pretty-printed JSON.
 pub fn save(tree: &InstanceTree) -> Result<String, TreeError> {
-    let children =
-        tree.children(tree.root())?.iter().map(|c| node_to_json(tree, *c)).collect::<Result<Vec<_>, _>>()?;
+    let refs = ref_targets(tree);
+    let children = tree
+        .children(tree.root())?
+        .iter()
+        .map(|c| node_to_json(tree, *c, &refs))
+        .collect::<Result<Vec<_>, _>>()?;
     let doc = json!({ "format": FORMAT, "version": VERSION, "children": children });
     Ok(serde_json::to_string_pretty(&doc).expect("JSON values always serialise"))
 }
@@ -176,11 +219,20 @@ pub struct LoadReport {
     pub warnings: Vec<String>,
 }
 
+/// Links read so far: saved numbers to the instances loaded for them, and
+/// links waiting for their target to be loaded.
+#[derive(Default)]
+struct LoadRefs {
+    ids: std::collections::HashMap<u64, InstanceId>,
+    pending: Vec<(InstanceId, Property, u64)>,
+}
+
 fn load_node(
     tree: &mut InstanceTree,
     node: &Value,
     parent: InstanceId,
     report: &mut LoadReport,
+    refs: &mut LoadRefs,
 ) -> Result<(), PlaceError> {
     let obj = node.as_object().ok_or_else(|| PlaceError::Malformed("expected an object".into()))?;
     let class_name = obj
@@ -202,6 +254,9 @@ fn load_node(
         tree.set_parent(id, Some(parent))?;
         id
     };
+    if let Some(n) = obj.get("ref_id").and_then(Value::as_u64) {
+        refs.ids.insert(n, id);
+    }
 
     if let Some(props) = obj.get("properties").and_then(Value::as_object) {
         for (key, raw) in props {
@@ -209,6 +264,13 @@ fn load_node(
                 report.warnings.push(format!("{name}: ignored unknown property `{key}`"));
                 continue;
             };
+            if property.expected_kind() == "ref" {
+                match raw.get("ref").and_then(Value::as_u64) {
+                    Some(n) => refs.pending.push((id, property, n)),
+                    None => report.warnings.push(format!("{name}: ignored bad link `{key}`")),
+                }
+                continue;
+            }
             match value_from_json(property, raw) {
                 Some(value) => tree.set(id, property, value)?,
                 None => report.warnings.push(format!("{name}: ignored bad value for `{key}`")),
@@ -230,7 +292,7 @@ fn load_node(
     }
     if let Some(children) = obj.get("children").and_then(Value::as_array) {
         for child in children {
-            load_node(tree, child, id, report)?;
+            load_node(tree, child, id, report, refs)?;
         }
     }
     Ok(())
@@ -249,9 +311,16 @@ pub fn load(text: &str) -> Result<(InstanceTree, LoadReport), PlaceError> {
     let mut tree = InstanceTree::new();
     let mut report = LoadReport::default();
     let root = tree.root();
+    let mut refs = LoadRefs::default();
     if let Some(children) = doc.get("children").and_then(Value::as_array) {
         for child in children {
-            load_node(&mut tree, child, root, &mut report)?;
+            load_node(&mut tree, child, root, &mut report, &mut refs)?;
+        }
+    }
+    for (id, property, n) in refs.pending {
+        match refs.ids.get(&n) {
+            Some(&target) => tree.set(id, property, PropertyValue::Ref(Some(target)))?,
+            None => report.warnings.push(format!("a link points at something that isn't in the file ({n})")),
         }
     }
     tree.drain_changes();
@@ -310,6 +379,32 @@ mod tests {
         assert_eq!(loaded.get(ball, Property::Shape).unwrap(), shape);
         let storage = loaded.service(ClassKind::ReplicatedStorage).unwrap();
         assert!(loaded.find_first_child(storage, "Util").unwrap().is_some());
+    }
+
+    #[test]
+    fn links_between_saved_instances_survive() {
+        let mut tree = InstanceTree::new();
+        let ws = tree.workspace();
+        let a = tree.create(ClassKind::Part, "A").unwrap();
+        let b = tree.create(ClassKind::Part, "B").unwrap();
+        let weld = tree.create(ClassKind::WeldConstraint, "Weld").unwrap();
+        for id in [a, b] {
+            tree.set_parent(id, Some(ws)).unwrap();
+        }
+        tree.set_parent(weld, Some(a)).unwrap();
+        tree.set(weld, Property::Part0, PropertyValue::Ref(Some(a))).unwrap();
+        tree.set(weld, Property::Part1, PropertyValue::Ref(Some(b))).unwrap();
+
+        let text = save(&tree).unwrap();
+        let (loaded, report) = load(&text).unwrap();
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        assert_eq!(save(&loaded).unwrap(), text, "save(load(x)) == x");
+        let ws = loaded.workspace();
+        let a = loaded.find_first_child(ws, "A").unwrap().unwrap();
+        let b = loaded.find_first_child(ws, "B").unwrap().unwrap();
+        let weld = loaded.find_first_child(a, "Weld").unwrap().unwrap();
+        assert_eq!(loaded.get_ref(weld, Property::Part0), Some(a));
+        assert_eq!(loaded.get_ref(weld, Property::Part1), Some(b));
     }
 
     #[test]

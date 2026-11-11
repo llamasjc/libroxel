@@ -121,6 +121,8 @@ pub enum ClassKind {
     Teams,
     /// A side players can be on, with its own colour.
     Team,
+    /// Holds two parts together so they move as one.
+    WeldConstraint,
 }
 
 impl ClassKind {
@@ -169,6 +171,7 @@ impl ClassKind {
         ClassKind::Explosion,
         ClassKind::Teams,
         ClassKind::Team,
+        ClassKind::WeldConstraint,
     ];
 
     /// The services every tree has under its root, in order. They can't be
@@ -268,6 +271,9 @@ impl ClassKind {
             Property::TeamColor,
             Property::Neutral,
         ];
+        const WORKSPACE: &[Property] = &[Property::Name, Property::Gravity];
+        const PLAYERS: &[Property] = &[Property::Name, Property::RespawnTime, Property::CharacterAutoLoads];
+        const WELD: &[Property] = &[Property::Name, Property::Part0, Property::Part1, Property::Enabled];
         const TEAM: &[Property] = &[Property::Name, Property::TeamColor, Property::AutoAssignable];
         const NUMBER: &[Property] = &[Property::Name, Property::NumberValue];
         const STRING: &[Property] = &[Property::Name, Property::StringValue];
@@ -386,6 +392,9 @@ impl ClassKind {
             ClassKind::Tool => TOOL,
             ClassKind::BillboardGui => BILLBOARD,
             ClassKind::Lighting => LIGHTING,
+            ClassKind::Workspace => WORKSPACE,
+            ClassKind::Players => PLAYERS,
+            ClassKind::WeldConstraint => WELD,
             _ => COMMON,
         }
     }
@@ -463,7 +472,10 @@ impl ClassKind {
                 ClassKind::Team => Color3::WHITE,
                 _ => Color3::MEDIUM_GREY,
             }),
-            Property::AutoAssignable => PropertyValue::Bool(true),
+            Property::AutoAssignable | Property::CharacterAutoLoads => PropertyValue::Bool(true),
+            Property::Gravity => PropertyValue::Number(196.2),
+            Property::RespawnTime => PropertyValue::Number(5.0),
+            Property::Part0 | Property::Part1 => PropertyValue::Ref(None),
             Property::Size => PropertyValue::Vec3(Vec3::new(4.0, 1.0, 2.0)),
             Property::Color => PropertyValue::Color3(match self {
                 ClassKind::SpawnLocation => Color3::new(0.3, 0.55, 0.95),
@@ -526,6 +538,7 @@ impl ClassKind {
             ClassKind::Explosion => "explosion",
             ClassKind::Teams => "teams",
             ClassKind::Team => "team",
+            ClassKind::WeldConstraint => "weld_constraint",
         }
     }
 

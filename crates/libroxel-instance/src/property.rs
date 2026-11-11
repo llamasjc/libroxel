@@ -99,6 +99,16 @@ pub enum Property {
     TeamColor,
     /// On a team: whether players joining are put on it.
     AutoAssignable,
+    /// On the workspace: how hard things fall, in studs per second squared.
+    Gravity,
+    /// On the players service: seconds between dying and coming back.
+    RespawnTime,
+    /// On the players service: whether characters spawn by themselves.
+    CharacterAutoLoads,
+    /// On a weld: the first part it holds.
+    Part0,
+    /// On a weld: the second part it holds.
+    Part1,
 }
 
 /// The value of a property.
@@ -110,7 +120,7 @@ pub enum PropertyValue {
     Vec3(Vec3),
     Color3(Color3),
     Enum(EnumValue),
-    /// A link to another instance. Links are runtime-only and are not saved.
+    /// A link to another instance. Places save links between saved instances.
     Ref(Option<InstanceId>),
     Vec2(Vec2),
     UDim2(UDim2),
@@ -159,7 +169,8 @@ impl Property {
             | Property::ClearTextOnFocus
             | Property::Jump
             | Property::Neutral
-            | Property::AutoAssignable => "bool",
+            | Property::AutoAssignable
+            | Property::CharacterAutoLoads => "bool",
             Property::TeamColor => "Color3",
             Property::CornerRadius | Property::Padding => "UDim",
             Property::CameraType => EnumKind::CameraType.kind_name(),
@@ -178,7 +189,9 @@ impl Property {
             | Property::Range
             | Property::Angle
             | Property::BlastRadius
-            | Property::BlastPressure => "number",
+            | Property::BlastPressure
+            | Property::Gravity
+            | Property::RespawnTime => "number",
             Property::KeyboardKeyCode => EnumKind::KeyCode.kind_name(),
             Property::Transparency
             | Property::Health
@@ -189,7 +202,7 @@ impl Property {
             | Property::UserId => "number",
             Property::Shape => EnumKind::Shape.kind_name(),
             Property::Material => EnumKind::Material.kind_name(),
-            Property::Character | Property::Team => "ref",
+            Property::Character | Property::Team | Property::Part0 | Property::Part1 => "ref",
         }
     }
 
@@ -266,6 +279,11 @@ impl Property {
         Property::Neutral,
         Property::TeamColor,
         Property::AutoAssignable,
+        Property::Gravity,
+        Property::RespawnTime,
+        Property::CharacterAutoLoads,
+        Property::Part0,
+        Property::Part1,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -330,6 +348,11 @@ impl Property {
             Property::Neutral => "neutral",
             Property::TeamColor => "team_color",
             Property::AutoAssignable => "auto_assignable",
+            Property::Gravity => "gravity",
+            Property::RespawnTime => "respawn_time",
+            Property::CharacterAutoLoads => "character_auto_loads",
+            Property::Part0 => "part0",
+            Property::Part1 => "part1",
         }
     }
 

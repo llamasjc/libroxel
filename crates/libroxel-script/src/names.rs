@@ -113,6 +113,20 @@ pub mod events {
     pub const HIT: &str = "Hit";
     /// On a humanoid: fires with whether it got there after `MoveTo`.
     pub const MOVE_TO_FINISHED: &str = "MoveToFinished";
+    /// On parts: fires with the other part when they stop touching.
+    pub const TOUCH_ENDED: &str = "TouchEnded";
+    /// On any instance: fires with a child that was taken out of it.
+    pub const CHILD_REMOVED: &str = "ChildRemoved";
+    /// On any instance: fires with anything put somewhere inside it.
+    pub const DESCENDANT_ADDED: &str = "DescendantAdded";
+    /// On any instance: fires with anything taken out from inside it.
+    pub const DESCENDANT_REMOVING: &str = "DescendantRemoving";
+    /// On any instance: fires when it is destroyed.
+    pub const DESTROYING: &str = "Destroying";
+    /// On a humanoid: fires with the new health whenever it changes.
+    pub const HEALTH_CHANGED: &str = "HealthChanged";
+    /// On a player: fires with their character just before it is removed.
+    pub const CHARACTER_REMOVING: &str = "CharacterRemoving";
 }
 
 /// Methods that only some classes have.
@@ -169,6 +183,8 @@ pub mod methods {
     pub const UNEQUIP_TOOLS: &str = "UnequipTools";
     /// Player: the player's mouse.
     pub const GET_MOUSE: &str = "GetMouse";
+    /// Player: removes their character (if any) and spawns a fresh one now.
+    pub const LOAD_CHARACTER: &str = "LoadCharacter";
     /// Text box: start or stop typing into it, and whether the player is.
     pub const CAPTURE_FOCUS: &str = "CaptureFocus";
     pub const RELEASE_FOCUS: &str = "ReleaseFocus";
@@ -614,6 +630,7 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::Explosion => "Explosion",
         ClassKind::Teams => "Teams",
         ClassKind::Team => "Team",
+        ClassKind::WeldConstraint => "WeldConstraint",
     }
 }
 
@@ -683,6 +700,11 @@ pub fn property_name(property: Property) -> &'static str {
         Property::Neutral => "Neutral",
         Property::TeamColor => "TeamColor",
         Property::AutoAssignable => "AutoAssignable",
+        Property::Gravity => "Gravity",
+        Property::RespawnTime => "RespawnTime",
+        Property::CharacterAutoLoads => "CharacterAutoLoads",
+        Property::Part0 => "Part0",
+        Property::Part1 => "Part1",
     }
 }
 

@@ -135,6 +135,21 @@ impl ScriptRuntime {
         bindings::fire_touched(&self.lua, part, other)
     }
 
+    /// Fires `part.TouchEnded(other)`.
+    pub fn fire_touch_ended(&self, part: InstanceId, other: InstanceId) -> Vec<ScriptError> {
+        bindings::fire_touch_ended(&self.lua, part, other)
+    }
+
+    /// Takes the players whose characters `LoadCharacter` asked to respawn.
+    pub fn take_load_requests(&self) -> Vec<InstanceId> {
+        world::take_load_requests(&self.lua)
+    }
+
+    /// Fires `player.CharacterRemoving(character)`.
+    pub fn character_removing(&self, player: InstanceId, character: InstanceId) -> Vec<ScriptError> {
+        world::character_removing(&self.lua, player, character)
+    }
+
     /// Starts every enabled `LocalScript` under `ancestor` (such as a
     /// player's GUI after it is copied in).
     pub fn run_local_scripts(&self, ancestor: InstanceId) -> Vec<ScriptError> {

@@ -66,6 +66,13 @@ pub(crate) enum SignalKind {
     RenderStepped,
     TextBoxFocusLost(InstanceId),
     ExplosionHit(InstanceId),
+    TouchEnded(InstanceId),
+    ChildRemoved(InstanceId),
+    DescendantAdded(InstanceId),
+    DescendantRemoving(InstanceId),
+    Destroying(InstanceId),
+    HealthChanged(InstanceId),
+    CharacterRemoving(InstanceId),
 }
 
 impl SignalKind {
@@ -75,6 +82,11 @@ impl SignalKind {
             SignalKind::Changed(id)
             | SignalKind::PropertyChanged(id, _)
             | SignalKind::ChildAdded(id)
+            | SignalKind::ChildRemoved(id)
+            | SignalKind::DescendantAdded(id)
+            | SignalKind::DescendantRemoving(id)
+            | SignalKind::Destroying(id)
+            | SignalKind::HealthChanged(id)
             | SignalKind::AttributeChanged(id)
             | SignalKind::AttributeNamedChanged(id, _) => Some(id),
             _ => None,
@@ -507,6 +519,13 @@ fn instance_event(class: ClassKind, id: InstanceId, key: &str) -> Option<SignalK
         FOCUS_LOST if class == ClassKind::TextBox => SignalKind::TextBoxFocusLost(id),
         HIT if class == ClassKind::Explosion => SignalKind::ExplosionHit(id),
         MOVE_TO_FINISHED if class == ClassKind::Humanoid => SignalKind::MoveToFinished(id),
+        TOUCH_ENDED if class.is_physical() => SignalKind::TouchEnded(id),
+        CHILD_REMOVED => SignalKind::ChildRemoved(id),
+        DESCENDANT_ADDED => SignalKind::DescendantAdded(id),
+        DESCENDANT_REMOVING => SignalKind::DescendantRemoving(id),
+        DESTROYING => SignalKind::Destroying(id),
+        HEALTH_CHANGED if class == ClassKind::Humanoid => SignalKind::HealthChanged(id),
+        CHARACTER_REMOVING if class == ClassKind::Player => SignalKind::CharacterRemoving(id),
         _ => return None,
     })
 }
@@ -1663,12 +1682,59 @@ pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
                     Ok(std::iter::once(Value::String(lua.create_string(name)?)).collect())
                 });
                 fire(lua, SignalKind::PropertyChanged(*id, *property), || Ok(MultiValue::new()));
+                if *property == Property::Health {
+                    let health = host(lua).tree.borrow().get_number(*id, Property::Health);
+                    if let Some(health) = health {
+                        fire(lua, SignalKind::HealthChanged(*id), || {
+                            Ok(std::iter::once(Value::Number(health)).collect())
+                        });
+                    }
+                }
             }
             Change::Reparented { id, old_parent, new_parent } => {
+                if let Some(parent) = old_parent
+                    && watched.contains(parent)
+                {
+                    with_instance(SignalKind::ChildRemoved(*parent), *id);
+                }
                 if let Some(parent) = new_parent
                     && watched.contains(parent)
                 {
                     with_instance(SignalKind::ChildAdded(*parent), *id);
+                }
+                // Everything moved (the instance and what's inside it) left the
+                // old parent's ancestors and arrived in the new parent's.
+                let (moved, left, arrived) = {
+                    let host = host(lua);
+                    let tree = host.tree.borrow();
+                    let up = |from: &Option<InstanceId>| {
+                        let mut chain = Vec::new();
+                        let mut at = *from;
+                        while let Some(a) = at {
+                            if watched.contains(&a) {
+                                chain.push(a);
+                            }
+                            at = tree.parent(a).ok().flatten();
+                        }
+                        chain
+                    };
+                    let (left, arrived) = (up(old_parent), up(new_parent));
+                    let mut moved = Vec::new();
+                    if !left.is_empty() || !arrived.is_empty() {
+                        moved.push(*id);
+                        moved.extend(tree.descendants(*id).unwrap_or_default());
+                    }
+                    (moved, left, arrived)
+                };
+                for &ancestor in &left {
+                    for &item in &moved {
+                        with_instance(SignalKind::DescendantRemoving(ancestor), item);
+                    }
+                }
+                for &ancestor in &arrived {
+                    for &item in &moved {
+                        with_instance(SignalKind::DescendantAdded(ancestor), item);
+                    }
                 }
                 if tools_heard {
                     let (is_tool, from, to) = {
@@ -1706,7 +1772,13 @@ pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
                     with_instance(SignalKind::TagRemoved(n), *id);
                 }
             }
-            Change::Destroyed(id) if tags_heard => {
+            Change::Destroyed(id) if watched.contains(id) || tags_heard => {
+                if watched.contains(id) {
+                    fire(lua, SignalKind::Destroying(*id), || Ok(MultiValue::new()));
+                }
+                if !tags_heard {
+                    continue;
+                }
                 let tags = host(lua).tree.borrow().tags(*id).map(|t| t.to_vec()).unwrap_or_default();
                 for n in tags.iter().filter_map(|t| interned(lua, t)) {
                     with_instance(SignalKind::TagRemoved(n), *id);
@@ -1722,6 +1794,14 @@ pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
 pub(crate) fn click_button(lua: &Lua, button: InstanceId) -> Vec<ScriptError> {
     fire(lua, SignalKind::ButtonClicked(button), || Ok(MultiValue::new()));
     fire(lua, SignalKind::ButtonActivated(button), || Ok(MultiValue::new()));
+    take_errors(lua)
+}
+
+/// Fires `part.TouchEnded(other)`.
+pub(crate) fn fire_touch_ended(lua: &Lua, part: InstanceId, other: InstanceId) -> Vec<ScriptError> {
+    fire(lua, SignalKind::TouchEnded(part), || {
+        Ok(std::iter::once(Value::UserData(push_instance(lua, other)?)).collect())
+    });
     take_errors(lua)
 }
 

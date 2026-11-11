@@ -395,7 +395,9 @@ impl InstanceTree {
                     | Property::MaxDistance
                     | Property::Range
                     | Property::BlastRadius
-                    | Property::BlastPressure,
+                    | Property::BlastPressure
+                    | Property::RespawnTime
+                    | Property::Gravity,
                     PropertyValue::Number(n),
                 ) => PropertyValue::Number(n.max(0.0)),
                 (Property::LayoutOrder, PropertyValue::Number(n)) => PropertyValue::Number(n.round()),
@@ -531,8 +533,30 @@ impl InstanceTree {
         }
     }
 
-    /// Deep-copies `id` and its descendants. The copy is unparented.
+    /// Deep-copies `id` and its descendants. The copy is unparented. Links
+    /// between instances inside the copy point at their copies, so a cloned
+    /// model's welds hold the cloned parts.
     pub fn clone_subtree(&mut self, id: InstanceId) -> Result<InstanceId> {
+        let mut copies = std::collections::HashMap::new();
+        let new_id = self.clone_inner(id, &mut copies)?;
+        for &copy in copies.values() {
+            let data = self.data_mut(copy)?;
+            for (_, value) in data.props.iter_mut() {
+                if let PropertyValue::Ref(Some(target)) = value
+                    && let Some(mapped) = copies.get(target)
+                {
+                    *target = *mapped;
+                }
+            }
+        }
+        Ok(new_id)
+    }
+
+    fn clone_inner(
+        &mut self,
+        id: InstanceId,
+        copies: &mut std::collections::HashMap<InstanceId, InstanceId>,
+    ) -> Result<InstanceId> {
         let source = self.data(id)?;
         if !source.class.is_creatable() {
             return Err(TreeError::NotCreatable(source.class));
@@ -543,12 +567,13 @@ impl InstanceTree {
         copy.parent_locked = false;
         copy.destroyed = false;
         let new_id = self.alloc(copy);
+        copies.insert(id, new_id);
         self.changes.push(Change::Created(new_id));
         for child in children {
             if self.data(child)?.destroyed {
                 continue;
             }
-            let child_copy = self.clone_subtree(child)?;
+            let child_copy = self.clone_inner(child, copies)?;
             self.set_parent(child_copy, Some(new_id))?;
         }
         Ok(new_id)
@@ -751,6 +776,17 @@ mod tests {
         assert_eq!(tree.get_vec3(wheel_copy, Property::Size), Some(Vec3::ONE));
         assert_eq!(tree.children(model).unwrap(), &[wheel], "original untouched");
         assert_eq!(tree.clone_subtree(ws), Err(TreeError::NotCreatable(ClassKind::Workspace)));
+
+        // Links inside the copy point at the copied instances; links out stay.
+        let weld = tree.create(ClassKind::WeldConstraint, "Weld").unwrap();
+        tree.set_parent(weld, Some(model)).unwrap();
+        tree.set(weld, Property::Part0, PropertyValue::Ref(Some(wheel))).unwrap();
+        tree.set(weld, Property::Part1, PropertyValue::Ref(Some(ws))).unwrap();
+        let copy = tree.clone_subtree(model).unwrap();
+        let weld_copy = tree.find_first_child(copy, "Weld").unwrap().unwrap();
+        let wheel_copy = tree.find_first_child(copy, "Wheel").unwrap().unwrap();
+        assert_eq!(tree.get_ref(weld_copy, Property::Part0), Some(wheel_copy));
+        assert_eq!(tree.get_ref(weld_copy, Property::Part1), Some(ws));
     }
 
     #[test]

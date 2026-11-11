@@ -10,6 +10,7 @@ pub mod npc;
 pub mod physics;
 pub mod session;
 pub mod view;
+pub mod weld;
 
 pub use character::{Character, CharacterInput};
 pub use session::{Blast, LogEntry, LogLevel, PlaySession};

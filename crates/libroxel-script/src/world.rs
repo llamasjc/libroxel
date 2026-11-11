@@ -35,6 +35,8 @@ pub(crate) struct WorldState {
     viewport: Vec2,
     /// Humanoids asked to walk somewhere (or to stop, with `None`).
     moves: Vec<(InstanceId, Option<Vec3>)>,
+    /// Players whose character scripts asked to (re)spawn.
+    loads: Vec<InstanceId>,
 }
 
 fn runtime_err(message: impl Into<String>) -> mlua::Error {
@@ -162,6 +164,15 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
             at = pos;
         }
         host(lua).world.borrow_mut().moves.push((this.0, Some(at)));
+        Ok(())
+    });
+    m.add_method(methods::LOAD_CHARACTER, |lua, this, ()| {
+        require_class(lua, this.0, ClassKind::Player, methods::LOAD_CHARACTER)?;
+        let host = host(lua);
+        let mut world = host.world.borrow_mut();
+        if !world.loads.contains(&this.0) {
+            world.loads.push(this.0);
+        }
         Ok(())
     });
     m.add_method(methods::GET_TEAMS, |lua, this, ()| {
@@ -317,6 +328,17 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
 
 pub(crate) fn take_move_requests(lua: &Lua) -> Vec<(InstanceId, Option<Vec3>)> {
     std::mem::take(&mut host(lua).world.borrow_mut().moves)
+}
+
+pub(crate) fn take_load_requests(lua: &Lua) -> Vec<InstanceId> {
+    std::mem::take(&mut host(lua).world.borrow_mut().loads)
+}
+
+pub(crate) fn character_removing(lua: &Lua, player: InstanceId, character: InstanceId) -> Vec<ScriptError> {
+    fire(lua, SignalKind::CharacterRemoving(player), || {
+        Ok(std::iter::once(Value::UserData(push_instance(lua, character)?)).collect())
+    });
+    take_errors(lua)
 }
 
 pub(crate) fn move_finished(lua: &Lua, humanoid: InstanceId, reached: bool) -> Vec<ScriptError> {

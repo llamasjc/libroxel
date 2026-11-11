@@ -87,6 +87,7 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::UICorner,
     ClassKind::UIListLayout,
     ClassKind::Team,
+    ClassKind::WeldConstraint,
 ];
 
 const SHAPES: &[(PartShape, &str)] = &[
@@ -134,6 +135,7 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::UICorner => "◜",
         ClassKind::UIListLayout => "☰",
         ClassKind::Explosion => "💥",
+        ClassKind::WeldConstraint => "🔗",
         ClassKind::Teams | ClassKind::Team => "🚩",
     }
 }
@@ -833,8 +835,14 @@ fn properties(
             let Ok(value) = tree.get(id, property) else { continue };
             ui.label(names::property_name(property));
             if let PropertyValue::Ref(target) = &value {
-                let name = target.and_then(|t| tree.name(t).ok()).unwrap_or("(none)");
-                ui.label(RichText::new(name).weak());
+                if matches!(property, Property::Part0 | Property::Part1) {
+                    if let Some(new) = part_picker(ui, tree, id, property, *target) {
+                        edited = Some((property, PropertyValue::Ref(new)));
+                    }
+                } else {
+                    let name = target.and_then(|t| tree.name(t).ok()).unwrap_or("(none)");
+                    ui.label(RichText::new(name).weak());
+                }
                 ui.end_row();
                 continue;
             }
@@ -942,6 +950,10 @@ fn properties(
         ClassKind::Humanoid => Some(
             "A model with a Humanoid and an unanchored part called HumanoidRootPart walks: \
              `humanoid:MoveTo(point)` sends it, `MoveToFinished` says when it got there, and setting `Jump` jumps.",
+        ),
+        ClassKind::WeldConstraint => Some(
+            "Holds Part0 and Part1 together while playing: they move as one, keeping how they sit now. \
+             Unanchor one part and the whole assembly falls, rolls and gets pushed together.",
         ),
         ClassKind::Explosion => Some(
             "Goes off as soon as it is in the workspace while playing: parts within BlastRadius are hit, \
@@ -1507,6 +1519,70 @@ fn gui_parent(tree: &mut InstanceTree, selection: Option<InstanceId>) -> Option<
     Some(screen)
 }
 
+/// A drop-down of the workspace's parts, for a weld's Part0 or Part1.
+fn part_picker(
+    ui: &mut egui::Ui,
+    tree: &InstanceTree,
+    id: InstanceId,
+    property: Property,
+    current: Option<InstanceId>,
+) -> Option<Option<InstanceId>> {
+    let label = |p: InstanceId| {
+        let name = tree.name(p).unwrap_or("?");
+        match tree.parent(p).ok().flatten().filter(|q| *q != tree.workspace()) {
+            Some(q) => format!("{} › {name}", tree.name(q).unwrap_or("?")),
+            None => name.to_owned(),
+        }
+    };
+    let shown = current.filter(|t| tree.exists(*t)).map(label).unwrap_or_else(|| "(none)".into());
+    let mut picked = None;
+    egui::ComboBox::from_id_salt(("part_picker", id, property as u32)).selected_text(shown).show_ui(
+        ui,
+        |ui| {
+            if ui.selectable_label(current.is_none(), "(none)").clicked() {
+                picked = Some(None);
+            }
+            for part in tree.descendants_of_class(tree.workspace(), ClassKind::Part) {
+                if ui.selectable_label(current == Some(part), label(part)).clicked() {
+                    picked = Some(Some(part));
+                }
+            }
+        },
+    );
+    picked.filter(|p| *p != current)
+}
+
+/// The part whose box touches or overlaps `part`'s the most, if any.
+fn touching_part(tree: &InstanceTree, part: InstanceId) -> Option<InstanceId> {
+    let bounds = |p: InstanceId| {
+        let pos = tree.get_vec3(p, Property::Position)?;
+        let half = tree.get_vec3(p, Property::Size)? / 2.0;
+        Some((pos - half, pos + half))
+    };
+    let (amin, amax) = bounds(part)?;
+    let mut best: Option<(f32, InstanceId)> = None;
+    for other in tree.descendants_of_class(tree.workspace(), ClassKind::Part) {
+        if other == part {
+            continue;
+        }
+        let Some((bmin, bmax)) = bounds(other) else { continue };
+        let gap = |lo: f32, hi: f32| hi - lo;
+        let ox = gap(amin.x.max(bmin.x), amax.x.min(bmax.x));
+        let oy = gap(amin.y.max(bmin.y), amax.y.min(bmax.y));
+        let oz = gap(amin.z.max(bmin.z), amax.z.min(bmax.z));
+        const SLACK: f32 = 0.05;
+        if ox < -SLACK || oy < -SLACK || oz < -SLACK {
+            continue;
+        }
+        // Rank by the area (or volume) shared, with faces that only touch counting a little.
+        let score = ox.max(0.01) * oy.max(0.01) * oz.max(0.01);
+        if best.is_none_or(|(s, _)| score > s) {
+            best = Some((score, other));
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
 fn new_instance(
     tree: &mut InstanceTree,
     class: ClassKind,
@@ -1691,6 +1767,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     | ClassKind::NumberValue
                     | ClassKind::StringValue
                     | ClassKind::BoolValue
+                    | ClassKind::WeldConstraint
             );
             let parent = match editor.selection {
                 Some(sel)
@@ -1702,6 +1779,14 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                 _ => parent,
             };
             if let Some(id) = new_instance(&mut tree, class, parent, near) {
+                if class == ClassKind::WeldConstraint
+                    && let Some(part) = near
+                {
+                    // Weld the selected part to whatever it touches.
+                    let _ = tree.set(id, Property::Part0, PropertyValue::Ref(Some(part)));
+                    let other = touching_part(&tree, part);
+                    let _ = tree.set(id, Property::Part1, PropertyValue::Ref(other));
+                }
                 editor.selection = Some(id);
                 if is_code(class) {
                     editor.open_script = Some(id);

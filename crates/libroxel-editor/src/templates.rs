@@ -320,6 +320,59 @@ detector.MouseClick:Connect(function(player)
 end)
 "#;
 
+const CART_SCRIPT: &str = r#"
+-- The mine cart's sides are welded to its base, so the whole cart moves
+-- together. Click it to push it one way, then the other.
+local cart = script.Parent
+local base = cart.Base
+local away = true
+
+base.ClickDetector.MouseClick:Connect(function(player)
+	local push = if away then -30 else 30
+	away = not away
+	base.AssemblyLinearVelocity = Vector3.new(0, 8, push)
+	print(player.Name .. " pushed the mine cart")
+end)
+"#;
+
+const PLATE_SCRIPT: &str = r#"
+-- A pressure plate: it glows while someone stands on it.
+local plate = script.Parent
+local Players = game:GetService("Players")
+local standing = {}
+
+local function count()
+	local n = 0
+	for _ in standing do
+		n += 1
+	end
+	return n
+end
+
+local function update()
+	local pressed = count() > 0
+	plate.Material = if pressed then Enum.Material.Neon else Enum.Material.Metal
+	plate.Color = if pressed then Color3.fromRGB(120, 255, 160) else Color3.fromRGB(110, 110, 120)
+end
+
+plate.Touched:Connect(function(hit)
+	if Players:GetPlayerFromCharacter(hit.Parent) and not standing[hit] then
+		standing[hit] = true
+		if count() == 1 then
+			print("Pressure plate pressed")
+		end
+		update()
+	end
+end)
+
+plate.TouchEnded:Connect(function(hit)
+	if standing[hit] then
+		standing[hit] = nil
+		update()
+	end
+end)
+"#;
+
 const CHAT_SCRIPT: &str = r#"
 -- What players type in the chat box floats over their head for a few seconds.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -466,6 +519,25 @@ chat.FocusLost:Connect(function(enterPressed)
 	end
 	chat.Text = ""
 end)
+
+-- The health bar follows the character's health.
+local bar = hud.HealthBar
+local fill = bar.Fill
+local function watch(character)
+	local humanoid = character:WaitForChild("Humanoid")
+	local function show(health)
+		local share = math.clamp(health / humanoid.MaxHealth, 0, 1)
+		fill.Size = UDim2.new(share, 0, 1, 0)
+		fill.BackgroundColor3 = if share > 0.3 then Color3.fromRGB(80, 200, 100) else Color3.fromRGB(230, 70, 60)
+		bar.Label.Text = "Health: " .. math.floor(health + 0.5)
+	end
+	humanoid.HealthChanged:Connect(show)
+	show(humanoid.Health)
+end
+if player.Character then
+	watch(player.Character)
+end
+player.CharacterAdded:Connect(watch)
 
 -- C flies the camera up for a look over the whole course, and back.
 local camera = workspace.CurrentCamera
@@ -697,9 +769,26 @@ pub fn sample_obby() -> InstanceTree {
     set(&mut tree, height, Property::TextColor, PropertyValue::Color3(white));
     set(&mut tree, height, Property::TextSize, PropertyValue::Number(16.0));
     set(&mut tree, height, Property::Text, PropertyValue::String("Height: 0 studs".into()));
+    // A health bar in the top left: a dark frame with a coloured fill.
+    let health = add(&mut tree, hud, ClassKind::Frame, "HealthBar");
+    set(&mut tree, health, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.0, 12.0, 0.0, 12.0)));
+    set(&mut tree, health, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 200.0, 0.0, 24.0)));
+    set(&mut tree, health, Property::BackgroundColor, PropertyValue::Color3(dark));
+    set(&mut tree, health, Property::BackgroundTransparency, PropertyValue::Number(0.3));
+    let fill = add(&mut tree, health, ClassKind::Frame, "Fill");
+    set(&mut tree, fill, Property::GuiSize, PropertyValue::UDim2(UDim2::new(1.0, 0.0, 1.0, 0.0)));
+    set(&mut tree, fill, Property::BackgroundColor, PropertyValue::Color3(Color3::from_rgb8(80, 200, 100)));
+    let fill_corner = add(&mut tree, fill, ClassKind::UICorner, "UICorner");
+    set(&mut tree, fill_corner, Property::CornerRadius, PropertyValue::UDim(UDim::new(0.0, 6.0)));
+    let health_label = add(&mut tree, health, ClassKind::TextLabel, "Label");
+    set(&mut tree, health_label, Property::GuiSize, PropertyValue::UDim2(UDim2::new(1.0, 0.0, 1.0, 0.0)));
+    set(&mut tree, health_label, Property::BackgroundTransparency, PropertyValue::Number(1.0));
+    set(&mut tree, health_label, Property::TextColor, PropertyValue::Color3(white));
+    set(&mut tree, health_label, Property::TextSize, PropertyValue::Number(15.0));
+    set(&mut tree, health_label, Property::Text, PropertyValue::String("Health: 100".into()));
     let help = add(&mut tree, hud, ClassKind::Frame, "Help");
     set(&mut tree, help, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.0, 12.0, 0.5, 0.0)));
-    set(&mut tree, help, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 260.0, 0.0, 192.0)));
+    set(&mut tree, help, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 260.0, 0.0, 236.0)));
     set(&mut tree, help, Property::AnchorPoint, PropertyValue::Vec2(Vec2::new(0.0, 0.5)));
     set(&mut tree, help, Property::BackgroundColor, PropertyValue::Color3(dark));
     set(&mut tree, help, Property::BackgroundTransparency, PropertyValue::Number(0.3));
@@ -714,6 +803,8 @@ pub fn sample_obby() -> InstanceTree {
         "/: chat    C: overhead camera",
         "Green pad: jump!    Click the TNT",
         "Look out for the quarry zombie",
+        "Click the mine cart to push it",
+        "Stand on the plate by the shop",
         "Coins are saved",
     ]
     .iter()
@@ -738,7 +829,7 @@ pub fn sample_obby() -> InstanceTree {
     set(&mut tree, chat, Property::TextSize, PropertyValue::Number(16.0));
     set(&mut tree, chat, Property::PlaceholderText, PropertyValue::String("Press / to chat".into()));
     // Rounded corners on every box on the HUD.
-    for id in [label, button, message, help, chat] {
+    for id in [label, button, message, help, chat, health] {
         let corner = add(&mut tree, id, ClassKind::UICorner, "UICorner");
         set(&mut tree, corner, Property::CornerRadius, PropertyValue::UDim(UDim::new(0.0, 8.0)));
     }
@@ -863,6 +954,37 @@ pub fn sample_obby() -> InstanceTree {
     set(&mut tree, zombie_label, Property::TextSize, PropertyValue::Number(17.0));
     set(&mut tree, zombie_label, Property::Text, PropertyValue::String("Zombie".into()));
     script(&mut tree, server, "ZombieBrain", ZOMBIE_SCRIPT);
+
+    // A mine cart in the quarry: a loose base with its sides welded on.
+    let cart = add(&mut tree, ws, ClassKind::Model, "MineCart");
+    let iron = [90, 90, 100];
+    let base = block(&mut tree, cart, "Base", [5.0, 0.3, 18.0], [2.4, 0.6, 3.0], [110, 80, 55]);
+    material(&mut tree, base, Material::Wood);
+    add(&mut tree, base, ClassKind::ClickDetector, "ClickDetector");
+    for (name, pos, size) in [
+        ("Left", [3.95, 1.1, 18.0], [0.3, 1.0, 3.0]),
+        ("Right", [6.05, 1.1, 18.0], [0.3, 1.0, 3.0]),
+        ("Front", [5.0, 1.1, 16.65], [1.8, 1.0, 0.3]),
+        ("Back", [5.0, 1.1, 19.35], [1.8, 1.0, 0.3]),
+    ] {
+        let side = block(&mut tree, cart, name, pos, size, iron);
+        material(&mut tree, side, Material::Metal);
+        set(&mut tree, side, Property::Anchored, PropertyValue::Bool(false));
+        let weld = add(&mut tree, base, ClassKind::WeldConstraint, &format!("{name}Weld"));
+        set(&mut tree, weld, Property::Part0, PropertyValue::Ref(Some(base)));
+        set(&mut tree, weld, Property::Part1, PropertyValue::Ref(Some(side)));
+    }
+    set(&mut tree, base, Property::Anchored, PropertyValue::Bool(false));
+    script(&mut tree, cart, "Push", CART_SCRIPT);
+
+    // A pressure plate beside the speed shop.
+    let plate = block(&mut tree, start, "PressurePlate", [6.0, 0.05, -1.0], [3.0, 0.1, 3.0], [110, 110, 120]);
+    material(&mut tree, plate, Material::Metal);
+    script(&mut tree, plate, "Plate", PLATE_SCRIPT);
+
+    // Characters come back three seconds after they die.
+    let players = tree.service(ClassKind::Players).expect("every tree has Players");
+    set(&mut tree, players, Property::RespawnTime, PropertyValue::Number(3.0));
 
     // Everyone starts as a Runner; finishing the obby makes you a Winner.
     let teams = tree.service(ClassKind::Teams).expect("every tree has Teams");
@@ -1328,6 +1450,90 @@ mod tests {
         assert_eq!(team_name(&session), "Winners");
         let log = session.take_log();
         assert!(log.iter().any(|l| l.text == "The zombie is down!"), "{log:?}");
+        assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
+    }
+
+    #[test]
+    fn mine_cart_rolls_together_and_the_plate_and_health_bar_react() {
+        let frame = |s: &mut libroxel_engine::PlaySession, n: usize| {
+            for _ in 0..n {
+                s.step(1.0 / 60.0, CharacterInput::default());
+            }
+        };
+        let mut session = start_on(sample_obby(), true).unwrap();
+        frame(&mut session, 30);
+        let tree = session.runtime().tree().clone();
+        let part = |path: &[&str]| {
+            let t = tree.borrow();
+            let mut at = t.workspace();
+            for name in path {
+                at = t.find_first_child(at, name).unwrap().unwrap();
+            }
+            at
+        };
+        let (base, left) = (part(&["MineCart", "Base"]), part(&["MineCart", "Left"]));
+        let pos = |id| tree.borrow().get_vec3(id, Property::Position).unwrap();
+        let (base_start, left_start) = (pos(base), pos(left));
+        assert!((base_start.y - 0.3).abs() < 0.05, "resting on the ground: {base_start:?}");
+        assert!((left_start - base_start - Vec3::new(-1.05, 0.8, 0.0)).length() < 0.01);
+
+        // Walk up to the cart and click it.
+        session
+            .runtime()
+            .run("move", "workspace.Player1.HumanoidRootPart.Position = Vector3.new(5, 3, 12)")
+            .unwrap();
+        frame(&mut session, 5);
+        assert!(session.click_part(base));
+        frame(&mut session, 90);
+        let (base_end, left_end) = (pos(base), pos(left));
+        assert!(base_end.z < base_start.z - 2.0, "pushed: {base_start:?} -> {base_end:?}");
+        assert!((left_end - base_end - (left_start - base_start)).length() < 0.01, "the side came along");
+
+        // Back on the start, away from the zombie, the health bar shows damage.
+        session
+            .runtime()
+            .run("home", "workspace.Player1.HumanoidRootPart.Position = Vector3.new(0, 3, 0)")
+            .unwrap();
+        frame(&mut session, 5);
+        session.runtime().run("heal", "workspace.Player1.Humanoid.Health = 100").unwrap();
+        frame(&mut session, 2);
+        session.runtime().run("hurt", "workspace.Player1.Humanoid:TakeDamage(80)").unwrap();
+        frame(&mut session, 2);
+        let gui = session.player_gui().unwrap();
+        let (fill_size, text) = {
+            let t = tree.borrow();
+            let hud = t.find_first_child(gui, "HUD").unwrap().unwrap();
+            let bar = t.find_first_child(hud, "HealthBar").unwrap().unwrap();
+            let fill = t.find_first_child(bar, "Fill").unwrap().unwrap();
+            let label = t.find_first_child(bar, "Label").unwrap().unwrap();
+            (t.get(fill, Property::GuiSize).unwrap(), t.get_string(label, Property::Text).unwrap())
+        };
+        assert_eq!(fill_size, PropertyValue::UDim2(UDim2::new(0.2, 0.0, 1.0, 0.0)));
+        assert_eq!(text, "Health: 20");
+
+        // Standing on the plate lights it; stepping off puts it out.
+        let plate = part(&["Start", "PressurePlate"]);
+        session
+            .runtime()
+            .run("plate", "workspace.Player1.HumanoidRootPart.Position = Vector3.new(6, 3, -1)")
+            .unwrap();
+        frame(&mut session, 30);
+        assert_eq!(
+            tree.borrow().get(plate, Property::Material).unwrap(),
+            PropertyValue::Enum(libroxel_instance::EnumValue::Material(Material::Neon))
+        );
+        session
+            .runtime()
+            .run("off", "workspace.Player1.HumanoidRootPart.Position = Vector3.new(0, 3, 0)")
+            .unwrap();
+        frame(&mut session, 30);
+        assert_eq!(
+            tree.borrow().get(plate, Property::Material).unwrap(),
+            PropertyValue::Enum(libroxel_instance::EnumValue::Material(Material::Metal))
+        );
+        let log = session.take_log();
+        assert!(log.iter().any(|l| l.text == "Player1 pushed the mine cart"), "{log:?}");
+        assert!(log.iter().any(|l| l.text == "Pressure plate pressed"), "{log:?}");
         assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
     }
 }

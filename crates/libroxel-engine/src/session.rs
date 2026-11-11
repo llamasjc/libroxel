@@ -8,8 +8,9 @@ use libroxel_script::{MouseRay, OutputLevel, ScriptRuntime, SharedTree, UserInpu
 use crate::character::{Character, CharacterInput};
 use crate::physics::Physics;
 
-/// How long a character stays dead before respawning, in seconds.
-pub const RESPAWN_DELAY: f32 = 2.0;
+/// How long a character stays dead before respawning, in seconds, unless
+/// the players service's `RespawnTime` says otherwise.
+pub const RESPAWN_DELAY: f32 = 5.0;
 /// The name of the local player.
 pub const LOCAL_PLAYER_NAME: &str = "Player1";
 
@@ -73,6 +74,10 @@ pub struct PlaySession {
     camera: Option<InstanceId>,
     /// Walks that scripts started with `MoveTo`, and humanoids that died.
     npcs: crate::npc::Npcs,
+    /// Parts that welds hold together.
+    welds: crate::weld::Welds,
+    /// Whether the current character's death has been seen.
+    death_seen: bool,
 }
 
 /// An explosion's flash, for drawing.
@@ -137,6 +142,8 @@ impl PlaySession {
             blasts: Vec::new(),
             camera: None,
             npcs: Default::default(),
+            welds: Default::default(),
+            death_seen: false,
         };
         // Scripts find the camera through the workspace, so it exists from the start.
         session.camera = {
@@ -192,7 +199,9 @@ impl PlaySession {
             auto_assign_team(&mut tree.borrow_mut(), player);
             let errors = session.runtime.player_added(player);
             session.collect(errors);
-            session.spawn_character(&tree);
+            if session.auto_loads(&tree) {
+                session.spawn_character(&tree);
+            }
         }
         Ok(session)
     }
@@ -212,6 +221,8 @@ impl PlaySession {
         };
         self.fill_backpack(tree);
         self.character = Some(character);
+        self.death_seen = false;
+        self.respawn_in = None;
         let errors = self.runtime.character_added(player, character.model);
         self.collect(errors);
     }
@@ -634,6 +645,11 @@ impl PlaySession {
             b.age += dt;
             b.age < BLAST_TIME
         });
+        for player in self.runtime.take_load_requests() {
+            if Some(player) == self.player {
+                self.respawn(&tree);
+            }
+        }
         let mut walks_ended = Vec::new();
         for (humanoid, target) in self.runtime.take_move_requests() {
             walks_ended.extend(self.npcs.request(humanoid, target).map(|h| (h, false)));
@@ -669,11 +685,13 @@ impl PlaySession {
             }
             let player_model = self.character.map(|c| c.model);
             let poses = self.npcs.before_physics(&mut tree, &mut self.physics, player_model);
+            self.welds.before_physics(&tree, &mut self.physics);
             let result = self.physics.step(&mut tree, dt);
             if let Some(c) = self.character.filter(|c| !c.is_dead(&tree)) {
                 c.follow(&mut tree);
             }
             let (ended, died) = self.npcs.after_physics(&mut tree, &poses, dt);
+            self.welds.after_physics(&mut tree);
             walks_ended.extend(ended);
             if let Some(c) = self.character {
                 walks_ended
@@ -697,6 +715,17 @@ impl PlaySession {
             let mut errors = self.runtime.fire_touched(a, b);
             errors.extend(self.runtime.fire_touched(b, a));
             self.collect(errors);
+        }
+        for (a, b) in result.untouches {
+            let alive = {
+                let t = tree.borrow();
+                [a, b].iter().all(|p| t.exists(*p) && !t.is_destroyed(*p).unwrap_or(true))
+            };
+            if alive {
+                let mut errors = self.runtime.fire_touch_ended(a, b);
+                errors.extend(self.runtime.fire_touch_ended(b, a));
+                self.collect(errors);
+            }
         }
         for id in result.fell {
             let _ = tree.borrow_mut().destroy(id);
@@ -774,18 +803,43 @@ impl PlaySession {
         if let Some(remaining) = self.respawn_in.as_mut() {
             *remaining -= dt;
             if *remaining <= 0.0 {
-                self.respawn_in = None;
-                let _ = tree.borrow_mut().destroy(character.model);
-                self.copy_starter_gui(tree, true);
-                self.spawn_character(tree);
+                self.respawn(tree);
                 self.info("Respawned");
             }
-        } else if character.is_dead(&tree.borrow()) {
-            self.respawn_in = Some(RESPAWN_DELAY);
+        } else if !self.death_seen && character.is_dead(&tree.borrow()) {
+            self.death_seen = true;
             self.info("Your character died");
             let errors = self.runtime.humanoid_died(character.humanoid);
             self.collect(errors);
+            // Without auto-loading, a script brings the character back with LoadCharacter.
+            if self.auto_loads(tree) {
+                let delay = {
+                    let t = tree.borrow();
+                    t.service(ClassKind::Players)
+                        .and_then(|p| t.get_number(p, Property::RespawnTime))
+                        .map_or(RESPAWN_DELAY, |d| d as f32)
+                };
+                self.respawn_in = Some(delay);
+            }
         }
+    }
+
+    /// Whether characters spawn by themselves (the players service's `CharacterAutoLoads`).
+    fn auto_loads(&self, tree: &SharedTree) -> bool {
+        let t = tree.borrow();
+        t.service(ClassKind::Players).and_then(|p| t.get_bool(p, Property::CharacterAutoLoads)) != Some(false)
+    }
+
+    /// Removes the player's character, if any, and spawns a fresh one.
+    fn respawn(&mut self, tree: &SharedTree) {
+        self.respawn_in = None;
+        if let (Some(player), Some(character)) = (self.player, self.character.take()) {
+            let errors = self.runtime.character_removing(player, character.model);
+            self.collect(errors);
+            let _ = tree.borrow_mut().destroy(character.model);
+            self.copy_starter_gui(tree, true);
+        }
+        self.spawn_character(tree);
     }
 }
 

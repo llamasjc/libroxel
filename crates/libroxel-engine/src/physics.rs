@@ -257,6 +257,8 @@ fn collider_for(size: Vec3, shape: PartShape, orientation: Vec3) -> (Vec3, Colli
 pub struct StepResult {
     /// Pairs that started touching this step. Each pair appears once.
     pub touches: Vec<(InstanceId, InstanceId)>,
+    /// Pairs that stopped touching this step.
+    pub untouches: Vec<(InstanceId, InstanceId)>,
     /// Unanchored parts that fell out of the world (the caller destroys them).
     pub fell: Vec<InstanceId>,
 }
@@ -267,6 +269,10 @@ pub struct Physics {
     velocities: HashMap<InstanceId, Vec3>,
     grounded: HashSet<InstanceId>,
     contacts: HashSet<(InstanceId, InstanceId)>,
+    /// Parts moved by something else (a weld) that stand still in a step.
+    carried: HashSet<InstanceId>,
+    /// Pairs that pass through each other and never touch (parts of one assembly).
+    ignored: HashSet<(InstanceId, InstanceId)>,
 }
 
 fn ordered(a: InstanceId, b: InstanceId) -> (InstanceId, InstanceId) {
@@ -287,17 +293,35 @@ impl Physics {
         &self.velocities
     }
 
+    /// Sets which parts are carried by welds (they act as anchored during a
+    /// step) and which pairs of parts belong together and ignore each other.
+    pub fn set_assemblies(
+        &mut self,
+        carried: HashSet<InstanceId>,
+        together: impl IntoIterator<Item = (InstanceId, InstanceId)>,
+    ) {
+        for id in &carried {
+            self.velocities.remove(id);
+        }
+        self.carried = carried;
+        self.ignored = together.into_iter().map(|(a, b)| ordered(a, b)).collect();
+    }
+
+    fn ignores(&self, a: InstanceId, b: InstanceId) -> bool {
+        !self.ignored.is_empty() && self.ignored.contains(&ordered(a, b))
+    }
+
     /// Whether `id` ended the last step resting on something.
     pub fn is_grounded(&self, id: InstanceId) -> bool {
         self.grounded.contains(&id)
     }
 
-    fn collect_bodies(tree: &InstanceTree) -> Vec<Body> {
+    fn collect_bodies(&self, tree: &InstanceTree) -> Vec<Body> {
         tree.descendants_of_class(tree.workspace(), ClassKind::Part)
             .into_iter()
             .filter_map(|id| {
                 let size = tree.get_vec3(id, Property::Size)?;
-                let anchored = tree.get_bool(id, Property::Anchored)?;
+                let anchored = tree.get_bool(id, Property::Anchored)? || self.carried.contains(&id);
                 let shape = match tree.get_enum(id, Property::Shape) {
                     Some(EnumValue::Shape(shape)) => shape,
                     _ => PartShape::Block,
@@ -323,7 +347,8 @@ impl Physics {
 
     /// Advances the simulation by `dt` seconds.
     pub fn step(&mut self, tree: &mut InstanceTree, dt: f32) -> StepResult {
-        let mut bodies = Self::collect_bodies(tree);
+        let mut bodies = self.collect_bodies(tree);
+        let gravity = tree.get_number(tree.workspace(), Property::Gravity).map_or(GRAVITY, |g| g as f32);
         let live: HashSet<InstanceId> = bodies.iter().map(|b| b.id).collect();
         self.velocities.retain(|id, _| live.contains(id));
         self.grounded.clear();
@@ -331,7 +356,7 @@ impl Physics {
         let substeps = ((dt / MAX_SUBSTEP).ceil() as usize).clamp(1, MAX_SUBSTEPS);
         let h = dt / substeps as f32;
         for _ in 0..substeps {
-            self.integrate(&mut bodies, h);
+            self.integrate(&mut bodies, h, gravity);
         }
 
         let mut result = StepResult::default();
@@ -351,7 +376,7 @@ impl Physics {
         let mut current = HashSet::new();
         for (i, a) in bodies.iter().enumerate() {
             for b in &bodies[i + 1..] {
-                if a.anchored && b.anchored {
+                if (a.anchored && b.anchored) || self.ignores(a.id, b.id) {
                     continue;
                 }
                 if touching(a, b) {
@@ -362,18 +387,21 @@ impl Physics {
         let mut touches: Vec<_> = current.difference(&self.contacts).copied().collect();
         touches.sort();
         result.touches = touches;
+        let mut untouches: Vec<_> = self.contacts.difference(&current).copied().collect();
+        untouches.sort();
+        result.untouches = untouches;
         self.contacts = current;
         result
     }
 
-    fn integrate(&mut self, bodies: &mut [Body], h: f32) {
+    fn integrate(&mut self, bodies: &mut [Body], h: f32, gravity: f32) {
         for i in 0..bodies.len() {
             if bodies[i].anchored {
                 continue;
             }
             let id = bodies[i].id;
             let mut v = self.velocity(id);
-            v.y -= GRAVITY * h;
+            v.y -= gravity * h;
             let mut grounded = false;
 
             // Move one axis at a time (Y first, so standing on the floor
@@ -395,6 +423,7 @@ impl Physics {
                         || !bodies[j].can_collide
                         || bodies[j].collider != Collider::Aabb
                         || !overlaps(&bodies[i], &bodies[j], -EPS)
+                        || self.ignores(bodies[i].id, bodies[j].id)
                     {
                         continue;
                     }
@@ -432,6 +461,7 @@ impl Physics {
                             || !other.can_collide
                             || other.collider == Collider::Aabb
                             || !overlaps(&bodies[i], &other, -EPS)
+                            || self.ignores(bodies[i].id, other.id)
                         {
                             continue;
                         }

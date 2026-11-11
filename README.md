@@ -50,6 +50,9 @@ The first build compiles Bevy and takes a while. After that it is quick.
   of crates, a chat box (press /) that floats what you say over your head,
   an overhead camera (press C), and a zombie in the quarry that chases you.
   Everyone starts on the Runners team and joins the Winners at the finish.
+  A health bar sits in the corner, the quarry has a mine cart (its sides are
+  welded on) that you can click to push, and a pressure plate by the shop
+  glows while you stand on it.
   Press **▶ Play** (or F5) to try it.
 - **Explorer** (left) shows the instance tree. Click to select, double-click
   a script to edit it, drag one item onto another to move it inside, and
@@ -130,7 +133,9 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `FindFirstChildOfClass`, `FindFirstAncestor`, `FindFirstDescendant`,
   `WaitForChild`, `GetChildren`, `GetDescendants`, `ClearAllChildren`, `IsA`,
   `IsDescendantOf`, `GetFullName`, `Clone`, `Destroy`, `instance.ChildName`,
-  the `Changed` and `ChildAdded` events, and `GetPropertyChangedSignal(name)`.
+  `GetPropertyChangedSignal(name)`, and the `Changed`, `ChildAdded`,
+  `ChildRemoved`, `DescendantAdded`, `DescendantRemoving` and `Destroying`
+  events. Parts also have `Touched` and `TouchEnded`.
 - **Attributes:** `SetAttribute(name, value)` (nil removes it),
   `GetAttribute`, `GetAttributes`, `GetAttributeChangedSignal(name)` and the
   `AttributeChanged(name)` event. Values can be booleans, numbers, strings,
@@ -226,8 +231,20 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   leaderboard.
 - **Characters:** each player's character is a `Model` named after them with a
   `HumanoidRootPart` and a `Humanoid` (`Health`, `MaxHealth`, `WalkSpeed`,
-  `JumpPower`, `TakeDamage(amount)` and the `Died` event). When health
-  reaches 0 the character dies and respawns after two seconds.
+  `JumpPower`, `TakeDamage(amount)` and the `Died` and `HealthChanged(health)`
+  events). When health reaches 0 the character dies and respawns after
+  `Players.RespawnTime` seconds (5 unless changed). Set
+  `Players.CharacterAutoLoads` to false to spawn characters yourself with
+  `player:LoadCharacter()`; `player.CharacterRemoving` fires before a
+  character is removed.
+- **Welds:** a `WeldConstraint` with `Part0` and `Part1` (and `Enabled`)
+  holds two parts together while playing. Parts joined by welds move as one
+  assembly: unanchor them and they fall, slide and get pushed together. In
+  the editor, Insert → WeldConstraint with a part selected welds it to the
+  part it touches, and Part0/Part1 can be picked from a list. Welds (and
+  other links between saved instances) are saved in places, and `Clone`
+  points a copy's welds at the copied parts.
+- **Gravity:** `workspace.Gravity` (196.2 studs/s² unless changed).
 - **NPCs:** any `Model` in the workspace with a `Humanoid` and an unanchored
   `HumanoidRootPart` is a character. `Humanoid:MoveTo(position)` walks it
   there and fires `MoveToFinished(reached)` (it gives up after 8 seconds),
