@@ -8,6 +8,7 @@
 pub mod character;
 pub mod effects;
 pub mod movers;
+pub mod net;
 pub mod npc;
 pub mod physics;
 pub mod seat;

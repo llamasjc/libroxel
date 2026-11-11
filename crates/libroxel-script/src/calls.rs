@@ -11,6 +11,8 @@ use crate::names::{self, functions, game_info, http};
 const CALLBACKS: &str = "libroxel.callbacks";
 const INVOKE_SERVER_FN: &str = "libroxel.invoke_server";
 const INVOKE_CLIENT_FN: &str = "libroxel.invoke_client";
+/// Answers a call from another computer: see [`crate::net::serve_invoke`].
+pub(crate) const INVOKE_SERVE_FN: &str = "libroxel.invoke_serve";
 const INVOKE_FN: &str = "libroxel.invoke";
 
 fn runtime_err(message: impl Into<String>) -> mlua::Error {
@@ -98,7 +100,7 @@ pub(crate) fn new_index(
 /// Luau halves of the invoke methods: the caller waits until a callback is
 /// set, then calls it in its own thread, so the callback may wait too.
 const INVOKE_PRELUDE: &str = r#"
-    local get, local_player, check_player = ...
+    local get, local_player, check_player, send, poll, reply = ...
     local yield = coroutine.yield
     local function await(self, name)
         while true do
@@ -108,8 +110,24 @@ const INVOKE_PRELUDE: &str = r#"
         end
     end
     local invoke_server = function(self, ...)
+        -- On a player's computer the call goes to the server; wait for the answer.
+        local call = send(self, ...)
+        if call then
+            while true do
+                local done, ok, result = poll(call)
+                if done then
+                    if not ok then error(result, 2) end
+                    return table.unpack(result, 1, result.n)
+                end
+                yield(0)
+            end
+        end
         local cb = await(self, "OnServerInvoke")
         return cb(local_player(), ...)
+    end
+    local serve = function(self, call, player, ...)
+        local cb = await(self, "OnServerInvoke")
+        reply(call, player, pcall(cb, player, ...))
     end
     local invoke_client = function(self, player, ...)
         check_player(player)
@@ -120,7 +138,7 @@ const INVOKE_PRELUDE: &str = r#"
         local cb = await(self, "OnInvoke")
         return cb(...)
     end
-    return invoke_server, invoke_client, invoke
+    return invoke_server, invoke_client, invoke, serve
 "#;
 
 // ---------------------------------------------------------------------------
@@ -360,8 +378,13 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
         }
         Ok(())
     })?;
-    let (server, client, bindable): (Function, Function, Function) =
-        lua.load(INVOKE_PRELUDE).set_name("=libroxel").call((get, local_player, check_player))?;
+    let (send, poll, reply) =
+        (crate::net::send_invoke_fn(lua)?, crate::net::poll_invoke_fn(lua)?, crate::net::reply_fn(lua)?);
+    let (server, client, bindable, serve): (Function, Function, Function, Function) = lua
+        .load(INVOKE_PRELUDE)
+        .set_name("=libroxel")
+        .call((get, local_player, check_player, send, poll, reply))?;
+    lua.set_named_registry_value(INVOKE_SERVE_FN, serve)?;
     lua.set_named_registry_value(INVOKE_SERVER_FN, server)?;
     lua.set_named_registry_value(INVOKE_CLIENT_FN, client)?;
     lua.set_named_registry_value(INVOKE_FN, bindable)?;

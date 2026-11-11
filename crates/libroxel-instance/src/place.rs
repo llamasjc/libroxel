@@ -33,7 +33,8 @@ pub enum PlaceError {
     Tree(#[from] TreeError),
 }
 
-fn value_to_json(value: &PropertyValue) -> Value {
+/// A property value as JSON. Links become `null`: they are saved separately.
+pub fn value_to_json(value: &PropertyValue) -> Value {
     match value {
         PropertyValue::Bool(b) => json!(b),
         PropertyValue::Number(n) => json!(n),
@@ -56,7 +57,8 @@ fn triple(value: &Value) -> Option<[f32; 3]> {
     Some([arr[0].as_f64()? as f32, arr[1].as_f64()? as f32, arr[2].as_f64()? as f32])
 }
 
-fn value_from_json(property: Property, value: &Value) -> Option<PropertyValue> {
+/// Reads a value of `property`'s kind back from [`value_to_json`]'s JSON.
+pub fn value_from_json(property: Property, value: &Value) -> Option<PropertyValue> {
     if let Some(kind) = property.enum_kind() {
         return kind.from_file_name(value.as_str()?).map(PropertyValue::Enum);
     }
@@ -92,14 +94,14 @@ fn value_from_json(property: Property, value: &Value) -> Option<PropertyValue> {
 /// Attributes are saved with their kind, since the same JSON (a list of
 /// numbers) could be several kinds: `{"kind": "Vec3", "value": [1, 2, 3]}`.
 /// Booleans, numbers and strings are saved as they are.
-fn attribute_to_json(value: &PropertyValue) -> Value {
+pub fn attribute_to_json(value: &PropertyValue) -> Value {
     match value {
         PropertyValue::Bool(_) | PropertyValue::Number(_) | PropertyValue::String(_) => value_to_json(value),
         other => json!({ "kind": other.kind_name(), "value": value_to_json(other) }),
     }
 }
 
-fn attribute_from_json(value: &Value) -> Option<PropertyValue> {
+pub fn attribute_from_json(value: &Value) -> Option<PropertyValue> {
     Some(match value {
         Value::Bool(b) => PropertyValue::Bool(*b),
         Value::Number(n) => PropertyValue::Number(n.as_f64()?),

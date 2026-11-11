@@ -443,15 +443,22 @@ fn workspace_raycast(
 // Remote and bindable events
 // ---------------------------------------------------------------------------
 
-/// The player on this computer: the first one in the players service.
+/// The player on this computer: the one the engine named, else (in a game
+/// on one computer) the first one in the players service.
 pub(crate) fn local_player(lua: &Lua) -> Option<InstanceId> {
     let host = host(lua);
+    {
+        let net = host.net.borrow();
+        if net.local_player.is_some() || net.role == crate::net::NetRole::Server {
+            return net.local_player;
+        }
+    }
     let tree = host.tree.borrow();
     let players = tree.service(ClassKind::Players)?;
     tree.children(players).ok()?.iter().copied().find(|c| tree.class(*c) == Ok(ClassKind::Player))
 }
 
-fn fire_args(lua: &Lua, signal: SignalKind, first: Option<InstanceId>, args: MultiValue) {
+pub(crate) fn fire_args(lua: &Lua, signal: SignalKind, first: Option<InstanceId>, args: MultiValue) {
     fire(lua, signal, || {
         let mut all = MultiValue::new();
         if let Some(first) = first {
@@ -473,6 +480,11 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
     );
     m.add_method(methods::FIRE_SERVER, |lua, this, args: MultiValue| {
         require_class(lua, this.0, ClassKind::RemoteEvent, methods::FIRE_SERVER)?;
+        if crate::net::role(lua) == crate::net::NetRole::Client {
+            let args = crate::net::encode_args(&args)?;
+            crate::net::send(lua, crate::net::NetMessage::ServerEvent { remote: this.0, args });
+            return Ok(());
+        }
         let player = local_player(lua).ok_or_else(|| runtime_err("FireServer needs a player in the game"))?;
         fire_args(lua, SignalKind::ServerEvent(this.0), Some(player), args);
         Ok(())
@@ -482,15 +494,34 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
         let player = as_instance(&player)
             .filter(|p| host(lua).tree.borrow().class(*p) == Ok(ClassKind::Player))
             .ok_or_else(|| runtime_err("FireClient expects a Player first"))?;
-        // Every local script here belongs to the local player.
+        use crate::net::{NetMessage, NetRole, role};
+        if role(lua) == NetRole::Client {
+            return Err(runtime_err("FireClient can only be used by the server"));
+        }
+        let args: MultiValue = args.into_iter().collect();
+        // Local scripts here belong to the local player; other players are elsewhere.
         if Some(player) == local_player(lua) {
-            fire_args(lua, SignalKind::ClientEvent(this.0), None, args.into_iter().collect());
+            fire_args(lua, SignalKind::ClientEvent(this.0), None, args);
+        } else if role(lua) == NetRole::Server {
+            let args = crate::net::encode_args(&args)?;
+            crate::net::send(lua, NetMessage::ClientEvent { remote: this.0, player: Some(player), args });
         }
         Ok(())
     });
     m.add_method(methods::FIRE_ALL_CLIENTS, |lua, this, args: MultiValue| {
         require_class(lua, this.0, ClassKind::RemoteEvent, methods::FIRE_ALL_CLIENTS)?;
-        fire_args(lua, SignalKind::ClientEvent(this.0), None, args);
+        use crate::net::{NetMessage, NetRole, role};
+        match role(lua) {
+            NetRole::Client => return Err(runtime_err("FireAllClients can only be used by the server")),
+            NetRole::Server => {
+                let json = crate::net::encode_args(&args)?;
+                crate::net::send(lua, NetMessage::ClientEvent { remote: this.0, player: None, args: json });
+                if local_player(lua).is_some() {
+                    fire_args(lua, SignalKind::ClientEvent(this.0), None, args);
+                }
+            }
+            NetRole::Solo => fire_args(lua, SignalKind::ClientEvent(this.0), None, args),
+        }
         Ok(())
     });
     m.add_method(methods::FIRE, |lua, this, args: MultiValue| {

@@ -125,7 +125,7 @@ pub(crate) struct Host {
     connections: RefCell<Vec<Connection>>,
     next_connection: Cell<u64>,
     output: RefCell<Vec<OutputLine>>,
-    errors: RefCell<Vec<ScriptError>>,
+    pub(crate) errors: RefCell<Vec<ScriptError>>,
     current_script: RefCell<String>,
     /// The script instance whose code is running, if it came from one.
     current_owner: Cell<Option<InstanceId>>,
@@ -148,6 +148,8 @@ pub(crate) struct Host {
     pub(crate) mouse: Cell<Option<crate::MouseRay>>,
     /// Velocities, the focused text box and the view size, shared with the engine.
     pub(crate) world: RefCell<crate::world::WorldState>,
+    /// Which side of a networked game this is, and what it is sending.
+    pub(crate) net: RefCell<crate::net::NetState>,
 }
 
 /// The number for `name`, giving it one if it has none yet.
@@ -249,7 +251,7 @@ fn resume(
     }
 }
 
-fn spawn(
+pub(crate) fn spawn(
     lua: &Lua,
     func: Function,
     args: MultiValue,
@@ -860,13 +862,7 @@ impl UserData for LuaInstance {
                 return Ok(value);
             }
             if key == names::methods::LOCAL_PLAYER && class == ClassKind::Players {
-                let first = {
-                    let host = host(lua);
-                    let tree = host.tree.borrow();
-                    let children = tree.children(id).map_err(tree_err)?;
-                    children.iter().copied().find(|c| tree.class(*c) == Ok(ClassKind::Player))
-                };
-                return match first {
+                return match crate::services::local_player(lua) {
                     Some(p) => Ok(Value::UserData(push_instance(lua, p)?)),
                     None => Ok(Value::Nil),
                 };
@@ -956,10 +952,11 @@ impl UserData for RunService {
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        use crate::net::NetRole;
         use names::services::*;
-        for name in [IS_CLIENT, IS_SERVER, IS_STUDIO] {
-            methods.add_method(name, |_, _, ()| Ok(true));
-        }
+        methods.add_method(IS_CLIENT, |lua, _, ()| Ok(crate::net::role(lua) != NetRole::Server));
+        methods.add_method(IS_SERVER, |lua, _, ()| Ok(crate::net::role(lua) != NetRole::Client));
+        methods.add_method(IS_STUDIO, |lua, _, ()| Ok(crate::net::role(lua) == NetRole::Solo));
     }
 }
 
@@ -1490,6 +1487,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         interned: RefCell::new(Vec::new()),
         mouse: Cell::new(None),
         world: RefCell::new(Default::default()),
+        net: RefCell::new(Default::default()),
     });
 
     // Weak-valued cache so each instance has exactly one userdata.

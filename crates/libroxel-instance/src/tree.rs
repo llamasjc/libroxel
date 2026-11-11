@@ -17,6 +17,18 @@ pub struct InstanceId {
     generation: u32,
 }
 
+impl InstanceId {
+    /// The id as one number, for sending to another computer.
+    pub fn to_bits(self) -> u64 {
+        (u64::from(self.generation) << 32) | u64::from(self.index)
+    }
+
+    /// The id [`to_bits`](Self::to_bits) made.
+    pub fn from_bits(bits: u64) -> Self {
+        Self { index: bits as u32, generation: (bits >> 32) as u32 }
+    }
+}
+
 impl fmt::Display for InstanceId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "#{}v{}", self.index, self.generation)
@@ -466,7 +478,8 @@ impl InstanceTree {
         Ok(())
     }
 
-    /// A number that changes every time one of `id`'s properties does, so
+    /// A number that changes every time one of `id`'s properties, attributes
+    /// or tags does, so
     /// a mirror of the tree (like the renderer) can skip instances that
     /// haven't changed since it last looked.
     pub fn revision(&self, id: InstanceId) -> Result<u64> {
@@ -494,6 +507,7 @@ impl InstanceTree {
             None => attributes.remove(name).is_some(),
         };
         if changed {
+            self.data_mut(id)?.revision = next_revision();
             self.changes.push(Change::AttributeChanged { id, name: name.to_owned() });
         }
         Ok(())
@@ -512,6 +526,7 @@ impl InstanceTree {
         let tags = &mut self.data_mut(id)?.tags;
         if let Err(at) = tags.binary_search_by(|t| t.as_str().cmp(tag)) {
             tags.insert(at, tag.to_owned());
+            self.data_mut(id)?.revision = next_revision();
             self.changes.push(Change::TagAdded { id, tag: tag.to_owned() });
         }
         Ok(())
@@ -521,6 +536,7 @@ impl InstanceTree {
         let tags = &mut self.data_mut(id)?.tags;
         if let Ok(at) = tags.binary_search_by(|t| t.as_str().cmp(tag)) {
             tags.remove(at);
+            self.data_mut(id)?.revision = next_revision();
             self.changes.push(Change::TagRemoved { id, tag: tag.to_owned() });
         }
         Ok(())

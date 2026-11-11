@@ -136,6 +136,11 @@ pub(crate) fn mouse_button(lua: &Lua, down: bool) {
     let signal = if down { SignalKind::MouseButton1Down } else { SignalKind::MouseButton1Up };
     fire(lua, signal, || Ok(mlua::MultiValue::new()));
     let Some(tool) = held_tool(lua) else { return };
+    activate(lua, tool, down);
+}
+
+/// Fires `tool`'s `Activated` or `Deactivated`, unless it is turned off.
+pub(crate) fn activate(lua: &Lua, tool: InstanceId, down: bool) {
     if host(lua).tree.borrow().get_bool(tool, Property::Enabled) == Some(false) {
         return;
     }

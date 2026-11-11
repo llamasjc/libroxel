@@ -302,6 +302,15 @@ impl Character {
         character
     }
 
+    /// The character a model made by [`spawn_dressed`](Self::spawn_dressed)
+    /// is, found by its parts' names (as on a computer that was sent it).
+    pub fn from_model(tree: &InstanceTree, model: InstanceId) -> Option<Character> {
+        let root = tree.find_first_child(model, names::ROOT_PART).ok().flatten()?;
+        let humanoid = tree.find_first_child_of_class(model, ClassKind::Humanoid).ok().flatten()?;
+        let (head, limbs) = find_rig(tree, model)?;
+        Some(Character { model, root, head, humanoid, limbs })
+    }
+
     /// Puts the body around the root in `pose`.
     pub fn pose(&self, tree: &mut InstanceTree, pose: Pose) {
         pose_rig(tree, self.root, self.head, &self.limbs, pose);

@@ -1837,4 +1837,90 @@ mod tests {
         let log = session.take_log();
         assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
     }
+
+    #[test]
+    fn the_sample_plays_from_a_joined_computer() {
+        use libroxel_engine::PlaySession;
+        use libroxel_instance::KeyCode;
+        use libroxel_script::{MouseRay, UserInput};
+        use std::{cell::RefCell, rc::Rc};
+        let mut host = PlaySession::host(Rc::new(RefCell::new(sample_obby())), 0, None, true).unwrap();
+        let port = host.host_address().unwrap().port();
+        let guest_tree = Rc::new(RefCell::new(InstanceTree::new()));
+        let mut guest = PlaySession::join(guest_tree.clone(), &format!("127.0.0.1:{port}"), "Bea").unwrap();
+        let mut host_log = Vec::new();
+        let mut guest_log = Vec::new();
+        let mut until = |host: &mut PlaySession,
+                         guest: &mut PlaySession,
+                         what: &str,
+                         done: &dyn Fn(&PlaySession) -> bool| {
+            for _ in 0..900 {
+                host.step(1.0 / 60.0, CharacterInput::default());
+                guest.step(1.0 / 60.0, CharacterInput::default());
+                host_log.extend(host.take_log());
+                guest_log.extend(guest.take_log());
+                if done(guest) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            panic!("gave up waiting for {what}: {host_log:?} {guest_log:?}");
+        };
+        let child = |tree: &InstanceTree, parent: InstanceId, name: &str| {
+            tree.find_first_child(parent, name).unwrap()
+        };
+
+        // The guest's HUD runs on the guest and shows their coins.
+        until(&mut host, &mut guest, "the coin counter", &|g| {
+            let tree = g.runtime().tree().borrow();
+            let label = g
+                .player_gui()
+                .and_then(|gui| child(&tree, gui, "HUD"))
+                .and_then(|hud| child(&tree, hud, "CoinLabel"));
+            label.is_some_and(|l| tree.get_string(l, Property::Text).as_deref() == Some("Coins: 0"))
+        });
+        assert!(g_has(&guest, "Builder"), "the guest has the builder tool");
+
+        // Pressing 1 holds the builder; the host moves it into the guest's character.
+        guest.input_began(UserInput::Key(KeyCode::One), false);
+        guest.input_ended(UserInput::Key(KeyCode::One), false);
+        until(&mut host, &mut guest, "the tool in hand", &|g| g.hotbar().first().is_some_and(|t| t.1));
+
+        // Clicking with it runs the guest's aim script, which asks the host to build.
+        guest.set_mouse(Some(MouseRay {
+            origin: Vec3::new(4.0, 20.0, 4.0),
+            direction: Vec3::new(0.0, -1.0, 0.0),
+            x: 0.0,
+            y: 0.0,
+        }));
+        guest.input_began(UserInput::MouseButton1, false);
+        guest.input_ended(UserInput::MouseButton1, false);
+        until(&mut host, &mut guest, "a brick", &|g| {
+            let tree = g.runtime().tree().borrow();
+            child(&tree, tree.workspace(), "BuiltBrick").is_some_and(|b| {
+                tree.get_attribute(b, "Builder").unwrap() == Some(PropertyValue::String("Bea".into()))
+            })
+        });
+
+        // Clicking the vault door from the guest opens it for everyone.
+        let door = {
+            let tree = guest_tree.borrow();
+            let vault = child(&tree, tree.workspace(), "Vault").unwrap();
+            child(&tree, vault, "Door").unwrap()
+        };
+        assert!(guest.click_part(door));
+        until(&mut host, &mut guest, "the door", &|g| {
+            g.runtime().tree().borrow().get_vec3(door, Property::Position).is_some_and(|p| p.y > 8.0)
+        });
+        let printed: Vec<&str> = host_log.iter().map(|l| l.text.as_str()).collect();
+        assert!(printed.contains(&"Bea opened the vault"), "{printed:?}");
+        let errors: Vec<_> =
+            host_log.iter().chain(guest_log.iter()).filter(|l| l.level == LogLevel::Error).collect();
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    fn g_has(session: &libroxel_engine::PlaySession, tool: &str) -> bool {
+        let tree = session.runtime().tree().borrow();
+        session.hotbar().iter().any(|(t, _)| tree.name(*t) == Ok(tool))
+    }
 }

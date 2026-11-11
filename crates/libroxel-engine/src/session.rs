@@ -3,7 +3,9 @@
 use libroxel_instance::{
     ClassKind, EnumValue, InstanceId, InstanceTree, KeyCode, Property, PropertyValue, Rotation, Vec3,
 };
-use libroxel_script::{MouseRay, OutputLevel, ScriptRuntime, SharedTree, UserInput, VelocityRequest, names};
+use libroxel_script::{
+    MouseRay, NetRole, OutputLevel, ScriptRuntime, SharedTree, UserInput, VelocityRequest, names,
+};
 
 use crate::character::{Character, CharacterInput};
 use crate::physics::Physics;
@@ -43,49 +45,11 @@ pub struct ActivePrompt {
 
 /// A prompt key being held down.
 #[derive(Debug, Clone, Copy)]
-struct PromptHold {
+pub(crate) struct PromptHold {
     prompt: InstanceId,
     key: KeyCode,
     held: f32,
     triggered: bool,
-}
-
-/// Scripts, physics and a character, all running against one tree.
-pub struct PlaySession {
-    runtime: ScriptRuntime,
-    physics: Physics,
-    character: Option<Character>,
-    /// The local player's object under the players service.
-    player: Option<InstanceId>,
-    /// The local player's GUI container.
-    player_gui: Option<InstanceId>,
-    respawn_in: Option<f32>,
-    log: Vec<LogEntry>,
-    hold: Option<PromptHold>,
-    /// The local player's tool container.
-    backpack: Option<InstanceId>,
-    /// The player's tools in hotbar order (slot 1 first).
-    hotbar: Vec<InstanceId>,
-    /// Explosions that have already gone off.
-    exploded: std::collections::HashSet<InstanceId>,
-    /// Explosions still being drawn: where, how big, and how long ago.
-    blasts: Vec<Blast>,
-    /// Particle bursts scripts asked for, for the renderer to send out.
-    emits: Vec<(InstanceId, u32)>,
-    /// The GUI objects under the pointer, outermost first.
-    hovered: Vec<InstanceId>,
-    /// The workspace camera the view follows or obeys.
-    camera: Option<InstanceId>,
-    /// Walks that scripts started with `MoveTo`, and humanoids that died.
-    npcs: crate::npc::Npcs,
-    /// Parts that welds hold together.
-    welds: crate::weld::Welds,
-    /// Whether the current character's death has been seen.
-    death_seen: bool,
-    /// The seat the player's character sits in.
-    seating: crate::seat::Seating,
-    /// How far through a stride the character's walk is, in radians.
-    stride: f32,
 }
 
 /// An explosion's flash, for drawing.
@@ -116,6 +80,79 @@ const SLOT_KEYS: [KeyCode; 9] = [
     KeyCode::Eight,
     KeyCode::Nine,
 ];
+/// One player in the game, and what the session keeps track of for them.
+#[derive(Debug)]
+pub(crate) struct Avatar {
+    pub(crate) player: InstanceId,
+    /// Their GUI container. A player on another computer has an empty one
+    /// here: their GUIs run on their computer.
+    pub(crate) gui: Option<InstanceId>,
+    /// Their tool container.
+    pub(crate) backpack: Option<InstanceId>,
+    /// Their tools in hotbar order (slot 1 first).
+    pub(crate) hotbar: Vec<InstanceId>,
+    pub(crate) character: Option<Character>,
+    pub(crate) respawn_in: Option<f32>,
+    /// Whether the current character's death has been seen.
+    pub(crate) death_seen: bool,
+    pub(crate) hold: Option<PromptHold>,
+    /// The seat their character sits in.
+    pub(crate) seating: crate::seat::Seating,
+    /// How far through a stride the character's walk is, in radians.
+    pub(crate) stride: f32,
+    /// Whether they play on another computer, so their input comes over
+    /// the network and their GUIs and local scripts run there.
+    pub(crate) remote: bool,
+    /// Their latest input, for players on other computers.
+    pub(crate) input: CharacterInput,
+}
+
+impl Avatar {
+    pub(crate) fn new(player: InstanceId, remote: bool) -> Self {
+        Self {
+            player,
+            gui: None,
+            backpack: None,
+            hotbar: Vec::new(),
+            character: None,
+            respawn_in: None,
+            death_seen: false,
+            hold: None,
+            seating: Default::default(),
+            stride: 0.0,
+            remote,
+            input: CharacterInput::default(),
+        }
+    }
+}
+
+/// Scripts, physics and the players' characters, all running against one tree.
+pub struct PlaySession {
+    pub(crate) runtime: ScriptRuntime,
+    pub(crate) physics: Physics,
+    /// Everyone in the game. The one on this computer (if any) is the one
+    /// that isn't `remote`.
+    pub(crate) avatars: Vec<Avatar>,
+    pub(crate) log: Vec<LogEntry>,
+    /// Explosions that have already gone off.
+    pub(crate) exploded: std::collections::HashSet<InstanceId>,
+    /// Explosions still being drawn: where, how big, and how long ago.
+    pub(crate) blasts: Vec<Blast>,
+    /// Particle bursts scripts asked for, for the renderer to send out.
+    pub(crate) emits: Vec<(InstanceId, u32)>,
+    /// The GUI objects under the pointer, outermost first.
+    hovered: Vec<InstanceId>,
+    /// The workspace camera the view follows or obeys.
+    pub(crate) camera: Option<InstanceId>,
+    /// Walks that scripts started with `MoveTo`, and humanoids that died.
+    npcs: crate::npc::Npcs,
+    /// Parts that welds hold together.
+    welds: crate::weld::Welds,
+    /// The network connection, when the game is hosted or joined.
+    pub(crate) link: crate::net::Link,
+    /// The next `UserId` to give a player who joins.
+    pub(crate) next_user_id: u32,
+}
 
 impl PlaySession {
     /// Spawns a character (when `with_character`) and starts every script.
@@ -124,29 +161,25 @@ impl PlaySession {
     /// then their character spawns, so scripts see the same order as in a
     /// real game.
     pub fn start(tree: SharedTree, with_character: bool) -> Result<Self, String> {
-        Self::start_inner(tree, with_character, None)
+        Self::start_inner(tree, with_character, None, NetRole::Solo)
     }
 
     /// Like [`start`](Self::start) with a character, with data stores
     /// holding `saved_data` (JSON from an earlier session's
     /// [`save_data`](Self::save_data)) before any script runs.
     pub fn start_with_data(tree: SharedTree, saved_data: &str) -> Result<Self, String> {
-        Self::start_inner(tree, true, Some(saved_data))
+        Self::start_inner(tree, true, Some(saved_data), NetRole::Solo)
     }
 
-    fn start_inner(tree: SharedTree, with_character: bool, saved_data: Option<&str>) -> Result<Self, String> {
+    /// A session with no scripts started and no one in it, for `role`.
+    pub(crate) fn empty(tree: SharedTree, role: NetRole) -> Result<Self, String> {
         let runtime = ScriptRuntime::new(tree.clone()).map_err(|e| format!("could not start Luau: {e}"))?;
+        runtime.set_net_role(role);
         let mut session = Self {
             runtime,
             physics: Physics::default(),
-            character: None,
-            player: None,
-            player_gui: None,
-            respawn_in: None,
+            avatars: Vec::new(),
             log: Vec::new(),
-            hold: None,
-            backpack: None,
-            hotbar: Vec::new(),
             exploded: Default::default(),
             blasts: Vec::new(),
             emits: Vec::new(),
@@ -154,9 +187,8 @@ impl PlaySession {
             camera: None,
             npcs: Default::default(),
             welds: Default::default(),
-            death_seen: false,
-            seating: Default::default(),
-            stride: 0.0,
+            link: Default::default(),
+            next_user_id: 1,
         };
         // Scripts find the camera through the workspace, so it exists from the start.
         session.camera = {
@@ -173,6 +205,16 @@ impl PlaySession {
                 }
             }
         };
+        Ok(session)
+    }
+
+    pub(crate) fn start_inner(
+        tree: SharedTree,
+        with_character: bool,
+        saved_data: Option<&str>,
+        role: NetRole,
+    ) -> Result<Self, String> {
+        let mut session = Self::empty(tree, role)?;
         if let Some(json) = saved_data
             && let Err(err) = session.runtime.load_data(json)
         {
@@ -185,42 +227,90 @@ impl PlaySession {
         let errors = session.runtime.run_tree_scripts();
         session.collect(errors);
         if with_character {
-            let player = {
-                let mut t = tree.borrow_mut();
-                let players = t.service(ClassKind::Players).expect("every tree has a players service");
-                let player = t.create(ClassKind::Player, LOCAL_PLAYER_NAME).expect("players can be created");
-                t.set_parent(player, Some(players)).expect("fresh players can be parented");
-                t.set(player, Property::UserId, PropertyValue::Number(1.0)).expect("players have ids");
-                player
-            };
-            session.player = Some(player);
-            let gui = {
-                let mut t = tree.borrow_mut();
-                let gui = t.create(ClassKind::PlayerGui, "PlayerGui").expect("player GUIs can be created");
-                t.set_parent(gui, Some(player)).expect("fresh GUIs can be parented");
-                gui
-            };
-            session.player_gui = Some(gui);
-            let backpack = {
-                let mut t = tree.borrow_mut();
-                let backpack = t.create(ClassKind::Backpack, "Backpack").expect("backpacks can be created");
-                t.set_parent(backpack, Some(player)).expect("fresh backpacks can be parented");
-                backpack
-            };
-            session.backpack = Some(backpack);
-            session.copy_starter_gui(&tree, false);
-            auto_assign_team(&mut tree.borrow_mut(), player);
-            let errors = session.runtime.player_added(player);
-            session.collect(errors);
-            if session.auto_loads(&tree) {
-                session.spawn_character(&tree);
-            }
+            session.add_player(LOCAL_PLAYER_NAME, false);
         }
         Ok(session)
     }
 
-    fn spawn_character(&mut self, tree: &SharedTree) {
-        let Some(player) = self.player else { return };
+    /// Adds a player called `name` (made unique): their player object, GUI
+    /// container and backpack, a team, the join event, then their character.
+    pub(crate) fn add_player(&mut self, name: &str, remote: bool) -> InstanceId {
+        let tree = self.runtime.tree().clone();
+        let user_id = self.next_user_id;
+        self.next_user_id += 1;
+        let player = {
+            let mut t = tree.borrow_mut();
+            let players = t.service(ClassKind::Players).expect("every tree has a players service");
+            let taken = |t: &InstanceTree, n: &str| t.find_first_child(players, n).ok().flatten().is_some();
+            let mut unique = name.to_owned();
+            let mut n = 2;
+            while taken(&t, &unique) {
+                unique = format!("{name}{n}");
+                n += 1;
+            }
+            let player = t.create(ClassKind::Player, unique).expect("players can be created");
+            t.set_parent(player, Some(players)).expect("fresh players can be parented");
+            t.set(player, Property::UserId, PropertyValue::Number(f64::from(user_id)))
+                .expect("players have ids");
+            player
+        };
+        let mut avatar = Avatar::new(player, remote);
+        {
+            let mut t = tree.borrow_mut();
+            let gui = t.create(ClassKind::PlayerGui, "PlayerGui").expect("player GUIs can be created");
+            t.set_parent(gui, Some(player)).expect("fresh GUIs can be parented");
+            avatar.gui = Some(gui);
+            let backpack = t.create(ClassKind::Backpack, "Backpack").expect("backpacks can be created");
+            t.set_parent(backpack, Some(player)).expect("fresh backpacks can be parented");
+            avatar.backpack = Some(backpack);
+        }
+        self.avatars.push(avatar);
+        let index = self.avatars.len() - 1;
+        if !remote && self.runtime.net_role() != NetRole::Solo {
+            self.runtime.set_local_player(Some(player));
+        }
+        self.copy_starter_gui(index, false);
+        auto_assign_team(&mut tree.borrow_mut(), player);
+        let errors = self.runtime.player_added(player);
+        self.collect(errors);
+        if self.auto_loads(&tree)
+            && let Some(index) = self.avatar_of(player)
+        {
+            self.spawn_character(index);
+        }
+        player
+    }
+
+    /// Takes `player` out of the game: the leave event, then their
+    /// character and player object go.
+    pub(crate) fn leave(&mut self, player: InstanceId) {
+        let Some(index) = self.avatar_of(player) else { return };
+        let errors = self.runtime.player_removing(player);
+        self.collect(errors);
+        let Some(index) = self.avatar_of(player).or(Some(index)).filter(|i| *i < self.avatars.len()) else {
+            return;
+        };
+        let avatar = self.avatars.remove(index);
+        let mut tree = self.runtime.tree().borrow_mut();
+        if let Some(c) = avatar.character {
+            let _ = tree.destroy(c.model);
+        }
+        let _ = tree.destroy(player);
+    }
+
+    /// Which avatar is `player`'s.
+    pub(crate) fn avatar_of(&self, player: InstanceId) -> Option<usize> {
+        self.avatars.iter().position(|a| a.player == player)
+    }
+
+    /// The avatar of the player on this computer.
+    fn local(&self) -> Option<usize> {
+        self.avatars.iter().position(|a| !a.remote)
+    }
+
+    fn spawn_character(&mut self, index: usize) {
+        let tree = self.runtime.tree().clone();
+        let player = self.avatars[index].player;
         let character = {
             let mut t = tree.borrow_mut();
             let name = t.name(player).unwrap_or(LOCAL_PLAYER_NAME).to_owned();
@@ -234,28 +324,37 @@ impl PlaySession {
             let _ = t.set(player, Property::Character, PropertyValue::Ref(Some(character.model)));
             character
         };
-        self.fill_backpack(tree);
-        self.character = Some(character);
-        self.death_seen = false;
-        self.respawn_in = None;
+        self.fill_backpack(index);
+        let avatar = &mut self.avatars[index];
+        avatar.character = Some(character);
+        avatar.death_seen = false;
+        avatar.respawn_in = None;
         let errors = self.runtime.character_added(player, character.model);
         self.collect(errors);
     }
 
     /// The local player's object, while a character is being played.
     pub fn player(&self) -> Option<InstanceId> {
-        self.player
+        self.local().map(|i| self.avatars[i].player)
     }
 
     /// The local player's GUI container, whose screen GUIs are drawn over the view.
     pub fn player_gui(&self) -> Option<InstanceId> {
-        self.player_gui
+        self.local().and_then(|i| self.avatars[i].gui)
+    }
+
+    /// Everyone in the game, the local player (if any) included.
+    pub fn players(&self) -> Vec<InstanceId> {
+        self.avatars.iter().map(|a| a.player).collect()
     }
 
     /// Copies the starter GUIs into the player's GUI and starts their local
     /// scripts. With `respawn`, only GUIs that reset on spawn are replaced.
-    fn copy_starter_gui(&mut self, tree: &SharedTree, respawn: bool) {
-        let Some(gui) = self.player_gui else { return };
+    /// Players on other computers get theirs there.
+    pub(crate) fn copy_starter_gui(&mut self, index: usize, respawn: bool) {
+        let tree = self.runtime.tree().clone();
+        let avatar = &self.avatars[index];
+        let Some(gui) = avatar.gui.filter(|_| !avatar.remote) else { return };
         let copies: Vec<InstanceId> = {
             let mut t = tree.borrow_mut();
             let resets =
@@ -291,9 +390,12 @@ impl PlaySession {
     }
 
     /// Gives the player a fresh copy of every starter tool, replacing what
-    /// their backpack held, and starts the tools' scripts.
-    fn fill_backpack(&mut self, tree: &SharedTree) {
-        let Some(backpack) = self.backpack else { return };
+    /// their backpack held, and starts the tools' scripts (their local
+    /// scripts only for the player on this computer).
+    fn fill_backpack(&mut self, index: usize) {
+        let tree = self.runtime.tree().clone();
+        let Some(backpack) = self.avatars[index].backpack else { return };
+        let remote = self.avatars[index].remote;
         let copies: Vec<InstanceId> = {
             let mut t = tree.borrow_mut();
             for old in t.children(backpack).unwrap_or_default().to_vec() {
@@ -316,45 +418,64 @@ impl PlaySession {
                 })
                 .collect()
         };
-        self.hotbar.clear();
+        self.avatars[index].hotbar.clear();
         for copy in copies {
             let mut errors = self.runtime.run_scripts(copy);
-            errors.extend(self.runtime.run_local_scripts(copy));
+            if !remote {
+                errors.extend(self.runtime.run_local_scripts(copy));
+            }
             self.collect(errors);
         }
-        self.refresh_hotbar();
+        self.refresh_hotbar(index);
     }
 
-    /// Keeps the hotbar in step with the tools the player has: ones that
+    /// Keeps a hotbar in step with the tools the player has: ones that
     /// are gone drop out, new ones go at the end.
-    fn refresh_hotbar(&mut self) {
+    pub(crate) fn refresh_hotbar(&mut self, index: usize) {
         let tree = self.runtime.tree().borrow();
+        let avatar = &mut self.avatars[index];
         let mut owned: Vec<InstanceId> = Vec::new();
-        for container in [self.backpack, self.character.map(|c| c.model)].into_iter().flatten() {
+        for container in [avatar.backpack, avatar.character.map(|c| c.model)].into_iter().flatten() {
             if let Ok(children) = tree.children(container) {
                 owned.extend(children.iter().copied().filter(|c| tree.class(*c) == Ok(ClassKind::Tool)));
             }
         }
-        self.hotbar.retain(|t| owned.contains(t));
+        avatar.hotbar.retain(|t| owned.contains(t));
         for tool in owned {
-            if !self.hotbar.contains(&tool) {
-                self.hotbar.push(tool);
+            if !avatar.hotbar.contains(&tool) {
+                avatar.hotbar.push(tool);
             }
         }
     }
 
     /// The player's tools in hotbar order, each with whether it's held.
     pub fn hotbar(&self) -> Vec<(InstanceId, bool)> {
+        let Some(avatar) = self.local().map(|i| &self.avatars[i]) else { return Vec::new() };
         let tree = self.runtime.tree().borrow();
-        let model = self.character.map(|c| c.model);
-        self.hotbar.iter().map(|t| (*t, model.is_some() && tree.parent(*t).ok().flatten() == model)).collect()
+        let model = avatar.character.map(|c| c.model);
+        avatar
+            .hotbar
+            .iter()
+            .map(|t| (*t, model.is_some() && tree.parent(*t).ok().flatten() == model))
+            .collect()
     }
 
     /// Holds the tool in hotbar `slot` (from 0), or puts it away if it's
     /// already held. Holding one tool puts any other away.
     pub fn toggle_tool(&mut self, slot: usize) {
+        if self.runtime.net_role() == NetRole::Client {
+            self.send_to_server(crate::net::ClientSays::Tool(slot));
+            return;
+        }
+        if let Some(index) = self.local() {
+            self.toggle_tool_for(index, slot);
+        }
+    }
+
+    pub(crate) fn toggle_tool_for(&mut self, index: usize, slot: usize) {
+        let avatar = &self.avatars[index];
         let (Some(tool), Some(character), Some(backpack)) =
-            (self.hotbar.get(slot).copied(), self.character, self.backpack)
+            (avatar.hotbar.get(slot).copied(), avatar.character, avatar.backpack)
         else {
             return;
         };
@@ -383,10 +504,11 @@ impl PlaySession {
         self.runtime.set_mouse(mouse);
     }
 
-    /// Turns the character to face where it walks and puts its tool's
+    /// Turns a character to face where it walks and puts its tool's
     /// handle in its hand.
-    fn pose_character(&mut self, input: CharacterInput, dt: f32) {
-        let Some(character) = self.character else { return };
+    fn pose_character(&mut self, index: usize, input: CharacterInput, dt: f32) {
+        let avatar = &mut self.avatars[index];
+        let Some(character) = avatar.character else { return };
         let mut tree = self.runtime.tree().borrow_mut();
         if character.is_dead(&tree) {
             return;
@@ -400,14 +522,14 @@ impl PlaySession {
         // Arms and legs swing with the walking speed.
         let v = self.physics.velocity(character.root);
         let speed = (v.x * v.x + v.z * v.z).sqrt();
-        let sitting = self.seating.seat().is_some();
+        let sitting = avatar.seating.seat().is_some();
         if speed > 0.5 && !sitting {
-            self.stride = (self.stride + speed * dt * STRIDE_PER_STUD) % std::f32::consts::TAU;
+            avatar.stride = (avatar.stride + speed * dt * STRIDE_PER_STUD) % std::f32::consts::TAU;
         } else {
-            self.stride = 0.0;
+            avatar.stride = 0.0;
         }
         let tool = tree.find_first_child_of_class(character.model, ClassKind::Tool).ok().flatten();
-        let swing = crate::character::swing_for(speed, self.stride);
+        let swing = crate::character::swing_for(speed, avatar.stride);
         character.pose(&mut tree, crate::character::Pose { swing, sitting, holding: tool.is_some() });
         let Some(tool) = tool else {
             return;
@@ -463,7 +585,25 @@ impl PlaySession {
     /// The player clicked a part. Fires its click detector if it has one and
     /// the character is close enough. Returns whether the part was clickable.
     pub fn click_part(&mut self, part: InstanceId) -> bool {
-        let Some(player) = self.player else { return false };
+        if self.runtime.net_role() == NetRole::Client {
+            let clickable = {
+                let tree = self.runtime.tree().borrow();
+                tree.find_first_child_of_class(part, ClassKind::ClickDetector).ok().flatten().is_some()
+            };
+            if clickable {
+                self.send_to_server(crate::net::ClientSays::Click(part));
+            }
+            return clickable;
+        }
+        match self.local() {
+            Some(index) => self.click_part_for(index, part),
+            None => false,
+        }
+    }
+
+    pub(crate) fn click_part_for(&mut self, index: usize, part: InstanceId) -> bool {
+        let avatar = &self.avatars[index];
+        let player = avatar.player;
         let (detector, in_reach) = {
             let tree = self.runtime.tree().borrow();
             let Some(detector) =
@@ -472,7 +612,7 @@ impl PlaySession {
                 return false;
             };
             let reach = tree.get_number(detector, Property::MaxActivationDistance).unwrap_or(32.0) as f32;
-            let from = self.character.and_then(|c| tree.get_vec3(c.root, Property::Position));
+            let from = avatar.character.and_then(|c| tree.get_vec3(c.root, Property::Position));
             let to = tree.get_vec3(part, Property::Position);
             let in_reach = match (from, to) {
                 (Some(a), Some(b)) => (a - b).length() <= reach,
@@ -492,13 +632,18 @@ impl PlaySession {
         self.runtime.save_data()
     }
 
-    /// Ends the session: the player leaves (firing the leave event, where
+    /// Ends the session: every player leaves (firing the leave event, where
     /// games usually save), so call this before throwing the session away.
     pub fn stop(&mut self) {
-        if let Some(player) = self.player.take() {
-            let errors = self.runtime.player_removing(player);
+        if self.runtime.net_role() == NetRole::Client {
+            self.link = Default::default();
+            return;
+        }
+        for avatar in std::mem::take(&mut self.avatars) {
+            let errors = self.runtime.player_removing(avatar.player);
             self.collect(errors);
         }
+        self.link = Default::default();
     }
 
     /// A key or mouse button went down. `processed` means the game's UI used
@@ -506,17 +651,21 @@ impl PlaySession {
     pub fn input_began(&mut self, input: UserInput, processed: bool) {
         let errors = self.runtime.input_began(input, processed);
         self.collect(errors);
+        if self.runtime.net_role() == NetRole::Client && input == UserInput::MouseButton1 && !processed {
+            self.send_to_server(crate::net::ClientSays::Activate(true));
+        }
         if let (UserInput::Key(key), false) = (input, processed)
             && let Some(slot) = SLOT_KEYS.iter().position(|k| *k == key)
         {
             self.toggle_tool(slot);
         }
-        if let (UserInput::Key(key), false) = (input, processed)
+        if let (UserInput::Key(key), false, Some(index)) = (input, processed, self.local())
             && let Some(active) = self.active_prompt()
             && active.key == key
         {
-            self.hold = Some(PromptHold { prompt: active.prompt, key, held: 0.0, triggered: false });
-            self.advance_hold(0.0);
+            self.avatars[index].hold =
+                Some(PromptHold { prompt: active.prompt, key, held: 0.0, triggered: false });
+            self.advance_hold(index, 0.0);
         }
     }
 
@@ -524,27 +673,58 @@ impl PlaySession {
     pub fn input_ended(&mut self, input: UserInput, processed: bool) {
         let errors = self.runtime.input_ended(input, processed);
         self.collect(errors);
-        if let (UserInput::Key(key), Some(hold)) = (input, self.hold)
+        if self.runtime.net_role() == NetRole::Client && input == UserInput::MouseButton1 {
+            self.send_to_server(crate::net::ClientSays::Activate(false));
+        }
+        if let (UserInput::Key(key), Some(index)) = (input, self.local())
+            && let Some(hold) = self.avatars[index].hold
             && hold.key == key
         {
-            self.release_hold();
+            self.release_hold(index);
         }
     }
 
     /// Uses a prompt straight away, as when the player clicks it.
     pub fn trigger_prompt(&mut self, prompt: InstanceId) {
-        let Some(player) = self.player else { return };
-        if self.active_prompt().is_none_or(|a| a.prompt != prompt) {
+        let Some(index) = self.local() else { return };
+        if self.active_prompt_for(index).is_none_or(|a| a.prompt != prompt) {
             return;
         }
-        let mut errors = self.runtime.prompt_triggered(prompt, player);
-        errors.extend(self.runtime.prompt_trigger_ended(prompt, player));
+        self.prompt_fired(index, prompt, false);
+        self.prompt_fired(index, prompt, true);
+    }
+
+    /// A player used (or, when `ended`, let go of) a prompt. On a player's
+    /// computer this goes to the server, which fires the events.
+    fn prompt_fired(&mut self, index: usize, prompt: InstanceId, ended: bool) {
+        if self.runtime.net_role() == NetRole::Client {
+            self.send_to_server(crate::net::ClientSays::Prompt { prompt, ended });
+            return;
+        }
+        let player = self.avatars[index].player;
+        let errors = if ended {
+            self.runtime.prompt_trigger_ended(prompt, player)
+        } else {
+            self.runtime.prompt_triggered(prompt, player)
+        };
         self.collect(errors);
+    }
+
+    /// The server's check that `player` (on another computer) may use `prompt`.
+    pub(crate) fn remote_prompt(&mut self, index: usize, prompt: InstanceId, ended: bool) {
+        if ended || self.active_prompt_for(index).is_some_and(|a| a.prompt == prompt) {
+            self.prompt_fired(index, prompt, ended);
+        }
     }
 
     /// The nearest enabled prompt in reach of the character, if any.
     pub fn active_prompt(&self) -> Option<ActivePrompt> {
-        let character = self.character?;
+        self.active_prompt_for(self.local()?)
+    }
+
+    fn active_prompt_for(&self, index: usize) -> Option<ActivePrompt> {
+        let avatar = &self.avatars[index];
+        let character = avatar.character?;
         let tree = self.runtime.tree().borrow();
         if character.is_dead(&tree) {
             return None;
@@ -567,7 +747,7 @@ impl PlaySession {
                 _ => KeyCode::E,
             };
             let duration = tree.get_number(prompt, Property::HoldDuration).unwrap_or(0.0) as f32;
-            let progress = match self.hold {
+            let progress = match avatar.hold {
                 Some(h) if h.prompt == prompt && duration > 0.0 => (h.held / duration).min(1.0),
                 Some(h) if h.prompt == prompt => 1.0,
                 _ => 0.0,
@@ -578,37 +758,31 @@ impl PlaySession {
     }
 
     /// Moves a held prompt on by `dt`, triggering it once the hold is long enough.
-    fn advance_hold(&mut self, dt: f32) {
-        let Some(mut hold) = self.hold else { return };
-        if self.active_prompt().is_none_or(|a| a.prompt != hold.prompt) {
+    pub(crate) fn advance_hold(&mut self, index: usize, dt: f32) {
+        let Some(mut hold) = self.avatars[index].hold else { return };
+        if self.active_prompt_for(index).is_none_or(|a| a.prompt != hold.prompt) {
             // Walked away or the prompt was turned off.
-            self.release_hold();
+            self.release_hold(index);
             return;
         }
         hold.held += dt;
         let duration =
             self.runtime.tree().borrow().get_number(hold.prompt, Property::HoldDuration).unwrap_or(0.0)
                 as f32;
-        if !hold.triggered
-            && hold.held >= duration
-            && let Some(player) = self.player
-        {
+        if !hold.triggered && hold.held >= duration {
             hold.triggered = true;
-            self.hold = Some(hold);
-            let errors = self.runtime.prompt_triggered(hold.prompt, player);
-            self.collect(errors);
+            self.avatars[index].hold = Some(hold);
+            self.prompt_fired(index, hold.prompt, false);
         } else {
-            self.hold = Some(hold);
+            self.avatars[index].hold = Some(hold);
         }
     }
 
-    fn release_hold(&mut self) {
-        if let Some(hold) = self.hold.take()
+    fn release_hold(&mut self, index: usize) {
+        if let Some(hold) = self.avatars[index].hold.take()
             && hold.triggered
-            && let Some(player) = self.player
         {
-            let errors = self.runtime.prompt_trigger_ended(hold.prompt, player);
-            self.collect(errors);
+            self.prompt_fired(index, hold.prompt, true);
         }
     }
 
@@ -616,8 +790,9 @@ impl PlaySession {
         &self.runtime
     }
 
+    /// The local player's character.
     pub fn character(&self) -> Option<Character> {
-        self.character
+        self.local().and_then(|i| self.avatars[i].character)
     }
 
     /// The workspace camera: the view writes where it is each frame, or
@@ -630,12 +805,12 @@ impl PlaySession {
             .or_else(|| tree.find_first_child_of_class(ws, ClassKind::Camera).ok().flatten())
     }
 
-    /// Explosions being drawn right now.
     /// Particle bursts (`ParticleEmitter:Emit`) since the last call.
     pub fn take_emits(&mut self) -> Vec<(InstanceId, u32)> {
         std::mem::take(&mut self.emits)
     }
 
+    /// Explosions being drawn right now.
     pub fn blasts(&self) -> &[Blast] {
         &self.blasts
     }
@@ -659,14 +834,18 @@ impl PlaySession {
 
     /// The part the camera should follow.
     pub fn focus(&self) -> Option<InstanceId> {
-        self.character.map(|c| c.root)
+        self.character().map(|c| c.root)
     }
 
-    fn info(&mut self, text: impl Into<String>) {
+    pub(crate) fn info(&mut self, text: impl Into<String>) {
         self.log.push(LogEntry { level: LogLevel::Info, time: self.runtime.clock(), text: text.into() });
     }
 
-    fn collect(&mut self, errors: Vec<libroxel_script::ScriptError>) {
+    pub(crate) fn warn(&mut self, text: impl Into<String>) {
+        self.log.push(LogEntry { level: LogLevel::Warn, time: self.runtime.clock(), text: text.into() });
+    }
+
+    pub(crate) fn collect(&mut self, errors: Vec<libroxel_script::ScriptError>) {
         let time = self.runtime.clock();
         for line in self.runtime.take_output() {
             let level = match line.level {
@@ -686,15 +865,34 @@ impl PlaySession {
     }
 
     /// Runs one frame: scripts, then character movement and physics, then
-    /// touch events, then deaths and respawns.
+    /// touch events, then deaths and respawns. `input` drives the local
+    /// player's character.
+    ///
+    /// A hosted game also hears from the players who joined and sends them
+    /// what changed; a joined one only sends input and shows what the
+    /// server sends (see [`crate::net`]).
     pub fn step(&mut self, dt: f32, input: CharacterInput) {
+        match self.runtime.net_role() {
+            NetRole::Client => return self.client_step(dt, input),
+            NetRole::Server => self.serve_incoming(),
+            NetRole::Solo => {}
+        }
+        self.simulate(dt, input);
+        if self.runtime.net_role() == NetRole::Server {
+            self.serve_outgoing();
+        }
+    }
+
+    fn simulate(&mut self, dt: f32, input: CharacterInput) {
         // Everything that changed since last frame, for Changed events.
         let changes = self.runtime.tree().borrow_mut().drain_changes();
         let errors = self.runtime.fire_changes(&changes);
         self.collect(errors);
         let errors = self.runtime.step(dt as f64);
         self.collect(errors);
-        self.advance_hold(dt);
+        for index in 0..self.avatars.len() {
+            self.advance_hold(index, dt);
+        }
 
         let tree = self.runtime.tree().clone();
         self.explode(&tree);
@@ -703,50 +901,64 @@ impl PlaySession {
             b.age < BLAST_TIME
         });
         for player in self.runtime.take_load_requests() {
-            if Some(player) == self.player {
-                self.respawn(&tree);
+            if let Some(index) = self.avatar_of(player) {
+                self.respawn(index);
             }
         }
         let mut walks_ended = Vec::new();
         for (humanoid, target) in self.runtime.take_move_requests() {
             walks_ended.extend(self.npcs.request(humanoid, target).map(|h| (h, false)));
         }
-        let mut input = input;
+        let local = self.local();
+        let mut inputs: Vec<CharacterInput> = self
+            .avatars
+            .iter()
+            .enumerate()
+            .map(|(i, a)| if Some(i) == local { input } else { a.input })
+            .collect();
         let mut seat_changes = Vec::new();
         let (result, died) = {
             let mut tree = tree.borrow_mut();
-            // The player's own character walks where MoveTo sends it until they steer.
-            if let Some(c) = self.character.filter(|c| !c.is_dead(&tree)) {
-                let steering = input.move_dir.x != 0.0 || input.move_dir.z != 0.0;
-                if steering {
-                    walks_ended.extend(self.npcs.request(c.humanoid, None).map(|h| (h, false)));
-                } else if let Some(pos) = tree.get_vec3(c.root, Property::Position) {
-                    input.move_dir = self.npcs.input_for(c.humanoid, pos).move_dir;
-                }
-                if tree.get_bool(c.humanoid, Property::Jump) == Some(true) {
-                    input.jump = true;
-                    let _ = tree.set(c.humanoid, Property::Jump, PropertyValue::Bool(false));
+            for (avatar, input) in self.avatars.iter().zip(inputs.iter_mut()) {
+                // A player's own character walks where MoveTo sends it until they steer.
+                if let Some(c) = avatar.character.filter(|c| !c.is_dead(&tree)) {
+                    let steering = input.move_dir.x != 0.0 || input.move_dir.z != 0.0;
+                    if steering {
+                        walks_ended.extend(self.npcs.request(c.humanoid, None).map(|h| (h, false)));
+                    } else if let Some(pos) = tree.get_vec3(c.root, Property::Position) {
+                        input.move_dir = self.npcs.input_for(c.humanoid, pos).move_dir;
+                    }
+                    if tree.get_bool(c.humanoid, Property::Jump) == Some(true) {
+                        input.jump = true;
+                        let _ = tree.set(c.humanoid, Property::Jump, PropertyValue::Bool(false));
+                    }
                 }
             }
             self.emits.extend(self.runtime.take_emit_requests());
             for (seat, humanoid) in self.runtime.take_sit_requests() {
-                if let Some(c) = self.character.filter(|c| c.humanoid == humanoid && !c.is_dead(&tree)) {
-                    if self.seating.seat().is_some_and(|s| s != seat) {
-                        seat_changes.extend(self.seating.stand(&mut tree, c));
+                for avatar in &mut self.avatars {
+                    if let Some(c) = avatar.character.filter(|c| c.humanoid == humanoid && !c.is_dead(&tree))
+                    {
+                        if avatar.seating.seat().is_some_and(|s| s != seat) {
+                            seat_changes.extend(avatar.seating.stand(&mut tree, c));
+                        }
+                        seat_changes.extend(avatar.seating.sit(&mut tree, c, seat));
                     }
-                    seat_changes.extend(self.seating.sit(&mut tree, c, seat));
                 }
             }
-            let was_seated = self.seating.seat().is_some();
-            let (seated_input, change) = self.seating.before_physics(&mut tree, self.character, input, dt);
-            seat_changes.extend(change);
-            if was_seated {
-                // Sitting: the keys went to the seat. Jumping off leaps up.
-                if let Some(c) = self.character.filter(|_| input.jump && seated_input.jump) {
-                    let power = tree.get_number(c.humanoid, Property::JumpPower).unwrap_or(50.0) as f32;
-                    self.physics.set_velocity(c.root, Vec3::new(0.0, power, 0.0));
+            for (avatar, input) in self.avatars.iter_mut().zip(inputs.iter_mut()) {
+                let was_seated = avatar.seating.seat().is_some();
+                let (seated_input, change) =
+                    avatar.seating.before_physics(&mut tree, avatar.character, *input, dt);
+                seat_changes.extend(change);
+                if was_seated {
+                    // Sitting: the keys went to the seat. Jumping off leaps up.
+                    if let Some(c) = avatar.character.filter(|_| input.jump && seated_input.jump) {
+                        let power = tree.get_number(c.humanoid, Property::JumpPower).unwrap_or(50.0) as f32;
+                        self.physics.set_velocity(c.root, Vec3::new(0.0, power, 0.0));
+                    }
+                    *input = CharacterInput::default();
                 }
-                input = CharacterInput::default();
             }
             for (id, request) in self.runtime.take_velocity_requests() {
                 if tree.get_bool(id, Property::Anchored) != Some(false) {
@@ -758,34 +970,45 @@ impl PlaySession {
                 };
                 self.physics.set_velocity(id, v);
             }
-            if let Some(c) = self.character.filter(|c| !c.is_dead(&tree)) {
-                c.drive(&tree, &mut self.physics, input);
+            for (avatar, input) in self.avatars.iter().zip(inputs.iter()) {
+                if let Some(c) = avatar.character.filter(|c| !c.is_dead(&tree)) {
+                    c.drive(&tree, &mut self.physics, *input);
+                }
             }
-            let player_model = self.character.map(|c| c.model);
-            let poses = self.npcs.before_physics(&mut tree, &mut self.physics, player_model);
+            let player_models: Vec<InstanceId> =
+                self.avatars.iter().filter_map(|a| a.character.map(|c| c.model)).collect();
+            let poses = self.npcs.before_physics(&mut tree, &mut self.physics, &player_models);
             crate::seat::drive_vehicles(&mut tree, &mut self.physics, dt);
             self.welds.before_physics(&tree, &mut self.physics);
             crate::movers::apply(&tree, &self.welds, &mut self.physics, dt);
-            self.seating.hold(&tree, &mut self.physics, self.character);
+            for avatar in &self.avatars {
+                avatar.seating.hold(&tree, &mut self.physics, avatar.character);
+            }
             let result = self.physics.step(&mut tree, dt);
-            if let Some(c) = self.character.filter(|c| !c.is_dead(&tree)) {
-                c.follow(&mut tree);
+            for avatar in &self.avatars {
+                if let Some(c) = avatar.character.filter(|c| !c.is_dead(&tree)) {
+                    c.follow(&mut tree);
+                }
             }
             let (ended, died) = self.npcs.after_physics(&mut tree, &poses, dt);
             self.welds.after_physics(&mut tree);
-            self.seating.after_physics(&mut tree, self.character);
-            // Touching a free seat sits the character down.
-            if let Some(c) = self.character.filter(|c| !c.is_dead(&tree))
-                && self.seating.can_sit()
-                && let Some(seat) = crate::seat::touched_seat(&tree, c.root, &result.touches)
-            {
-                seat_changes.extend(self.seating.sit(&mut tree, c, seat));
-                self.seating.after_physics(&mut tree, self.character);
+            for avatar in &mut self.avatars {
+                avatar.seating.after_physics(&mut tree, avatar.character);
+                // Touching a free seat sits the character down.
+                if let Some(c) = avatar.character.filter(|c| !c.is_dead(&tree))
+                    && avatar.seating.can_sit()
+                    && let Some(seat) = crate::seat::touched_seat(&tree, c.root, &result.touches)
+                {
+                    seat_changes.extend(avatar.seating.sit(&mut tree, c, seat));
+                    avatar.seating.after_physics(&mut tree, avatar.character);
+                }
             }
             walks_ended.extend(ended);
-            if let Some(c) = self.character {
-                walks_ended
-                    .extend(self.npcs.finish_walks(&tree, dt, |h| (h == c.humanoid).then_some(c.root)));
+            for avatar in &self.avatars {
+                if let Some(c) = avatar.character {
+                    walks_ended
+                        .extend(self.npcs.finish_walks(&tree, dt, |h| (h == c.humanoid).then_some(c.root)));
+                }
             }
             (result, died)
         };
@@ -802,8 +1025,10 @@ impl PlaySession {
             self.collect(errors);
         }
         self.runtime.set_velocities(self.physics.velocities().clone());
-        self.pose_character(input, dt);
-        self.refresh_hotbar();
+        for (index, input) in inputs.into_iter().enumerate() {
+            self.pose_character(index, input, dt);
+            self.refresh_hotbar(index);
+        }
 
         for (a, b) in result.touches {
             let mut errors = self.runtime.fire_touched(a, b);
@@ -825,7 +1050,9 @@ impl PlaySession {
             let _ = tree.borrow_mut().destroy(id);
         }
 
-        self.handle_death(&tree, dt);
+        for index in 0..self.avatars.len() {
+            self.handle_death(index, dt);
+        }
     }
 
     /// Sets off every explosion that has arrived in the workspace: each
@@ -892,28 +1119,34 @@ impl PlaySession {
         }
     }
 
-    fn handle_death(&mut self, tree: &SharedTree, dt: f32) {
-        let Some(character) = self.character else { return };
-        if let Some(remaining) = self.respawn_in.as_mut() {
+    fn handle_death(&mut self, index: usize, dt: f32) {
+        let tree = self.runtime.tree().clone();
+        let avatar = &mut self.avatars[index];
+        let Some(character) = avatar.character else { return };
+        if let Some(remaining) = avatar.respawn_in.as_mut() {
             *remaining -= dt;
             if *remaining <= 0.0 {
-                self.respawn(tree);
-                self.info("Respawned");
+                self.respawn(index);
+                if !self.avatars[index].remote {
+                    self.info("Respawned");
+                }
             }
-        } else if !self.death_seen && character.is_dead(&tree.borrow()) {
-            self.death_seen = true;
-            self.info("Your character died");
+        } else if !avatar.death_seen && character.is_dead(&tree.borrow()) {
+            avatar.death_seen = true;
+            if !avatar.remote {
+                self.info("Your character died");
+            }
             let errors = self.runtime.humanoid_died(character.humanoid);
             self.collect(errors);
             // Without auto-loading, a script brings the character back with LoadCharacter.
-            if self.auto_loads(tree) {
+            if self.auto_loads(&tree) {
                 let delay = {
                     let t = tree.borrow();
                     t.service(ClassKind::Players)
                         .and_then(|p| t.get_number(p, Property::RespawnTime))
                         .map_or(RESPAWN_DELAY, |d| d as f32)
                 };
-                self.respawn_in = Some(delay);
+                self.avatars[index].respawn_in = Some(delay);
             }
         }
     }
@@ -924,23 +1157,25 @@ impl PlaySession {
         t.service(ClassKind::Players).and_then(|p| t.get_bool(p, Property::CharacterAutoLoads)) != Some(false)
     }
 
-    /// Removes the player's character, if any, and spawns a fresh one.
-    fn respawn(&mut self, tree: &SharedTree) {
-        self.respawn_in = None;
-        if let Some(c) = self.character {
-            let change = self.seating.stand(&mut tree.borrow_mut(), c);
+    /// Removes a player's character, if any, and spawns a fresh one.
+    fn respawn(&mut self, index: usize) {
+        let tree = self.runtime.tree().clone();
+        self.avatars[index].respawn_in = None;
+        if let Some(c) = self.avatars[index].character {
+            let change = self.avatars[index].seating.stand(&mut tree.borrow_mut(), c);
             if let Some(change) = change {
                 let errors = self.runtime.seated(change.humanoid, change.seat);
                 self.collect(errors);
             }
         }
-        if let (Some(player), Some(character)) = (self.player, self.character.take()) {
+        let player = self.avatars[index].player;
+        if let Some(character) = self.avatars[index].character.take() {
             let errors = self.runtime.character_removing(player, character.model);
             self.collect(errors);
             let _ = tree.borrow_mut().destroy(character.model);
-            self.copy_starter_gui(tree, true);
+            self.copy_starter_gui(index, true);
         }
-        self.spawn_character(tree);
+        self.spawn_character(index);
     }
 }
 

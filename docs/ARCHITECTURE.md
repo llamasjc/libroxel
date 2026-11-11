@@ -190,6 +190,36 @@
   and everything in it), destruction into `Destroying`, and a humanoid's
   `Health` changing into `HealthChanged`. Physics reports pairs that stopped
   touching for `TouchEnded`.
+- **Players.** The session keeps an `Avatar` for each player: their player
+  object, GUI container, backpack and hotbar, character, prompt being held,
+  seat and respawn timer. Every step drives each character from its own
+  input, so the same code serves one player or many; NPC code leaves all
+  players' characters alone.
+- **Networking** lives in `libroxel-engine/src/net.rs` and only uses the
+  standard library and `serde_json`. A hosted session is an ordinary
+  session (scripts, physics, the host's own player) that also accepts TCP
+  connections. Messages are one JSON object per line. A joining computer
+  says hello with a name and gets a player of its own (its input arrives
+  in `input` messages and drives its character on the host). After each
+  step, the `Replicator` walks the shared services (Workspace, Players,
+  ReplicatedStorage, StarterGui, Lighting, Teams; never cameras or player
+  GUIs), skips instances whose revision hasn't changed (revisions now also
+  change with attributes and tags), and sends created, updated and removed
+  instances as operations named by the host's ids. A newcomer gets
+  everything at once. Server `Script` source is sent empty. A joined
+  session has a fresh tree, maps the host's ids to its own, applies the
+  operations (links last, since they may point ahead), runs no `Script`s
+  and no physics, and starts `LocalScript`s in its copy of StarterGui and
+  in its tools as they arrive. Clicks on click detectors, prompts, hotbar
+  keys and the mouse button over the world go to the host, which checks
+  reach and fires the events there.
+- **Remote events across computers.** The script runtime knows its role
+  (`Solo`, `Server` or `Client`) and the local player. Remote calls aimed
+  at the other side become `NetMessage`s with their arguments as JSON
+  (instances tagged `{"$i": id}`); the engine rewrites the ids for the
+  other side and delivers them there. `InvokeServer` on a client sends the
+  call and yields until the answer comes back; the host runs
+  `OnServerInvoke` in its own thread so it may wait too.
 - **Threading.** The Luau VM is single-threaded, so the engine state is a
   Bevy non-send resource and the tree is shared as `Rc<RefCell<_>>`.
 
@@ -200,4 +230,9 @@
 - Loose parts never rotate, and cylinders collide as boxes.
 - A welded assembly collides with the world through its root part only;
   its carried parts stop other things but don't stop the assembly.
-- No networking.
+- A joined player's character moves when the host has moved it, so over a
+  slow connection the controls lag; there is no prediction yet.
+- The host sends everyone the whole shared world, every step something
+  changes; there is no interest management or compression.
+- `ParticleEmitter:Emit` bursts and velocities aren't sent to joined
+  computers.

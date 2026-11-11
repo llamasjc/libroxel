@@ -7,7 +7,8 @@ built from blocks and parts, behaviour is written in [Luau](https://luau.org),
 and the engine runs on [Bevy](https://bevy.org).
 
 > **Status: early.** There is an editor where you can build a world, write
-> scripts and press Play to test it with a character. Nothing is stable yet.
+> scripts and press Play to test it with a character, or host it and have
+> friends join from their own computers. Nothing is stable yet.
 
 ![The Libroxel editor](docs/editor.png)
 
@@ -105,6 +106,14 @@ The first build compiles Bevy and takes a while. After that it is quick.
   press Play. **File → Clear saved data** forgets it.
 - **Output** (bottom) shows `print`, `warn` and script errors. While playing
   you can type Luau into its command bar and press Enter.
+- **Playing together:** **🌐 Host** plays the game and lets other computers
+  join on port 7420 (open it in your firewall to play across a network).
+  On another computer, **🔗 Join** asks for the host's address (and a port,
+  if not 7420) and a name. The host runs every `Script` and all the physics;
+  each joined computer runs its own player's `LocalScript`s and shows the
+  world the host sends. The toolbar shows how many have joined. To host
+  without a window, run
+  `cargo run --release -p libroxel-engine --example server -- mygame.lrx`.
 - **Undo/redo** with Ctrl+Z and Ctrl+Y. **Save** with Ctrl+S. Games are
   saved as `.lrx` files in `~/Projects/libroxel-games/` by default.
 
@@ -284,7 +293,12 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `OnServerEvent(player, ...)`; `FireClient(player, ...)` and
   `FireAllClients(...)` reach `OnClientEvent(...)`. A `BindableEvent`'s
   `Fire(...)` reaches its `Event`. With one player on one computer these
-  arrive straight away and tables are passed as they are, not copied.
+  arrive straight away and tables are passed as they are, not copied. In a
+  hosted game, remote events go between computers: their values are copied
+  (nil, booleans, numbers, strings, tables, instances, `Vector3`, `Vector2`,
+  `Color3`, `CFrame`, `UDim`, `UDim2` and enum items; an instance the other
+  side can't see arrives as nil), and `RemoteFunction:InvokeServer` waits for
+  the host's answer. `FireClient` and `FireAllClients` only work on the host.
 - **Saved data:** `DataStoreService:GetDataStore(name)` gives a store with
   `GetAsync`, `SetAsync`, `UpdateAsync`, `IncrementAsync` and `RemoveAsync`.
   Values can be nil, booleans, numbers, strings, and tables of those.
@@ -343,8 +357,10 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
 - **Random numbers:** `Random.new(seed?)` with `NextNumber(min?, max?)` and
   `NextInteger(min, max)`.
 - **Services:** `RunService.Stepped(time, dt)`, `Heartbeat(dt)` and
-  `RenderStepped(dt)` fire each frame in that order; `IsClient`, `IsServer`
-  and `IsStudio` all return true while play testing. Scripts start when they are in Workspace or ServerScriptService.
+  `RenderStepped(dt)` fire each frame in that order. While play testing on
+  one computer `IsClient`, `IsServer` and `IsStudio` all return true; in a
+  hosted game the host is the server and a joined computer is a client
+  (`IsStudio` is false for both). Scripts start when they are in Workspace or ServerScriptService.
 
 A kill brick, for example:
 
@@ -387,8 +403,8 @@ door.ClickDetector.MouseClick:Connect(function(player)
 end)
 ```
 
-**Not yet:** images, scrolling frames, tool animations, particles, sounds, terrain and voxels, and
-multiplayer (so remote events never cross a network). Physics is simple: anchored parts can be rotated and shaped
+**Not yet:** images, tool animations, sounds, terrain and voxels, and
+movement prediction for joined players. Physics is simple: anchored parts can be rotated and shaped
 (ramps and balls work), but loose parts are upright boxes that fall and
 stack without tipping over. Characters climb steps up to 0.6 studs.
 

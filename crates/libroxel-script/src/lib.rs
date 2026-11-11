@@ -24,6 +24,7 @@ mod calls;
 mod effects;
 mod items;
 pub mod names;
+mod net;
 mod services;
 mod types;
 mod world;
@@ -35,6 +36,7 @@ use libroxel_instance::{InstanceId, InstanceTree, KeyCode};
 use mlua::Lua;
 
 pub use mlua;
+pub use net::{NetMessage, NetRole, decode as decode_net_value, encode as encode_net_value, map_instances};
 pub use world::VelocityRequest;
 
 /// The tree, shared between the runtime and the host engine.
@@ -316,5 +318,70 @@ impl ScriptRuntime {
     /// The number of live signal connections.
     pub fn connection_count(&self) -> usize {
         bindings::connection_count(&self.lua)
+    }
+
+    /// Says which side of a networked game this runtime is. Remote events
+    /// fired toward the other side become [`NetMessage`]s.
+    pub fn set_net_role(&self, role: NetRole) {
+        bindings::host(&self.lua).net.borrow_mut().role = role;
+    }
+
+    pub fn net_role(&self) -> NetRole {
+        net::role(&self.lua)
+    }
+
+    /// Names the player on this computer (`Players.LocalPlayer`). Without
+    /// one, a game on one computer uses the first player, and a server has none.
+    pub fn set_local_player(&self, player: Option<InstanceId>) {
+        bindings::host(&self.lua).net.borrow_mut().local_player = player;
+    }
+
+    /// Takes what scripts sent toward the other side since the last call.
+    pub fn take_net_messages(&self) -> Vec<NetMessage> {
+        std::mem::take(&mut bindings::host(&self.lua).net.borrow_mut().outbox)
+    }
+
+    /// On the server: `player`'s computer fired `remote` with `args` (as
+    /// [`encode_net_value`] makes them, in this runtime's ids).
+    pub fn deliver_server_event(
+        &self,
+        remote: InstanceId,
+        player: InstanceId,
+        args: &libroxel_instance::serde_json::Value,
+    ) -> Vec<ScriptError> {
+        net::server_event(&self.lua, remote, player, args)
+    }
+
+    /// On a player's computer: the server fired `remote` at it.
+    pub fn deliver_client_event(
+        &self,
+        remote: InstanceId,
+        args: &libroxel_instance::serde_json::Value,
+    ) -> Vec<ScriptError> {
+        net::client_event(&self.lua, remote, args)
+    }
+
+    /// On the server: `player` called `remote:InvokeServer`. The answer
+    /// comes out later as a [`NetMessage::InvokeResult`].
+    pub fn deliver_invoke(
+        &self,
+        call: u64,
+        remote: InstanceId,
+        player: InstanceId,
+        args: &libroxel_instance::serde_json::Value,
+    ) -> Vec<ScriptError> {
+        net::serve_invoke(&self.lua, call, remote, player, args)
+    }
+
+    /// On a player's computer: the server answered call `call`.
+    pub fn deliver_invoke_result(&self, call: u64, ok: bool, values: libroxel_instance::serde_json::Value) {
+        net::invoke_result(&self.lua, call, ok, values)
+    }
+
+    /// Fires `tool`'s `Activated` (or `Deactivated`), as when a player on
+    /// another computer clicks while holding it.
+    pub fn activate_tool(&self, tool: InstanceId, down: bool) -> Vec<ScriptError> {
+        items::activate(&self.lua, tool, down);
+        bindings::take_errors(&self.lua)
     }
 }

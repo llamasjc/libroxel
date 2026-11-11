@@ -74,19 +74,19 @@ impl Npcs {
         }
     }
 
-    /// Sets every model's walk going. `player` is the player's character
-    /// model, which the session drives itself. Returns where each one was,
+    /// Sets every model's walk going. `players` are the players' character
+    /// models, which the session drives itself. Returns where each one was,
     /// for [`after_physics`](Self::after_physics).
     pub fn before_physics(
         &mut self,
         tree: &mut InstanceTree,
         physics: &mut Physics,
-        player: Option<InstanceId>,
+        players: &[InstanceId],
     ) -> Vec<Pose> {
         let mut poses = Vec::new();
         for humanoid in tree.descendants_of_class(tree.workspace(), ClassKind::Humanoid) {
             let Some(model) = tree.parent(humanoid).ok().flatten() else { continue };
-            if Some(model) == player || tree.class(model) != Ok(ClassKind::Model) {
+            if players.contains(&model) || tree.class(model) != Ok(ClassKind::Model) {
                 continue;
             }
             let Some(root) = tree.find_first_child(model, names::character::ROOT_PART).ok().flatten() else {

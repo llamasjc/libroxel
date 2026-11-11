@@ -39,8 +39,17 @@ pub enum Tool {
 /// Which file dialog is open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dialog {
-    Open { path: String },
-    SaveAs { path: String },
+    Open {
+        path: String,
+    },
+    SaveAs {
+        path: String,
+    },
+    /// Joining a game someone hosts: where, and the name to play as.
+    Join {
+        address: String,
+        name: String,
+    },
 }
 
 /// Everything the editor remembers between frames.

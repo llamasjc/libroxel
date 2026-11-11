@@ -25,6 +25,13 @@ enum Action {
     Save,
     SaveTo(PathBuf),
     Play,
+    /// Play, letting other computers join.
+    Host,
+    /// Join a game another computer hosts.
+    Join {
+        address: String,
+        name: String,
+    },
     Stop,
     Undo,
     Redo,
@@ -250,7 +257,7 @@ pub fn editor_ui(
         menu_bar(ui, editor, playing, &mut actions);
     });
     egui::Panel::top("toolbar").show(&mut root, |ui| {
-        toolbar(ui, editor, playing, &mut actions);
+        toolbar(ui, editor, engine.session.as_ref(), &mut actions);
     });
     egui::Panel::left("explorer").resizable(true).default_size(260.0).show(&mut root, |ui| {
         ui.heading("Explorer");
@@ -723,18 +730,39 @@ fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
     });
 }
 
-fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut Vec<Action>) {
+fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>, actions: &mut Vec<Action>) {
+    let playing = session.is_some();
     ui.horizontal(|ui| {
         if playing {
             if ui.button(RichText::new("⏹ Stop").strong().color(Color32::from_rgb(255, 120, 110))).clicked()
             {
                 actions.push(Action::Stop);
             }
-        } else if ui
-            .button(RichText::new("▶ Play").strong().color(Color32::from_rgb(120, 220, 120)))
-            .clicked()
-        {
-            actions.push(Action::Play);
+        } else {
+            if ui.button(RichText::new("▶ Play").strong().color(Color32::from_rgb(120, 220, 120))).clicked()
+            {
+                actions.push(Action::Play);
+            }
+            if ui.button("🌐 Host").on_hover_text("Play, and let other computers join").clicked() {
+                actions.push(Action::Host);
+            }
+            if ui.button("🔗 Join").on_hover_text("Join a game another computer hosts").clicked() {
+                editor.dialog = Some(Dialog::Join { address: "127.0.0.1".into(), name: "Player".into() });
+            }
+        }
+        if let Some(session) = session {
+            if let Some(address) = session.host_address() {
+                let joined = session.joined_count();
+                let who = if joined == 1 { "1 joined".to_owned() } else { format!("{joined} joined") };
+                ui.label(format!("🌐 Hosting on port {} · {who}", address.port()))
+                    .on_hover_text("Others join with this computer's address and this port");
+            } else if session.is_joined() {
+                if session.disconnected() {
+                    ui.colored_label(Color32::from_rgb(255, 120, 110), "🔗 Disconnected");
+                } else {
+                    ui.label("🔗 Joined");
+                }
+            }
         }
         ui.separator();
         ui.selectable_value(&mut editor.tool, Tool::Select, "🖱 Select");
@@ -1560,15 +1588,50 @@ fn list_places() -> Vec<PathBuf> {
 
 fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) {
     let Some(dialog) = editor.dialog.as_mut() else { return };
+    if let Dialog::Join { address, name } = dialog {
+        let mut close = false;
+        egui::Window::new("Join a game").collapsible(false).resizable(false).default_width(360.0).show(
+            ctx,
+            |ui| {
+                egui::Grid::new("join").num_columns(2).show(ui, |ui| {
+                    ui.label("Address");
+                    ui.add(egui::TextEdit::singleline(address).hint_text("192.168.1.20 or host:port"));
+                    ui.end_row();
+                    ui.label("Your name");
+                    ui.add(egui::TextEdit::singleline(name).char_limit(20));
+                    ui.end_row();
+                });
+                ui.label(format!("Without a port, {} is used.", libroxel_engine::net::DEFAULT_PORT));
+                ui.horizontal(|ui| {
+                    if ui.button("Join").clicked() {
+                        actions.push(Action::Join {
+                            address: address.trim().to_owned(),
+                            name: name.trim().to_owned(),
+                        });
+                        close = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                });
+            },
+        );
+        if close {
+            editor.dialog = None;
+        }
+        return;
+    }
     let (title, button) = match dialog {
         Dialog::Open { .. } => ("Open place", "Open"),
         Dialog::SaveAs { .. } => ("Save place as", "Save"),
+        Dialog::Join { .. } => return,
     };
     let opening = matches!(dialog, Dialog::Open { .. });
     let mut close = false;
     egui::Window::new(title).collapsible(false).resizable(false).default_width(480.0).show(ctx, |ui| {
         let path = match dialog {
             Dialog::Open { path } | Dialog::SaveAs { path } => path,
+            Dialog::Join { .. } => return,
         };
         ui.label("File path (places use the .lrx extension):");
         ui.add(egui::TextEdit::singleline(path).desired_width(f32::INFINITY));
@@ -1620,6 +1683,10 @@ fn end_session(engine: &mut EngineState, editor: &Editor) -> bool {
     session.stop();
     let lines = session.take_log();
     engine.log.extend(lines);
+    // A joined game's data is kept by whoever hosts it.
+    if session.is_joined() {
+        return true;
+    }
     let json = session.save_data();
     let path = data_path(editor);
     if json.trim() != "{}" || path.exists() {
@@ -1856,21 +1923,45 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             }
         },
         Action::SaveTo(path) => save_to(engine, editor, path),
-        Action::Play => {
+        action @ (Action::Play | Action::Host | Action::Join { .. }) => {
             if playing {
                 return;
             }
             editor.history.tick(f64::INFINITY, false);
             editor.edit_snapshot = Some(engine.tree.borrow().clone());
-            let started = match std::fs::read_to_string(data_path(editor)) {
-                Ok(json) => PlaySession::start_with_data(engine.tree.clone(), &json),
-                Err(_) => PlaySession::start(engine.tree.clone(), true),
+            let saved = std::fs::read_to_string(data_path(editor)).ok();
+            let (started, what) = match &action {
+                Action::Host => (
+                    PlaySession::host(
+                        engine.tree.clone(),
+                        libroxel_engine::net::DEFAULT_PORT,
+                        saved.as_deref(),
+                        true,
+                    ),
+                    "🌐 Hosting".to_owned(),
+                ),
+                Action::Join { address, name } => {
+                    let name = if name.is_empty() { "Player" } else { name.as_str() };
+                    // The session says where it is joining.
+                    (PlaySession::join(engine.tree.clone(), address, name), String::new())
+                }
+                _ => (
+                    match saved {
+                        Some(json) => PlaySession::start_with_data(engine.tree.clone(), &json),
+                        None => PlaySession::start(engine.tree.clone(), true),
+                    },
+                    "▶ Playing".to_owned(),
+                ),
             };
             match started {
                 Ok(mut session) => {
                     let lines = session.take_log();
+                    if let Some(address) = session.host_address() {
+                        log(engine, LogLevel::Info, format!("{what} on port {}", address.port()));
+                    } else if !what.is_empty() {
+                        log(engine, LogLevel::Info, what);
+                    }
                     engine.session = Some(session);
-                    log(engine, LogLevel::Info, "▶ Playing");
                     engine.log.extend(lines);
                 }
                 Err(err) => {
