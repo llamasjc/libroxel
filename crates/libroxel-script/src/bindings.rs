@@ -5,7 +5,9 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use libroxel_instance::{ClassKind, Color3, InstanceId, Property, PropertyValue, TreeError, Vec3};
+use libroxel_instance::{
+    ClassKind, Color3, EnumKind, EnumValue, InstanceId, Property, PropertyValue, TreeError, Vec3,
+};
 use mlua::{
     AnyUserData, Function, Lua, MetaMethod, MultiValue, RegistryKey, Table, Thread, UserData, UserDataFields,
     UserDataMethods, Value, Variadic,
@@ -21,9 +23,13 @@ pub(crate) const RUN_LIMIT: Duration = Duration::from_secs(5);
 
 /// The signals a script can connect to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SignalKind {
+pub(crate) enum SignalKind {
     Heartbeat,
     Touched(InstanceId),
+    PlayerAdded,
+    PlayerRemoving,
+    CharacterAdded(InstanceId),
+    Died(InstanceId),
 }
 
 struct Connection {
@@ -242,6 +248,48 @@ impl UserData for LuaColor3 {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LuaEnumItem(EnumValue);
+
+impl UserData for LuaEnumItem {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        use names::enum_item::*;
+        fields.add_field_method_get(NAME, |_, this| Ok(names::enum_item_name(this.0)));
+        fields.add_field_method_get(VALUE, |_, this| Ok(this.0.index() as i64));
+        fields.add_field_method_get(ENUM_TYPE, |_, this| Ok(names::enum_name(this.0.kind())));
+        fields.add_meta_field(MetaMethod::Type, TYPE_NAME);
+    }
+
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_meta_method(MetaMethod::ToString, |_, this, ()| {
+            Ok(format!(
+                "{}.{}.{}",
+                globals::ENUM,
+                names::enum_name(this.0.kind()),
+                names::enum_item_name(this.0)
+            ))
+        });
+        methods.add_meta_function(MetaMethod::Eq, |_, (a, b): (Value, Value)| {
+            let item = |v: &Value| match v {
+                Value::UserData(ud) => ud.borrow::<LuaEnumItem>().ok().map(|e| e.0),
+                _ => None,
+            };
+            Ok(matches!((item(&a), item(&b)), (Some(a), Some(b)) if a == b))
+        });
+    }
+}
+
+/// Reads an enum value of `kind` from a script value: an item, its name, or its number.
+fn as_enum(kind: EnumKind, value: &Value) -> Option<EnumValue> {
+    match value {
+        Value::UserData(ud) => ud.borrow::<LuaEnumItem>().ok().map(|e| e.0).filter(|e| e.kind() == kind),
+        Value::String(s) => names::enum_item_from_name(kind, &s.to_string_lossy()),
+        Value::Integer(n) => usize::try_from(*n).ok().and_then(|i| kind.items().get(i).copied()),
+        Value::Number(n) if n.fract() == 0.0 && *n >= 0.0 => kind.items().get(*n as usize).copied(),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Instances
 // ---------------------------------------------------------------------------
@@ -276,10 +324,23 @@ fn property_to_lua(lua: &Lua, value: PropertyValue) -> mlua::Result<Value> {
         PropertyValue::String(s) => Value::String(lua.create_string(&s)?),
         PropertyValue::Vec3(v) => Value::UserData(lua.create_userdata(LuaVector3(v))?),
         PropertyValue::Color3(c) => Value::UserData(lua.create_userdata(LuaColor3(c))?),
+        PropertyValue::Enum(e) => Value::UserData(lua.create_userdata(LuaEnumItem(e))?),
+        PropertyValue::Ref(Some(id)) => Value::UserData(push_instance(lua, id)?),
+        PropertyValue::Ref(None) => Value::Nil,
     })
 }
 
-fn property_from_lua(value: &Value) -> Option<PropertyValue> {
+/// Converts a script value into a value for `property`, if it fits.
+fn property_from_lua(property: Property, value: &Value) -> Option<PropertyValue> {
+    if let Some(kind) = property.enum_kind() {
+        return as_enum(kind, value).map(PropertyValue::Enum);
+    }
+    if property.expected_kind() == "ref" {
+        return match value {
+            Value::Nil => Some(PropertyValue::Ref(None)),
+            other => as_instance(other).map(|id| PropertyValue::Ref(Some(id))),
+        };
+    }
     Some(match value {
         Value::Boolean(b) => PropertyValue::Bool(*b),
         Value::Number(n) => PropertyValue::Number(*n),
@@ -308,6 +369,28 @@ fn not_a_member(lua: &Lua, id: InstanceId, key: &str) -> mlua::Error {
 fn class_arg(name: &str) -> mlua::Result<ClassKind> {
     names::class_from_name(name)
         .ok_or_else(|| mlua::Error::runtime(format!("{name} is not a valid class name")))
+}
+
+fn class_of(lua: &Lua, id: InstanceId) -> mlua::Result<ClassKind> {
+    host(lua).tree.borrow().class(id).map_err(tree_err)
+}
+
+/// Fails with "not a valid member" unless `id` is a `class`.
+fn require_class(lua: &Lua, id: InstanceId, class: ClassKind, member: &str) -> mlua::Result<()> {
+    if class_of(lua, id)?.is_a(class) { Ok(()) } else { Err(not_a_member(lua, id, member)) }
+}
+
+/// The event called `key` on an instance of `class`, if it has one.
+fn instance_event(class: ClassKind, id: InstanceId, key: &str) -> Option<SignalKind> {
+    use names::events::*;
+    Some(match key {
+        TOUCHED if class.is_physical() => SignalKind::Touched(id),
+        PLAYER_ADDED if class == ClassKind::Players => SignalKind::PlayerAdded,
+        PLAYER_REMOVING if class == ClassKind::Players => SignalKind::PlayerRemoving,
+        CHARACTER_ADDED if class == ClassKind::Player => SignalKind::CharacterAdded(id),
+        DIED if class == ClassKind::Humanoid => SignalKind::Died(id),
+        _ => return None,
+    })
 }
 
 impl UserData for LuaInstance {
@@ -368,21 +451,44 @@ impl UserData for LuaInstance {
             push_instance(lua, copy)
         });
         methods.add_method(GET_SERVICE, |lua, this, name: String| {
-            let (root, workspace) = {
+            require_class(lua, this.0, ClassKind::DataModel, GET_SERVICE)?;
+            if name == names::services::RUN_SERVICE {
+                return Ok(Value::UserData(lua.create_userdata(RunService)?));
+            }
+            let service = names::class_from_name(&name).and_then(|c| host(lua).tree.borrow().service(c));
+            match service {
+                Some(id) => Ok(Value::UserData(push_instance(lua, id)?)),
+                None => Err(mlua::Error::runtime(format!("{name} is not a valid service name"))),
+            }
+        });
+        methods.add_method(names::methods::GET_PLAYERS, |lua, this, ()| {
+            require_class(lua, this.0, ClassKind::Players, names::methods::GET_PLAYERS)?;
+            let players: Vec<InstanceId> = {
                 let host = host(lua);
                 let tree = host.tree.borrow();
-                (tree.root(), tree.workspace())
+                let children = tree.children(this.0).map_err(tree_err)?;
+                children.iter().copied().filter(|c| tree.class(*c) == Ok(ClassKind::Player)).collect()
             };
-            if this.0 != root {
-                return Err(not_a_member(lua, this.0, GET_SERVICE));
-            }
-            match name.as_str() {
-                names::services::RUN_SERVICE => Ok(Value::UserData(lua.create_userdata(RunService)?)),
-                n if n == names::class_name(ClassKind::Workspace) => {
-                    Ok(Value::UserData(push_instance(lua, workspace)?))
-                }
-                _ => Err(mlua::Error::runtime(format!("{name} is not a valid service name"))),
-            }
+            players.into_iter().map(|id| push_instance(lua, id)).collect::<mlua::Result<Vec<_>>>()
+        });
+        methods.add_method(names::methods::GET_PLAYER_FROM_CHARACTER, |lua, this, model: Value| {
+            require_class(lua, this.0, ClassKind::Players, names::methods::GET_PLAYER_FROM_CHARACTER)?;
+            let Some(model) = as_instance(&model) else { return Ok(None) };
+            let found = {
+                let host = host(lua);
+                let tree = host.tree.borrow();
+                let children = tree.children(this.0).map_err(tree_err)?;
+                children.iter().copied().find(|p| tree.get_ref(*p, Property::Character) == Some(model))
+            };
+            found.map(|id| push_instance(lua, id)).transpose()
+        });
+        methods.add_method(names::methods::TAKE_DAMAGE, |lua, this, amount: f64| {
+            require_class(lua, this.0, ClassKind::Humanoid, names::methods::TAKE_DAMAGE)?;
+            let host = host(lua);
+            let mut tree = host.tree.borrow_mut();
+            let health = tree.get_number(this.0, Property::Health).unwrap_or(0.0);
+            let health = (health - amount.max(0.0)).max(0.0);
+            tree.set(this.0, Property::Health, PropertyValue::Number(health)).map_err(tree_err)
         });
 
         methods.add_meta_method(MetaMethod::Index, |lua, this, key: String| {
@@ -401,13 +507,11 @@ impl UserData for LuaInstance {
             if key == WAIT_FOR_CHILD {
                 return lua.named_registry_value::<Value>(WAIT_FOR_CHILD_FN);
             }
-            if key == names::events::TOUCHED {
-                let class = host(lua).tree.borrow().class(id).map_err(tree_err)?;
-                if class.is_physical() {
-                    return Ok(Value::UserData(lua.create_userdata(Signal(SignalKind::Touched(id)))?));
-                }
+            let class = class_of(lua, id)?;
+            if let Some(signal) = instance_event(class, id, &key) {
+                return Ok(Value::UserData(lua.create_userdata(Signal(signal))?));
             }
-            if let Some(property) = names::property_from_name(&key) {
+            if let Some(property) = names::property_from_name(class, &key) {
                 let value = host(lua).tree.borrow().get(id, property);
                 match value {
                     Ok(value) => return property_to_lua(lua, value),
@@ -435,10 +539,11 @@ impl UserData for LuaInstance {
                 };
                 return host(lua).tree.borrow_mut().set_parent(id, parent).map_err(tree_err);
             }
-            let Some(property) = names::property_from_name(&key) else {
+            let class = class_of(lua, id)?;
+            let Some(property) = names::property_from_name(class, &key) else {
                 return Err(not_a_member(lua, id, &key));
             };
-            let value = property_from_lua(&value).ok_or_else(|| {
+            let value = property_from_lua(property, &value).ok_or_else(|| {
                 mlua::Error::runtime(format!(
                     "{key} expects a {}, got a {}",
                     names::value_kind_name(property.expected_kind()),
@@ -544,10 +649,10 @@ fn prelude() -> String {
     format!(
         r#"
         local yield = coroutine.yield
-        local lib = ...
+        local lib, load_module = ...
         lib["{wait}"] = function(seconds) return yield(seconds or 0) end
         local wait = lib["{wait}"]
-        return wait, function(self, name, timeout)
+        local wait_for_child = function(self, name, timeout)
             local waited = 0
             while true do
                 local child = self:{find}(name)
@@ -556,6 +661,26 @@ fn prelude() -> String {
                 waited += wait()
             end
         end
+        -- Each module runs once; later requires get the same value back.
+        local results, loading = {{}}, {{}}
+        local require = function(module)
+            local done = results[module]
+            if done then return done.value end
+            if loading[module] then
+                error("require loop: " .. tostring(module) .. " requires itself", 2)
+            end
+            local run = load_module(module)
+            loading[module] = true
+            local out = table.pack(pcall(run))
+            loading[module] = nil
+            if not out[1] then error(out[2], 0) end
+            if out.n ~= 2 then
+                error(tostring(module) .. " must return exactly one value", 2)
+            end
+            results[module] = {{ value = out[2] }}
+            return out[2]
+        end
+        return wait, wait_for_child, require
         "#,
         wait = task::WAIT,
         find = instance::FIND_FIRST_CHILD,
@@ -607,6 +732,9 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         constructors::NEW,
         lua.create_function(|lua, (class, parent): (String, Option<Value>)| {
             let class = class_arg(&class)?;
+            if !class.is_user_creatable() {
+                return Err(tree_err(TreeError::NotCreatable(class)));
+            }
             let parent = parent.as_ref().and_then(as_instance);
             let id = {
                 let host = host(lua);
@@ -677,9 +805,41 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    let (wait, wait_for_child): (Function, Function) =
-        lua.load(prelude()).set_name("=libroxel").call(task_lib.clone())?;
+    let load_module = lua.create_function(|lua, module: Value| {
+        let id =
+            as_instance(&module).ok_or_else(|| mlua::Error::runtime("require expects a ModuleScript"))?;
+        let (class, name, source) = {
+            let host = host(lua);
+            let tree = host.tree.borrow();
+            let class = tree.class(id).map_err(tree_err)?;
+            (class, tree.name(id).map_err(tree_err)?.to_owned(), tree.get_string(id, Property::Source))
+        };
+        if class != ClassKind::ModuleScript {
+            return Err(mlua::Error::runtime(format!(
+                "require expects a {}, got a {}",
+                names::class_name(ClassKind::ModuleScript),
+                names::class_name(class)
+            )));
+        }
+        let env = script_env(lua, Some(id))?;
+        lua.load(source.unwrap_or_default()).set_name(format!("={name}")).set_environment(env).into_function()
+    })?;
+    let (wait, wait_for_child, require): (Function, Function, Function) =
+        lua.load(prelude()).set_name("=libroxel").call((task_lib.clone(), load_module))?;
     lua.set_named_registry_value(WAIT_FOR_CHILD_FN, wait_for_child)?;
+    g.set(globals::REQUIRE, require)?;
+
+    let enum_lib = lua.create_table()?;
+    for &kind in EnumKind::ALL {
+        let items = lua.create_table()?;
+        for &item in kind.items() {
+            items.set(names::enum_item_name(item), LuaEnumItem(item))?;
+        }
+        items.set_readonly(true);
+        enum_lib.set(names::enum_name(kind), items)?;
+    }
+    enum_lib.set_readonly(true);
+    g.set(globals::ENUM, enum_lib)?;
     g.set(globals::TASK, task_lib)?;
     g.set(globals::WAIT, wait)?;
     g.set(globals::TIME, lua.create_function(|lua, ()| Ok(host(lua).clock.get()))?)?;
@@ -703,6 +863,19 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     Ok(())
 }
 
+/// Each script gets its own global environment that falls back to the
+/// shared, read-only globals, so scripts can't leak globals into each other.
+fn script_env(lua: &Lua, script_instance: Option<InstanceId>) -> mlua::Result<Table> {
+    let env = lua.create_table()?;
+    let meta = lua.create_table()?;
+    meta.set("__index", lua.globals())?;
+    env.set_metatable(Some(meta))?;
+    if let Some(id) = script_instance {
+        env.raw_set(globals::SCRIPT, push_instance(lua, id)?)?;
+    }
+    Ok(env)
+}
+
 /// Runs a chunk as a new thread in its own environment. Errors raised before
 /// the script first yields are returned; later ones surface from `step`.
 pub(crate) fn run_chunk(
@@ -712,15 +885,7 @@ pub(crate) fn run_chunk(
     script_instance: Option<InstanceId>,
 ) -> Result<(), ScriptError> {
     let fail = |err: mlua::Error| ScriptError { script: script_name.to_owned(), message: err.to_string() };
-    // Each script gets its own global environment that falls back to the
-    // shared, read-only globals, so scripts can't leak globals into each other.
-    let env = lua.create_table().map_err(fail)?;
-    let meta = lua.create_table().map_err(fail)?;
-    meta.set("__index", lua.globals()).map_err(fail)?;
-    env.set_metatable(Some(meta)).map_err(fail)?;
-    if let Some(id) = script_instance {
-        env.raw_set(globals::SCRIPT, push_instance(lua, id).map_err(fail)?).map_err(fail)?;
-    }
+    let env = script_env(lua, script_instance).map_err(fail)?;
     let func = lua
         .load(source)
         .set_name(format!("={script_name}"))
@@ -783,6 +948,18 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
         }
     }
     fire(lua, SignalKind::Heartbeat, || Ok(std::iter::once(Value::Number(dt)).collect()));
+    take_errors(lua)
+}
+
+/// Fires an instance event with one instance argument.
+pub(crate) fn fire_with_instance(lua: &Lua, signal: SignalKind, arg: InstanceId) -> Vec<ScriptError> {
+    fire(lua, signal, || Ok(std::iter::once(Value::UserData(push_instance(lua, arg)?)).collect()));
+    take_errors(lua)
+}
+
+/// Fires an instance event with no arguments.
+pub(crate) fn fire_plain(lua: &Lua, signal: SignalKind) -> Vec<ScriptError> {
+    fire(lua, signal, || Ok(MultiValue::new()));
     take_errors(lua)
 }
 

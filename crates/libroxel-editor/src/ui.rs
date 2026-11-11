@@ -10,7 +10,9 @@ use bevy_egui::EguiContexts;
 use bevy_egui::egui::{self, Color32, Key, KeyboardShortcut, Modifiers, RichText};
 use libroxel_engine::view::{CameraMode, CameraRig, EngineState, InputCapture};
 use libroxel_engine::{LogEntry, LogLevel, PlaySession};
-use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property, PropertyValue, place};
+use libroxel_instance::{
+    ClassKind, EnumValue, InstanceId, InstanceTree, PartShape, Property, PropertyValue, place,
+};
 use libroxel_script::names;
 
 use crate::{Dialog, Editor, Tool, games_dir, templates, viewport};
@@ -27,7 +29,10 @@ enum Action {
     Undo,
     Redo,
     Insert(ClassKind),
+    InsertShape(PartShape),
     InsertInto(ClassKind, InstanceId),
+    /// Turn the selection a quarter turn around the vertical axis.
+    Rotate90(InstanceId),
     Delete(InstanceId),
     Duplicate(InstanceId),
     Select(Option<InstanceId>),
@@ -38,8 +43,25 @@ enum Action {
     ClearOutput,
 }
 
-const INSERTABLE: &[ClassKind] =
-    &[ClassKind::Part, ClassKind::SpawnLocation, ClassKind::Script, ClassKind::Model, ClassKind::Folder];
+const INSERTABLE: &[ClassKind] = &[
+    ClassKind::Part,
+    ClassKind::SpawnLocation,
+    ClassKind::Script,
+    ClassKind::ModuleScript,
+    ClassKind::Model,
+    ClassKind::Folder,
+    ClassKind::IntValue,
+    ClassKind::NumberValue,
+    ClassKind::StringValue,
+    ClassKind::BoolValue,
+];
+
+const SHAPES: &[(PartShape, &str)] = &[
+    (PartShape::Block, "Block"),
+    (PartShape::Ball, "Ball"),
+    (PartShape::Cylinder, "Cylinder"),
+    (PartShape::Wedge, "Wedge"),
+];
 
 fn icon(class: ClassKind) -> &'static str {
     match class {
@@ -50,8 +72,20 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::Part => "⬛",
         ClassKind::SpawnLocation => "🏁",
         ClassKind::Script => "📜",
+        ClassKind::ModuleScript => "📘",
         ClassKind::Humanoid => "👤",
+        ClassKind::Players => "👥",
+        ClassKind::Player => "🙂",
+        ClassKind::ReplicatedStorage => "🗄",
+        ClassKind::IntValue | ClassKind::NumberValue => "🔢",
+        ClassKind::StringValue => "🔤",
+        ClassKind::BoolValue => "☑",
     }
+}
+
+/// Classes that hold Luau source and open in the script editor.
+fn is_code(class: ClassKind) -> bool {
+    matches!(class, ClassKind::Script | ClassKind::ModuleScript)
 }
 
 fn level_color(level: LogLevel) -> Color32 {
@@ -140,6 +174,9 @@ pub fn editor_ui(
                 );
             }
             hud(ui, playing);
+            if playing {
+                leaderboard(ui, &tree_rc.borrow());
+            }
             ui.max_rect()
         })
         .inner;
@@ -210,7 +247,7 @@ pub fn editor_ui(
     Ok(())
 }
 
-fn shortcuts(ctx: &egui::Context, editor: &Editor, playing: bool, actions: &mut Vec<Action>) {
+fn shortcuts(ctx: &egui::Context, editor: &mut Editor, playing: bool, actions: &mut Vec<Action>) {
     let typing = ctx.egui_wants_keyboard_input();
     ctx.input_mut(|i| {
         let cmd = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
@@ -234,9 +271,22 @@ fn shortcuts(ctx: &egui::Context, editor: &Editor, playing: bool, actions: &mut 
         if typing {
             return;
         }
+        for (key, tool) in [
+            (Key::Num1, Tool::Select),
+            (Key::Num2, Tool::Move),
+            (Key::Num3, Tool::Scale),
+            (Key::Num4, Tool::Rotate),
+        ] {
+            if i.consume_shortcut(&cmd(key)) {
+                editor.tool = tool;
+            }
+        }
         if let Some(id) = editor.selection {
             if i.consume_shortcut(&cmd(Key::D)) {
                 actions.push(Action::Duplicate(id));
+            }
+            if i.consume_shortcut(&cmd(Key::R)) {
+                actions.push(Action::Rotate90(id));
             }
             if i.consume_key(Modifiers::NONE, Key::Delete) {
                 actions.push(Action::Delete(id));
@@ -297,11 +347,22 @@ fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
             {
                 actions.push(Action::Delete(id));
             }
+            if ui.add_enabled(selected.is_some(), egui::Button::new("Turn 90°   Ctrl+R")).clicked()
+                && let Some(id) = selected
+            {
+                actions.push(Action::Rotate90(id));
+            }
         });
         ui.menu_button("Insert", |ui| {
             for &class in INSERTABLE {
                 if ui.button(format!("{} {}", icon(class), names::class_name(class))).clicked() {
                     actions.push(Action::Insert(class));
+                }
+            }
+            ui.separator();
+            for &(shape, label) in SHAPES {
+                if ui.button(format!("{} part", label)).clicked() {
+                    actions.push(Action::InsertShape(shape));
                 }
             }
         });
@@ -311,7 +372,8 @@ fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
         ui.menu_button("Help", |ui| {
             ui.label("Right mouse + WASD/QE: fly the camera (Shift = faster)");
             ui.label("Scroll: move forward/back");
-            ui.label("Click: select · Del: delete · Ctrl+D: duplicate");
+            ui.label("Click: select · Del: delete · Ctrl+D: duplicate · Ctrl+R: turn 90°");
+            ui.label("Ctrl+1..4: select, move, resize, rotate tools");
             ui.label("F5: play / stop · Esc: stop");
             ui.label("While playing: WASD walk, Space jump, right mouse turns the camera");
         });
@@ -335,6 +397,7 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut 
         ui.selectable_value(&mut editor.tool, Tool::Select, "🖱 Select");
         ui.selectable_value(&mut editor.tool, Tool::Move, "✥ Move");
         ui.selectable_value(&mut editor.tool, Tool::Scale, "⤢ Resize");
+        ui.selectable_value(&mut editor.tool, Tool::Rotate, "⟳ Rotate");
         ui.separator();
         ui.label("Snap");
         egui::ComboBox::from_id_salt("snap")
@@ -345,15 +408,32 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut 
                     ui.selectable_value(&mut editor.snap, s, format!("{s} stud"));
                 }
             });
+        egui::ComboBox::from_id_salt("angle-snap")
+            .selected_text(if editor.angle_snap > 0.0 {
+                format!("{}°", editor.angle_snap)
+            } else {
+                "Free".into()
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut editor.angle_snap, 0.0, "Free");
+                for a in [5.0, 15.0, 45.0, 90.0] {
+                    ui.selectable_value(&mut editor.angle_snap, a, format!("{a}°"));
+                }
+            });
         ui.separator();
-        for &class in &[ClassKind::Part, ClassKind::Script] {
-            if ui
-                .add_enabled(!playing, egui::Button::new(format!("+ {}", names::class_name(class))))
-                .clicked()
-            {
-                actions.push(Action::Insert(class));
+        ui.add_enabled_ui(!playing, |ui| {
+            ui.menu_button("+ Part", |ui| {
+                for &(shape, label) in SHAPES {
+                    if ui.button(label).clicked() {
+                        actions.push(Action::InsertShape(shape));
+                        ui.close();
+                    }
+                }
+            });
+            if ui.button("+ Script").clicked() {
+                actions.push(Action::Insert(ClassKind::Script));
             }
-        }
+        });
         if playing {
             ui.separator();
             ui.label(RichText::new("Playing: edits are undone when you stop").italics());
@@ -391,14 +471,14 @@ fn explorer_node(
                 .frame_when_inactive(false)
                 .sense(egui::Sense::click_and_drag()),
         );
-        if class.is_creatable() {
+        if class.is_user_creatable() {
             inner.dnd_set_drag_payload(id);
         }
         if inner.clicked() {
             actions.push(Action::Select(Some(id)));
         }
         if inner.double_clicked() {
-            if class == ClassKind::Script {
+            if is_code(class) {
                 actions.push(Action::OpenScript(id));
             } else {
                 editor.focus_selection = true;
@@ -417,7 +497,7 @@ fn explorer_node(
                     }
                 }
             });
-            let editable = class.is_creatable();
+            let editable = class.is_user_creatable();
             if ui.add_enabled(editable, egui::Button::new("Rename")).clicked() {
                 editor.renaming = Some((id, name.to_owned()));
                 ui.close();
@@ -430,7 +510,7 @@ fn explorer_node(
                 actions.push(Action::Delete(id));
                 ui.close();
             }
-            if class == ClassKind::Script && ui.button("Edit script").clicked() {
+            if is_code(class) && ui.button("Edit script").clicked() {
                 actions.push(Action::OpenScript(id));
                 ui.close();
             }
@@ -483,7 +563,14 @@ fn properties(
         for &property in class.properties() {
             let Ok(value) = tree.get(id, property) else { continue };
             ui.label(names::property_name(property));
-            let locked = property == Property::Name && !class.is_creatable();
+            if let PropertyValue::Ref(target) = &value {
+                let name = target.and_then(|t| tree.name(t).ok()).unwrap_or("(none)");
+                ui.label(RichText::new(name).weak());
+                ui.end_row();
+                continue;
+            }
+            let locked =
+                (property == Property::Name && !class.is_user_creatable()) || property == Property::Character;
             ui.add_enabled_ui(!locked, |ui| {
                 if let Some(new) = property_editor(ui, property, value, id, actions) {
                     edited = Some((property, new));
@@ -500,9 +587,23 @@ fn properties(
         let _ = tree.set(id, property, value);
     }
 
-    if class == ClassKind::Script {
+    let hint = match class {
+        ClassKind::Script => Some(
+            "Scripts start when you press Play. `script` is this Script; `script.Parent` is what it's inside.",
+        ),
+        ClassKind::ModuleScript => Some(
+            "Module scripts don't run on their own. Another script loads one with `require(path.to.Module)` \
+             and gets back whatever the module returns.",
+        ),
+        ClassKind::Players => Some(
+            "While playing, each player appears here. Scripts can add a `leaderstats` folder with values to show them on the leaderboard.",
+        ),
+        ClassKind::ReplicatedStorage => Some("A place for modules and templates that aren't in the world."),
+        _ => None,
+    };
+    if let Some(hint) = hint {
         ui.add_space(8.0);
-        ui.label("Scripts start when you press Play. `script` is this Script; `script.Parent` is what it's inside.");
+        ui.label(hint);
     }
 }
 
@@ -554,7 +655,98 @@ fn property_editor(
                 .changed()
                 .then(|| PropertyValue::Color3(libroxel_instance::Color3::new(rgb[0], rgb[1], rgb[2])))
         }
+        PropertyValue::Enum(current) => {
+            let mut chosen = current;
+            egui::ComboBox::from_id_salt(("enum", property.file_name()))
+                .selected_text(names::enum_item_name(current))
+                .show_ui(ui, |ui| {
+                    for &item in current.kind().items() {
+                        ui.selectable_value(&mut chosen, item, names::enum_item_name(item));
+                    }
+                });
+            (chosen != current).then_some(PropertyValue::Enum(chosen))
+        }
+        // Shown by the caller, which can look up the name.
+        PropertyValue::Ref(_) => None,
     }
+}
+
+/// While playing: everyone's `leaderstats` values in the top-right corner.
+fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree) {
+    let Some(players) = tree.service(ClassKind::Players) else { return };
+    let rows: Vec<(String, Vec<(String, String)>)> = tree
+        .children(players)
+        .unwrap_or_default()
+        .iter()
+        .filter(|p| tree.class(**p) == Ok(ClassKind::Player))
+        .map(|&player| {
+            let stats = tree
+                .find_first_child(player, "leaderstats")
+                .ok()
+                .flatten()
+                .map(|folder| {
+                    tree.children(folder)
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|&v| {
+                            let class = tree.class(v).ok()?;
+                            let value = match class {
+                                ClassKind::IntValue | ClassKind::NumberValue => {
+                                    let n = tree.get_number(v, Property::NumberValue)?;
+                                    if n.fract() == 0.0 { format!("{n:.0}") } else { format!("{n:.2}") }
+                                }
+                                ClassKind::StringValue => tree.get_string(v, Property::StringValue)?,
+                                ClassKind::BoolValue => {
+                                    if tree.get_bool(v, Property::BoolValue)? {
+                                        "Yes".into()
+                                    } else {
+                                        "No".into()
+                                    }
+                                }
+                                _ => return None,
+                            };
+                            Some((tree.name(v).ok()?.to_owned(), value))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            (tree.name(player).unwrap_or("?").to_owned(), stats)
+        })
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    let columns: Vec<String> =
+        rows.iter().flat_map(|(_, s)| s.iter().map(|(n, _)| n.clone())).fold(Vec::new(), |mut acc, n| {
+            if !acc.contains(&n) {
+                acc.push(n);
+            }
+            acc
+        });
+    let rect = ui.max_rect();
+    egui::Area::new(egui::Id::new("leaderboard"))
+        .fixed_pos(egui::pos2(rect.right() - 12.0, rect.top() + 12.0))
+        .pivot(egui::Align2::RIGHT_TOP)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).fill(Color32::from_black_alpha(170)).show(ui, |ui| {
+                egui::Grid::new("leaderboard-grid").spacing([16.0, 4.0]).show(ui, |ui| {
+                    ui.label(RichText::new("Player").strong().color(Color32::WHITE));
+                    for c in &columns {
+                        ui.label(RichText::new(c).strong().color(Color32::WHITE));
+                    }
+                    ui.end_row();
+                    for (name, stats) in &rows {
+                        ui.label(RichText::new(name).color(Color32::WHITE));
+                        for c in &columns {
+                            let v =
+                                stats.iter().find(|(n, _)| n == c).map(|(_, v)| v.as_str()).unwrap_or("-");
+                            ui.label(RichText::new(v).color(Color32::from_rgb(255, 220, 120)));
+                        }
+                        ui.end_row();
+                    }
+                });
+            });
+        });
 }
 
 fn output(
@@ -774,6 +966,10 @@ fn new_instance(
             PropertyValue::String("print(\"Hello from \" .. script.Name)\n".into()),
         );
     }
+    if class == ClassKind::ModuleScript {
+        let source = "local module = {}\n\nfunction module.hello()\n\tprint(\"Hello from \" .. script.Name)\nend\n\nreturn module\n";
+        let _ = tree.set(id, Property::Source, PropertyValue::String(source.into()));
+    }
     tree.set_parent(id, Some(parent)).ok()?;
     Some(id)
 }
@@ -864,18 +1060,75 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             }
             let near = editor.selection.filter(|s| tree.class(*s).is_ok_and(|c| c.is_physical()));
             // Scripts go inside the selected part, so `script.Parent` is useful straight away.
-            let parent = match (class, editor.selection) {
-                (ClassKind::Script, Some(sel)) if tree.class(sel).is_ok_and(|c| c != ClassKind::Script) => {
+            // Modules live in storage unless something else is selected.
+            let parent = match class {
+                ClassKind::ModuleScript => tree.service(ClassKind::ReplicatedStorage).unwrap_or(parent),
+                _ => parent,
+            };
+            let goes_inside = matches!(
+                class,
+                ClassKind::Script
+                    | ClassKind::ModuleScript
+                    | ClassKind::IntValue
+                    | ClassKind::NumberValue
+                    | ClassKind::StringValue
+                    | ClassKind::BoolValue
+            );
+            let parent = match editor.selection {
+                Some(sel)
+                    if goes_inside
+                        && tree.class(sel).is_ok_and(|c| !is_code(c) && c != ClassKind::DataModel) =>
+                {
                     sel
                 }
                 _ => parent,
             };
             if let Some(id) = new_instance(&mut tree, class, parent, near) {
                 editor.selection = Some(id);
-                if class == ClassKind::Script {
+                if is_code(class) {
                     editor.open_script = Some(id);
                 }
             }
+        }
+        Action::InsertShape(shape) => {
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            if !playing {
+                editor.history.begin_edit(&tree, now);
+                editor.dirty = true;
+            }
+            let near = editor.selection.filter(|s| tree.class(*s).is_ok_and(|c| c.is_physical()));
+            let parent = tree.workspace();
+            if let Some(id) = new_instance(&mut tree, ClassKind::Part, parent, near) {
+                let size = match shape {
+                    PartShape::Block => libroxel_instance::Vec3::new(4.0, 1.0, 2.0),
+                    PartShape::Ball => libroxel_instance::Vec3::new(2.0, 2.0, 2.0),
+                    PartShape::Cylinder => libroxel_instance::Vec3::new(2.0, 2.0, 2.0),
+                    PartShape::Wedge => libroxel_instance::Vec3::new(4.0, 2.0, 4.0),
+                };
+                let _ = tree.set(id, Property::Shape, PropertyValue::Enum(EnumValue::Shape(shape)));
+                let _ = tree.set(id, Property::Size, PropertyValue::Vec3(size));
+                if let Some(pos) = tree.get_vec3(id, Property::Position) {
+                    let lifted = pos + libroxel_instance::Vec3::new(0.0, size.y / 2.0 - 0.5, 0.0);
+                    let _ = tree.set(id, Property::Position, PropertyValue::Vec3(lifted));
+                }
+                let name = SHAPES.iter().find(|(s, _)| *s == shape).map(|(_, n)| *n).unwrap_or("Part");
+                if shape != PartShape::Block {
+                    let _ = tree.set_name(id, name);
+                }
+                editor.selection = Some(id);
+            }
+        }
+        Action::Rotate90(id) => {
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            let Some(o) = tree.get_vec3(id, Property::Orientation) else { return };
+            if !playing {
+                editor.history.begin_edit(&tree, now);
+                editor.dirty = true;
+            }
+            let turned = libroxel_instance::Vec3::new(o.x, (o.y + 90.0).rem_euclid(360.0), o.z);
+            let _ = tree.set(id, Property::Orientation, PropertyValue::Vec3(turned));
         }
         Action::InsertInto(class, parent) => {
             let tree_rc = engine.tree.clone();
@@ -887,7 +1140,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             let near = Some(parent).filter(|p| tree.class(*p).is_ok_and(|c| c.is_physical()));
             if let Some(id) = new_instance(&mut tree, class, parent, near) {
                 editor.selection = Some(id);
-                if class == ClassKind::Script {
+                if is_code(class) {
                     editor.open_script = Some(id);
                 }
             }
@@ -895,7 +1148,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
         Action::Delete(id) => {
             let tree_rc = engine.tree.clone();
             let mut tree = tree_rc.borrow_mut();
-            if !tree.class(id).is_ok_and(|c| c.is_creatable()) {
+            if !tree.class(id).is_ok_and(|c| c.is_user_creatable()) {
                 return;
             }
             if !playing {

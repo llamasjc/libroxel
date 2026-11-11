@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
-use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property};
+use libroxel_instance::{ClassKind, EnumValue, InstanceId, InstanceTree, Material, PartShape, Property};
 use libroxel_script::SharedTree;
 
 use crate::{CharacterInput, LogEntry, PlaySession};
@@ -55,6 +55,45 @@ pub struct PartName(pub String);
 pub struct PartAppearance {
     pub color: Color,
     pub transparency: f32,
+    pub material: Material,
+    /// How many times surface textures repeat across the part.
+    pub texture_repeat: f32,
+}
+
+/// Which mesh the part is drawn with.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PartGeometry(pub PartShape);
+
+/// The transform that draws a part of `shape` and `size` at `pos` with `orientation`.
+///
+/// Meshes are unit-sized; balls use their smallest side and cylinders (which
+/// lie along X) use the smaller of their other two sides as the diameter.
+pub fn part_transform(
+    pos: libroxel_instance::Vec3,
+    size: libroxel_instance::Vec3,
+    orientation: libroxel_instance::Vec3,
+    shape: PartShape,
+) -> Transform {
+    let size = to_bevy(size).max(Vec3::splat(0.01));
+    let scale = match shape {
+        PartShape::Ball => Vec3::splat(size.min_element()),
+        PartShape::Cylinder => {
+            let d = size.y.min(size.z);
+            Vec3::new(size.x, d, d)
+        }
+        PartShape::Block | PartShape::Wedge => size,
+    };
+    Transform::from_translation(to_bevy(pos))
+        .with_rotation(crate::physics::orientation_quat(orientation))
+        .with_scale(scale)
+}
+
+/// Reads a part's shape, defaulting to a block.
+pub fn part_shape(tree: &InstanceTree, id: InstanceId) -> PartShape {
+    match tree.get_enum(id, Property::Shape) {
+        Some(EnumValue::Shape(shape)) => shape,
+        _ => PartShape::Block,
+    }
 }
 
 #[derive(Resource, Default)]
@@ -106,7 +145,7 @@ fn sync_parts(
     engine: NonSend<EngineState>,
     mut entities: ResMut<PartEntities>,
     mut commands: Commands,
-    mut parts: Query<(&mut Transform, &mut PartAppearance, &mut PartName), With<PartLink>>,
+    mut parts: Query<(&mut Transform, &mut PartAppearance, &mut PartName, &mut PartGeometry), With<PartLink>>,
 ) {
     let mut tree = engine.tree.borrow_mut();
     tree.drain_changes();
@@ -131,19 +170,27 @@ fn sync_parts(
         let color =
             tree.get_color(id, Property::Color).map(|c| Color::srgb(c.r, c.g, c.b)).unwrap_or(Color::WHITE);
         let transparency = tree.get_number(id, Property::Transparency).unwrap_or(0.0) as f32;
-        let transform =
-            Transform::from_translation(to_bevy(pos)).with_scale(to_bevy(size).max(Vec3::splat(0.01)));
-        let appearance = PartAppearance { color, transparency };
+        let material = match tree.get_enum(id, Property::Material) {
+            Some(EnumValue::Material(m)) => m,
+            _ => Material::Plastic,
+        };
+        let shape = part_shape(&tree, id);
+        let orientation = tree.get_vec3(id, Property::Orientation).unwrap_or_default();
+        let transform = part_transform(pos, size, orientation, shape);
+        let texture_repeat = (size.x.max(size.y).max(size.z) / 8.0).max(0.25);
+        let appearance = PartAppearance { color, transparency, material, texture_repeat };
         let name = PartName(tree.name(id).unwrap_or_default().to_owned());
+        let geometry = PartGeometry(shape);
 
         match entities.0.get(&id).and_then(|e| parts.get_mut(*e).ok()) {
-            Some((mut t, mut a, mut n)) => {
+            Some((mut t, mut a, mut n, mut g)) => {
                 t.set_if_neq(transform);
                 a.set_if_neq(appearance);
                 n.set_if_neq(name);
+                g.set_if_neq(geometry);
             }
             None if !entities.0.contains_key(&id) => {
-                let entity = commands.spawn((PartLink(id), name, transform, appearance)).id();
+                let entity = commands.spawn((PartLink(id), name, transform, appearance, geometry)).id();
                 entities.0.insert(id, entity);
             }
             None => {} // spawned this frame; commands not applied yet
@@ -162,13 +209,145 @@ impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_scene)
             .add_systems(Update, (camera_controls, play_input).chain().in_set(EngineSet::Input))
-            .add_systems(PostUpdate, (attach_visuals, update_materials).chain())
+            .add_systems(PostUpdate, (attach_visuals, update_materials, update_meshes).chain())
             .add_systems(PostUpdate, follow_camera.before(TransformSystems::Propagate));
     }
 }
 
+/// One unit-sized mesh per part shape.
 #[derive(Resource)]
-struct UnitCube(Handle<Mesh>);
+struct PartMeshes {
+    block: Handle<Mesh>,
+    ball: Handle<Mesh>,
+    cylinder: Handle<Mesh>,
+    wedge: Handle<Mesh>,
+}
+
+impl PartMeshes {
+    fn get(&self, shape: PartShape) -> Handle<Mesh> {
+        match shape {
+            PartShape::Block => self.block.clone(),
+            PartShape::Ball => self.ball.clone(),
+            PartShape::Cylinder => self.cylinder.clone(),
+            PartShape::Wedge => self.wedge.clone(),
+        }
+    }
+}
+
+/// Generated surface textures for the textured materials.
+#[derive(Resource)]
+struct MaterialTextures {
+    wood: Handle<Image>,
+    brick: Handle<Image>,
+    grass: Handle<Image>,
+}
+
+/// A unit ramp: full height at +Z, sloping down to -Z.
+fn wedge_mesh() -> Mesh {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    let h = 0.5;
+    let slope = Vec3::new(0.0, 1.0, -1.0).normalize();
+    // (corners, normal, uvs) for each face.
+    let faces: [(Vec<Vec3>, Vec3); 5] = [
+        (
+            vec![Vec3::new(-h, -h, -h), Vec3::new(h, -h, -h), Vec3::new(h, -h, h), Vec3::new(-h, -h, h)],
+            Vec3::NEG_Y,
+        ),
+        (vec![Vec3::new(-h, -h, h), Vec3::new(h, -h, h), Vec3::new(h, h, h), Vec3::new(-h, h, h)], Vec3::Z),
+        (vec![Vec3::new(-h, -h, -h), Vec3::new(h, -h, -h), Vec3::new(h, h, h), Vec3::new(-h, h, h)], slope),
+        (vec![Vec3::new(-h, -h, -h), Vec3::new(-h, -h, h), Vec3::new(-h, h, h)], Vec3::NEG_X),
+        (vec![Vec3::new(h, -h, -h), Vec3::new(h, -h, h), Vec3::new(h, h, h)], Vec3::X),
+    ];
+    let (mut positions, mut normals, mut uvs, mut indices) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for (corners, normal) in faces {
+        let base = positions.len() as u32;
+        for c in &corners {
+            positions.push(c.to_array());
+            normals.push(normal.to_array());
+            // Project onto the face's two other axes for texture coordinates.
+            let uv = if normal.x.abs() > 0.5 {
+                Vec2::new(c.z, c.y)
+            } else if normal.y.abs() > 0.9 {
+                Vec2::new(c.x, c.z)
+            } else {
+                Vec2::new(c.x, c.y)
+            };
+            uvs.push((uv + Vec2::splat(0.5)).to_array());
+        }
+        for k in 1..corners.len() as u32 - 1 {
+            let (a, b, c) = (corners[0], corners[k as usize], corners[k as usize + 1]);
+            // Wind counter-clockwise as seen from outside.
+            if (b - a).cross(c - a).dot(normal) >= 0.0 {
+                indices.extend([base, base + k, base + k + 1]);
+            } else {
+                indices.extend([base, base + k + 1, base + k]);
+            }
+        }
+    }
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(Indices::U32(indices))
+}
+
+/// A cheap repeatable hash for texture noise.
+fn noise(x: u32, y: u32, seed: u32) -> f32 {
+    let mut n = x.wrapping_mul(374_761_393) ^ y.wrapping_mul(668_265_263) ^ seed.wrapping_mul(2_246_822_519);
+    n = (n ^ (n >> 13)).wrapping_mul(1_274_126_177);
+    (n ^ (n >> 16)) as f32 / u32::MAX as f32
+}
+
+/// A small greyscale texture that tints the part's colour. Chunky pixels
+/// on purpose, to match the blocky look.
+fn make_texture(shade: impl Fn(u32, u32) -> f32) -> Image {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    const SIZE: u32 = 32;
+    let mut data = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let v = (shade(x, y).clamp(0.0, 1.0) * 255.0) as u8;
+            data.extend([v, v, v, 255]);
+        }
+    }
+    let mut image = Image::new(
+        Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    );
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::Repeat,
+        address_mode_v: ImageAddressMode::Repeat,
+        ..ImageSamplerDescriptor::nearest()
+    });
+    image
+}
+
+fn material_textures(images: &mut Assets<Image>) -> MaterialTextures {
+    let wood = make_texture(|x, y| {
+        // Long grain running along U, with a few wobbles.
+        let wobble = (noise(0, y / 4, 7) - 0.5) * 3.0;
+        let ring = ((y as f32 + wobble) * 0.9).sin() * 0.5 + 0.5;
+        0.72 + ring * 0.18 + noise(x / 8, y, 3) * 0.08
+    });
+    let brick = make_texture(|x, y| {
+        let row = y / 8;
+        let offset = if row % 2 == 0 { 0 } else { 8 };
+        let mortar = y % 8 == 0 || (x + offset) % 16 == 0;
+        if mortar {
+            0.97
+        } else {
+            0.66 + noise((x + offset) / 16, row, 11) * 0.18 + noise(x / 2, y / 2, 5) * 0.06
+        }
+    });
+    let grass = make_texture(|x, y| 0.68 + noise(x / 2, y / 2, 17) * 0.3);
+    MaterialTextures { wood: images.add(wood), brick: images.add(brick), grass: images.add(grass) }
+}
 
 /// How the camera moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,9 +381,18 @@ impl CameraRig {
     }
 }
 
-fn setup_scene(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
-    // Parts are unit cubes scaled by their Size.
-    commands.insert_resource(UnitCube(meshes.add(Cuboid::new(1.0, 1.0, 1.0))));
+fn setup_scene(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut images: ResMut<Assets<Image>>) {
+    // Parts are unit meshes scaled by their Size.
+    commands.insert_resource(PartMeshes {
+        block: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+        ball: meshes.add(Sphere::new(0.5).mesh().uv(32, 18)),
+        cylinder: meshes.add(
+            Mesh::from(Cylinder::new(0.5, 1.0))
+                .rotated_by(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
+        ),
+        wedge: meshes.add(wedge_mesh()),
+    });
+    commands.insert_resource(material_textures(&mut images));
     let rig = CameraRig::default();
     commands.spawn((
         Camera3d::default(),
@@ -218,14 +406,41 @@ fn setup_scene(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     commands.insert_resource(ClearColor(Color::srgb(0.53, 0.72, 0.9)));
 }
 
-fn material_for(appearance: &PartAppearance) -> StandardMaterial {
-    let alpha = (1.0 - appearance.transparency).clamp(0.0, 1.0);
-    StandardMaterial {
+fn material_for(appearance: &PartAppearance, textures: &MaterialTextures) -> StandardMaterial {
+    let mut alpha = (1.0 - appearance.transparency).clamp(0.0, 1.0);
+    if appearance.material == Material::Glass {
+        alpha = alpha.min(0.45);
+    }
+    let mut material = StandardMaterial {
         base_color: appearance.color.with_alpha(alpha),
         alpha_mode: if alpha < 1.0 { AlphaMode::Blend } else { AlphaMode::Opaque },
         perceptual_roughness: 0.85,
+        uv_transform: bevy::math::Affine2::from_scale(Vec2::splat(appearance.texture_repeat)),
         ..default()
+    };
+    match appearance.material {
+        Material::Plastic => {}
+        Material::SmoothPlastic => material.perceptual_roughness = 0.35,
+        Material::Neon => {
+            material.unlit = true;
+            material.emissive = appearance.color.to_linear() * 2.0;
+        }
+        Material::Metal => {
+            material.metallic = 0.65;
+            material.perceptual_roughness = 0.3;
+        }
+        Material::Glass => {
+            material.perceptual_roughness = 0.05;
+            material.reflectance = 0.9;
+        }
+        Material::Wood => material.base_color_texture = Some(textures.wood.clone()),
+        Material::Brick => material.base_color_texture = Some(textures.brick.clone()),
+        Material::Grass => {
+            material.base_color_texture = Some(textures.grass.clone());
+            material.perceptual_roughness = 1.0;
+        }
     }
+    material
 }
 
 fn visibility_for(appearance: &PartAppearance) -> Visibility {
@@ -234,20 +449,22 @@ fn visibility_for(appearance: &PartAppearance) -> Visibility {
 
 fn attach_visuals(
     mut commands: Commands,
-    cube: Res<UnitCube>,
+    meshes: Res<PartMeshes>,
+    textures: Res<MaterialTextures>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    new_parts: Query<(Entity, &PartAppearance), Added<PartLink>>,
+    new_parts: Query<(Entity, &PartAppearance, &PartGeometry), Added<PartLink>>,
 ) {
-    for (entity, appearance) in &new_parts {
+    for (entity, appearance, geometry) in &new_parts {
         commands.entity(entity).insert((
-            Mesh3d(cube.0.clone()),
-            MeshMaterial3d(materials.add(material_for(appearance))),
+            Mesh3d(meshes.get(geometry.0)),
+            MeshMaterial3d(materials.add(material_for(appearance, &textures))),
             visibility_for(appearance),
         ));
     }
 }
 
 fn update_materials(
+    textures: Res<MaterialTextures>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut changed: Query<
         (&PartAppearance, &MeshMaterial3d<StandardMaterial>, &mut Visibility),
@@ -256,9 +473,21 @@ fn update_materials(
 ) {
     for (appearance, handle, mut visibility) in &mut changed {
         if let Some(mut material) = materials.get_mut(&handle.0) {
-            *material = material_for(appearance);
+            *material = material_for(appearance, &textures);
         }
         visibility.set_if_neq(visibility_for(appearance));
+    }
+}
+
+fn update_meshes(
+    meshes: Res<PartMeshes>,
+    mut changed: Query<(&PartGeometry, &mut Mesh3d), Changed<PartGeometry>>,
+) {
+    for (geometry, mut mesh) in &mut changed {
+        let wanted = meshes.get(geometry.0);
+        if mesh.0 != wanted {
+            mesh.0 = wanted;
+        }
     }
 }
 

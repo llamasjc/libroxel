@@ -40,6 +40,8 @@ fn value_to_json(value: &PropertyValue) -> Value {
         PropertyValue::String(s) => json!(s),
         PropertyValue::Vec3(v) => json!([v.x, v.y, v.z]),
         PropertyValue::Color3(c) => json!([c.r, c.g, c.b]),
+        PropertyValue::Enum(v) => json!(v.file_name()),
+        PropertyValue::Ref(_) => Value::Null,
     }
 }
 
@@ -52,6 +54,9 @@ fn triple(value: &Value) -> Option<[f32; 3]> {
 }
 
 fn value_from_json(property: Property, value: &Value) -> Option<PropertyValue> {
+    if let Some(kind) = property.enum_kind() {
+        return kind.from_file_name(value.as_str()?).map(PropertyValue::Enum);
+    }
     Some(match property.expected_kind() {
         "bool" => PropertyValue::Bool(value.as_bool()?),
         "number" => PropertyValue::Number(value.as_f64()?),
@@ -76,6 +81,10 @@ fn node_to_json(tree: &InstanceTree, id: InstanceId) -> Result<Value, TreeError>
             continue;
         }
         let value = tree.get(id, property)?;
+        // Links point at runtime objects (like a player's character) and aren't saved.
+        if matches!(value, PropertyValue::Ref(_)) {
+            continue;
+        }
         // Only store what differs from the default, to keep files small and diffable.
         if class.default_value(property).as_ref() != Some(&value) {
             props.insert(property.file_name().into(), value_to_json(&value));
@@ -125,9 +134,12 @@ fn load_node(
         .ok_or_else(|| PlaceError::UnknownClass(class_name.to_owned()))?;
     let name = obj.get("name").and_then(Value::as_str).unwrap_or(class_name);
 
-    // The workspace already exists; merge into it instead of creating one.
-    let id = if class == ClassKind::Workspace && parent == tree.root() {
-        tree.workspace()
+    // Services already exist; merge into them instead of creating new ones.
+    let id = if let Some(service) = tree.service(class).filter(|_| parent == tree.root()) {
+        service
+    } else if !class.is_user_creatable() {
+        report.warnings.push(format!("skipped {name}: a {class_name} can't be saved in a place"));
+        return Ok(());
     } else {
         let id = tree.create(class, name)?;
         tree.set_parent(id, Some(parent))?;
@@ -193,6 +205,14 @@ mod tests {
         let script = tree.create(ClassKind::Script, "Main").unwrap();
         tree.set_parent(script, Some(ws)).unwrap();
         tree.set(script, Property::Source, PropertyValue::String("print('hi')".into())).unwrap();
+        let ball = tree.create(ClassKind::Part, "Ball").unwrap();
+        tree.set_parent(ball, Some(ws)).unwrap();
+        let shape = PropertyValue::Enum(crate::EnumValue::Shape(crate::PartShape::Ball));
+        tree.set(ball, Property::Shape, shape.clone()).unwrap();
+        tree.set(ball, Property::Orientation, PropertyValue::Vec3(Vec3::new(0.0, 45.0, 0.0))).unwrap();
+        let storage = tree.service(ClassKind::ReplicatedStorage).unwrap();
+        let module = tree.create(ClassKind::ModuleScript, "Util").unwrap();
+        tree.set_parent(module, Some(storage)).unwrap();
 
         let text = save(&tree).unwrap();
         let (loaded, report) = load(&text).unwrap();
@@ -204,6 +224,10 @@ mod tests {
         let floor = loaded.find_first_child(level, "Floor").unwrap().unwrap();
         assert_eq!(loaded.get_vec3(floor, Property::Size), Some(Vec3::new(32.0, 1.0, 32.0)));
         assert_eq!(loaded.get_bool(floor, Property::Anchored), Some(true));
+        let ball = loaded.find_first_child(ws, "Ball").unwrap().unwrap();
+        assert_eq!(loaded.get(ball, Property::Shape).unwrap(), shape);
+        let storage = loaded.service(ClassKind::ReplicatedStorage).unwrap();
+        assert!(loaded.find_first_child(storage, "Util").unwrap().is_some());
     }
 
     #[test]

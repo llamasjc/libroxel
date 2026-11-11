@@ -312,3 +312,113 @@ fn endless_loops_are_stopped() {
     run(&rt, "print('alive')");
     assert_eq!(printed(&rt), vec!["alive"]);
 }
+
+#[test]
+fn enums_set_shapes_and_materials() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local ball = Instance.new("Part", workspace)
+        ball.Name = "Ball"
+        ball.Shape = Enum.PartType.Ball
+        ball.Material = "Neon"
+        ball.Orientation = Vector3.new(0, 90, 0)
+        print(ball.Shape, ball.Shape == Enum.PartType.Ball, ball.Material.Name, typeof(ball.Material))
+        print(pcall(function() ball.Shape = Enum.Material.Wood end))
+    "#,
+    );
+    let out = printed(&rt);
+    assert_eq!(out[0], "Enum.PartType.Ball true Neon EnumItem");
+    assert!(out[1].starts_with("false"), "a material is not a shape: {}", out[1]);
+    let tree = rt.tree().borrow();
+    let ball = tree.find_first_child(tree.workspace(), "Ball").unwrap().unwrap();
+    assert_eq!(
+        tree.get_enum(ball, Property::Material),
+        Some(libroxel_instance::EnumValue::Material(libroxel_instance::Material::Neon))
+    );
+}
+
+#[test]
+fn modules_run_once_and_can_wait() {
+    let rt = runtime();
+    {
+        let mut tree = rt.tree().borrow_mut();
+        let storage = tree.service(ClassKind::ReplicatedStorage).unwrap();
+        let module = tree.create(ClassKind::ModuleScript, "Util").unwrap();
+        tree.set_parent(module, Some(storage)).unwrap();
+        let source = r#"
+            print("loading", script.Name)
+            task.wait(0.5)
+            local Util = {}
+            function Util.double(n) return n * 2 end
+            return Util
+        "#;
+        tree.set(module, Property::Source, PropertyValue::String(source.into())).unwrap();
+        let bad = tree.create(ClassKind::ModuleScript, "Bad").unwrap();
+        tree.set_parent(bad, Some(storage)).unwrap();
+        tree.set(bad, Property::Source, PropertyValue::String("return 1, 2".into())).unwrap();
+    }
+    run(
+        &rt,
+        r#"
+        local storage = game:GetService("ReplicatedStorage")
+        local Util = require(storage.Util)
+        print(Util.double(21), require(storage.Util) == Util)
+        print(pcall(require, storage.Bad))
+        print(pcall(require, workspace))
+    "#,
+    );
+    assert_eq!(printed(&rt), vec!["loading Util"], "waits inside the module");
+    rt.step(0.6);
+    let out = printed(&rt);
+    assert_eq!(out[0], "42 true", "the second require reuses the first result");
+    assert!(out[1].contains("exactly one value"), "{}", out[1]);
+    assert!(out[2].contains("ModuleScript"), "{}", out[2]);
+}
+
+#[test]
+fn players_service_and_leaderstats() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local Players = game:GetService("Players")
+        Players.PlayerAdded:Connect(function(player)
+            local stats = Instance.new("Folder")
+            stats.Name = "leaderstats"
+            stats.Parent = player
+            local coins = Instance.new("IntValue", stats)
+            coins.Name = "Coins"
+            coins.Value = 9.6
+            print("joined", player.Name, #Players:GetPlayers(), coins.Value)
+            player.CharacterAdded:Connect(function(model)
+                print("character", model.Name, Players:GetPlayerFromCharacter(model) == player)
+                model.Humanoid.Died:Connect(function() print("died") end)
+                model.Humanoid:TakeDamage(150)
+                print("health", model.Humanoid.Health)
+            end)
+        end)
+        print(pcall(Instance.new, "Player"))
+    "#,
+    );
+    assert!(printed(&rt)[0].starts_with("false"), "scripts can't make players");
+
+    let (player, model, humanoid) = {
+        let mut tree = rt.tree().borrow_mut();
+        let players = tree.service(ClassKind::Players).unwrap();
+        let player = tree.create(ClassKind::Player, "Alex").unwrap();
+        tree.set_parent(player, Some(players)).unwrap();
+        let model = tree.create(ClassKind::Model, "Alex").unwrap();
+        let ws = tree.workspace();
+        tree.set_parent(model, Some(ws)).unwrap();
+        let humanoid = tree.create(ClassKind::Humanoid, "Humanoid").unwrap();
+        tree.set_parent(humanoid, Some(model)).unwrap();
+        tree.set(player, Property::Character, PropertyValue::Ref(Some(model))).unwrap();
+        (player, model, humanoid)
+    };
+    assert!(rt.player_added(player).is_empty());
+    assert!(rt.character_added(player, model).is_empty());
+    assert!(rt.humanoid_died(humanoid).is_empty());
+    assert_eq!(printed(&rt), vec!["joined Alex 1 10", "character Alex true", "health 0", "died"]);
+}

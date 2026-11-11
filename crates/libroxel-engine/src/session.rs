@@ -1,6 +1,6 @@
 //! A play session: what runs between pressing Play and Stop.
 
-use libroxel_instance::{InstanceId, InstanceTree};
+use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property, PropertyValue};
 use libroxel_script::{OutputLevel, ScriptRuntime, SharedTree};
 
 use crate::character::{Character, CharacterInput};
@@ -8,6 +8,8 @@ use crate::physics::Physics;
 
 /// How long a character stays dead before respawning, in seconds.
 pub const RESPAWN_DELAY: f32 = 2.0;
+/// The name of the local player.
+pub const LOCAL_PLAYER_NAME: &str = "Player1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
@@ -30,20 +32,64 @@ pub struct PlaySession {
     runtime: ScriptRuntime,
     physics: Physics,
     character: Option<Character>,
+    /// The local player's object under the players service.
+    player: Option<InstanceId>,
     respawn_in: Option<f32>,
     log: Vec<LogEntry>,
 }
 
 impl PlaySession {
     /// Spawns a character (when `with_character`) and starts every script.
+    ///
+    /// Scripts start first, then the player joins (firing the join event),
+    /// then their character spawns, so scripts see the same order as in a
+    /// real game.
     pub fn start(tree: SharedTree, with_character: bool) -> Result<Self, String> {
-        let character = with_character.then(|| Character::spawn(&mut tree.borrow_mut()));
-        let runtime = ScriptRuntime::new(tree).map_err(|e| format!("could not start Luau: {e}"))?;
-        let mut session =
-            Self { runtime, physics: Physics::default(), character, respawn_in: None, log: Vec::new() };
+        let runtime = ScriptRuntime::new(tree.clone()).map_err(|e| format!("could not start Luau: {e}"))?;
+        let mut session = Self {
+            runtime,
+            physics: Physics::default(),
+            character: None,
+            player: None,
+            respawn_in: None,
+            log: Vec::new(),
+        };
         let errors = session.runtime.run_tree_scripts();
         session.collect(errors);
+        if with_character {
+            let player = {
+                let mut t = tree.borrow_mut();
+                let players = t.service(ClassKind::Players).expect("every tree has a players service");
+                let player = t.create(ClassKind::Player, LOCAL_PLAYER_NAME).expect("players can be created");
+                t.set_parent(player, Some(players)).expect("fresh players can be parented");
+                t.set(player, Property::UserId, PropertyValue::Number(1.0)).expect("players have ids");
+                player
+            };
+            session.player = Some(player);
+            let errors = session.runtime.player_added(player);
+            session.collect(errors);
+            session.spawn_character(&tree);
+        }
         Ok(session)
+    }
+
+    fn spawn_character(&mut self, tree: &SharedTree) {
+        let Some(player) = self.player else { return };
+        let character = {
+            let mut t = tree.borrow_mut();
+            let name = t.name(player).unwrap_or(LOCAL_PLAYER_NAME).to_owned();
+            let character = Character::spawn_named(&mut t, &name);
+            let _ = t.set(player, Property::Character, PropertyValue::Ref(Some(character.model)));
+            character
+        };
+        self.character = Some(character);
+        let errors = self.runtime.character_added(player, character.model);
+        self.collect(errors);
+    }
+
+    /// The local player's object, while a character is being played.
+    pub fn player(&self) -> Option<InstanceId> {
+        self.player
     }
 
     pub fn runtime(&self) -> &ScriptRuntime {
@@ -119,15 +165,15 @@ impl PlaySession {
             *remaining -= dt;
             if *remaining <= 0.0 {
                 self.respawn_in = None;
-                let mut t = tree.borrow_mut();
-                let _ = t.destroy(character.model);
-                self.character = Some(Character::spawn(&mut t));
-                drop(t);
+                let _ = tree.borrow_mut().destroy(character.model);
+                self.spawn_character(tree);
                 self.info("Respawned");
             }
         } else if character.is_dead(&tree.borrow()) {
             self.respawn_in = Some(RESPAWN_DELAY);
             self.info("Your character died");
+            let errors = self.runtime.humanoid_died(character.humanoid);
+            self.collect(errors);
         }
     }
 }

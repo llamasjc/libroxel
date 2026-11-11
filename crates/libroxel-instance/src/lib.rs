@@ -14,11 +14,13 @@
 //! instance is destroyed its id never resolves again, even if the slot is
 //! reused.
 
+mod enums;
 mod math;
 pub mod place;
 mod property;
 mod tree;
 
+pub use enums::{EnumKind, EnumValue, Material, PartShape};
 pub use math::{Color3, Vec3};
 pub use property::{Property, PropertyValue};
 pub use tree::{Change, InstanceId, InstanceTree, TreeError};
@@ -45,6 +47,22 @@ pub enum ClassKind {
     Script,
     /// Gives a character health and movement settings.
     Humanoid,
+    /// Luau code that other scripts load with `require`. It never runs on its own.
+    ModuleScript,
+    /// The service that holds one [`ClassKind::Player`] per connected player.
+    Players,
+    /// Someone playing the game. Created by the engine, never by scripts.
+    Player,
+    /// A service for things that are kept but not in the world, such as modules and templates.
+    ReplicatedStorage,
+    /// Holds a whole number.
+    IntValue,
+    /// Holds a number.
+    NumberValue,
+    /// Holds a string.
+    StringValue,
+    /// Holds true or false.
+    BoolValue,
 }
 
 impl ClassKind {
@@ -58,12 +76,35 @@ impl ClassKind {
         ClassKind::SpawnLocation,
         ClassKind::Script,
         ClassKind::Humanoid,
+        ClassKind::ModuleScript,
+        ClassKind::Players,
+        ClassKind::Player,
+        ClassKind::ReplicatedStorage,
+        ClassKind::IntValue,
+        ClassKind::NumberValue,
+        ClassKind::StringValue,
+        ClassKind::BoolValue,
     ];
 
-    /// Whether scripts may create this class with a constructor.
-    /// Singletons like the root and workspace may not.
+    /// The services every tree has under its root, in order. They can't be
+    /// created, moved or destroyed.
+    pub const SERVICES: &[ClassKind] =
+        &[ClassKind::Workspace, ClassKind::Players, ClassKind::ReplicatedStorage];
+
+    /// Whether this class is one of the [`SERVICES`](Self::SERVICES).
+    pub fn is_service(self) -> bool {
+        Self::SERVICES.contains(&self)
+    }
+
+    /// Whether the tree may create this class. The root and services may not.
     pub fn is_creatable(self) -> bool {
-        !matches!(self, ClassKind::DataModel | ClassKind::Workspace)
+        self != ClassKind::DataModel && !self.is_service()
+    }
+
+    /// Whether scripts and the editor may create this class. Players are
+    /// made by the engine when someone joins.
+    pub fn is_user_creatable(self) -> bool {
+        self.is_creatable() && self != ClassKind::Player
     }
 
     /// Whether this class is a box in the world (it has a position, size and colour).
@@ -99,13 +140,21 @@ impl ClassKind {
         const PART: &[Property] = &[
             Property::Name,
             Property::Position,
+            Property::Orientation,
             Property::Size,
+            Property::Shape,
             Property::Color,
+            Property::Material,
             Property::Anchored,
             Property::CanCollide,
             Property::Transparency,
         ];
         const SCRIPT: &[Property] = &[Property::Name, Property::Disabled, Property::Source];
+        const MODULE: &[Property] = &[Property::Name, Property::Source];
+        const PLAYER: &[Property] = &[Property::Name, Property::UserId, Property::Character];
+        const NUMBER: &[Property] = &[Property::Name, Property::NumberValue];
+        const STRING: &[Property] = &[Property::Name, Property::StringValue];
+        const BOOL: &[Property] = &[Property::Name, Property::BoolValue];
         const HUMANOID: &[Property] = &[
             Property::Name,
             Property::Health,
@@ -117,6 +166,11 @@ impl ClassKind {
             ClassKind::Part | ClassKind::SpawnLocation => PART,
             ClassKind::Script => SCRIPT,
             ClassKind::Humanoid => HUMANOID,
+            ClassKind::ModuleScript => MODULE,
+            ClassKind::Player => PLAYER,
+            ClassKind::IntValue | ClassKind::NumberValue => NUMBER,
+            ClassKind::StringValue => STRING,
+            ClassKind::BoolValue => BOOL,
             _ => COMMON,
         }
     }
@@ -132,8 +186,13 @@ impl ClassKind {
             return None;
         }
         Some(match property {
-            Property::Name | Property::Source => PropertyValue::String(String::new()),
-            Property::Position => PropertyValue::Vec3(Vec3::ZERO),
+            Property::Name | Property::Source | Property::StringValue => PropertyValue::String(String::new()),
+            Property::Position | Property::Orientation => PropertyValue::Vec3(Vec3::ZERO),
+            Property::Shape => PropertyValue::Enum(EnumValue::Shape(PartShape::Block)),
+            Property::Material => PropertyValue::Enum(EnumValue::Material(Material::Plastic)),
+            Property::NumberValue | Property::UserId => PropertyValue::Number(0.0),
+            Property::BoolValue => PropertyValue::Bool(false),
+            Property::Character => PropertyValue::Ref(None),
             Property::Size => PropertyValue::Vec3(Vec3::new(4.0, 1.0, 2.0)),
             Property::Color => PropertyValue::Color3(match self {
                 ClassKind::SpawnLocation => Color3::new(0.3, 0.55, 0.95),
@@ -160,6 +219,14 @@ impl ClassKind {
             ClassKind::SpawnLocation => "spawn_location",
             ClassKind::Script => "script",
             ClassKind::Humanoid => "humanoid",
+            ClassKind::ModuleScript => "module_script",
+            ClassKind::Players => "players",
+            ClassKind::Player => "player",
+            ClassKind::ReplicatedStorage => "replicated_storage",
+            ClassKind::IntValue => "int_value",
+            ClassKind::NumberValue => "number_value",
+            ClassKind::StringValue => "string_value",
+            ClassKind::BoolValue => "bool_value",
         }
     }
 

@@ -111,6 +111,26 @@ impl ScriptRuntime {
         bindings::fire_touched(&self.lua, part, other)
     }
 
+    /// Fires the players service's join event for `player`.
+    pub fn player_added(&self, player: InstanceId) -> Vec<ScriptError> {
+        bindings::fire_with_instance(&self.lua, bindings::SignalKind::PlayerAdded, player)
+    }
+
+    /// Fires the players service's leave event for `player`.
+    pub fn player_removing(&self, player: InstanceId) -> Vec<ScriptError> {
+        bindings::fire_with_instance(&self.lua, bindings::SignalKind::PlayerRemoving, player)
+    }
+
+    /// Fires `player`'s character event with its new `model`.
+    pub fn character_added(&self, player: InstanceId, model: InstanceId) -> Vec<ScriptError> {
+        bindings::fire_with_instance(&self.lua, bindings::SignalKind::CharacterAdded(player), model)
+    }
+
+    /// Fires `humanoid`'s death event.
+    pub fn humanoid_died(&self, humanoid: InstanceId) -> Vec<ScriptError> {
+        bindings::fire_plain(&self.lua, bindings::SignalKind::Died(humanoid))
+    }
+
     /// Seconds of game time so far (the sum of every `step`).
     pub fn clock(&self) -> f64 {
         bindings::clock(&self.lua)

@@ -6,6 +6,7 @@
 //! ```text
 //! cargo run -p libroxel-editor                 # start with a blank world
 //! cargo run -p libroxel-editor -- my_game.lrx  # open a saved place
+//! cargo run -p libroxel-editor -- --sample     # open the sample obby
 //! ```
 
 mod history;
@@ -31,6 +32,7 @@ pub enum Tool {
     Select,
     Move,
     Scale,
+    Rotate,
 }
 
 /// Which file dialog is open.
@@ -46,6 +48,8 @@ pub struct Editor {
     pub tool: Tool,
     /// Grid snap in studs; 0 turns snapping off.
     pub snap: f32,
+    /// Rotation snap in degrees; 0 turns it off.
+    pub angle_snap: f32,
     pub history: History,
     /// The world as it was when Play was pressed.
     pub edit_snapshot: Option<InstanceTree>,
@@ -73,6 +77,7 @@ impl Default for Editor {
             selection: None,
             tool: Tool::Move,
             snap: 1.0,
+            angle_snap: 15.0,
             history: History::default(),
             edit_snapshot: None,
             file: None,
@@ -102,6 +107,7 @@ pub fn games_dir() -> PathBuf {
 fn main() {
     let mut editor = Editor::default();
     let tree = match std::env::args().nth(1) {
+        Some(flag) if flag == "--sample" => templates::sample_obby(),
         Some(path) => match std::fs::read_to_string(&path)
             .map_err(|e| e.to_string())
             .and_then(|text| place::load(&text).map_err(|e| e.to_string()))

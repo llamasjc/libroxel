@@ -1,13 +1,20 @@
 //! A small box physics engine.
 //!
-//! Parts have no rotation yet, so every part is an axis-aligned box and
-//! collisions are exact and cheap. Unanchored parts fall under gravity and
-//! stop on anything with `CanCollide`. Every frame we also work out which
-//! pairs of parts started touching, for the `Touched` event.
+//! Moving (unanchored) parts are axis-aligned boxes; they don't tumble.
+//! Anchored parts can be rotated and shaped: boxes and parts turned in
+//! right angles are handled as axis-aligned boxes (exact and cheap), while
+//! tilted boxes and wedges use a separating-axis test and balls use a
+//! sphere test, so ramps and round obstacles work. Unanchored parts fall
+//! under gravity and stop on anything with `CanCollide`. Every frame we
+//! also work out which pairs of parts started touching, for the `Touched`
+//! event.
 
 use std::collections::{HashMap, HashSet};
 
-use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property, PropertyValue, Vec3};
+use bevy::math::{EulerRot, Mat3, Quat, Vec3 as GVec3};
+use libroxel_instance::{
+    ClassKind, EnumValue, InstanceId, InstanceTree, PartShape, Property, PropertyValue, Vec3,
+};
 
 /// Downward acceleration, in studs per second squared.
 pub const GRAVITY: f32 = 196.2;
@@ -19,6 +26,38 @@ const MAX_SUBSTEPS: usize = 8;
 /// How far apart two boxes may be and still count as touching.
 const TOUCH_MARGIN: f32 = 0.05;
 const EPS: f32 = 1e-4;
+/// Moving boxes climb onto anything whose top is at most this far above their bottom.
+pub const STEP_HEIGHT: f32 = 0.6;
+
+/// Turns an orientation in degrees (Y, then X, then Z) into a rotation.
+pub fn orientation_quat(degrees: Vec3) -> Quat {
+    Quat::from_euler(EulerRot::YXZ, degrees.y.to_radians(), degrees.x.to_radians(), degrees.z.to_radians())
+}
+
+fn g(v: Vec3) -> GVec3 {
+    GVec3::new(v.x, v.y, v.z)
+}
+
+fn l(v: GVec3) -> Vec3 {
+    Vec3::new(v.x, v.y, v.z)
+}
+
+/// The exact shape a body collides with. `Body::half` is always its
+/// axis-aligned bounding box.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Collider {
+    /// Exactly its bounding box.
+    Aabb,
+    /// A box or wedge with any rotation. `half` is in the part's own axes.
+    Hull {
+        rotation: Mat3,
+        half: GVec3,
+        wedge: bool,
+    },
+    Sphere {
+        radius: f32,
+    },
+}
 
 #[derive(Debug, Clone, Copy)]
 struct Body {
@@ -27,6 +66,7 @@ struct Body {
     half: Vec3,
     anchored: bool,
     can_collide: bool,
+    collider: Collider,
 }
 
 impl Body {
@@ -35,6 +75,134 @@ impl Body {
     }
     fn max(&self) -> Vec3 {
         self.pos + self.half
+    }
+}
+
+/// A convex shape as points plus the directions a separating axis can come from.
+struct Hull {
+    points: Vec<GVec3>,
+    normals: Vec<GVec3>,
+    edges: Vec<GVec3>,
+}
+
+impl Body {
+    fn hull(&self) -> Hull {
+        let c = g(self.pos);
+        match self.collider {
+            Collider::Hull { rotation, half, wedge } => {
+                let corner = |x: f32, y: f32, z: f32| c + rotation * (half * GVec3::new(x, y, z));
+                let mut points = Vec::with_capacity(8);
+                for x in [-1.0, 1.0] {
+                    for z in [-1.0, 1.0] {
+                        points.push(corner(x, -1.0, z));
+                        // A wedge only keeps its top edge at the back.
+                        if !wedge || z > 0.0 {
+                            points.push(corner(x, 1.0, z));
+                        }
+                    }
+                }
+                let mut normals = vec![rotation.x_axis, rotation.y_axis, rotation.z_axis];
+                let mut edges = normals.clone();
+                if wedge {
+                    normals.push((rotation * GVec3::new(0.0, half.z, -half.y)).normalize_or_zero());
+                    edges.push((rotation * GVec3::new(0.0, half.y, half.z)).normalize_or_zero());
+                }
+                Hull { points, normals, edges }
+            }
+            _ => {
+                let h = g(self.half);
+                let mut points = Vec::with_capacity(8);
+                for x in [-1.0, 1.0] {
+                    for y in [-1.0, 1.0] {
+                        for z in [-1.0, 1.0] {
+                            points.push(c + h * GVec3::new(x, y, z));
+                        }
+                    }
+                }
+                Hull {
+                    points,
+                    normals: vec![GVec3::X, GVec3::Y, GVec3::Z],
+                    edges: vec![GVec3::X, GVec3::Y, GVec3::Z],
+                }
+            }
+        }
+    }
+}
+
+fn project(points: &[GVec3], axis: GVec3) -> (f32, f32) {
+    points.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), p| {
+        let d = p.dot(axis);
+        (lo.min(d), hi.max(d))
+    })
+}
+
+/// How to push `mover` (always a box) out of `obstacle`: the direction,
+/// pointing away from the obstacle, and the depth. `None` if they are more
+/// than `margin` apart.
+fn penetration(mover: &Body, obstacle: &Body, margin: f32) -> Option<(GVec3, f32)> {
+    if let Collider::Sphere { radius } = obstacle.collider {
+        let centre = g(obstacle.pos);
+        let (lo, hi) = (g(mover.min()), g(mover.max()));
+        let closest = centre.clamp(lo, hi);
+        let offset = closest - centre;
+        let dist = offset.length();
+        if dist > radius + margin {
+            return None;
+        }
+        if dist > 1e-5 {
+            return Some((offset / dist, radius - dist));
+        }
+        // The sphere's centre is inside the box: push out the shortest way.
+        let mut best = (GVec3::Y, f32::INFINITY);
+        for axis in [GVec3::X, GVec3::Y, GVec3::Z] {
+            for sign in [-1.0, 1.0] {
+                let n = axis * sign;
+                let depth = -(g(mover.pos) - centre).dot(n) + g(mover.half).dot(axis) + radius;
+                if depth < best.1 {
+                    best = (n, depth);
+                }
+            }
+        }
+        return Some(best);
+    }
+
+    let (a, b) = (mover.hull(), obstacle.hull());
+    let mut axes: Vec<GVec3> = a.normals.iter().chain(&b.normals).copied().collect();
+    for ea in &a.edges {
+        for eb in &b.edges {
+            let axis = ea.cross(*eb);
+            if axis.length_squared() > 1e-6 {
+                axes.push(axis.normalize());
+            }
+        }
+    }
+    let between = g(mover.pos) - g(obstacle.pos);
+    let mut best: Option<(GVec3, f32)> = None;
+    for axis in axes {
+        let (alo, ahi) = project(&a.points, axis);
+        let (blo, bhi) = project(&b.points, axis);
+        let overlap = ahi.min(bhi) - alo.max(blo);
+        if overlap < -margin {
+            return None;
+        }
+        if best.is_none_or(|(_, d)| overlap < d) {
+            let n = if between.dot(axis) < 0.0 { -axis } else { axis };
+            best = Some((n, overlap));
+        }
+    }
+    best
+}
+
+fn touching(a: &Body, b: &Body) -> bool {
+    if !overlaps(a, b, TOUCH_MARGIN) {
+        return false;
+    }
+    match (a.collider, b.collider) {
+        (Collider::Aabb, Collider::Aabb) => true,
+        (Collider::Aabb, _) => penetration(a, b, TOUCH_MARGIN).is_some(),
+        (_, Collider::Aabb) => penetration(b, a, TOUCH_MARGIN).is_some(),
+        // Two anchored shapes never get here; touches need something that moves.
+        _ => true,
     }
 }
 
@@ -57,6 +225,30 @@ fn set_axis(v: &mut Vec3, i: usize, value: f32) {
         0 => v.x = value,
         1 => v.y = value,
         _ => v.z = value,
+    }
+}
+
+/// Picks the cheapest exact collider for an anchored part.
+fn collider_for(size: Vec3, shape: PartShape, orientation: Vec3) -> (Vec3, Collider) {
+    let rotation = Mat3::from_quat(orientation_quat(orientation));
+    let local_half = g(size * 0.5);
+    // World bounding box of the rotated box.
+    let abs = Mat3::from_cols(rotation.x_axis.abs(), rotation.y_axis.abs(), rotation.z_axis.abs());
+    let bounds = l(abs * local_half);
+    if shape == PartShape::Ball {
+        let radius = size.x.min(size.y).min(size.z) * 0.5;
+        return (Vec3::new(radius, radius, radius), Collider::Sphere { radius });
+    }
+    let wedge = shape == PartShape::Wedge;
+    let right_angles = rotation.to_cols_array().iter().all(|v| {
+        let a = v.abs();
+        a < 1e-4 || (a - 1.0).abs() < 1e-4
+    });
+    // Cylinders collide as the box around them.
+    if right_angles && !wedge {
+        (bounds, Collider::Aabb)
+    } else {
+        (bounds, Collider::Hull { rotation, half: local_half, wedge })
     }
 }
 
@@ -99,12 +291,26 @@ impl Physics {
         tree.descendants_of_class(tree.workspace(), ClassKind::Part)
             .into_iter()
             .filter_map(|id| {
+                let size = tree.get_vec3(id, Property::Size)?;
+                let anchored = tree.get_bool(id, Property::Anchored)?;
+                let shape = match tree.get_enum(id, Property::Shape) {
+                    Some(EnumValue::Shape(shape)) => shape,
+                    _ => PartShape::Block,
+                };
+                let orientation = tree.get_vec3(id, Property::Orientation).unwrap_or_default();
+                let (half, collider) = if anchored {
+                    collider_for(size, shape, orientation)
+                } else {
+                    // Moving parts stay upright boxes.
+                    (size * 0.5, Collider::Aabb)
+                };
                 Some(Body {
                     id,
                     pos: tree.get_vec3(id, Property::Position)?,
-                    half: tree.get_vec3(id, Property::Size)? * 0.5,
-                    anchored: tree.get_bool(id, Property::Anchored)?,
+                    half,
+                    anchored,
                     can_collide: tree.get_bool(id, Property::CanCollide)?,
+                    collider,
                 })
             })
             .collect()
@@ -143,7 +349,7 @@ impl Physics {
                 if a.anchored && b.anchored {
                     continue;
                 }
-                if overlaps(a, b, TOUCH_MARGIN) {
+                if touching(a, b) {
                     current.insert(ordered(a.id, b.id));
                 }
             }
@@ -180,10 +386,20 @@ impl Physics {
                     continue;
                 }
                 for j in 0..bodies.len() {
-                    if i == j || !bodies[j].can_collide || !overlaps(&bodies[i], &bodies[j], -EPS) {
+                    if i == j
+                        || !bodies[j].can_collide
+                        || bodies[j].collider != Collider::Aabb
+                        || !overlaps(&bodies[i], &bodies[j], -EPS)
+                    {
                         continue;
                     }
                     let other = bodies[j];
+                    // Walk up small ledges (like the top of a ramp) instead of stopping.
+                    let rise = other.max().y - bodies[i].min().y;
+                    if ax != 1 && rise > 0.0 && rise <= STEP_HEIGHT {
+                        bodies[i].pos.y += rise + EPS;
+                        continue;
+                    }
                     let half = axis(bodies[i].half, ax);
                     let mut pos = bodies[i].pos;
                     if delta > 0.0 {
@@ -198,6 +414,50 @@ impl Physics {
                     }
                     bodies[i].pos = pos;
                     set_axis(&mut v, ax, 0.0);
+                }
+            }
+
+            // Then push out of tilted and round shapes along the shortest way.
+            if bodies[i].can_collide {
+                for _ in 0..3 {
+                    let mut pushed = false;
+                    for j in 0..bodies.len() {
+                        let other = bodies[j];
+                        if i == j
+                            || !other.can_collide
+                            || other.collider == Collider::Aabb
+                            || !overlaps(&bodies[i], &other, -EPS)
+                        {
+                            continue;
+                        }
+                        let Some((n, depth)) = penetration(&bodies[i], &other, 0.0) else { continue };
+                        if depth <= EPS {
+                            continue;
+                        }
+                        pushed = true;
+                        let mut pos = g(bodies[i].pos);
+                        let mut vel = g(v);
+                        if n.y > 0.7 {
+                            // Standing on a gentle slope: lift straight up so we don't slide.
+                            pos.y += (depth / n.y).min(depth * 2.0);
+                            vel.y = vel.y.max(0.0);
+                            grounded = true;
+                        } else {
+                            pos += n * depth;
+                            let into = vel.dot(n);
+                            if into < 0.0 {
+                                vel -= n * into;
+                            }
+                            if n.y > 0.3 {
+                                grounded = true;
+                            }
+                        }
+                        bodies[i].pos = l(pos);
+                        v = l(vel);
+                    }
+                    if !pushed {
+                        break;
+                    }
                 }
             }
 
@@ -273,6 +533,65 @@ mod tests {
         }
         let pos = tree.get_vec3(mover, Property::Position).unwrap();
         assert!((pos.x - 3.5).abs() < 1e-3, "stopped against the wall, got {pos:?}");
+    }
+
+    fn rotate(tree: &mut InstanceTree, id: InstanceId, degrees: Vec3) {
+        tree.set(id, Property::Orientation, PropertyValue::Vec3(degrees)).unwrap();
+    }
+
+    #[test]
+    fn right_angle_turns_swap_the_box() {
+        let mut tree = InstanceTree::new();
+        // A 20-long beam turned 90 degrees now runs along Z.
+        let beam = add_part(&mut tree, "Beam", Vec3::new(0.0, -0.5, 0.0), Vec3::new(20.0, 1.0, 2.0), true);
+        rotate(&mut tree, beam, Vec3::new(0.0, 90.0, 0.0));
+        let on = add_part(&mut tree, "On", Vec3::new(0.0, 5.0, 8.0), Vec3::ONE, false);
+        let off = add_part(&mut tree, "Off", Vec3::new(8.0, 5.0, 0.0), Vec3::ONE, false);
+        let mut physics = Physics::default();
+        for _ in 0..90 {
+            physics.step(&mut tree, 1.0 / 60.0);
+        }
+        assert!((tree.get_vec3(on, Property::Position).unwrap().y - 0.5).abs() < 1e-3);
+        assert!(tree.get_vec3(off, Property::Position).unwrap().y < -1.0, "fell past the turned beam");
+    }
+
+    #[test]
+    fn tilted_ramps_and_wedges_hold_things_up() {
+        for wedge in [false, true] {
+            let mut tree = InstanceTree::new();
+            let ramp = add_part(&mut tree, "Ramp", Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0), true);
+            if wedge {
+                let shape = PropertyValue::Enum(EnumValue::Shape(PartShape::Wedge));
+                tree.set(ramp, Property::Shape, shape).unwrap();
+            } else {
+                rotate(&mut tree, ramp, Vec3::new(30.0, 0.0, 0.0));
+            }
+            let crate_ = add_part(&mut tree, "Crate", Vec3::new(0.0, 12.0, 0.0), Vec3::ONE, false);
+            let mut physics = Physics::default();
+            let mut touched = false;
+            for _ in 0..120 {
+                touched |= !physics.step(&mut tree, 1.0 / 60.0).touches.is_empty();
+            }
+            let y = tree.get_vec3(crate_, Property::Position).unwrap().y;
+            assert!(y > 0.0 && y < 7.0, "rests on the slope (wedge: {wedge}), got y = {y}");
+            assert!(touched && physics.is_grounded(crate_));
+        }
+    }
+
+    #[test]
+    fn balls_are_round() {
+        let mut tree = InstanceTree::new();
+        let ball = add_part(&mut tree, "Ball", Vec3::ZERO, Vec3::new(4.0, 4.0, 4.0), true);
+        tree.set(ball, Property::Shape, PropertyValue::Enum(EnumValue::Shape(PartShape::Ball))).unwrap();
+        // Over the middle it lands on top; near the corner of the bounding box it misses.
+        let top = add_part(&mut tree, "Top", Vec3::new(0.0, 6.0, 0.0), Vec3::ONE, false);
+        let corner = add_part(&mut tree, "Corner", Vec3::new(1.8, 6.0, 1.8), Vec3::new(0.5, 0.5, 0.5), false);
+        let mut physics = Physics::default();
+        for _ in 0..120 {
+            physics.step(&mut tree, 1.0 / 60.0);
+        }
+        assert!((tree.get_vec3(top, Property::Position).unwrap().y - 2.5).abs() < 0.05);
+        assert!(tree.get_vec3(corner, Property::Position).unwrap().y < 0.0, "slipped past the curve");
     }
 
     #[test]

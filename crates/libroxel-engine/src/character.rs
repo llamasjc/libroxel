@@ -47,6 +47,11 @@ fn set(tree: &mut InstanceTree, id: InstanceId, property: Property, value: Prope
 impl Character {
     /// Builds a character in the workspace at the spawn point.
     pub fn spawn(tree: &mut InstanceTree) -> Character {
+        Self::spawn_named(tree, names::MODEL)
+    }
+
+    /// Like [`spawn`](Self::spawn), with the model called `name` (usually the player's name).
+    pub fn spawn_named(tree: &mut InstanceTree, name: &str) -> Character {
         let at = spawn_point(tree);
         let ws = tree.workspace();
         let make = |tree: &mut InstanceTree, class, name: &str, parent| {
@@ -54,7 +59,7 @@ impl Character {
             tree.set_parent(id, Some(parent)).expect("fresh instances can be parented");
             id
         };
-        let model = make(tree, ClassKind::Model, names::MODEL, ws);
+        let model = make(tree, ClassKind::Model, name, ws);
         let root = make(tree, ClassKind::Part, names::ROOT_PART, model);
         set(tree, root, Property::Size, PropertyValue::Vec3(BODY_SIZE));
         set(tree, root, Property::Position, PropertyValue::Vec3(at));

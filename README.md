@@ -11,6 +11,8 @@ and the engine runs on [Bevy](https://bevy.org).
 
 ![The Libroxel editor](docs/editor.png)
 
+![Playing the sample obby, with the leaderboard](docs/playing.png)
+
 ## Getting started
 
 You need a recent stable Rust toolchain (`rustup update stable`).
@@ -29,6 +31,7 @@ Then:
 
 ```sh
 cargo run -p libroxel-editor                      # the editor
+cargo run -p libroxel-editor -- --sample          # the editor, with the sample obby open
 cargo run -p libroxel-proto -- my_game.lrx        # play a saved game without the editor
 cargo test --workspace                            # every test, no GPU needed
 ```
@@ -37,18 +40,25 @@ The first build compiles Bevy and takes a while. After that it is quick.
 
 ## The editor
 
-- **File → Open sample obby** loads a small obstacle course with lava,
-  fading platforms, a lift and a finish pad. Press **▶ Play** (or F5) to try it.
+- **File → Open sample obby** loads a small obstacle course with a wooden
+  ramp, spinning coins, lava, fading platforms, a lift and a finish pad, plus
+  a leaderboard that counts coins and deaths. Press **▶ Play** (or F5) to try it.
 - **Explorer** (left) shows the instance tree. Click to select, double-click
   a script to edit it, drag one item onto another to move it inside, and
   right-click for Insert, Rename, Duplicate and Delete.
-- **Properties** (right) edits the selection: name, position, size, colour,
-  anchored, can-collide, transparency, and so on.
+- **Properties** (right) edits the selection: name, position, orientation,
+  size, shape, colour, material, anchored, can-collide, transparency, and so on.
+- **Parts** come in four shapes (block, ball, cylinder, wedge) and eight
+  materials (plastic, smooth plastic, neon, metal, glass, wood, brick, grass).
+  Insert them from **+ Part** or the Insert menu.
 - **Viewport:** hold the right mouse button and use WASD/QE to fly (Shift is
   faster), scroll to move forward. Click a part to select it, then drag the
-  arrows to move it or switch to Resize. Snap sets the grid step.
-- **Play / Stop:** Play spawns your character at the first SpawnLocation and
-  starts every Script. Walk with WASD, jump with Space, turn the camera with
+  handles to move, resize or rotate it (Ctrl+1 to Ctrl+4 switch tools, and
+  Ctrl+R turns the selection 90°). The two snap boxes set the grid step and
+  the rotation step.
+- **Play / Stop:** Play starts every Script, then you join as `Player1` and
+  your character spawns at the first SpawnLocation. If scripts give you a
+  `leaderstats` folder, the leaderboard shows it in the top-right corner. Walk with WASD, jump with Space, turn the camera with
   the right mouse button. Stop (or Esc) puts the world back as it was.
 - **Output** (bottom) shows `print`, `warn` and script errors. While playing
   you can type Luau into its command bar and press Enter.
@@ -74,20 +84,31 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
 `game:GetService`, and signals with `:Connect`. What exists today:
 
 - **Globals:** `game`, `workspace`, `script`, `Instance.new(class, parent?)`,
-  `Vector3.new/zero/one`, `Color3.new/fromRGB`, `print`, `warn`, `time()`,
-  `task.wait`, `task.spawn`, `task.delay`, and `wait`.
+  `Vector3.new/zero/one`, `Color3.new/fromRGB`, `Enum`, `require`, `print`,
+  `warn`, `time()`, `task.wait`, `task.spawn`, `task.delay`, and `wait`.
 - **Classes:** `Part`, `SpawnLocation`, `Model`, `Folder`, `Script`,
-  `Humanoid`, plus the built-in `Workspace`.
+  `ModuleScript`, `Humanoid`, `IntValue`, `NumberValue`, `StringValue`,
+  `BoolValue`, plus the built-in `Workspace`, `Players` (with one `Player`
+  each) and `ReplicatedStorage`.
 - **Instance members:** `Name`, `ClassName`, `Parent`, `FindFirstChild`,
   `FindFirstChildOfClass`, `WaitForChild`, `GetChildren`, `GetDescendants`,
   `IsA`, `IsDescendantOf`, `GetFullName`, `Clone`, `Destroy`, and
   `instance.ChildName`.
-- **Part properties and events:** `Position`, `Size`, `Color`, `Anchored`,
-  `CanCollide`, `Transparency`, and the `Touched` event.
-- **Characters:** each player is a `Model` named `Player` with a
+- **Part properties and events:** `Position`, `Orientation` (degrees),
+  `Size`, `Shape` (`Enum.PartType`), `Color`, `Material` (`Enum.Material`),
+  `Anchored`, `CanCollide`, `Transparency`, and the `Touched` event. Enum
+  properties also accept a name, as in `part.Material = "Neon"`.
+- **Modules:** a `ModuleScript` returns one value; `require(module)` runs it
+  once and hands every caller the same value. Modules may `task.wait`.
+- **Players:** `game:GetService("Players")` has `PlayerAdded`,
+  `PlayerRemoving`, `GetPlayers()` and `GetPlayerFromCharacter(model)`. Each
+  `Player` has `Name`, `UserId`, `Character` and a `CharacterAdded` event.
+  A `leaderstats` folder of value objects inside a player shows up on the
+  leaderboard.
+- **Characters:** each player's character is a `Model` named after them with a
   `HumanoidRootPart` and a `Humanoid` (`Health`, `MaxHealth`, `WalkSpeed`,
-  `JumpPower`). Setting `Health` to 0 kills the character; it respawns after
-  two seconds.
+  `JumpPower`, `TakeDamage(amount)` and the `Died` event). When health
+  reaches 0 the character dies and respawns after two seconds.
 - **Services:** `RunService.Heartbeat`, fired once per frame with the frame time.
 
 A kill brick, for example:
@@ -105,9 +126,24 @@ Each script runs in its own sandboxed environment; the shared libraries are
 read-only. A script that errors is reported in Output and never stops the
 others.
 
-**Not yet:** part rotation, `CFrame`, GUIs, sounds, terrain and voxels,
-multiplayer, and data saving. Physics is simple: parts are axis-aligned
-boxes that fall and stack, without spinning.
+A coin that counts on the leaderboard, using a module in ReplicatedStorage:
+
+```lua
+local Players = game:GetService("Players")
+local Stats = require(game:GetService("ReplicatedStorage").Stats)
+
+script.Parent.Touched:Connect(function(hit)
+	local player = Players:GetPlayerFromCharacter(hit.Parent)
+	if player then
+		Stats.add(player, "Coins", 1)
+	end
+end)
+```
+
+**Not yet:** `CFrame`, GUIs, sounds, terrain and voxels, multiplayer, and
+data saving. Physics is simple: anchored parts can be rotated and shaped
+(ramps and balls work), but loose parts are upright boxes that fall and
+stack without tipping over. Characters climb steps up to 0.6 studs.
 
 ## Contributing
 

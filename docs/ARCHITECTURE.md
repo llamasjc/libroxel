@@ -22,13 +22,25 @@
 - **Scripts are threads.** Every script, signal handler and `task.spawn`
   runs in its own Luau thread. `task.wait` yields; the scheduler resumes the
   thread on the right frame. One failing thread never stops the others.
-- **Play sessions.** Pressing Play clones the tree, spawns a character and
-  starts every `Script`. Each frame runs: waiting threads and `Heartbeat`,
+- **Services.** Every tree has a root and three locked services: Workspace
+  (the world), Players (one Player per person in the game, made by the
+  engine) and ReplicatedStorage (modules and templates). Saved places merge
+  into the services instead of creating new ones. Links between instances
+  (like a player's `Character`) are runtime-only and are not saved.
+- **Modules.** `require` is written in Luau so that a module can yield. It
+  caches each module's single return value and detects require loops.
+- **Play sessions.** Pressing Play clones the tree, starts every `Script`,
+  adds the local Player (firing `PlayerAdded`) and spawns their character
+  (firing `CharacterAdded`). Each frame runs: waiting threads and `Heartbeat`,
   character movement, physics, `Touched` events, then deaths and respawns.
   Stop throws the session away and restores the clone.
-- **Physics.** Parts have no rotation yet, so every part is an axis-aligned
-  box. Unanchored parts fall, and are moved one axis at a time and pushed
-  out of anything with `CanCollide`. Touches are pairs that start
+- **Physics.** Unanchored parts are upright boxes. They fall, are moved one
+  axis at a time and pushed out of anything with `CanCollide`, and step up
+  ledges up to 0.6 studs. Anchored parts can be rotated and shaped: boxes
+  turned by right angles stay on the fast axis-aligned path, tilted boxes and
+  wedges are resolved with a separating-axis test, and balls with a sphere
+  test, pushing out along the shortest direction (straight up on gentle
+  slopes, so characters don't slide). Touches are pairs that start
   overlapping, where at least one part can move.
 - **Threading.** The Luau VM is single-threaded, so the engine state is a
   Bevy non-send resource and the tree is shared as `Rc<RefCell<_>>`.
@@ -37,7 +49,6 @@
 
 - The ECS sync does a full pass over the workspace each frame; it will move
   to the change journal once worlds get big.
-- No part rotation, so no `CFrame` yet.
-- No script execution time limits yet: an endless loop without `task.wait`
-  freezes the game.
+- Orientation is a plain vector of degrees; there is no `CFrame` yet.
+- Loose parts never rotate, and cylinders collide as boxes.
 - No networking.

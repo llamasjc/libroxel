@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::{ClassKind, Color3, Property, PropertyValue, Vec3};
+use crate::{ClassKind, Color3, EnumValue, Property, PropertyValue, Vec3};
 
 /// A generational handle to an instance.
 ///
@@ -100,6 +100,8 @@ pub struct InstanceTree {
     free: Vec<u32>,
     root: InstanceId,
     workspace: InstanceId,
+    /// One per [`ClassKind::SERVICES`], in the same order.
+    services: Vec<InstanceId>,
     changes: Vec<Change>,
 }
 
@@ -110,23 +112,39 @@ impl Default for InstanceTree {
 }
 
 impl InstanceTree {
-    /// Creates a tree with a root and a workspace. Neither can be reparented
-    /// or destroyed.
+    /// Creates a tree with a root and every service ([`ClassKind::SERVICES`]).
+    /// None of them can be reparented or destroyed.
     pub fn new() -> Self {
         let mut tree = Self {
             slots: Vec::new(),
             free: Vec::new(),
             root: InstanceId { index: 0, generation: 0 },
             workspace: InstanceId { index: 0, generation: 0 },
+            services: Vec::new(),
             changes: Vec::new(),
         };
         tree.root = tree.alloc(InstanceData::new(ClassKind::DataModel, "Game".into()));
-        tree.workspace = tree.alloc(InstanceData::new(ClassKind::Workspace, "Workspace".into()));
-        tree.set_parent(tree.workspace, Some(tree.root)).expect("fresh workspace can be parented");
         tree.data_mut(tree.root).expect("root exists").parent_locked = true;
-        tree.data_mut(tree.workspace).expect("workspace exists").parent_locked = true;
+        for &class in ClassKind::SERVICES {
+            let name = match class {
+                ClassKind::Workspace => "Workspace",
+                ClassKind::Players => "Players",
+                ClassKind::ReplicatedStorage => "ReplicatedStorage",
+                _ => unreachable!("every service has a name"),
+            };
+            let id = tree.alloc(InstanceData::new(class, name.into()));
+            tree.set_parent(id, Some(tree.root)).expect("fresh services can be parented");
+            tree.data_mut(id).expect("service exists").parent_locked = true;
+            tree.services.push(id);
+        }
+        tree.workspace = tree.services[0];
         tree.changes.clear();
         tree
+    }
+
+    /// The service of class `class`, if it is a service.
+    pub fn service(&self, class: ClassKind) -> Option<InstanceId> {
+        ClassKind::SERVICES.iter().position(|c| *c == class).map(|i| self.services[i])
     }
 
     pub fn root(&self) -> InstanceId {
@@ -344,12 +362,15 @@ impl InstanceTree {
             }
         } else {
             let slot = data.prop_mut(property).ok_or(TreeError::NoSuchProperty { class, property })?;
-            if std::mem::discriminant(slot) != std::mem::discriminant(&value) {
+            if slot.kind_name() != value.kind_name() {
                 return Err(wrong_type(&value));
             }
             let value = match (property, value) {
                 (Property::Transparency, PropertyValue::Number(t)) => {
                     PropertyValue::Number(t.clamp(0.0, 1.0))
+                }
+                (Property::NumberValue, PropertyValue::Number(n)) if class == ClassKind::IntValue => {
+                    PropertyValue::Number(n.round())
                 }
                 (_, v) => v,
             };
@@ -389,6 +410,30 @@ impl InstanceTree {
     pub fn get_color(&self, id: InstanceId, property: Property) -> Option<Color3> {
         match self.get(id, property).ok()? {
             PropertyValue::Color3(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Typed read of an enum property.
+    pub fn get_enum(&self, id: InstanceId, property: Property) -> Option<EnumValue> {
+        match self.get(id, property).ok()? {
+            PropertyValue::Enum(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Typed read of a link property.
+    pub fn get_ref(&self, id: InstanceId, property: Property) -> Option<InstanceId> {
+        match self.get(id, property).ok()? {
+            PropertyValue::Ref(v) => v,
+            _ => None,
+        }
+    }
+
+    /// Typed read of a string property.
+    pub fn get_string(&self, id: InstanceId, property: Property) -> Option<String> {
+        match self.get(id, property).ok()? {
+            PropertyValue::String(v) => Some(v),
             _ => None,
         }
     }
@@ -468,7 +513,10 @@ mod tests {
         let (root, ws) = (tree.root(), tree.workspace());
         assert_eq!(tree.class(root).unwrap(), ClassKind::DataModel);
         assert_eq!(tree.parent(ws).unwrap(), Some(root));
-        assert_eq!(tree.children(root).unwrap(), &[ws]);
+        assert_eq!(tree.children(root).unwrap()[0], ws);
+        let players = tree.service(ClassKind::Players).unwrap();
+        assert_eq!(tree.class(players).unwrap(), ClassKind::Players);
+        assert_eq!(tree.destroy(players), Err(TreeError::ParentLocked(players)));
         assert_eq!(tree.set_parent(ws, None), Err(TreeError::ParentLocked(ws)));
         assert_eq!(tree.destroy(root), Err(TreeError::ParentLocked(root)));
         assert!(tree.drain_changes().is_empty());
@@ -620,6 +668,21 @@ mod tests {
         assert_eq!(tree.get_bool(spawn, Property::Anchored), Some(true));
         assert_eq!(tree.get_number(hum, Property::WalkSpeed), Some(16.0));
         assert!(ClassKind::SpawnLocation.is_physical());
+    }
+
+    #[test]
+    fn int_values_round_and_enums_are_kind_checked() {
+        use crate::{Material, PartShape};
+        let mut tree = InstanceTree::new();
+        let coins = tree.create(ClassKind::IntValue, "Coins").unwrap();
+        tree.set(coins, Property::NumberValue, PropertyValue::Number(2.6)).unwrap();
+        assert_eq!(tree.get_number(coins, Property::NumberValue), Some(3.0));
+        let p = part(&mut tree, "P");
+        tree.set(p, Property::Shape, PropertyValue::Enum(EnumValue::Shape(PartShape::Ball))).unwrap();
+        assert!(matches!(
+            tree.set(p, Property::Shape, PropertyValue::Enum(EnumValue::Material(Material::Neon))),
+            Err(TreeError::WrongType { .. })
+        ));
     }
 
     #[test]

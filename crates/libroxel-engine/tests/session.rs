@@ -107,3 +107,48 @@ fn script_errors_reach_the_log() {
     assert_eq!(log[0].level, LogLevel::Error);
     assert!(log[0].text.starts_with("Broken:"), "{}", log[0].text);
 }
+
+#[test]
+fn players_join_get_leaderstats_and_respawn() {
+    let mut tree = world();
+    part(&mut tree, ClassKind::Part, "Lava", Vec3::new(30.0, 0.5, 0.0), Vec3::new(4.0, 1.0, 4.0));
+    script(
+        &mut tree,
+        "Stats",
+        r#"
+        local Players = game:GetService("Players")
+        Players.PlayerAdded:Connect(function(player)
+            local stats = Instance.new("Folder", player)
+            stats.Name = "leaderstats"
+            local deaths = Instance.new("IntValue", stats)
+            deaths.Name = "Deaths"
+            player.CharacterAdded:Connect(function(character)
+                print("spawned", character.Name)
+                character:WaitForChild("Humanoid").Died:Connect(function()
+                    deaths.Value += 1
+                end)
+            end)
+        end)
+        "#,
+    );
+    let mut session = start_on(tree, true).unwrap();
+    let tree = session.runtime().tree().clone();
+    let player = session.player().unwrap();
+    let first = session.character().unwrap();
+    assert_eq!(tree.borrow().get_ref(player, Property::Character), Some(first.model));
+
+    // Kill the character directly, then wait out the respawn.
+    tree.borrow_mut().set(first.humanoid, Property::Health, PropertyValue::Number(0.0)).unwrap();
+    for _ in 0..((RESPAWN_DELAY / DT) as usize + 10) {
+        session.step(DT, CharacterInput::default());
+    }
+    let second = session.character().unwrap();
+    assert_ne!(second.model, first.model);
+    let t = tree.borrow();
+    assert_eq!(t.get_ref(player, Property::Character), Some(second.model));
+    let stats = t.find_first_child(player, "leaderstats").unwrap().unwrap();
+    let deaths = t.find_first_child(stats, "Deaths").unwrap().unwrap();
+    assert_eq!(t.get_number(deaths, Property::NumberValue), Some(1.0));
+    let log: Vec<String> = session.take_log().into_iter().map(|e| e.text).collect();
+    assert_eq!(log.iter().filter(|l| l.as_str() == "spawned Player1").count(), 2, "{log:?}");
+}
