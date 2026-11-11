@@ -165,6 +165,24 @@ pub enum TextYAlignment {
     Bottom,
 }
 
+/// A side of a part.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum NormalId {
+    /// +X.
+    Right,
+    /// +Y.
+    Top,
+    /// +Z.
+    Back,
+    /// -X.
+    Left,
+    /// -Y.
+    Bottom,
+    /// -Z, the way a part faces.
+    #[default]
+    Front,
+}
+
 /// What drives a hinge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ActuatorType {
@@ -338,6 +356,7 @@ pub enum EnumKind {
     TextYAlignment,
     ScaleType,
     ActuatorType,
+    NormalId,
 }
 
 /// A value from one of the enumerations.
@@ -356,6 +375,7 @@ pub enum EnumValue {
     TextYAlignment(TextYAlignment),
     ScaleType(ScaleType),
     ActuatorType(ActuatorType),
+    NormalId(NormalId),
 }
 
 const KEY_CODES: &[EnumValue] = &[
@@ -429,6 +449,7 @@ impl EnumKind {
         EnumKind::TextYAlignment,
         EnumKind::ScaleType,
         EnumKind::ActuatorType,
+        EnumKind::NormalId,
     ];
 
     /// Every value of this enumeration, in a stable order.
@@ -505,6 +526,14 @@ impl EnumKind {
                 E::ActuatorType(ActuatorType::Motor),
                 E::ActuatorType(ActuatorType::Servo),
             ],
+            EnumKind::NormalId => &[
+                E::NormalId(NormalId::Right),
+                E::NormalId(NormalId::Top),
+                E::NormalId(NormalId::Back),
+                E::NormalId(NormalId::Left),
+                E::NormalId(NormalId::Bottom),
+                E::NormalId(NormalId::Front),
+            ],
         }
     }
 
@@ -524,6 +553,7 @@ impl EnumKind {
             EnumKind::TextYAlignment => "enum:text_y_alignment",
             EnumKind::ScaleType => "enum:scale_type",
             EnumKind::ActuatorType => "enum:actuator_type",
+            EnumKind::NormalId => "enum:normal_id",
         }
     }
 
@@ -549,6 +579,7 @@ impl EnumValue {
             EnumValue::TextYAlignment(_) => EnumKind::TextYAlignment,
             EnumValue::ScaleType(_) => EnumKind::ScaleType,
             EnumValue::ActuatorType(_) => EnumKind::ActuatorType,
+            EnumValue::NormalId(_) => EnumKind::NormalId,
         }
     }
 
@@ -685,6 +716,14 @@ impl EnumValue {
                 ActuatorType::None => "none",
                 ActuatorType::Motor => "motor",
                 ActuatorType::Servo => "servo",
+            },
+            EnumValue::NormalId(n) => match n {
+                NormalId::Right => "right",
+                NormalId::Top => "top",
+                NormalId::Back => "back",
+                NormalId::Left => "left",
+                NormalId::Bottom => "bottom",
+                NormalId::Front => "front",
             },
         }
     }

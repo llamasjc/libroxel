@@ -1,8 +1,8 @@
 //! Starter worlds: the blank template and a sample obby.
 
 use libroxel_instance::{
-    ActuatorType, ClassKind, Color3, EnumValue, InstanceId, InstanceTree, Material, PartShape, Property,
-    PropertyValue, UDim, UDim2, Vec2, Vec3,
+    ActuatorType, ClassKind, Color3, EnumValue, InstanceId, InstanceTree, Material, NormalId, PartShape,
+    Property, PropertyValue, UDim, UDim2, Vec2, Vec3,
 };
 
 /// Builds a go-kart standing on the ground at `at`, facing `yaw` degrees
@@ -81,6 +81,29 @@ fn shape(tree: &mut InstanceTree, id: InstanceId, shape: PartShape) {
 
 fn orient(tree: &mut InstanceTree, id: InstanceId, degrees: [f32; 3]) {
     set(tree, id, Property::Orientation, PropertyValue::Vec3(Vec3::new(degrees[0], degrees[1], degrees[2])));
+}
+
+/// Puts a picture on one side of `part`: a decal, or a texture tiled every `tile` studs.
+fn picture(
+    tree: &mut InstanceTree,
+    part: InstanceId,
+    name: &str,
+    face: NormalId,
+    tile: Option<f32>,
+) -> InstanceId {
+    let class = if tile.is_some() { ClassKind::Texture } else { ClassKind::Decal };
+    let id = add(tree, part, class, class_name_of(class));
+    set(tree, id, Property::Texture, PropertyValue::String(format!("libroxel://{name}")));
+    set(tree, id, Property::Face, PropertyValue::Enum(EnumValue::NormalId(face)));
+    if let Some(tile) = tile {
+        set(tree, id, Property::StudsPerTileU, PropertyValue::Number(tile as f64));
+        set(tree, id, Property::StudsPerTileV, PropertyValue::Number(tile as f64));
+    }
+    id
+}
+
+fn class_name_of(class: ClassKind) -> &'static str {
+    libroxel_script::names::class_name(class)
 }
 
 fn script(tree: &mut InstanceTree, parent: InstanceId, name: &str, source: &str) -> InstanceId {
@@ -783,6 +806,12 @@ pub fn sample_obby() -> InstanceTree {
     tree.set(spawn, Property::Position, PropertyValue::Vec3(Vec3::new(0.0, 0.5, 0.0))).unwrap();
     tree.set(spawn, Property::Size, PropertyValue::Vec3(Vec3::new(6.0, 1.0, 6.0))).unwrap();
 
+    // A signpost pointing the way.
+    let sign_post = block(&mut tree, start, "SignPost", [5.0, 1.5, -6.0], [0.4, 3.0, 0.4], [150, 105, 65]);
+    material(&mut tree, sign_post, Material::Wood);
+    let sign = block(&mut tree, start, "Sign", [5.0, 3.5, -6.0], [3.0, 1.6, 0.2], [240, 235, 220]);
+    picture(&mut tree, sign, "arrow", NormalId::Back, None);
+
     // A wooden ramp up to a ledge behind the start, with coins on top.
     let ramp = block(&mut tree, start, "Ramp", [0.0, 2.0, -12.0], [6.0, 4.0, 8.0], [150, 105, 65]);
     shape(&mut tree, ramp, PartShape::Wedge);
@@ -808,6 +837,7 @@ pub fn sample_obby() -> InstanceTree {
     material(&mut tree, door, Material::Wood);
     add(&mut tree, door, ClassKind::ClickDetector, "ClickDetector");
     script(&mut tree, door, "OpenOnClick", DOOR_SCRIPT);
+    picture(&mut tree, door, "star", NormalId::Right, None);
 
     // An on-screen display: a coin counter and a day/night button.
     let starter_gui = tree.service(ClassKind::StarterGui).expect("every tree has StarterGui");
@@ -1332,6 +1362,7 @@ pub fn sample_obby() -> InstanceTree {
     let finish = block(&mut tree, ws, "Finish", [106.0, 14.0, 0.0], [8.0, 1.0, 8.0], [250, 200, 40]);
     material(&mut tree, finish, Material::Neon);
     script(&mut tree, finish, "Celebrate", FINISH_SCRIPT);
+    picture(&mut tree, finish, "checker", NormalId::Top, Some(2.0));
     let glitter = add(&mut tree, finish, ClassKind::Sparkles, "Sparkles");
     set(&mut tree, glitter, Property::SparkleColor, PropertyValue::Color3(Color3::from_rgb8(255, 230, 120)));
 

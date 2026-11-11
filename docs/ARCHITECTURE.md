@@ -192,6 +192,12 @@
   when the hinge started (so nothing drifts). Bases are placed before the
   arms hanging from them, so hinges can chain. A script moving an arm part
   starts the hinge again from where it is.
+- **Pictures** are found and decoded by `libroxel-engine/src/pictures.rs`
+  (folders set by the editor, plus built-in PNGs in `engine/assets`), for
+  both egui images and decals. `view::sync_decals` draws each `Decal` and
+  `Texture` as a square on its part's side (`decal_transform`), lifted a
+  hundredth of a stud with a depth bias; textures tile with a repeating
+  sampler and the material's `uv_transform`.
 - **Effects** live in `libroxel-engine/src/effects.rs` and only exist on
   screen. Each particle is a small entity; each emitter has four materials
   from the start of a particle's life to its end, and particles switch

@@ -197,6 +197,16 @@ pub enum Property {
     MaxTorque,
     /// On a body angular velocity: the most turning force about each axis.
     BodyMaxTorque,
+    /// On a decal or texture: the picture's file name.
+    Texture,
+    /// On a decal or texture: which side of its part it's on.
+    Face,
+    /// On a decal or texture: a tint multiplied with the picture.
+    DecalColor,
+    /// On a texture: how wide each tile is, in studs.
+    StudsPerTileU,
+    /// On a texture: how tall each tile is, in studs.
+    StudsPerTileV,
     /// On a particle emitter: particles sent out each second.
     Rate,
     /// On a particle emitter: how long each particle lasts, as a range of seconds.
@@ -388,7 +398,12 @@ impl Property {
             | Property::AngularSpeed
             | Property::ServoMaxTorque
             | Property::CurrentAngle
-            | Property::MaxTorque => "number",
+            | Property::MaxTorque
+            | Property::StudsPerTileU
+            | Property::StudsPerTileV => "number",
+            Property::Texture => "string",
+            Property::DecalColor => "Color3",
+            Property::Face => EnumKind::NormalId.kind_name(),
             Property::AngularVelocity | Property::BodyMaxTorque => "Vec3",
             Property::ActuatorType => EnumKind::ActuatorType.kind_name(),
             Property::CharacterWalkSpeed
@@ -469,6 +484,7 @@ impl Property {
             Property::TextXAlignment => Some(EnumKind::TextXAlignment),
             Property::ScaleType => Some(EnumKind::ScaleType),
             Property::ActuatorType => Some(EnumKind::ActuatorType),
+            Property::Face => Some(EnumKind::NormalId),
             Property::TextYAlignment => Some(EnumKind::TextYAlignment),
             _ => None,
         }
@@ -585,6 +601,11 @@ impl Property {
         Property::AngularVelocity,
         Property::MaxTorque,
         Property::BodyMaxTorque,
+        Property::Texture,
+        Property::Face,
+        Property::DecalColor,
+        Property::StudsPerTileU,
+        Property::StudsPerTileV,
         Property::Rate,
         Property::Lifetime,
         Property::Speed,
@@ -741,6 +762,11 @@ impl Property {
             Property::AngularVelocity => "angular_velocity",
             Property::MaxTorque => "max_torque",
             Property::BodyMaxTorque => "body_max_torque",
+            Property::Texture => "texture",
+            Property::Face => "face",
+            Property::DecalColor => "decal_color",
+            Property::StudsPerTileU => "studs_per_tile_u",
+            Property::StudsPerTileV => "studs_per_tile_v",
             Property::Rate => "rate",
             Property::Lifetime => "lifetime",
             Property::Speed => "speed",

@@ -23,7 +23,8 @@ mod tree;
 
 pub use enums::{
     ActuatorType, CameraType, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection, KeyCode,
-    Material, PartShape, RaycastFilterType, ScaleType, TextXAlignment, TextYAlignment, UserInputType,
+    Material, NormalId, PartShape, RaycastFilterType, ScaleType, TextXAlignment, TextYAlignment,
+    UserInputType,
 };
 pub use math::{CFrame, Color3, Rotation, UDim, UDim2, Vec2, Vec3};
 pub use property::{Property, PropertyValue};
@@ -167,6 +168,10 @@ pub enum ClassKind {
     AngularVelocity,
     /// Inside a part: the older way to make it spin at AngularVelocity.
     BodyAngularVelocity,
+    /// Inside a part: a picture stretched over one Face.
+    Decal,
+    /// Inside a part: a picture tiled over one Face, StudsPerTileU by StudsPerTileV.
+    Texture,
     /// Inside a part: sends out little particles.
     ParticleEmitter,
     /// Inside a part: flames.
@@ -263,6 +268,8 @@ impl ClassKind {
         ClassKind::HingeConstraint,
         ClassKind::AngularVelocity,
         ClassKind::BodyAngularVelocity,
+        ClassKind::Decal,
+        ClassKind::Texture,
         ClassKind::ParticleEmitter,
         ClassKind::Fire,
         ClassKind::Smoke,
@@ -469,6 +476,22 @@ impl ClassKind {
             Property::Attachment0,
             Property::AngularVelocity,
             Property::MaxTorque,
+        ];
+        const DECAL: &[Property] = &[
+            Property::Name,
+            Property::Texture,
+            Property::Face,
+            Property::DecalColor,
+            Property::Transparency,
+        ];
+        const TEXTURE: &[Property] = &[
+            Property::Name,
+            Property::Texture,
+            Property::Face,
+            Property::DecalColor,
+            Property::Transparency,
+            Property::StudsPerTileU,
+            Property::StudsPerTileV,
         ];
         const BODY_ANGULAR_VELOCITY: &[Property] =
             &[Property::Name, Property::AngularVelocity, Property::BodyMaxTorque, Property::BodyPower];
@@ -773,6 +796,8 @@ impl ClassKind {
             ClassKind::HingeConstraint => HINGE,
             ClassKind::AngularVelocity => ANGULAR_VELOCITY,
             ClassKind::BodyAngularVelocity => BODY_ANGULAR_VELOCITY,
+            ClassKind::Decal => DECAL,
+            ClassKind::Texture => TEXTURE,
             ClassKind::ParticleEmitter => PARTICLES,
             ClassKind::Fire => FIRE,
             ClassKind::Smoke => SMOKE,
@@ -950,6 +975,10 @@ impl ClassKind {
                 PropertyValue::Number(100_000.0)
             }
             Property::AngularSpeed => PropertyValue::Number(1.0),
+            Property::Texture => PropertyValue::String(String::new()),
+            Property::Face => PropertyValue::Enum(EnumValue::NormalId(NormalId::Front)),
+            Property::DecalColor => PropertyValue::Color3(Color3::WHITE),
+            Property::StudsPerTileU | Property::StudsPerTileV => PropertyValue::Number(2.0),
             Property::AngularVelocity => PropertyValue::Vec3(Vec3::ZERO),
             Property::BodyMaxTorque => PropertyValue::Vec3(Vec3::new(4000.0, 4000.0, 4000.0)),
             Property::Rate => PropertyValue::Number(20.0),
@@ -1062,6 +1091,8 @@ impl ClassKind {
             ClassKind::HingeConstraint => "hinge_constraint",
             ClassKind::AngularVelocity => "angular_velocity",
             ClassKind::BodyAngularVelocity => "body_angular_velocity",
+            ClassKind::Decal => "decal",
+            ClassKind::Texture => "texture",
             ClassKind::ParticleEmitter => "particle_emitter",
             ClassKind::Fire => "fire",
             ClassKind::Smoke => "smoke",

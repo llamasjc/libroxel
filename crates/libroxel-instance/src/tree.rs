@@ -451,6 +451,8 @@ impl InstanceTree {
                     | Property::AngularSpeed
                     | Property::ServoMaxTorque
                     | Property::MaxTorque
+                    | Property::StudsPerTileU
+                    | Property::StudsPerTileV
                     | Property::Rate
                     | Property::EffectSize
                     | Property::Drag

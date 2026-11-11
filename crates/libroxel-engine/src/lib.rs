@@ -12,6 +12,7 @@ pub mod movers;
 pub mod net;
 pub mod npc;
 pub mod physics;
+pub mod pictures;
 pub mod seat;
 pub mod session;
 pub mod view;

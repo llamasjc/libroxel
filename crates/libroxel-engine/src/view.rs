@@ -5,7 +5,9 @@ use std::collections::HashMap;
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
-use libroxel_instance::{ClassKind, EnumValue, InstanceId, InstanceTree, Material, PartShape, Property};
+use libroxel_instance::{
+    ClassKind, EnumValue, InstanceId, InstanceTree, Material, NormalId, PartShape, Property,
+};
 use libroxel_script::SharedTree;
 
 use crate::{CharacterInput, LogEntry, PlaySession};
@@ -234,7 +236,7 @@ impl Plugin for RenderPlugin {
             // transform is brought up to date at once, so GUIs and name tags
             // drawn later this frame line up with where the camera is now.
             .add_systems(Update, (follow_camera, refresh_camera_global).chain().after(EngineSet::Sync))
-            .add_systems(Update, (sync_lights, draw_blasts, sync_ropes).after(EngineSet::Sync))
+            .add_systems(Update, (sync_lights, draw_blasts, sync_ropes, sync_decals).after(EngineSet::Sync))
             .add_systems(Update, update_lighting.after(EngineSet::Sync))
             .add_plugins(crate::effects::EffectsPlugin);
     }
@@ -247,6 +249,8 @@ pub(crate) struct PartMeshes {
     pub(crate) ball: Handle<Mesh>,
     pub(crate) cylinder: Handle<Mesh>,
     pub(crate) wedge: Handle<Mesh>,
+    /// A 1 by 1 square facing +Z, for decals.
+    pub(crate) quad: Handle<Mesh>,
 }
 
 impl PartMeshes {
@@ -417,6 +421,7 @@ fn setup_scene(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ima
                 .rotated_by(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
         ),
         wedge: meshes.add(wedge_mesh()),
+        quad: meshes.add(Rectangle::new(1.0, 1.0)),
     });
     commands.insert_resource(material_textures(&mut images));
     let rig = CameraRig::default();
@@ -1063,6 +1068,172 @@ fn sync_ropes(
     }
 }
 
+/// Where a decal on `face` of a part goes: a unit square facing +Z, turned
+/// and stretched over that side and lifted just off it. Also returns the
+/// side's width and height in studs.
+pub fn decal_transform(
+    pos: libroxel_instance::Vec3,
+    size: libroxel_instance::Vec3,
+    orientation: libroxel_instance::Vec3,
+    face: NormalId,
+) -> (Transform, Vec2) {
+    // The side's outward direction, and which way is up on it.
+    let (normal, up) = match face {
+        NormalId::Right => (Vec3::X, Vec3::Y),
+        NormalId::Left => (Vec3::NEG_X, Vec3::Y),
+        NormalId::Back => (Vec3::Z, Vec3::Y),
+        NormalId::Front => (Vec3::NEG_Z, Vec3::Y),
+        NormalId::Top => (Vec3::Y, Vec3::NEG_Z),
+        NormalId::Bottom => (Vec3::NEG_Y, Vec3::Z),
+    };
+    let right = up.cross(normal);
+    let size = to_bevy(size);
+    let extent = |axis: Vec3| (size * axis).abs().element_sum();
+    let (width, height) = (extent(right), extent(up));
+    let part = crate::physics::orientation_quat(orientation);
+    let lift = extent(normal) / 2.0 + 0.01;
+    let transform = Transform::from_translation(to_bevy(pos) + part * (normal * lift))
+        .with_rotation(part * Quat::from_mat3(&Mat3::from_cols(right, up, normal)))
+        .with_scale(Vec3::new(width, height, 1.0));
+    (transform, Vec2::new(width, height))
+}
+
+/// Links a drawn decal or texture to its instance, with what its material shows.
+#[derive(Component)]
+struct DecalLink(InstanceId, DecalLook);
+
+#[derive(Debug, Clone, PartialEq)]
+struct DecalLook {
+    picture: String,
+    tint: libroxel_instance::Color3,
+    transparency: f32,
+    /// How many times the picture repeats across and down, for textures.
+    tiles: Option<Vec2>,
+}
+
+/// Loaded pictures for decals: tiling ones repeat at the edges.
+#[derive(Default)]
+struct DecalPictures {
+    generation: u64,
+    loaded: HashMap<(String, bool), Option<Handle<Image>>>,
+}
+
+/// Draws every decal and texture on the side of its part.
+fn sync_decals(
+    engine: NonSend<EngineState>,
+    mut commands: Commands,
+    meshes: Option<Res<PartMeshes>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut pictures: Local<DecalPictures>,
+    mut drawn: Query<(Entity, &mut DecalLink, &mut Transform, &MeshMaterial3d<StandardMaterial>)>,
+) {
+    use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
+    let Some(meshes) = meshes else { return };
+    let tree = engine.tree.borrow();
+    let mut wanted: HashMap<InstanceId, (Transform, DecalLook)> = HashMap::new();
+    for class in [ClassKind::Decal, ClassKind::Texture] {
+        for id in tree.descendants_of_class(tree.workspace(), class) {
+            let Some(part) =
+                tree.parent(id).ok().flatten().filter(|p| tree.class(*p).is_ok_and(|c| c.is_physical()))
+            else {
+                continue;
+            };
+            let (Some(pos), Some(size)) =
+                (tree.get_vec3(part, Property::Position), tree.get_vec3(part, Property::Size))
+            else {
+                continue;
+            };
+            let face = match tree.get_enum(id, Property::Face) {
+                Some(EnumValue::NormalId(face)) => face,
+                _ => NormalId::Front,
+            };
+            let orientation = tree.get_vec3(part, Property::Orientation).unwrap_or_default();
+            let (transform, extent) = decal_transform(pos, size, orientation, face);
+            let tiles = (class == ClassKind::Texture).then(|| {
+                let per = |p| (tree.get_number(id, p).unwrap_or(2.0) as f32).max(0.01);
+                extent / Vec2::new(per(Property::StudsPerTileU), per(Property::StudsPerTileV))
+            });
+            let look = DecalLook {
+                picture: tree.get_string(id, Property::Texture).unwrap_or_default().trim().to_owned(),
+                tint: tree.get_color(id, Property::DecalColor).unwrap_or(libroxel_instance::Color3::WHITE),
+                transparency: tree.get_number(id, Property::Transparency).unwrap_or(0.0) as f32,
+                tiles,
+            };
+            if look.picture.is_empty() || look.transparency >= 0.999 {
+                continue;
+            }
+            wanted.insert(id, (transform, look));
+        }
+    }
+    drop(tree);
+
+    if pictures.generation != crate::pictures::generation() {
+        pictures.generation = crate::pictures::generation();
+        pictures.loaded.clear();
+    }
+    let mut material_for = |look: &DecalLook| -> Option<StandardMaterial> {
+        let key = (look.picture.clone(), look.tiles.is_some());
+        let picture = pictures
+            .loaded
+            .entry(key)
+            .or_insert_with(|| {
+                let sampler = if look.tiles.is_some() {
+                    ImageSampler::Descriptor(ImageSamplerDescriptor {
+                        address_mode_u: ImageAddressMode::Repeat,
+                        address_mode_v: ImageAddressMode::Repeat,
+                        ..ImageSamplerDescriptor::linear()
+                    })
+                } else {
+                    ImageSampler::linear()
+                };
+                let image = crate::pictures::decode(&crate::pictures::bytes_for(&look.picture)?, sampler)?;
+                Some(images.add(image))
+            })
+            .clone()?;
+        let t = look.tint;
+        Some(StandardMaterial {
+            base_color: Color::srgba(t.r, t.g, t.b, (1.0 - look.transparency).clamp(0.0, 1.0)),
+            base_color_texture: Some(picture),
+            alpha_mode: AlphaMode::Blend,
+            perceptual_roughness: 0.8,
+            uv_transform: bevy::math::Affine2::from_scale(look.tiles.unwrap_or(Vec2::ONE)),
+            // Drawn over the part's own side rather than fighting it.
+            depth_bias: 1.0,
+            ..default()
+        })
+    };
+    for (entity, mut link, mut transform, handle) in &mut drawn {
+        match wanted.remove(&link.0) {
+            Some((t, look)) => {
+                transform.set_if_neq(t);
+                if link.1 != look {
+                    match material_for(&look) {
+                        Some(material) => {
+                            if let Some(mut m) = materials.get_mut(&handle.0) {
+                                *m = material;
+                            }
+                            link.1 = look;
+                        }
+                        None => commands.entity(entity).despawn(),
+                    }
+                }
+            }
+            None => commands.entity(entity).despawn(),
+        }
+    }
+    for (id, (transform, look)) in wanted {
+        let Some(material) = material_for(&look) else { continue };
+        commands.spawn((
+            DecalLink(id, look),
+            Mesh3d(meshes.quad.clone()),
+            MeshMaterial3d(materials.add(material)),
+            transform,
+            bevy::light::NotShadowCaster,
+        ));
+    }
+}
+
 fn draw_blasts(
     engine: NonSend<EngineState>,
     mut commands: Commands,
@@ -1092,5 +1263,35 @@ fn draw_blasts(
             Transform::from_translation(to_bevy(blast.position)).with_scale(Vec3::splat(size)),
             bevy::light::NotShadowCaster,
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use libroxel_instance::Vec3 as V;
+
+    fn close(a: Vec3, b: Vec3) -> bool {
+        (a - b).length() < 1e-4
+    }
+
+    #[test]
+    fn decals_cover_their_side_and_face_out() {
+        let (pos, size) = (V::new(0.0, 5.0, 0.0), V::new(4.0, 2.0, 6.0));
+        let (t, extent) = decal_transform(pos, size, V::ZERO, NormalId::Front);
+        assert_eq!(extent, Vec2::new(4.0, 2.0));
+        assert!(close(t.translation, Vec3::new(0.0, 5.0, -3.01)));
+        // The square's +Z faces out of the front, and its top stays up.
+        assert!(close(t.rotation * Vec3::Z, Vec3::NEG_Z));
+        assert!(close(t.rotation * Vec3::Y, Vec3::Y));
+        let (t, extent) = decal_transform(pos, size, V::ZERO, NormalId::Top);
+        assert_eq!(extent, Vec2::new(4.0, 6.0));
+        assert!(close(t.translation, Vec3::new(0.0, 6.01, 0.0)));
+        assert!(close(t.rotation * Vec3::Z, Vec3::Y));
+        // A part turned a quarter about Y takes its decal round with it.
+        let (t, extent) = decal_transform(pos, size, V::new(0.0, 90.0, 0.0), NormalId::Right);
+        assert_eq!(extent, Vec2::new(6.0, 2.0));
+        assert!(close(t.rotation * Vec3::Z, Vec3::NEG_Z), "{:?}", t.rotation * Vec3::Z);
+        assert!(close(t.translation, Vec3::new(0.0, 5.0, -2.01)));
     }
 }

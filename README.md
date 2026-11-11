@@ -200,9 +200,16 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
 - **Images:** `ImageLabel` and `ImageButton` (which has `MouseButton1Click`
   and `Activated` like a text button) show the PNG named by `Image`. A plain
   name is looked for beside the game file, in an `images` folder beside it,
-  and in `~/Projects/libroxel-games/images`; `libroxel://coin` is built in.
+  and in `~/Projects/libroxel-games/images`. Built in are `libroxel://coin`,
+  `smile`, `star`, `arrow` and `checker`.
   `ImageColor3` tints it, `ImageTransparency` fades it, and `ScaleType` is
   `Stretch`, `Fit` or `Crop`. Joined computers need the same files.
+- **Pictures on parts:** a `Decal` inside a part stretches the PNG named by
+  `Texture` over one `Face` (`Enum.NormalId`: Front, Back, Left, Right,
+  Top, Bottom), and a `Texture` repeats it every `StudsPerTileU` by
+  `StudsPerTileV` studs. `Color3` tints it and `Transparency` fades it.
+  Names are found like an `ImageLabel`'s. The sample has an arrow sign, a
+  star on the vault door and a checkered finish.
 - **Scrolling frames:** `ScrollingFrame` has `CanvasSize` (`UDim2`),
   `CanvasPosition` (`Vector2`, changed by the wheel) and
   `ScrollBarThickness`; its children are placed on the canvas and clipped.
@@ -422,7 +429,7 @@ door.ClickDetector.MouseClick:Connect(function(player)
 end)
 ```
 
-**Not yet:** pictures on parts (decals and textures), tool animations, sounds, and terrain and voxels. Physics is simple: anchored parts can be rotated and shaped
+**Not yet:** tool animations, sounds, and terrain and voxels. Physics is simple: anchored parts can be rotated and shaped
 (ramps and balls work), but loose parts collide as the upright box around
 them and don't tip over by themselves (they spin only when something spins
 them). A hinge arm is carried by its hinge, so it blocks things but doesn't

@@ -127,6 +127,8 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::HingeConstraint,
     ClassKind::AngularVelocity,
     ClassKind::BodyAngularVelocity,
+    ClassKind::Decal,
+    ClassKind::Texture,
     ClassKind::ParticleEmitter,
     ClassKind::Fire,
     ClassKind::Smoke,
@@ -197,6 +199,8 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::SpringConstraint => "🌀",
         ClassKind::HingeConstraint => "🚪",
         ClassKind::AngularVelocity | ClassKind::BodyAngularVelocity => "🔄",
+        ClassKind::Decal => "🏷",
+        ClassKind::Texture => "🧱",
         ClassKind::ParticleEmitter | ClassKind::Sparkles => "✨",
         ClassKind::Fire => "🔥",
         ClassKind::Smoke => "☁",
@@ -1130,6 +1134,12 @@ fn properties(
         ),
         ClassKind::AngularVelocity => Some(
             "While playing, spins Attachment0's part at AngularVelocity (radians a second about X, Y              and Z), with up to MaxTorque. Unanchor the part first.",
+        ),
+        ClassKind::Decal | ClassKind::Texture => Some(
+            "Put one inside a part to show a PNG picture on one Face of it. A Decal stretches the \
+             picture over the whole side; a Texture repeats it every StudsPerTileU by StudsPerTileV \
+             studs. Texture is a file name, found like an ImageLabel's; libroxel://smile, star, arrow, \
+             checker and coin are built in. Color3 tints it.",
         ),
         ClassKind::BodyAngularVelocity => Some(
             "The older spinner: put one inside a loose part to spin it at AngularVelocity, with up to              MaxTorque about each axis.",
@@ -2093,6 +2103,8 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     | ClassKind::HingeConstraint
                     | ClassKind::AngularVelocity
                     | ClassKind::BodyAngularVelocity
+                    | ClassKind::Decal
+                    | ClassKind::Texture
                     | ClassKind::ParticleEmitter
                     | ClassKind::Fire
                     | ClassKind::Smoke

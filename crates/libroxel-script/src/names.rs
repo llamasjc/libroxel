@@ -12,8 +12,8 @@
 
 use libroxel_instance::{
     ActuatorType, CameraType, ClassKind, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection,
-    KeyCode, Material, PartShape, Property, RaycastFilterType, ScaleType, TextXAlignment, TextYAlignment,
-    UserInputType,
+    KeyCode, Material, NormalId, PartShape, Property, RaycastFilterType, ScaleType, TextXAlignment,
+    TextYAlignment, UserInputType,
 };
 
 /// Global variables installed into every script.
@@ -443,6 +443,7 @@ pub fn enum_name(kind: EnumKind) -> &'static str {
         EnumKind::TextYAlignment => "TextYAlignment",
         EnumKind::ScaleType => "ScaleType",
         EnumKind::ActuatorType => "ActuatorType",
+        EnumKind::NormalId => "NormalId",
     }
 }
 
@@ -565,6 +566,14 @@ pub fn enum_item_name(value: EnumValue) -> &'static str {
             TextYAlignment::Top => "Top",
             TextYAlignment::Center => "Center",
             TextYAlignment::Bottom => "Bottom",
+        },
+        EnumValue::NormalId(n) => match n {
+            NormalId::Right => "Right",
+            NormalId::Top => "Top",
+            NormalId::Back => "Back",
+            NormalId::Left => "Left",
+            NormalId::Bottom => "Bottom",
+            NormalId::Front => "Front",
         },
         EnumValue::ActuatorType(a) => match a {
             ActuatorType::None => "None",
@@ -765,6 +774,8 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::HingeConstraint => "HingeConstraint",
         ClassKind::AngularVelocity => "AngularVelocity",
         ClassKind::BodyAngularVelocity => "BodyAngularVelocity",
+        ClassKind::Decal => "Decal",
+        ClassKind::Texture => "Texture",
         ClassKind::BodyPosition => "BodyPosition",
         ClassKind::BodyForce => "BodyForce",
         ClassKind::ParticleEmitter => "ParticleEmitter",
@@ -902,6 +913,11 @@ pub fn property_name(property: Property) -> &'static str {
         Property::AngularVelocity => "AngularVelocity",
         Property::MaxTorque => "MaxTorque",
         Property::BodyMaxTorque => "MaxTorque",
+        Property::Texture => "Texture",
+        Property::Face => "Face",
+        Property::DecalColor => "Color3",
+        Property::StudsPerTileU => "StudsPerTileU",
+        Property::StudsPerTileV => "StudsPerTileV",
         Property::Rate => "Rate",
         Property::Lifetime => "Lifetime",
         Property::Speed => "Speed",
