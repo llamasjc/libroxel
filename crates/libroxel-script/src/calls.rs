@@ -53,6 +53,16 @@ pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> m
         _ if callback_class(key) == Some(class) => {
             return Err(runtime_err(format!("{key} is a callback: it can be set but not read")));
         }
+        names::attachment::WORLD_POSITION if class == ClassKind::Attachment => {
+            let part = host(lua).tree.borrow().parent(id).map_err(tree_err)?;
+            let offset = host(lua).tree.borrow().get_vec3(id, Property::Position).unwrap_or_default();
+            let world =
+                match part.filter(|p| host(lua).tree.borrow().class(*p).is_ok_and(|c| c.is_physical())) {
+                    Some(part) => crate::bindings::part_cframe(lua, part)?.point_to_world(offset),
+                    None => offset,
+                };
+            return Ok(Some(Value::UserData(lua.create_userdata(crate::bindings::LuaVector3(world))?)));
+        }
         game_info::JOB_ID if class == ClassKind::DataModel => {
             return Ok(Some(Value::String(lua.create_string("")?)));
         }

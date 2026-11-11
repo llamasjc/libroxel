@@ -156,6 +156,17 @@
   welds then carry the rest of the vehicle (and the seat) round with it.
   The player's raw W/S and A/D keys come in with the character input as
   `throttle` and `steer`.
+- **Movers and constraints** live in `libroxel-engine/src/movers.rs`. After
+  the welds are worked out and before the physics step, each enabled
+  `LinearVelocity`, `VectorForce`, `AlignPosition`, `RopeConstraint`,
+  `SpringConstraint` and legacy `Body*` mover changes the velocity of the
+  assembly root its attachment's part belongs to, using the assembly's
+  whole mass. Each one aims for the velocity the body should have at the
+  end of the step (physics adds gravity during it, so movers that hold
+  things up add it back). Springs, `AlignPosition` and `BodyPosition` are
+  solved implicitly, so stiff ones don't blow up; ropes cancel stretching
+  and close a share of any overshoot each step. Visible ropes and springs
+  are drawn by `view::sync_ropes` as thin rods.
 - **Events from the change journal.** `fire_changes` turns reparenting into
   `ChildAdded`/`ChildRemoved` on the parents and `DescendantAdded`/
   `DescendantRemoving` on every watched ancestor (for the moved instance

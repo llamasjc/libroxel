@@ -141,6 +141,24 @@ pub enum ClassKind {
     ServerStorage,
     /// A service with the settings each player's character starts with.
     StarterPlayer,
+    /// Inside a part: a point on it (Position is relative to the part) that constraints and movers hold.
+    Attachment,
+    /// Pushes Attachment0's part to move at VectorVelocity, with up to MaxForce.
+    LinearVelocity,
+    /// Pushes Attachment0's part with a steady Force.
+    VectorForce,
+    /// Pulls Attachment0's part to Attachment1 (or to Position).
+    AlignPosition,
+    /// Keeps two attachments no further apart than Length.
+    RopeConstraint,
+    /// Pulls two attachments towards FreeLength apart, like a spring.
+    SpringConstraint,
+    /// Inside a part: the older way to make it move at Velocity.
+    BodyVelocity,
+    /// Inside a part: the older way to pull it to Position.
+    BodyPosition,
+    /// Inside a part: the older way to push it with a steady Force.
+    BodyForce,
 }
 
 impl ClassKind {
@@ -199,6 +217,15 @@ impl ClassKind {
         ClassKind::Color3Value,
         ClassKind::ServerStorage,
         ClassKind::StarterPlayer,
+        ClassKind::Attachment,
+        ClassKind::LinearVelocity,
+        ClassKind::VectorForce,
+        ClassKind::AlignPosition,
+        ClassKind::RopeConstraint,
+        ClassKind::SpringConstraint,
+        ClassKind::BodyVelocity,
+        ClassKind::BodyPosition,
+        ClassKind::BodyForce,
     ];
 
     /// The services every tree has under its root, in order. They can't be
@@ -310,6 +337,59 @@ impl ClassKind {
         const OBJECT: &[Property] = &[Property::Name, Property::ObjectValue];
         const VECTOR3: &[Property] = &[Property::Name, Property::Vector3Value];
         const COLOR3: &[Property] = &[Property::Name, Property::Color3Value];
+        const ATTACHMENT: &[Property] = &[Property::Name, Property::Position, Property::Visible];
+        const LINEAR_VELOCITY: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::Attachment0,
+            Property::VectorVelocity,
+            Property::MaxForce,
+        ];
+        const VECTOR_FORCE: &[Property] =
+            &[Property::Name, Property::Enabled, Property::Attachment0, Property::Force];
+        const ALIGN_POSITION: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::Attachment0,
+            Property::Attachment1,
+            Property::Position,
+            Property::MaxForce,
+            Property::MaxVelocity,
+            Property::Responsiveness,
+            Property::RigidityEnabled,
+        ];
+        const ROPE: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::Attachment0,
+            Property::Attachment1,
+            Property::Length,
+            Property::Visible,
+            Property::Color,
+            Property::Thickness,
+        ];
+        const SPRING: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::Attachment0,
+            Property::Attachment1,
+            Property::FreeLength,
+            Property::Stiffness,
+            Property::Damping,
+            Property::Visible,
+            Property::Color,
+            Property::Thickness,
+        ];
+        const BODY_VELOCITY: &[Property] =
+            &[Property::Name, Property::Velocity, Property::BodyMaxForce, Property::BodyPower];
+        const BODY_POSITION: &[Property] = &[
+            Property::Name,
+            Property::Position,
+            Property::BodyMaxForce,
+            Property::BodyPower,
+            Property::BodyDamping,
+        ];
+        const BODY_FORCE: &[Property] = &[Property::Name, Property::Force];
         const STARTER_PLAYER: &[Property] =
             &[Property::Name, Property::CharacterWalkSpeed, Property::CharacterJumpPower];
         const PLAYERS: &[Property] = &[Property::Name, Property::RespawnTime, Property::CharacterAutoLoads];
@@ -484,6 +564,15 @@ impl ClassKind {
             ClassKind::Vector3Value => VECTOR3,
             ClassKind::Color3Value => COLOR3,
             ClassKind::StarterPlayer => STARTER_PLAYER,
+            ClassKind::Attachment => ATTACHMENT,
+            ClassKind::LinearVelocity => LINEAR_VELOCITY,
+            ClassKind::VectorForce => VECTOR_FORCE,
+            ClassKind::AlignPosition => ALIGN_POSITION,
+            ClassKind::RopeConstraint => ROPE,
+            ClassKind::SpringConstraint => SPRING,
+            ClassKind::BodyVelocity => BODY_VELOCITY,
+            ClassKind::BodyPosition => BODY_POSITION,
+            ClassKind::BodyForce => BODY_FORCE,
             _ => COMMON,
         }
     }
@@ -500,7 +589,11 @@ impl ClassKind {
         }
         Some(match property {
             Property::Name | Property::Source | Property::StringValue => PropertyValue::String(String::new()),
-            Property::Position | Property::Orientation => PropertyValue::Vec3(Vec3::ZERO),
+            Property::Position => PropertyValue::Vec3(match self {
+                ClassKind::BodyPosition => Vec3::new(0.0, 50.0, 0.0),
+                _ => Vec3::ZERO,
+            }),
+            Property::Orientation => PropertyValue::Vec3(Vec3::ZERO),
             Property::Shape => PropertyValue::Enum(EnumValue::Shape(PartShape::Block)),
             Property::Material => PropertyValue::Enum(EnumValue::Material(Material::Plastic)),
             Property::NumberValue | Property::UserId => PropertyValue::Number(0.0),
@@ -515,7 +608,8 @@ impl ClassKind {
             Property::AnchorPoint => PropertyValue::Vec2(Vec2::ZERO),
             Property::BackgroundColor => PropertyValue::Color3(Color3::WHITE),
             Property::BackgroundTransparency => PropertyValue::Number(0.0),
-            Property::Visible | Property::Enabled | Property::ResetOnSpawn => PropertyValue::Bool(true),
+            Property::Visible => PropertyValue::Bool(!matches!(self, ClassKind::Attachment)),
+            Property::Enabled | Property::ResetOnSpawn => PropertyValue::Bool(true),
             Property::Text => PropertyValue::String(match self {
                 ClassKind::TextButton => "Button".into(),
                 ClassKind::TextBox => String::new(),
@@ -582,10 +676,33 @@ impl ClassKind {
             Property::FogStart => PropertyValue::Number(0.0),
             Property::FogEnd => PropertyValue::Number(100_000.0),
             Property::FallenPartsDestroyHeight => PropertyValue::Number(-100.0),
+            Property::Attachment0 | Property::Attachment1 => PropertyValue::Ref(None),
+            Property::VectorVelocity | Property::Force => PropertyValue::Vec3(Vec3::ZERO),
+            Property::MaxForce => PropertyValue::Number(match self {
+                ClassKind::AlignPosition => 10_000.0,
+                _ => 1_000.0,
+            }),
+            Property::MaxVelocity => PropertyValue::Number(1_000_000.0),
+            Property::Responsiveness => PropertyValue::Number(10.0),
+            Property::RigidityEnabled => PropertyValue::Bool(false),
+            Property::Length => PropertyValue::Number(5.0),
+            Property::FreeLength => PropertyValue::Number(1.0),
+            Property::Stiffness => PropertyValue::Number(100.0),
+            Property::Damping => PropertyValue::Number(5.0),
+            Property::Thickness => PropertyValue::Number(0.1),
+            Property::Velocity => PropertyValue::Vec3(Vec3::new(0.0, 2.0, 0.0)),
+            Property::BodyMaxForce => PropertyValue::Vec3(Vec3::new(4000.0, 4000.0, 4000.0)),
+            Property::BodyPower => PropertyValue::Number(match self {
+                ClassKind::BodyPosition => 10_000.0,
+                _ => 1_250.0,
+            }),
+            Property::BodyDamping => PropertyValue::Number(1_250.0),
             Property::Size => PropertyValue::Vec3(Vec3::new(4.0, 1.0, 2.0)),
             Property::Color => PropertyValue::Color3(match self {
                 ClassKind::SpawnLocation => Color3::new(0.3, 0.55, 0.95),
                 ClassKind::PointLight | ClassKind::SpotLight => Color3::WHITE,
+                ClassKind::RopeConstraint => Color3::from_rgb8(120, 90, 60),
+                ClassKind::SpringConstraint => Color3::from_rgb8(200, 200, 210),
                 _ => Color3::MEDIUM_GREY,
             }),
             Property::Anchored => PropertyValue::Bool(self == ClassKind::SpawnLocation),
@@ -654,6 +771,15 @@ impl ClassKind {
             ClassKind::Color3Value => "color3_value",
             ClassKind::ServerStorage => "server_storage",
             ClassKind::StarterPlayer => "starter_player",
+            ClassKind::Attachment => "attachment",
+            ClassKind::LinearVelocity => "linear_velocity",
+            ClassKind::VectorForce => "vector_force",
+            ClassKind::AlignPosition => "align_position",
+            ClassKind::RopeConstraint => "rope_constraint",
+            ClassKind::SpringConstraint => "spring_constraint",
+            ClassKind::BodyVelocity => "body_velocity",
+            ClassKind::BodyPosition => "body_position",
+            ClassKind::BodyForce => "body_force",
         }
     }
 

@@ -305,6 +305,12 @@ pub mod http {
     pub const URL_ENCODE: &str = "UrlEncode";
 }
 
+/// Attachments: points on parts.
+pub mod attachment {
+    /// Where the attachment is in the world (read-only).
+    pub const WORLD_POSITION: &str = "WorldPosition";
+}
+
 /// Read-only facts about the running game.
 pub mod game_info {
     pub const JOB_ID: &str = "JobId";
@@ -703,6 +709,15 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::Color3Value => "Color3Value",
         ClassKind::ServerStorage => "ServerStorage",
         ClassKind::StarterPlayer => "StarterPlayer",
+        ClassKind::Attachment => "Attachment",
+        ClassKind::LinearVelocity => "LinearVelocity",
+        ClassKind::VectorForce => "VectorForce",
+        ClassKind::AlignPosition => "AlignPosition",
+        ClassKind::RopeConstraint => "RopeConstraint",
+        ClassKind::SpringConstraint => "SpringConstraint",
+        ClassKind::BodyVelocity => "BodyVelocity",
+        ClassKind::BodyPosition => "BodyPosition",
+        ClassKind::BodyForce => "BodyForce",
     }
 }
 
@@ -797,6 +812,23 @@ pub fn property_name(property: Property) -> &'static str {
         Property::FogStart => "FogStart",
         Property::FogEnd => "FogEnd",
         Property::FallenPartsDestroyHeight => "FallenPartsDestroyHeight",
+        Property::Attachment0 => "Attachment0",
+        Property::Attachment1 => "Attachment1",
+        Property::VectorVelocity => "VectorVelocity",
+        Property::MaxForce => "MaxForce",
+        Property::Force => "Force",
+        Property::MaxVelocity => "MaxVelocity",
+        Property::Responsiveness => "Responsiveness",
+        Property::RigidityEnabled => "RigidityEnabled",
+        Property::Length => "Length",
+        Property::FreeLength => "FreeLength",
+        Property::Stiffness => "Stiffness",
+        Property::Damping => "Damping",
+        Property::Thickness => "Thickness",
+        Property::Velocity => "Velocity",
+        Property::BodyMaxForce => "MaxForce",
+        Property::BodyPower => "P",
+        Property::BodyDamping => "D",
     }
 }
 

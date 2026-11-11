@@ -417,7 +417,17 @@ impl InstanceTree {
                     | Property::CharacterWalkSpeed
                     | Property::CharacterJumpPower
                     | Property::FogStart
-                    | Property::FogEnd,
+                    | Property::FogEnd
+                    | Property::MaxForce
+                    | Property::MaxVelocity
+                    | Property::Responsiveness
+                    | Property::Length
+                    | Property::FreeLength
+                    | Property::Stiffness
+                    | Property::Damping
+                    | Property::Thickness
+                    | Property::BodyPower
+                    | Property::BodyDamping,
                     PropertyValue::Number(n),
                 ) => PropertyValue::Number(n.max(0.0)),
                 (Property::LayoutOrder, PropertyValue::Number(n)) => PropertyValue::Number(n.round()),

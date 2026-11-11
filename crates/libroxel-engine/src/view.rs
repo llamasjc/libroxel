@@ -226,7 +226,7 @@ impl Plugin for RenderPlugin {
             // transform is brought up to date at once, so GUIs and name tags
             // drawn later this frame line up with where the camera is now.
             .add_systems(Update, (follow_camera, refresh_camera_global).chain().after(EngineSet::Sync))
-            .add_systems(Update, (sync_lights, draw_blasts).after(EngineSet::Sync))
+            .add_systems(Update, (sync_lights, draw_blasts, sync_ropes).after(EngineSet::Sync))
             .add_systems(Update, update_lighting.after(EngineSet::Sync));
     }
 }
@@ -982,6 +982,78 @@ fn sync_lights(
 struct BlastVisual;
 
 /// Draws each explosion as a growing, fading ball of fire.
+/// Links a drawn rope or spring to its constraint.
+#[derive(Component)]
+struct RopeLink(InstanceId, libroxel_instance::Color3);
+
+/// Draws every visible rope and spring as a thin rod between its attachments.
+fn sync_ropes(
+    engine: NonSend<EngineState>,
+    mut commands: Commands,
+    meshes: Option<Res<PartMeshes>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut drawn: Query<(Entity, &mut RopeLink, &mut Transform, &MeshMaterial3d<StandardMaterial>)>,
+) {
+    let Some(meshes) = meshes else { return };
+    let tree = engine.tree.borrow();
+    let mut wanted: HashMap<InstanceId, (Transform, libroxel_instance::Color3)> = HashMap::new();
+    for class in [ClassKind::RopeConstraint, ClassKind::SpringConstraint] {
+        for id in tree.descendants_of_class(tree.workspace(), class) {
+            if tree.get_bool(id, Property::Visible) != Some(true) {
+                continue;
+            }
+            let point = |p| {
+                tree.get_ref(id, p)
+                    .and_then(|a| crate::movers::attachment_world(&tree, a))
+                    .map(|(v, _)| to_bevy(v))
+            };
+            let (Some(a), Some(b)) = (point(Property::Attachment0), point(Property::Attachment1)) else {
+                continue;
+            };
+            let length = a.distance(b);
+            if length < 1e-3 {
+                continue;
+            }
+            let thick = tree.get_number(id, Property::Thickness).unwrap_or(0.1).max(0.02) as f32;
+            // The cylinder mesh lies along X.
+            let rotation = Quat::from_rotation_arc(Vec3::X, (b - a) / length);
+            let transform = Transform::from_translation((a + b) / 2.0)
+                .with_rotation(rotation)
+                .with_scale(Vec3::new(length, thick, thick));
+            let colour =
+                tree.get_color(id, Property::Color).unwrap_or(libroxel_instance::Color3::MEDIUM_GREY);
+            wanted.insert(id, (transform, colour));
+        }
+    }
+    let material = |c: libroxel_instance::Color3| StandardMaterial {
+        base_color: Color::srgb(c.r, c.g, c.b),
+        perceptual_roughness: 0.9,
+        ..default()
+    };
+    for (entity, mut link, mut transform, handle) in &mut drawn {
+        match wanted.remove(&link.0) {
+            Some((t, colour)) => {
+                transform.set_if_neq(t);
+                if link.1 != colour {
+                    link.1 = colour;
+                    if let Some(mut m) = materials.get_mut(&handle.0) {
+                        m.base_color = Color::srgb(colour.r, colour.g, colour.b);
+                    }
+                }
+            }
+            None => commands.entity(entity).despawn(),
+        }
+    }
+    for (id, (transform, colour)) in wanted {
+        commands.spawn((
+            RopeLink(id, colour),
+            Mesh3d(meshes.cylinder.clone()),
+            MeshMaterial3d(materials.add(material(colour))),
+            transform,
+        ));
+    }
+}
+
 fn draw_blasts(
     engine: NonSend<EngineState>,
     mut commands: Commands,

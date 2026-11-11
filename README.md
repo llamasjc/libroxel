@@ -54,7 +54,9 @@ The first build compiles Bevy and takes a while. After that it is quick.
   welded on) that you can click to push, and a pressure plate by the shop
   glows while you stand on it. Past the quarry is a walled kart track with a
   go-kart to drive (walk into its seat, WASD to drive, Space to hop out), and
-  there's a bench to sit on at the start.
+  there's a bench to sit on at the start. Over the track's right wall is a
+  physics playground: a tyre swing on a rope, a hovering pad held up by an
+  AlignPosition, and a weight bouncing on a spring.
   Press **▶ Play** (or F5) to try it.
 - **Explorer** (left) shows the instance tree. Click to select, double-click
   a script to edit it, drag one item onto another to move it inside, and
@@ -211,6 +213,18 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `Brightness` sets how strong the sun is, `Ambient` tints the shadows (0.5
   grey is normal), and things further than `FogStart` studs fade into
   `FogColor` until they vanish at `FogEnd`.
+- **Movers and constraints:** an `Attachment` is a point on a part
+  (`Position` relative to the part, `WorldPosition` to read). With
+  `Attachment0` set, `LinearVelocity` (`VectorVelocity`, `MaxForce`) pushes
+  the part towards a velocity, `VectorForce` (`Force`) pushes it steadily,
+  and `AlignPosition` pulls it to `Attachment1` or to `Position`
+  (`Responsiveness`, `MaxForce`, `MaxVelocity`, `RigidityEnabled`).
+  `RopeConstraint` (`Length`) and `SpringConstraint` (`FreeLength`,
+  `Stiffness`, `Damping`) join two attachments, and are drawn when
+  `Visible` (`Color`, `Thickness`). The older `BodyVelocity`, `BodyPosition`
+  (`P`, `D`) and `BodyForce` work inside a part. Movers push whole welded
+  assemblies. Hinges and motors aren't there yet, because loose parts don't
+  rotate.
 - **Remote and bindable functions:** like events, but the caller waits for
   an answer. A `RemoteFunction`'s `InvokeServer(...)` is answered by the
   function a game script sets as `OnServerInvoke(player, ...)`, and

@@ -726,6 +726,7 @@ impl PlaySession {
             let poses = self.npcs.before_physics(&mut tree, &mut self.physics, player_model);
             crate::seat::drive_vehicles(&mut tree, &mut self.physics, dt);
             self.welds.before_physics(&tree, &mut self.physics);
+            crate::movers::apply(&tree, &self.welds, &mut self.physics, dt);
             self.seating.hold(&tree, &mut self.physics, self.character);
             let result = self.physics.step(&mut tree, dt);
             if let Some(c) = self.character.filter(|c| !c.is_dead(&tree)) {

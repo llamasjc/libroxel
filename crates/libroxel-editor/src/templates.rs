@@ -100,6 +100,26 @@ fn code(
     id
 }
 
+/// Gives the tyre swing a push to start it off.
+const SWING_SCRIPT: &str = r#"
+local tyre = script.Parent
+task.wait(0.5)
+tyre:ApplyImpulse(Vector3.new(0, 0, tyre:GetMass() * 30))
+"#;
+
+/// Moves the hover pad's target up and down; its AlignPosition follows.
+const HOVER_SCRIPT: &str = r#"
+local hold = script.Parent.Hold
+local low = hold.Position
+local high = low + Vector3.new(0, 6, 0)
+while true do
+	task.wait(4)
+	hold.Position = high
+	task.wait(4)
+	hold.Position = low
+end
+"#;
+
 /// A baseplate and a spawn location.
 pub fn blank() -> InstanceTree {
     let mut tree = InstanceTree::new();
@@ -1053,6 +1073,61 @@ pub fn sample_obby() -> InstanceTree {
         material(&mut tree, cone, Material::Neon);
     }
     kart(&mut tree, track, Vec3::new(0.0, 0.0, 26.0), 180.0, [220, 50, 60]);
+    // A physics playground over the track's right wall: a tyre swing on a
+    // rope, a hovering platform held up by an AlignPosition, and a weight
+    // bouncing on a spring.
+    let play = add(&mut tree, ws, ClassKind::Folder, "Playground");
+    let lawn = block(&mut tree, play, "Ground", [33.0, -0.5, 37.0], [24.0, 1.0, 34.0], [96, 160, 90]);
+    material(&mut tree, lawn, Material::Grass);
+    let wood = [140, 100, 60];
+    for (name, x) in [("PostLeft", 26.0), ("PostRight", 34.0)] {
+        let post = block(&mut tree, play, name, [x, 7.0, 30.0], [1.0, 14.0, 1.0], wood);
+        material(&mut tree, post, Material::Wood);
+    }
+    let beam = block(&mut tree, play, "Beam", [30.0, 14.5, 30.0], [10.0, 1.0, 1.0], wood);
+    material(&mut tree, beam, Material::Wood);
+    let tyre = block(&mut tree, play, "Tyre", [30.0, 4.0, 30.0], [1.0, 3.0, 3.0], [40, 40, 45]);
+    shape(&mut tree, tyre, PartShape::Cylinder);
+    set(&mut tree, tyre, Property::Anchored, PropertyValue::Bool(false));
+    let hook = add(&mut tree, beam, ClassKind::Attachment, "Hook");
+    set(&mut tree, hook, Property::Position, PropertyValue::Vec3(Vec3::new(0.0, -0.5, 0.0)));
+    let grip = add(&mut tree, tyre, ClassKind::Attachment, "Grip");
+    set(&mut tree, grip, Property::Position, PropertyValue::Vec3(Vec3::new(0.0, 1.5, 0.0)));
+    let rope = add(&mut tree, beam, ClassKind::RopeConstraint, "Rope");
+    set(&mut tree, rope, Property::Attachment0, PropertyValue::Ref(Some(hook)));
+    set(&mut tree, rope, Property::Attachment1, PropertyValue::Ref(Some(grip)));
+    set(&mut tree, rope, Property::Length, PropertyValue::Number(9.0));
+    set(&mut tree, rope, Property::Thickness, PropertyValue::Number(0.2));
+    script(&mut tree, tyre, "Swing", SWING_SCRIPT);
+
+    let hover = block(&mut tree, play, "HoverPad", [38.0, 3.0, 44.0], [6.0, 1.0, 6.0], [90, 200, 255]);
+    material(&mut tree, hover, Material::Neon);
+    set(&mut tree, hover, Property::Anchored, PropertyValue::Bool(false));
+    let centre = add(&mut tree, hover, ClassKind::Attachment, "Centre");
+    let align = add(&mut tree, hover, ClassKind::AlignPosition, "Hold");
+    set(&mut tree, align, Property::Attachment0, PropertyValue::Ref(Some(centre)));
+    set(&mut tree, align, Property::Position, PropertyValue::Vec3(Vec3::new(38.0, 3.0, 44.0)));
+    set(&mut tree, align, Property::MaxForce, PropertyValue::Number(1e6));
+    set(&mut tree, align, Property::MaxVelocity, PropertyValue::Number(4.0));
+    set(&mut tree, align, Property::Responsiveness, PropertyValue::Number(3.0));
+    script(&mut tree, hover, "Bob", HOVER_SCRIPT);
+
+    let gallows = block(&mut tree, play, "SpringFrame", [26.0, 6.0, 46.0], [4.0, 1.0, 1.0], [120, 120, 130]);
+    material(&mut tree, gallows, Material::Metal);
+    let stand = block(&mut tree, play, "SpringPost", [27.5, 2.75, 46.0], [1.0, 5.5, 1.0], [120, 120, 130]);
+    material(&mut tree, stand, Material::Metal);
+    let weight = block(&mut tree, play, "Weight", [26.0, 2.0, 46.0], [1.5, 1.5, 1.5], [230, 80, 70]);
+    shape(&mut tree, weight, PartShape::Ball);
+    set(&mut tree, weight, Property::Anchored, PropertyValue::Bool(false));
+    let top = add(&mut tree, gallows, ClassKind::Attachment, "Top");
+    let bottom = add(&mut tree, weight, ClassKind::Attachment, "Bottom");
+    let spring = add(&mut tree, gallows, ClassKind::SpringConstraint, "Spring");
+    set(&mut tree, spring, Property::Attachment0, PropertyValue::Ref(Some(top)));
+    set(&mut tree, spring, Property::Attachment1, PropertyValue::Ref(Some(bottom)));
+    set(&mut tree, spring, Property::FreeLength, PropertyValue::Number(2.0));
+    set(&mut tree, spring, Property::Stiffness, PropertyValue::Number(40.0));
+    set(&mut tree, spring, Property::Damping, PropertyValue::Number(0.3));
+
     // And a bench on the start platform, to sit on.
     let bench = add(&mut tree, start, ClassKind::Seat, "Bench");
     set(&mut tree, bench, Property::Position, PropertyValue::Vec3(Vec3::new(-4.0, 0.5, -6.0)));
@@ -1672,6 +1747,33 @@ mod tests {
         };
         assert_eq!(tree.borrow().get_ref(bench, Property::Occupant), Some(character.humanoid));
         assert_eq!(tree.borrow().get_ref(seat, Property::Occupant), None);
+        let log = session.take_log();
+        assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
+    }
+
+    #[test]
+    fn sample_playground_swings_hovers_and_bounces() {
+        let mut session = start_on(sample_obby(), false).unwrap();
+        let tree = session.runtime().tree().clone();
+        let find = |name: &str| {
+            let t = tree.borrow();
+            let play = t.find_first_child(t.workspace(), "Playground").unwrap().unwrap();
+            t.find_first_child(play, name).unwrap().unwrap()
+        };
+        let (tyre, pad, weight) = (find("Tyre"), find("HoverPad"), find("Weight"));
+        let pos = |id| tree.borrow().get_vec3(id, Property::Position).unwrap();
+        let (mut swing, mut highest, mut bounce) = (0.0f32, 0.0f32, (f32::MAX, f32::MIN));
+        for _ in 0..(6 * 60) {
+            session.step(1.0 / 60.0, CharacterInput::default());
+            swing = swing.max((pos(tyre).z - 30.0).abs());
+            highest = highest.max(pos(pad).y);
+            let y = pos(weight).y;
+            bounce = (bounce.0.min(y), bounce.1.max(y));
+        }
+        assert!(swing > 3.0, "the tyre swings: {swing}");
+        assert!((pos(tyre) - Vec3::new(30.0, 14.0, 30.0)).length() < 10.7, "on its rope");
+        assert!(highest > 8.0, "the pad rose to its high point: {highest}");
+        assert!(bounce.1 - bounce.0 > 1.0, "the weight bounces: {bounce:?}");
         let log = session.take_log();
         assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
     }

@@ -161,6 +161,16 @@ impl Welds {
         }
     }
 
+    /// The part physics moves for `part`: its assembly's root, or itself.
+    pub fn root_for(&self, part: InstanceId) -> InstanceId {
+        self.carried.get(&part).map_or(part, |c| c.root)
+    }
+
+    /// Every part `root` carries, not counting itself.
+    pub fn carried_by(&self, root: InstanceId) -> impl Iterator<Item = InstanceId> + '_ {
+        self.carried.iter().filter(move |(_, c)| c.root == root).map(|(p, _)| *p)
+    }
+
     /// Whether `part` is carried by a weld rather than moving on its own.
     pub fn is_carried(&self, part: InstanceId) -> bool {
         self.carried.contains_key(&part)

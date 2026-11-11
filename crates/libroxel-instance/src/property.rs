@@ -143,6 +143,40 @@ pub enum Property {
     FogEnd,
     /// On the workspace: loose parts below this height are destroyed.
     FallenPartsDestroyHeight,
+    /// On a constraint or mover: the first attachment it holds.
+    Attachment0,
+    /// On a constraint: the second attachment it holds.
+    Attachment1,
+    /// On a linear velocity: the velocity it pushes towards, in studs per second.
+    VectorVelocity,
+    /// On a mover: the strongest push it can give.
+    MaxForce,
+    /// On a force: the push it gives every moment.
+    Force,
+    /// On an align position: the fastest it moves its part.
+    MaxVelocity,
+    /// On an align position: how quickly it gets there.
+    Responsiveness,
+    /// On an align position: snap straight there.
+    RigidityEnabled,
+    /// On a rope: how long it is, in studs.
+    Length,
+    /// On a spring: how long it is when nothing pulls on it.
+    FreeLength,
+    /// On a spring: how hard it pulls back.
+    Stiffness,
+    /// On a spring: how quickly its bouncing dies down.
+    Damping,
+    /// On a rope or spring: how thick it is drawn, in studs.
+    Thickness,
+    /// On a body velocity: the velocity it pushes towards.
+    Velocity,
+    /// On an older body mover: the strongest push on each axis.
+    BodyMaxForce,
+    /// On an older body mover: how hard it pushes.
+    BodyPower,
+    /// On a body position: how much it slows down to stop overshooting.
+    BodyDamping,
 }
 
 /// The value of a property.
@@ -194,6 +228,20 @@ impl Property {
             Property::Color | Property::BackgroundColor | Property::TextColor => "Color3",
             Property::Color3Value | Property::Ambient | Property::FogColor => "Color3",
             Property::Vector3Value => "Vec3",
+            Property::VectorVelocity | Property::Force | Property::Velocity | Property::BodyMaxForce => {
+                "Vec3"
+            }
+            Property::RigidityEnabled => "bool",
+            Property::MaxForce
+            | Property::MaxVelocity
+            | Property::Responsiveness
+            | Property::Length
+            | Property::FreeLength
+            | Property::Stiffness
+            | Property::Damping
+            | Property::Thickness
+            | Property::BodyPower
+            | Property::BodyDamping => "number",
             Property::CharacterWalkSpeed
             | Property::CharacterJumpPower
             | Property::FogStart
@@ -255,7 +303,9 @@ impl Property {
             | Property::Part1
             | Property::Occupant
             | Property::SeatPart
-            | Property::ObjectValue => "ref",
+            | Property::ObjectValue
+            | Property::Attachment0
+            | Property::Attachment1 => "ref",
         }
     }
 
@@ -355,6 +405,23 @@ impl Property {
         Property::FogStart,
         Property::FogEnd,
         Property::FallenPartsDestroyHeight,
+        Property::Attachment0,
+        Property::Attachment1,
+        Property::VectorVelocity,
+        Property::MaxForce,
+        Property::Force,
+        Property::MaxVelocity,
+        Property::Responsiveness,
+        Property::RigidityEnabled,
+        Property::Length,
+        Property::FreeLength,
+        Property::Stiffness,
+        Property::Damping,
+        Property::Thickness,
+        Property::Velocity,
+        Property::BodyMaxForce,
+        Property::BodyPower,
+        Property::BodyDamping,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -442,6 +509,23 @@ impl Property {
             Property::FogStart => "fog_start",
             Property::FogEnd => "fog_end",
             Property::FallenPartsDestroyHeight => "fallen_parts_destroy_height",
+            Property::Attachment0 => "attachment0",
+            Property::Attachment1 => "attachment1",
+            Property::VectorVelocity => "vector_velocity",
+            Property::MaxForce => "max_force",
+            Property::Force => "force",
+            Property::MaxVelocity => "max_velocity",
+            Property::Responsiveness => "responsiveness",
+            Property::RigidityEnabled => "rigidity_enabled",
+            Property::Length => "length",
+            Property::FreeLength => "free_length",
+            Property::Stiffness => "stiffness",
+            Property::Damping => "damping",
+            Property::Thickness => "thickness",
+            Property::Velocity => "velocity",
+            Property::BodyMaxForce => "body_max_force",
+            Property::BodyPower => "body_power",
+            Property::BodyDamping => "body_damping",
         }
     }
 

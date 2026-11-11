@@ -96,6 +96,15 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::ObjectValue,
     ClassKind::Vector3Value,
     ClassKind::Color3Value,
+    ClassKind::Attachment,
+    ClassKind::LinearVelocity,
+    ClassKind::VectorForce,
+    ClassKind::AlignPosition,
+    ClassKind::RopeConstraint,
+    ClassKind::SpringConstraint,
+    ClassKind::BodyVelocity,
+    ClassKind::BodyPosition,
+    ClassKind::BodyForce,
 ];
 
 const SHAPES: &[(PartShape, &str)] = &[
@@ -147,12 +156,18 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::Seat => "🪑",
         ClassKind::VehicleSeat => "🏎",
         ClassKind::RemoteFunction => "📞",
-        ClassKind::BindableFunction => "🛎",
+        ClassKind::BindableFunction => "🔔",
         ClassKind::ObjectValue => "🔗",
         ClassKind::Vector3Value => "📐",
         ClassKind::Color3Value => "🎨",
-        ClassKind::ServerStorage => "🗃",
-        ClassKind::StarterPlayer => "🧍",
+        ClassKind::ServerStorage => "🗄",
+        ClassKind::StarterPlayer => "👤",
+        ClassKind::Attachment => "📍",
+        ClassKind::LinearVelocity | ClassKind::BodyVelocity => "➡",
+        ClassKind::VectorForce | ClassKind::BodyForce => "💨",
+        ClassKind::AlignPosition | ClassKind::BodyPosition => "🎯",
+        ClassKind::RopeConstraint => "➰",
+        ClassKind::SpringConstraint => "🌀",
         ClassKind::Teams | ClassKind::Team => "🚩",
     }
 }
@@ -856,7 +871,14 @@ fn properties(
             let Ok(value) = tree.get(id, property) else { continue };
             ui.label(names::property_name(property));
             if let PropertyValue::Ref(target) = &value {
-                if matches!(property, Property::Part0 | Property::Part1) {
+                if matches!(
+                    property,
+                    Property::Part0
+                        | Property::Part1
+                        | Property::Attachment0
+                        | Property::Attachment1
+                        | Property::ObjectValue
+                ) {
                     if let Some(new) = part_picker(ui, tree, id, property, *target) {
                         edited = Some((property, PropertyValue::Ref(new)));
                     }
@@ -996,6 +1018,34 @@ fn properties(
         ClassKind::Lighting => Some(
             "ClockTime sets the time of day: 6 is sunrise, 12 noon, 18 sunset. Ambient lights the shadows, \
              and things further than FogStart fade into FogColor until they vanish at FogEnd.",
+        ),
+        ClassKind::Attachment => Some(
+            "A point on its part (Position is relative to the part). Movers and constraints hold \
+             attachments: insert one with a part selected and it gets an attachment on that part.",
+        ),
+        ClassKind::LinearVelocity => Some(
+            "While playing, pushes Attachment0's part to move at VectorVelocity (studs per second), \
+             with up to MaxForce. Unanchor the part first.",
+        ),
+        ClassKind::VectorForce => Some(
+            "While playing, pushes Attachment0's part with Force all the time. A force of mass × 196.2 \
+             straight up cancels gravity.",
+        ),
+        ClassKind::AlignPosition => Some(
+            "While playing, pulls Attachment0's part to Attachment1, or to Position if there's no \
+             Attachment1. Responsiveness is how quickly; RigidityEnabled snaps straight there.",
+        ),
+        ClassKind::RopeConstraint => Some(
+            "Keeps Attachment0 and Attachment1 no further apart than Length studs, so a loose part \
+             hangs and swings from an anchored one. Visible draws the rope.",
+        ),
+        ClassKind::SpringConstraint => Some(
+            "Pulls Attachment0 and Attachment1 towards FreeLength studs apart. Stiffness is how hard, \
+             Damping how quickly the bouncing stops.",
+        ),
+        ClassKind::BodyVelocity | ClassKind::BodyPosition | ClassKind::BodyForce => Some(
+            "The older movers: put one inside a loose part. BodyVelocity pushes it at Velocity, \
+             BodyPosition pulls it to Position, BodyForce pushes with Force. MaxForce limits each axis.",
         ),
         ClassKind::WeldConstraint => Some(
             "Holds Part0 and Part1 together while playing: they move as one, keeping how they sit now. \
@@ -1566,6 +1616,21 @@ fn gui_parent(tree: &mut InstanceTree, selection: Option<InstanceId>) -> Option<
 }
 
 /// A drop-down of the workspace's parts, for a weld's Part0 or Part1.
+/// Classes that hold an `Attachment0`, which inserting fills in.
+fn needs_attachment(class: ClassKind) -> bool {
+    class.has_property(Property::Attachment0)
+}
+
+/// What a link property may point at.
+fn ref_choices(tree: &InstanceTree, property: Property) -> Vec<InstanceId> {
+    let ws = tree.workspace();
+    match property {
+        Property::Part0 | Property::Part1 => tree.descendants_of_class(ws, ClassKind::Part),
+        Property::Attachment0 | Property::Attachment1 => tree.descendants_of_class(ws, ClassKind::Attachment),
+        _ => tree.descendants(tree.root()).unwrap_or_default(),
+    }
+}
+
 fn part_picker(
     ui: &mut egui::Ui,
     tree: &InstanceTree,
@@ -1588,7 +1653,7 @@ fn part_picker(
             if ui.selectable_label(current.is_none(), "(none)").clicked() {
                 picked = Some(None);
             }
-            for part in tree.descendants_of_class(tree.workspace(), ClassKind::Part) {
+            for part in ref_choices(tree, property) {
                 if ui.selectable_label(current == Some(part), label(part)).clicked() {
                     picked = Some(Some(part));
                 }
@@ -1820,6 +1885,15 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     | ClassKind::StringValue
                     | ClassKind::BoolValue
                     | ClassKind::WeldConstraint
+                    | ClassKind::Attachment
+                    | ClassKind::LinearVelocity
+                    | ClassKind::VectorForce
+                    | ClassKind::AlignPosition
+                    | ClassKind::RopeConstraint
+                    | ClassKind::SpringConstraint
+                    | ClassKind::BodyVelocity
+                    | ClassKind::BodyPosition
+                    | ClassKind::BodyForce
             );
             let parent = match editor.selection {
                 Some(sel)
@@ -1831,6 +1905,17 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                 _ => parent,
             };
             if let Some(id) = new_instance(&mut tree, class, parent, near) {
+                if needs_attachment(class)
+                    && let Some(part) = near
+                {
+                    // Movers and constraints hold attachments: give it one on the selected part.
+                    if let Ok(at) =
+                        tree.create(ClassKind::Attachment, names::class_name(ClassKind::Attachment))
+                        && tree.set_parent(at, Some(part)).is_ok()
+                    {
+                        let _ = tree.set(id, Property::Attachment0, PropertyValue::Ref(Some(at)));
+                    }
+                }
                 if class == ClassKind::WeldConstraint
                     && let Some(part) = near
                 {
