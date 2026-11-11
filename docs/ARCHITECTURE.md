@@ -107,8 +107,17 @@
   kills characters and throws loose parts, and keeps a short-lived flash
   for the renderer.
 - **Lights** are mirrored onto Bevy point and spot lights at their part.
-- **GUI layout.** A `UIListLayout` replaces its siblings' positions with a
-  column or row; a `UICorner` sets the rounding. While playing, the text
+- **GUI layout.** A `UIListLayout` or `UIGridLayout` replaces its siblings'
+  positions with a column, row or grid; a `UICorner` sets the rounding,
+  `UIPadding` shrinks the area children are placed in, and `UIScale` and
+  `UIAspectRatioConstraint` change an object's own size after `Size` is
+  worked out. Siblings are drawn in `ZIndex` order. A `ScrollingFrame`
+  places its children on a canvas of `CanvasSize`, shifted by
+  `CanvasPosition` and clipped to the frame; clicks and hovering outside a
+  clip don't reach what is hidden. The editor tells the session which GUI
+  object is under the pointer each frame, and the session fires
+  `MouseLeave` and `MouseEnter` for the objects (and their GUI ancestors)
+  the pointer left and entered. While playing, the text
   box being typed into gets an egui text field over it, which writes into
   `Text`; focus changes go through the runtime so `Focused`, `FocusLost`
   and `CaptureFocus` agree with the editor.

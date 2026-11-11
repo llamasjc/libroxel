@@ -147,6 +147,24 @@ pub enum CameraType {
     Scriptable,
 }
 
+/// Where text sits across its box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TextXAlignment {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+/// Where text sits up and down its box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TextYAlignment {
+    Top,
+    #[default]
+    Center,
+    Bottom,
+}
+
 /// Which way a list layout lines things up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum FillDirection {
@@ -292,6 +310,8 @@ pub enum EnumKind {
     RaycastFilterType,
     CameraType,
     FillDirection,
+    TextXAlignment,
+    TextYAlignment,
 }
 
 /// A value from one of the enumerations.
@@ -306,6 +326,8 @@ pub enum EnumValue {
     RaycastFilterType(RaycastFilterType),
     CameraType(CameraType),
     FillDirection(FillDirection),
+    TextXAlignment(TextXAlignment),
+    TextYAlignment(TextYAlignment),
 }
 
 const KEY_CODES: &[EnumValue] = &[
@@ -375,6 +397,8 @@ impl EnumKind {
         EnumKind::RaycastFilterType,
         EnumKind::CameraType,
         EnumKind::FillDirection,
+        EnumKind::TextXAlignment,
+        EnumKind::TextYAlignment,
     ];
 
     /// Every value of this enumeration, in a stable order.
@@ -431,6 +455,16 @@ impl EnumKind {
             EnumKind::FillDirection => {
                 &[E::FillDirection(FillDirection::Vertical), E::FillDirection(FillDirection::Horizontal)]
             }
+            EnumKind::TextXAlignment => &[
+                E::TextXAlignment(TextXAlignment::Left),
+                E::TextXAlignment(TextXAlignment::Center),
+                E::TextXAlignment(TextXAlignment::Right),
+            ],
+            EnumKind::TextYAlignment => &[
+                E::TextYAlignment(TextYAlignment::Top),
+                E::TextYAlignment(TextYAlignment::Center),
+                E::TextYAlignment(TextYAlignment::Bottom),
+            ],
         }
     }
 
@@ -446,6 +480,8 @@ impl EnumKind {
             EnumKind::RaycastFilterType => "enum:raycast_filter_type",
             EnumKind::CameraType => "enum:camera_type",
             EnumKind::FillDirection => "enum:fill_direction",
+            EnumKind::TextXAlignment => "enum:text_x_alignment",
+            EnumKind::TextYAlignment => "enum:text_y_alignment",
         }
     }
 
@@ -467,6 +503,8 @@ impl EnumValue {
             EnumValue::RaycastFilterType(_) => EnumKind::RaycastFilterType,
             EnumValue::CameraType(_) => EnumKind::CameraType,
             EnumValue::FillDirection(_) => EnumKind::FillDirection,
+            EnumValue::TextXAlignment(_) => EnumKind::TextXAlignment,
+            EnumValue::TextYAlignment(_) => EnumKind::TextYAlignment,
         }
     }
 
@@ -583,6 +621,16 @@ impl EnumValue {
             EnumValue::FillDirection(d) => match d {
                 FillDirection::Vertical => "vertical",
                 FillDirection::Horizontal => "horizontal",
+            },
+            EnumValue::TextXAlignment(a) => match a {
+                TextXAlignment::Left => "left",
+                TextXAlignment::Center => "center",
+                TextXAlignment::Right => "right",
+            },
+            EnumValue::TextYAlignment(a) => match a {
+                TextYAlignment::Top => "top",
+                TextYAlignment::Center => "center",
+                TextYAlignment::Bottom => "bottom",
             },
         }
     }

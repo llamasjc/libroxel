@@ -74,6 +74,8 @@ pub(crate) enum SignalKind {
     HealthChanged(InstanceId),
     CharacterRemoving(InstanceId),
     Seated(InstanceId),
+    MouseEnter(InstanceId),
+    MouseLeave(InstanceId),
 }
 
 impl SignalKind {
@@ -585,6 +587,8 @@ fn instance_event(class: ClassKind, id: InstanceId, key: &str) -> Option<SignalK
         CHANGED => SignalKind::Changed(id),
         CHILD_ADDED => SignalKind::ChildAdded(id),
         MOUSE_BUTTON1_CLICK if class == ClassKind::TextButton => SignalKind::ButtonClicked(id),
+        MOUSE_ENTER if class.is_gui_object() => SignalKind::MouseEnter(id),
+        MOUSE_LEAVE if class.is_gui_object() => SignalKind::MouseLeave(id),
         ACTIVATED if class == ClassKind::TextButton => SignalKind::ButtonActivated(id),
         ACTIVATED if class == ClassKind::Tool => SignalKind::ToolActivated(id),
         DEACTIVATED if class == ClassKind::Tool => SignalKind::ToolDeactivated(id),
@@ -1924,6 +1928,13 @@ pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
             _ => {}
         }
     }
+    take_errors(lua)
+}
+
+/// Fires `MouseEnter` (or, when `entered` is false, `MouseLeave`) on a GUI object.
+pub(crate) fn mouse_over(lua: &Lua, object: InstanceId, entered: bool) -> Vec<ScriptError> {
+    let signal = if entered { SignalKind::MouseEnter(object) } else { SignalKind::MouseLeave(object) };
+    fire(lua, signal, || Ok(MultiValue::new()));
     take_errors(lua)
 }
 

@@ -17,6 +17,9 @@ pub type GuiHit = Option<(InstanceId, ClassKind)>;
 pub struct TextBoxes {
     pub found: Vec<(InstanceId, Rect)>,
     pub typing: Option<InstanceId>,
+    /// The innermost scrolling frame under the pointer, and how far it can
+    /// scroll (in pixels, on each axis), so the mouse wheel can move it.
+    pub scroll: Option<(InstanceId, egui::Vec2)>,
 }
 
 fn color(c: Color3, alpha: f32) -> Color32 {
@@ -58,10 +61,45 @@ fn rounding(tree: &InstanceTree, id: InstanceId, rect: Rect) -> f32 {
     })
 }
 
+/// The space inside `rect` left after a UI padding in `id`.
+fn padded(tree: &InstanceTree, id: InstanceId, rect: Rect) -> Rect {
+    let Some(pad) = child_of_class(tree, id, ClassKind::UIPadding) else { return rect };
+    let (w, h) = (rect.width(), rect.height());
+    let left = udim(tree, pad, Property::PaddingLeft).resolve(w);
+    let right = udim(tree, pad, Property::PaddingRight).resolve(w);
+    let top = udim(tree, pad, Property::PaddingTop).resolve(h);
+    let bottom = udim(tree, pad, Property::PaddingBottom).resolve(h);
+    let min = Pos2::new(rect.min.x + left, rect.min.y + top);
+    let max = Pos2::new((rect.max.x - right).max(min.x), (rect.max.y - bottom).max(min.y));
+    Rect::from_min_max(min, max)
+}
+
+fn by_layout_order(tree: &InstanceTree, items: &mut [(InstanceId, ClassKind)]) {
+    // Lowest LayoutOrder first; ties keep their order in the tree.
+    items.sort_by(|a, b| {
+        let order = |id| tree.get_number(id, Property::LayoutOrder).unwrap_or(0.0);
+        order(a.0).total_cmp(&order(b.0))
+    });
+}
+
 /// The visible GUI objects inside `parent`, in drawing order, each with its
-/// rectangle. A list layout inside `parent` lines them up instead of using
-/// their positions.
+/// rectangle. A list or grid layout inside `parent` lines them up instead of
+/// using their positions. Higher ZIndex is drawn later (on top).
 fn arrange(tree: &InstanceTree, parent: InstanceId, rect: Rect) -> Vec<(InstanceId, ClassKind, Rect)> {
+    let mut out = arrange_unsorted(tree, parent, rect);
+    out.sort_by(|a, b| {
+        let z = |id| tree.get_number(id, Property::ZIndex).unwrap_or(1.0);
+        z(a.0).total_cmp(&z(b.0))
+    });
+    out
+}
+
+fn arrange_unsorted(
+    tree: &InstanceTree,
+    parent: InstanceId,
+    rect: Rect,
+) -> Vec<(InstanceId, ClassKind, Rect)> {
+    let rect = padded(tree, parent, rect);
     let mut items: Vec<(InstanceId, ClassKind)> = tree
         .children(parent)
         .unwrap_or_default()
@@ -69,6 +107,30 @@ fn arrange(tree: &InstanceTree, parent: InstanceId, rect: Rect) -> Vec<(Instance
         .filter_map(|&c| Some((c, tree.class(c).ok()?)))
         .filter(|(c, class)| class.is_gui_object() && tree.get_bool(*c, Property::Visible) != Some(false))
         .collect();
+    if let Some(grid) = child_of_class(tree, parent, ClassKind::UIGridLayout) {
+        by_layout_order(tree, &mut items);
+        let parent_size = Vec2::new(rect.width(), rect.height());
+        let cell = udim2(tree, grid, Property::CellSize).resolve(parent_size);
+        let gap = udim2(tree, grid, Property::CellPadding).resolve(parent_size);
+        let (cw, ch) = (cell.x.max(0.0), cell.y.max(0.0));
+        let rows_first = tree.get_enum(grid, Property::FillDirection)
+            != Some(libroxel_instance::EnumValue::FillDirection(libroxel_instance::FillDirection::Vertical));
+        // How many cells fit along the direction being filled (at least one).
+        let fit =
+            |span: f32, size: f32, gap: f32| (((span + gap) / (size + gap).max(1.0)).floor() as usize).max(1);
+        let per_line = if rows_first { fit(rect.width(), cw, gap.x) } else { fit(rect.height(), ch, gap.y) };
+        return items
+            .into_iter()
+            .enumerate()
+            .map(|(i, (c, class))| {
+                let (line, along) = (i / per_line, i % per_line);
+                let (col, row) = if rows_first { (along, line) } else { (line, along) };
+                let min =
+                    Pos2::new(rect.min.x + col as f32 * (cw + gap.x), rect.min.y + row as f32 * (ch + gap.y));
+                (c, class, Rect::from_min_size(min, egui::vec2(cw, ch)))
+            })
+            .collect();
+    }
     let Some(list) = child_of_class(tree, parent, ClassKind::UIListLayout) else {
         return items.into_iter().map(|(c, class)| (c, class, layout(tree, c, rect))).collect();
     };
@@ -76,17 +138,13 @@ fn arrange(tree: &InstanceTree, parent: InstanceId, rect: Rect) -> Vec<(Instance
         == Some(libroxel_instance::EnumValue::FillDirection(libroxel_instance::FillDirection::Horizontal));
     let along = if horizontal { rect.width() } else { rect.height() };
     let gap = udim(tree, list, Property::Padding).resolve(along);
-    // Lowest LayoutOrder first; ties keep their order in the tree.
-    items.sort_by(|a, b| {
-        let order = |id| tree.get_number(id, Property::LayoutOrder).unwrap_or(0.0);
-        order(a.0).total_cmp(&order(b.0))
-    });
+    by_layout_order(tree, &mut items);
     let parent_size = Vec2::new(rect.width(), rect.height());
     let mut cursor = 0.0;
     items
         .into_iter()
         .map(|(c, class)| {
-            let size = udim2(tree, c, Property::GuiSize).resolve(parent_size);
+            let size = constrained(tree, c, udim2(tree, c, Property::GuiSize).resolve(parent_size));
             let size = egui::vec2(size.x.max(0.0), size.y.max(0.0));
             let min = if horizontal {
                 Pos2::new(rect.min.x + cursor, rect.min.y)
@@ -99,10 +157,29 @@ fn arrange(tree: &InstanceTree, parent: InstanceId, rect: Rect) -> Vec<(Instance
         .collect()
 }
 
+/// A GUI object's size after its UI scale and aspect ratio constraint.
+fn constrained(tree: &InstanceTree, id: InstanceId, size: Vec2) -> Vec2 {
+    let mut size = size;
+    if let Some(scale) = child_of_class(tree, id, ClassKind::UIScale) {
+        let k = tree.get_number(scale, Property::Scale).unwrap_or(1.0).max(0.0) as f32;
+        size = Vec2::new(size.x * k, size.y * k);
+    }
+    if let Some(aspect) = child_of_class(tree, id, ClassKind::UIAspectRatioConstraint) {
+        let ratio = tree.get_number(aspect, Property::AspectRatio).unwrap_or(1.0).max(0.001) as f32;
+        // Shrink whichever side is too long.
+        if size.x > size.y * ratio {
+            size.x = size.y * ratio;
+        } else {
+            size.y = size.x / ratio;
+        }
+    }
+    size
+}
+
 /// Where a GUI object sits inside its parent's rectangle.
 pub fn layout(tree: &InstanceTree, id: InstanceId, parent: Rect) -> Rect {
     let parent_size = Vec2::new(parent.width(), parent.height());
-    let size = udim2(tree, id, Property::GuiSize).resolve(parent_size);
+    let size = constrained(tree, id, udim2(tree, id, Property::GuiSize).resolve(parent_size));
     let pos = udim2(tree, id, Property::GuiPosition).resolve(parent_size);
     let anchor = vec2(tree, id, Property::AnchorPoint);
     let min = Pos2::new(parent.min.x + pos.x - anchor.x * size.x, parent.min.y + pos.y - anchor.y * size.y);
@@ -133,6 +210,110 @@ pub fn draw(
     hit
 }
 
+/// Draws `text` inside `rect` as a text object's properties say: aligned,
+/// wrapped or scaled to fit, and outlined when `stroke` is given.
+#[allow(clippy::too_many_arguments)]
+fn draw_text(
+    painter: &egui::Painter,
+    tree: &InstanceTree,
+    id: InstanceId,
+    rect: Rect,
+    text: String,
+    size: f32,
+    colour: Color32,
+    stroke: Option<(Color32, f32)>,
+) {
+    use libroxel_instance::{EnumValue, TextXAlignment, TextYAlignment};
+    let x = match tree.get_enum(id, Property::TextXAlignment) {
+        Some(EnumValue::TextXAlignment(a)) => a,
+        _ => TextXAlignment::Center,
+    };
+    let y = match tree.get_enum(id, Property::TextYAlignment) {
+        Some(EnumValue::TextYAlignment(a)) => a,
+        _ => TextYAlignment::Center,
+    };
+    let wrapped = tree.get_bool(id, Property::TextWrapped) == Some(true);
+    let scaled = tree.get_bool(id, Property::TextScaled) == Some(true);
+    let halign = match x {
+        TextXAlignment::Left => egui::Align::LEFT,
+        TextXAlignment::Center => egui::Align::Center,
+        TextXAlignment::Right => egui::Align::RIGHT,
+    };
+    let lay = |size: f32| {
+        let mut job = egui::text::LayoutJob::simple(
+            text.clone(),
+            FontId::proportional(size),
+            colour,
+            if wrapped || scaled { rect.width().max(1.0) } else { f32::INFINITY },
+        );
+        job.halign = halign;
+        painter.layout_job(job)
+    };
+    let galley = if scaled {
+        // The biggest size that fits, found by halving the gap a few times.
+        let (mut lo, mut hi) = (1.0f32, 100.0f32);
+        for _ in 0..8 {
+            let mid = (lo + hi) / 2.0;
+            let g = lay(mid);
+            if g.size().x <= rect.width() + 0.5 && g.size().y <= rect.height() + 0.5 {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        lay(lo)
+    } else {
+        lay(size)
+    };
+    let bounds = galley.rect;
+    let left = match x {
+        TextXAlignment::Left => rect.min.x,
+        TextXAlignment::Center => rect.center().x - bounds.width() / 2.0,
+        TextXAlignment::Right => rect.max.x - bounds.width(),
+    };
+    let top = match y {
+        TextYAlignment::Top => rect.min.y,
+        TextYAlignment::Center => rect.center().y - bounds.height() / 2.0,
+        TextYAlignment::Bottom => rect.max.y - bounds.height(),
+    };
+    let pos = Pos2::new(left, top) - bounds.min.to_vec2();
+    if let Some((stroke_colour, width)) = stroke {
+        let w = width.max(0.5);
+        for (dx, dy) in [
+            (-1.0, 0.0),
+            (1.0, 0.0),
+            (0.0, -1.0),
+            (0.0, 1.0),
+            (-0.7, -0.7),
+            (0.7, -0.7),
+            (-0.7, 0.7),
+            (0.7, 0.7),
+        ] {
+            painter.galley_with_override_text_color(
+                pos + egui::vec2(dx * w, dy * w),
+                galley.clone(),
+                stroke_colour,
+            );
+        }
+    }
+    painter.galley(pos, galley, colour);
+}
+
+/// A UI stroke inside `id`, if it has an enabled one: its colour and thickness.
+fn stroke_of(tree: &InstanceTree, id: InstanceId) -> Option<(Color32, f32)> {
+    let s = child_of_class(tree, id, ClassKind::UIStroke)?;
+    if tree.get_bool(s, Property::Enabled) == Some(false) {
+        return None;
+    }
+    let alpha = 1.0 - tree.get_number(s, Property::Transparency).unwrap_or(0.0) as f32;
+    let c = tree.get_color(s, Property::Color).unwrap_or(Color3::new(0.0, 0.0, 0.0));
+    Some((color(c, alpha), tree.get_number(s, Property::Thickness).unwrap_or(1.0).max(0.0) as f32))
+}
+
+fn is_text(class: ClassKind) -> bool {
+    matches!(class, ClassKind::TextLabel | ClassKind::TextButton | ClassKind::TextBox)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_children(
     painter: &egui::Painter,
@@ -146,7 +327,8 @@ fn draw_children(
 ) {
     for (child, class, r) in arrange(tree, parent, rect) {
         let round = rounding(tree, child, r);
-        let hovered = pointer.is_some_and(|p| r.contains(p));
+        // Only what shows (inside any clipping frame) can be pointed at.
+        let hovered = pointer.is_some_and(|p| r.contains(p) && painter.clip_rect().contains(p));
         if hovered {
             *hit = Some((child, class));
         }
@@ -159,27 +341,33 @@ fn draw_children(
         if alpha > 0.0 {
             painter.rect_filled(r, round, color(background, alpha));
         }
+        let border = tree.get_number(child, Property::BorderSizePixel).unwrap_or(0.0) as f32;
+        if border > 0.0 && alpha > 0.0 {
+            let c = tree.get_color(child, Property::BorderColor).unwrap_or(Color3::new(0.1, 0.16, 0.2));
+            painter.rect_stroke(r, round, Stroke::new(border, color(c, alpha)), StrokeKind::Outside);
+        }
+        let stroke = stroke_of(tree, child);
+        if let Some((c, width)) = stroke.filter(|_| !is_text(class)) {
+            painter.rect_stroke(r, round, Stroke::new(width, c), StrokeKind::Outside);
+        }
         let size = tree.get_number(child, Property::TextSize).unwrap_or(14.0).max(1.0) as f32;
         let text_color = tree.get_color(child, Property::TextColor).unwrap_or(Color3::new(0.1, 0.16, 0.2));
         let mut text = tree.get_string(child, Property::Text).unwrap_or_default().to_owned();
-        let mut text_alpha = 1.0;
+        let mut text_alpha = 1.0 - tree.get_number(child, Property::TextTransparency).unwrap_or(0.0) as f32;
         if class == ClassKind::TextBox {
             boxes.found.push((child, r));
             if boxes.typing == Some(child) {
                 text.clear();
             } else if text.is_empty() {
                 text = tree.get_string(child, Property::PlaceholderText).unwrap_or_default().to_owned();
-                text_alpha = 0.45;
+                text_alpha *= 0.45;
             }
         }
-        if !text.is_empty() {
-            painter.with_clip_rect(r.intersect(painter.clip_rect())).text(
-                r.center(),
-                Align2::CENTER_CENTER,
-                text,
-                FontId::proportional(size),
-                color(text_color, text_alpha),
-            );
+        let inner = padded(tree, child, r);
+        if !text.is_empty() && text_alpha > 0.0 {
+            let clipped = painter.with_clip_rect(r.intersect(painter.clip_rect()));
+            let outline = stroke.filter(|_| is_text(class));
+            draw_text(&clipped, tree, child, inner, text, size, color(text_color, text_alpha), outline);
         }
         if selected == Some(child) {
             painter.rect_stroke(
@@ -189,7 +377,35 @@ fn draw_children(
                 StrokeKind::Outside,
             );
         }
-        draw_children(painter, tree, child, r, pointer, selected, hit, boxes);
+        if class == ClassKind::ScrollingFrame {
+            // The children sit on a canvas that can be bigger than the frame, moved by scrolling.
+            let canvas = udim2(tree, child, Property::CanvasSize).resolve(Vec2::new(r.width(), r.height()));
+            let canvas = egui::vec2(canvas.x.max(r.width()), canvas.y.max(r.height()));
+            let max = canvas - r.size();
+            let at = vec2(tree, child, Property::CanvasPosition);
+            let at = egui::vec2(at.x.clamp(0.0, max.x), at.y.clamp(0.0, max.y));
+            if hovered {
+                boxes.scroll = Some((child, max));
+            }
+            let clip = painter.with_clip_rect(r.intersect(painter.clip_rect()));
+            let area = Rect::from_min_size(r.min - at, canvas);
+            draw_children(&clip, tree, child, area, pointer, selected, hit, boxes);
+            let bar = tree.get_number(child, Property::ScrollBarThickness).unwrap_or(12.0) as f32;
+            if max.y > 0.5 && bar > 0.0 {
+                let track = Rect::from_min_max(Pos2::new(r.max.x - bar, r.min.y), r.max);
+                let thumb_h = (r.height() * r.height() / canvas.y).max(bar);
+                let thumb_y = track.min.y + (track.height() - thumb_h) * (at.y / max.y);
+                let thumb = Rect::from_min_size(Pos2::new(track.min.x, thumb_y), egui::vec2(bar, thumb_h));
+                painter.rect_filled(thumb.shrink(2.0), bar / 2.0, Color32::from_black_alpha(120));
+            }
+            continue;
+        }
+        if tree.get_bool(child, Property::ClipsDescendants) == Some(true) {
+            let clip = painter.with_clip_rect(r.intersect(painter.clip_rect()));
+            draw_children(&clip, tree, child, r, pointer, selected, hit, boxes);
+        } else {
+            draw_children(painter, tree, child, r, pointer, selected, hit, boxes);
+        }
     }
 }
 
@@ -359,4 +575,58 @@ pub fn hotbar(ui: &egui::Ui, tree: &InstanceTree, tools: &[(InstanceId, bool)]) 
         rects.push((i, rect));
     }
     rects
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gui(tree: &mut InstanceTree, class: ClassKind, parent: InstanceId, name: &str) -> InstanceId {
+        let id = tree.create(class, name).unwrap();
+        tree.set_parent(id, Some(parent)).unwrap();
+        id
+    }
+
+    fn set(tree: &mut InstanceTree, id: InstanceId, p: Property, v: PropertyValue) {
+        tree.set(id, p, v).unwrap();
+    }
+
+    #[test]
+    fn grids_padding_aspect_and_z_order() {
+        let mut tree = InstanceTree::new();
+        let root = tree.root();
+        let screen = gui(&mut tree, ClassKind::ScreenGui, root, "Screen");
+        let frame = gui(&mut tree, ClassKind::Frame, screen, "Frame");
+        let pad = gui(&mut tree, ClassKind::UIPadding, frame, "UIPadding");
+        set(&mut tree, pad, Property::PaddingLeft, PropertyValue::UDim(UDim::new(0.0, 10.0)));
+        set(&mut tree, pad, Property::PaddingTop, PropertyValue::UDim(UDim::new(0.1, 0.0)));
+        let grid = gui(&mut tree, ClassKind::UIGridLayout, frame, "UIGridLayout");
+        set(&mut tree, grid, Property::CellSize, PropertyValue::UDim2(UDim2::new(0.0, 40.0, 0.0, 30.0)));
+        let cells: Vec<_> =
+            (0..5).map(|i| gui(&mut tree, ClassKind::Frame, frame, &format!("Cell{i}"))).collect();
+        // Put the last one first.
+        set(&mut tree, cells[4], Property::LayoutOrder, PropertyValue::Number(-1.0));
+        let area = Rect::from_min_size(Pos2::ZERO, egui::vec2(140.0, 200.0));
+        let placed = arrange(&tree, frame, area);
+        let at = |id| placed.iter().find(|(c, _, _)| *c == id).unwrap().2;
+        // 130 wide after padding: 40 + 5 + 40 + 5 + 40 fits three to a row.
+        assert_eq!(at(cells[4]).min, Pos2::new(10.0, 20.0));
+        assert_eq!(at(cells[0]).min, Pos2::new(55.0, 20.0));
+        assert_eq!(at(cells[2]).min, Pos2::new(10.0, 55.0));
+        assert_eq!(at(cells[2]).size(), egui::vec2(40.0, 30.0));
+
+        let square = gui(&mut tree, ClassKind::Frame, screen, "Square");
+        set(&mut tree, square, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 300.0, 0.0, 100.0)));
+        gui(&mut tree, ClassKind::UIAspectRatioConstraint, square, "Aspect");
+        let big = gui(&mut tree, ClassKind::Frame, screen, "Big");
+        set(&mut tree, big, Property::ZIndex, PropertyValue::Number(5.0));
+        let scale = gui(&mut tree, ClassKind::UIScale, big, "UIScale");
+        set(&mut tree, scale, Property::Scale, PropertyValue::Number(2.0));
+        let placed = arrange(&tree, screen, Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)));
+        let names: Vec<_> = placed.iter().map(|(c, _, _)| tree.name(*c).unwrap().to_owned()).collect();
+        assert_eq!(names.last().unwrap(), "Big", "highest ZIndex is drawn last");
+        let rect = |name: &str| placed.iter().find(|(c, _, _)| tree.name(*c) == Ok(name)).unwrap().2;
+        assert_eq!(rect("Square").size(), egui::vec2(100.0, 100.0));
+        assert_eq!(rect("Big").size(), egui::vec2(200.0, 200.0));
+    }
 }

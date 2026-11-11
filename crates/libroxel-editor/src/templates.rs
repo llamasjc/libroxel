@@ -554,6 +554,16 @@ button.MouseButton1Click:Connect(function()
 	TweenService:Create(Lighting, TweenInfo.new(2, Enum.EasingStyle.Sine), { ClockTime = goal }):Play()
 	button.Text = if night then "Make it day" else "Make it night"
 end)
+-- The button lights up while the pointer is over it.
+local stroke = button.UIStroke
+button.MouseEnter:Connect(function()
+	stroke.Thickness = 3
+	stroke.Color = Color3.fromRGB(255, 215, 60)
+end)
+button.MouseLeave:Connect(function()
+	stroke.Thickness = 1
+	stroke.Color = Color3.fromRGB(255, 255, 255)
+end)
 
 -- Messages from the game's scripts pop up for a few seconds.
 local message = hud.Message
@@ -810,6 +820,8 @@ pub fn sample_obby() -> InstanceTree {
     set(&mut tree, button, Property::TextColor, PropertyValue::Color3(white));
     set(&mut tree, button, Property::TextSize, PropertyValue::Number(18.0));
     set(&mut tree, button, Property::Text, PropertyValue::String("Make it night".into()));
+    let stroke = add(&mut tree, button, ClassKind::UIStroke, "UIStroke");
+    set(&mut tree, stroke, Property::Transparency, PropertyValue::Number(0.2));
     let message = add(&mut tree, hud, ClassKind::TextLabel, "Message");
     set(&mut tree, message, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.5, 0.0, 0.0, 60.0)));
     set(&mut tree, message, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 360.0, 0.0, 36.0)));
@@ -845,9 +857,16 @@ pub fn sample_obby() -> InstanceTree {
     set(&mut tree, health_label, Property::TextColor, PropertyValue::Color3(white));
     set(&mut tree, health_label, Property::TextSize, PropertyValue::Number(15.0));
     set(&mut tree, health_label, Property::Text, PropertyValue::String("Health: 100".into()));
-    let help = add(&mut tree, hud, ClassKind::Frame, "Help");
+    // The help scrolls: it is shorter than its lines.
+    let help = add(&mut tree, hud, ClassKind::ScrollingFrame, "Help");
     set(&mut tree, help, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.0, 12.0, 0.5, 0.0)));
-    set(&mut tree, help, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 260.0, 0.0, 258.0)));
+    set(&mut tree, help, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 270.0, 0.0, 160.0)));
+    set(&mut tree, help, Property::CanvasSize, PropertyValue::UDim2(UDim2::new(0.0, 0.0, 0.0, 250.0)));
+    set(&mut tree, help, Property::ScrollBarThickness, PropertyValue::Number(6.0));
+    let help_pad = add(&mut tree, help, ClassKind::UIPadding, "UIPadding");
+    for side in [Property::PaddingLeft, Property::PaddingRight, Property::PaddingTop] {
+        set(&mut tree, help_pad, side, PropertyValue::UDim(UDim::new(0.0, 6.0)));
+    }
     set(&mut tree, help, Property::AnchorPoint, PropertyValue::Vec2(Vec2::new(0.0, 0.5)));
     set(&mut tree, help, Property::BackgroundColor, PropertyValue::Color3(dark));
     set(&mut tree, help, Property::BackgroundTransparency, PropertyValue::Number(0.3));
@@ -872,6 +891,8 @@ pub fn sample_obby() -> InstanceTree {
     {
         let label = add(&mut tree, help, ClassKind::TextLabel, &format!("Line{}", i + 1));
         set(&mut tree, label, Property::LayoutOrder, PropertyValue::Number(i as f64));
+        let left = libroxel_instance::EnumValue::TextXAlignment(libroxel_instance::TextXAlignment::Left);
+        set(&mut tree, label, Property::TextXAlignment, PropertyValue::Enum(left));
         let height = if line.is_empty() { 2.0 } else { 20.0 };
         set(&mut tree, label, Property::GuiSize, PropertyValue::UDim2(UDim2::new(1.0, 0.0, 0.0, height)));
         set(&mut tree, label, Property::BackgroundTransparency, PropertyValue::Number(1.0));
@@ -1349,6 +1370,13 @@ mod tests {
         }
         assert_eq!(get(&session, lighting, Property::ClockTime), PropertyValue::Number(21.0));
         assert_eq!(get(&session, button, Property::Text), PropertyValue::String("Make it day".into()));
+
+        // Pointing at the button thickens its outline.
+        let stroke = session.runtime().tree().borrow().find_first_child(button, "UIStroke").unwrap().unwrap();
+        session.gui_hover(Some(button));
+        assert_eq!(get(&session, stroke, Property::Thickness), PropertyValue::Number(3.0));
+        session.gui_hover(None);
+        assert_eq!(get(&session, stroke, Property::Thickness), PropertyValue::Number(1.0));
 
         assert!(session.click_part(door));
         for _ in 0..60 {

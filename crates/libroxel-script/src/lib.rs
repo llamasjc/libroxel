@@ -180,6 +180,11 @@ impl ScriptRuntime {
     }
 
     /// Fires a text button's click events, as if the player clicked it.
+    /// Fires a GUI object's `MouseEnter` (or `MouseLeave` when `entered` is false).
+    pub fn mouse_over(&self, object: InstanceId, entered: bool) -> Vec<ScriptError> {
+        bindings::mouse_over(&self.lua, object, entered)
+    }
+
     pub fn click_button(&self, button: InstanceId) -> Vec<ScriptError> {
         bindings::click_button(&self.lua, button)
     }

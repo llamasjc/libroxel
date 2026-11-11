@@ -23,7 +23,7 @@ mod tree;
 
 pub use enums::{
     CameraType, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection, KeyCode, Material,
-    PartShape, RaycastFilterType, UserInputType,
+    PartShape, RaycastFilterType, TextXAlignment, TextYAlignment, UserInputType,
 };
 pub use math::{CFrame, Color3, Rotation, UDim, UDim2, Vec2, Vec3};
 pub use property::{Property, PropertyValue};
@@ -169,6 +169,18 @@ pub enum ClassKind {
     Sparkles,
     /// Draws an outline and a tint over its Adornee (or its parent).
     Highlight,
+    /// A frame whose inside (its canvas) can be bigger than it and scrolled.
+    ScrollingFrame,
+    /// Inside a GUI object: outlines it, or its text.
+    UIStroke,
+    /// Inside a GUI object: keeps what's inside it away from its edges.
+    UIPadding,
+    /// Inside a GUI object: lines its other children up in a grid of cells.
+    UIGridLayout,
+    /// Inside a GUI object: keeps its width / height at AspectRatio.
+    UIAspectRatioConstraint,
+    /// Inside a GUI object: makes it bigger or smaller by Scale.
+    UIScale,
 }
 
 impl ClassKind {
@@ -241,6 +253,12 @@ impl ClassKind {
         ClassKind::Smoke,
         ClassKind::Sparkles,
         ClassKind::Highlight,
+        ClassKind::ScrollingFrame,
+        ClassKind::UIStroke,
+        ClassKind::UIPadding,
+        ClassKind::UIGridLayout,
+        ClassKind::UIAspectRatioConstraint,
+        ClassKind::UIScale,
     ];
 
     /// The services every tree has under its root, in order. They can't be
@@ -295,9 +313,11 @@ impl ClassKind {
             // Workspace behaves like a Model that can't be removed.
             ClassKind::Workspace => Some(ClassKind::Model),
             ClassKind::SpawnLocation | ClassKind::Seat | ClassKind::VehicleSeat => Some(ClassKind::Part),
-            ClassKind::Frame | ClassKind::TextLabel | ClassKind::TextButton | ClassKind::TextBox => {
-                Some(ClassKind::GuiObject)
-            }
+            ClassKind::Frame
+            | ClassKind::TextLabel
+            | ClassKind::TextButton
+            | ClassKind::TextBox
+            | ClassKind::ScrollingFrame => Some(ClassKind::GuiObject),
             _ => None,
         }
     }
@@ -496,7 +516,46 @@ impl ClassKind {
             Property::BackgroundTransparency,
             Property::Visible,
             Property::LayoutOrder,
+            Property::ZIndex,
+            Property::BorderSizePixel,
+            Property::BorderColor,
+            Property::ClipsDescendants,
         ];
+        const SCROLLING: &[Property] = &[
+            Property::Name,
+            Property::GuiPosition,
+            Property::GuiSize,
+            Property::AnchorPoint,
+            Property::BackgroundColor,
+            Property::BackgroundTransparency,
+            Property::Visible,
+            Property::LayoutOrder,
+            Property::ZIndex,
+            Property::BorderSizePixel,
+            Property::BorderColor,
+            Property::ClipsDescendants,
+            Property::CanvasSize,
+            Property::CanvasPosition,
+            Property::ScrollBarThickness,
+        ];
+        const STROKE: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::Color,
+            Property::Thickness,
+            Property::Transparency,
+        ];
+        const PADDING: &[Property] = &[
+            Property::Name,
+            Property::PaddingLeft,
+            Property::PaddingRight,
+            Property::PaddingTop,
+            Property::PaddingBottom,
+        ];
+        const GRID: &[Property] =
+            &[Property::Name, Property::CellSize, Property::CellPadding, Property::FillDirection];
+        const ASPECT: &[Property] = &[Property::Name, Property::AspectRatio];
+        const SCALE: &[Property] = &[Property::Name, Property::Scale];
         const TEXT: &[Property] = &[
             Property::Name,
             Property::GuiPosition,
@@ -509,6 +568,15 @@ impl ClassKind {
             Property::TextColor,
             Property::TextSize,
             Property::LayoutOrder,
+            Property::ZIndex,
+            Property::BorderSizePixel,
+            Property::BorderColor,
+            Property::ClipsDescendants,
+            Property::TextTransparency,
+            Property::TextXAlignment,
+            Property::TextYAlignment,
+            Property::TextWrapped,
+            Property::TextScaled,
         ];
         const TEXT_BOX: &[Property] = &[
             Property::Name,
@@ -524,6 +592,15 @@ impl ClassKind {
             Property::LayoutOrder,
             Property::PlaceholderText,
             Property::ClearTextOnFocus,
+            Property::ZIndex,
+            Property::BorderSizePixel,
+            Property::BorderColor,
+            Property::ClipsDescendants,
+            Property::TextTransparency,
+            Property::TextXAlignment,
+            Property::TextYAlignment,
+            Property::TextWrapped,
+            Property::TextScaled,
         ];
         const CAMERA: &[Property] = &[
             Property::Name,
@@ -633,6 +710,12 @@ impl ClassKind {
             ClassKind::Smoke => SMOKE,
             ClassKind::Sparkles => SPARKLES,
             ClassKind::Highlight => HIGHLIGHT,
+            ClassKind::ScrollingFrame => SCROLLING,
+            ClassKind::UIStroke => STROKE,
+            ClassKind::UIPadding => PADDING,
+            ClassKind::UIGridLayout => GRID,
+            ClassKind::UIAspectRatioConstraint => ASPECT,
+            ClassKind::UIScale => SCALE,
             _ => COMMON,
         }
     }
@@ -704,7 +787,33 @@ impl ClassKind {
             }),
             Property::Angle => PropertyValue::Number(90.0),
             Property::CornerRadius => PropertyValue::UDim(UDim::new(0.0, 8.0)),
-            Property::FillDirection => PropertyValue::Enum(EnumValue::FillDirection(FillDirection::Vertical)),
+            Property::FillDirection => PropertyValue::Enum(EnumValue::FillDirection(match self {
+                ClassKind::UIGridLayout => FillDirection::Horizontal,
+                _ => FillDirection::Vertical,
+            })),
+            Property::ZIndex => PropertyValue::Number(1.0),
+            Property::BorderSizePixel => PropertyValue::Number(0.0),
+            Property::BorderColor => PropertyValue::Color3(Color3::from_rgb8(27, 42, 53)),
+            Property::ClipsDescendants | Property::TextWrapped | Property::TextScaled => {
+                PropertyValue::Bool(false)
+            }
+            Property::TextTransparency => PropertyValue::Number(0.0),
+            Property::TextXAlignment => {
+                PropertyValue::Enum(EnumValue::TextXAlignment(TextXAlignment::Center))
+            }
+            Property::TextYAlignment => {
+                PropertyValue::Enum(EnumValue::TextYAlignment(TextYAlignment::Center))
+            }
+            Property::CanvasSize => PropertyValue::UDim2(UDim2::new(0.0, 0.0, 2.0, 0.0)),
+            Property::CanvasPosition => PropertyValue::Vec2(Vec2::ZERO),
+            Property::ScrollBarThickness => PropertyValue::Number(12.0),
+            Property::PaddingLeft
+            | Property::PaddingRight
+            | Property::PaddingTop
+            | Property::PaddingBottom => PropertyValue::UDim(UDim::default()),
+            Property::CellSize => PropertyValue::UDim2(UDim2::new(0.0, 100.0, 0.0, 100.0)),
+            Property::CellPadding => PropertyValue::UDim2(UDim2::new(0.0, 5.0, 0.0, 5.0)),
+            Property::AspectRatio | Property::Scale => PropertyValue::Number(1.0),
             Property::Padding => PropertyValue::UDim(UDim::default()),
             Property::BlastRadius => PropertyValue::Number(4.0),
             Property::BlastPressure => PropertyValue::Number(500_000.0),
@@ -749,7 +858,10 @@ impl ClassKind {
             Property::FreeLength => PropertyValue::Number(1.0),
             Property::Stiffness => PropertyValue::Number(100.0),
             Property::Damping => PropertyValue::Number(5.0),
-            Property::Thickness => PropertyValue::Number(0.1),
+            Property::Thickness => PropertyValue::Number(match self {
+                ClassKind::UIStroke => 1.0,
+                _ => 0.1,
+            }),
             Property::Velocity => PropertyValue::Vec3(Vec3::new(0.0, 2.0, 0.0)),
             Property::BodyMaxForce => PropertyValue::Vec3(Vec3::new(4000.0, 4000.0, 4000.0)),
             Property::BodyPower => PropertyValue::Number(match self {
@@ -785,6 +897,7 @@ impl ClassKind {
                 ClassKind::ParticleEmitter => Color3::WHITE,
                 ClassKind::Fire => Color3::from_rgb8(236, 139, 70),
                 ClassKind::Smoke => Color3::WHITE,
+                ClassKind::UIStroke => Color3::new(0.0, 0.0, 0.0),
                 ClassKind::SpringConstraint => Color3::from_rgb8(200, 200, 210),
                 _ => Color3::MEDIUM_GREY,
             }),
@@ -868,6 +981,12 @@ impl ClassKind {
             ClassKind::Smoke => "smoke",
             ClassKind::Sparkles => "sparkles",
             ClassKind::Highlight => "highlight",
+            ClassKind::ScrollingFrame => "scrolling_frame",
+            ClassKind::UIStroke => "ui_stroke",
+            ClassKind::UIPadding => "ui_padding",
+            ClassKind::UIGridLayout => "ui_grid_layout",
+            ClassKind::UIAspectRatioConstraint => "ui_aspect_ratio_constraint",
+            ClassKind::UIScale => "ui_scale",
         }
     }
 

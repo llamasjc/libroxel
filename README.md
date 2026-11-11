@@ -93,7 +93,10 @@ The first build compiles Bevy and takes a while. After that it is quick.
   around it; they show best at night.
 - **Text boxes and layouts:** a `TextBox` can be typed into while playing.
   A `UICorner` inside a GUI object rounds its corners, and a `UIListLayout`
-  inside a frame stacks its other children in a column or row.
+  inside a frame stacks its other children in a column or row. A
+  `ScrollingFrame` scrolls with the mouse wheel, and `UIGridLayout`,
+  `UIPadding`, `UIStroke`, `UIScale` and `UIAspectRatioConstraint` can be
+  inserted into the selected GUI object.
 - **Attributes and tags:** the Properties panel lists the selection's
   attributes (numbers, text, booleans, vectors, colours) and tags, which you
   can add, change and remove. Both are saved with the game.
@@ -131,7 +134,9 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `LocalScript`, `ModuleScript`, `Humanoid`, `IntValue`, `NumberValue`,
   `StringValue`, `BoolValue`, `ClickDetector`, `ProximityPrompt`,
   `RemoteEvent`, `BindableEvent`, `RemoteFunction`, `BindableFunction`, `ObjectValue`, `Vector3Value`, `Color3Value`, `ScreenGui`, `Frame`, `TextLabel`,
-  `TextButton`, `TextBox`, `UICorner`, `UIListLayout`, `BillboardGui`,
+  `TextButton`, `TextBox`, `ScrollingFrame`, `UICorner`, `UIListLayout`,
+  `UIGridLayout`, `UIPadding`, `UIStroke`, `UIScale`,
+  `UIAspectRatioConstraint`, `BillboardGui`,
   `Tool`, `PointLight`, `SpotLight`, `Explosion`, `Camera`, plus the built-in `Workspace`,
   `Players` (with one `Player` each, holding a `PlayerGui` and a
   `Backpack`), `ReplicatedStorage`, `ServerStorage`, `StarterPlayer`, `ServerScriptService`, `StarterGui`,
@@ -175,6 +180,15 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
 - **Layout helpers:** `UICorner.CornerRadius` and `UIListLayout.Padding` are
   `UDim`s (`UDim.new(scale, offset)`); `UIListLayout.FillDirection` is
   `Vertical` or `Horizontal`, and items go in `LayoutOrder` order.
+  `UIGridLayout` has `CellSize`, `CellPadding` (`UDim2`s) and
+  `FillDirection`. `UIPadding` has `PaddingLeft`, `PaddingRight`,
+  `PaddingTop` and `PaddingBottom`. `UIStroke` outlines its parent (or its
+  text, for a text object) with `Color`, `Thickness`, `Transparency` and
+  `Enabled`. `UIScale.Scale` grows its parent and `UIAspectRatioConstraint`
+  keeps its `AspectRatio` (width over height).
+- **Scrolling frames:** `ScrollingFrame` has `CanvasSize` (`UDim2`),
+  `CanvasPosition` (`Vector2`, changed by the wheel) and
+  `ScrollBarThickness`; its children are placed on the canvas and clipped.
 - **Lights:** `PointLight` and `SpotLight` have `Enabled`, `Brightness`,
   `Color` and `Range`; spot lights also have `Angle`.
 - **Floating text:** `BillboardGui` has `Size` (`UDim2`, scale in studs plus
@@ -201,8 +215,12 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
 - **GUIs:** `ScreenGui` (`Enabled`, `ResetOnSpawn`), and `Frame`,
   `TextLabel` and `TextButton` with `Position` and `Size` (`UDim2`),
   `AnchorPoint`, `BackgroundColor3`, `BackgroundTransparency`, `Visible`,
-  `Text`, `TextColor3` and `TextSize`. Buttons fire `MouseButton1Click` and
-  `Activated`. `LocalScript`s inside a GUI run for the player, and
+  `Text`, `TextColor3` and `TextSize`, plus `ZIndex` (higher draws on
+  top), `BorderSizePixel`, `BorderColor3` and `ClipsDescendants`. Text
+  objects also have `TextTransparency`, `TextXAlignment` (`Left`, `Center`,
+  `Right`), `TextYAlignment` (`Top`, `Center`, `Bottom`), `TextWrapped` and
+  `TextScaled`. Buttons fire `MouseButton1Click` and `Activated`, and every
+  GUI object fires `MouseEnter` and `MouseLeave`. `LocalScript`s inside a GUI run for the player, and
   `Players.LocalPlayer` is that player.
 - **Clicking parts:** a `ClickDetector` inside a part fires
   `MouseClick(player)` when the player clicks the part from within

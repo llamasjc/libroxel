@@ -401,7 +401,8 @@ impl InstanceTree {
                     | Property::LightEmission
                     | Property::Opacity
                     | Property::FillTransparency
-                    | Property::OutlineTransparency,
+                    | Property::OutlineTransparency
+                    | Property::TextTransparency,
                     PropertyValue::Number(t),
                 ) => PropertyValue::Number(t.clamp(0.0, 1.0)),
                 (Property::NumberValue, PropertyValue::Number(n)) if class == ClassKind::IntValue => {
@@ -437,10 +438,16 @@ impl InstanceTree {
                     | Property::Rate
                     | Property::EffectSize
                     | Property::Drag
-                    | Property::Heat,
+                    | Property::Heat
+                    | Property::BorderSizePixel
+                    | Property::ScrollBarThickness
+                    | Property::AspectRatio
+                    | Property::Scale,
                     PropertyValue::Number(n),
                 ) => PropertyValue::Number(n.max(0.0)),
-                (Property::LayoutOrder, PropertyValue::Number(n)) => PropertyValue::Number(n.round()),
+                (Property::LayoutOrder | Property::ZIndex, PropertyValue::Number(n)) => {
+                    PropertyValue::Number(n.round())
+                }
                 (Property::Throttle | Property::Steer, PropertyValue::Number(n)) => {
                     PropertyValue::Number(n.round().clamp(-1.0, 1.0))
                 }

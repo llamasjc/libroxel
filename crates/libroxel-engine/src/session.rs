@@ -72,6 +72,8 @@ pub struct PlaySession {
     blasts: Vec<Blast>,
     /// Particle bursts scripts asked for, for the renderer to send out.
     emits: Vec<(InstanceId, u32)>,
+    /// The GUI objects under the pointer, outermost first.
+    hovered: Vec<InstanceId>,
     /// The workspace camera the view follows or obeys.
     camera: Option<InstanceId>,
     /// Walks that scripts started with `MoveTo`, and humanoids that died.
@@ -148,6 +150,7 @@ impl PlaySession {
             exploded: Default::default(),
             blasts: Vec::new(),
             emits: Vec::new(),
+            hovered: Vec::new(),
             camera: None,
             npcs: Default::default(),
             welds: Default::default(),
@@ -428,6 +431,33 @@ impl PlaySession {
     pub fn click_button(&mut self, button: InstanceId) {
         let errors = self.runtime.click_button(button);
         self.collect(errors);
+    }
+
+    /// The pointer is over `object` (the topmost GUI object under it), or
+    /// over no GUI. Fires `MouseLeave` on what it left and `MouseEnter` on
+    /// what it moved onto, counting the GUI objects `object` is inside.
+    pub fn gui_hover(&mut self, object: Option<InstanceId>) {
+        let now: Vec<InstanceId> = {
+            let shared = self.runtime.tree().clone();
+            let tree = shared.borrow();
+            let mut chain = Vec::new();
+            let mut current = object;
+            while let Some(id) = current.filter(|id| tree.class(*id).is_ok_and(|c| c.is_gui_object())) {
+                chain.push(id);
+                current = tree.parent(id).ok().flatten();
+            }
+            chain.reverse();
+            chain
+        };
+        let before = std::mem::replace(&mut self.hovered, now.clone());
+        for id in before.iter().rev().filter(|id| !now.contains(id)) {
+            let errors = self.runtime.mouse_over(*id, false);
+            self.collect(errors);
+        }
+        for id in now.iter().filter(|id| !before.contains(id)) {
+            let errors = self.runtime.mouse_over(*id, true);
+            self.collect(errors);
+        }
     }
 
     /// The player clicked a part. Fires its click detector if it has one and

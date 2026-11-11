@@ -659,3 +659,42 @@ fn starter_player_sets_speeds_and_the_fall_height_is_the_workspaces() {
     }
     assert!(tree.borrow().is_destroyed(rock).unwrap_or(true), "the rock fell below -20 and was removed");
 }
+
+#[test]
+fn the_pointer_entering_and_leaving_gui_objects_fires_events() {
+    let mut tree = world();
+    let starter = tree.service(ClassKind::StarterGui).unwrap();
+    let screen = tree.create(ClassKind::ScreenGui, "Menu").unwrap();
+    tree.set_parent(screen, Some(starter)).unwrap();
+    let panel = tree.create(ClassKind::Frame, "Panel").unwrap();
+    tree.set_parent(panel, Some(screen)).unwrap();
+    let button = tree.create(ClassKind::TextButton, "Play").unwrap();
+    tree.set_parent(button, Some(panel)).unwrap();
+    let local = tree.create(ClassKind::LocalScript, "Hover").unwrap();
+    tree.set_parent(local, Some(screen)).unwrap();
+    let source = r#"
+        local panel = script.Parent.Panel
+        for _, g in { panel, panel.Play } do
+            g.MouseEnter:Connect(function() print("enter " .. g.Name) end)
+            g.MouseLeave:Connect(function() print("leave " .. g.Name) end)
+        end
+    "#;
+    tree.set(local, Property::Source, PropertyValue::String(source.into())).unwrap();
+    let mut session = start_on(tree, true).unwrap();
+    session.step(DT, CharacterInput::default());
+    let gui = session.player_gui().unwrap();
+    let (panel, button) = {
+        let t = session.runtime().tree().clone();
+        let t = t.borrow();
+        let menu = t.find_first_child(gui, "Menu").unwrap().unwrap();
+        let panel = t.find_first_child(menu, "Panel").unwrap().unwrap();
+        (panel, t.find_first_child(panel, "Play").unwrap().unwrap())
+    };
+    session.take_log();
+    session.gui_hover(Some(button));
+    session.gui_hover(Some(button));
+    session.gui_hover(Some(panel));
+    session.gui_hover(None);
+    let printed: Vec<_> = session.take_log().into_iter().map(|l| l.text).collect();
+    assert_eq!(printed, ["enter Panel", "enter Play", "leave Play", "leave Panel"]);
+}

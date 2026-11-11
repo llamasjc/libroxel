@@ -213,6 +213,46 @@ pub enum Property {
     OutlineColor,
     /// On a highlight: how see-through the outline is.
     OutlineTransparency,
+    /// On a GUI object: higher ones are drawn over lower ones beside them.
+    ZIndex,
+    /// On a GUI object: how thick its border is, in pixels.
+    BorderSizePixel,
+    /// On a GUI object: its border's colour.
+    BorderColor,
+    /// On a GUI object: hides the parts of what's inside that stick out.
+    ClipsDescendants,
+    /// On a text object: how see-through the text is.
+    TextTransparency,
+    /// On a text object: left, centre or right.
+    TextXAlignment,
+    /// On a text object: top, centre or bottom.
+    TextYAlignment,
+    /// On a text object: long text goes onto more lines.
+    TextWrapped,
+    /// On a text object: the text is made as big as fits.
+    TextScaled,
+    /// On a scrolling frame: how big its inside is.
+    CanvasSize,
+    /// On a scrolling frame: how far it is scrolled, in pixels.
+    CanvasPosition,
+    /// On a scrolling frame: how wide its scroll bar is, in pixels.
+    ScrollBarThickness,
+    /// On a UI padding: the space on the left.
+    PaddingLeft,
+    /// On a UI padding: the space on the right.
+    PaddingRight,
+    /// On a UI padding: the space at the top.
+    PaddingTop,
+    /// On a UI padding: the space at the bottom.
+    PaddingBottom,
+    /// On a grid layout: how big each cell is.
+    CellSize,
+    /// On a grid layout: the space between cells.
+    CellPadding,
+    /// On an aspect ratio constraint: width divided by height.
+    AspectRatio,
+    /// On a UI scale: how much bigger (or smaller, below 1).
+    Scale,
 }
 
 /// The value of a property.
@@ -275,6 +315,22 @@ impl Property {
             | Property::FillColor
             | Property::OutlineColor => "Color3",
             Property::Adornee => "ref",
+            Property::BorderColor => "Color3",
+            Property::ClipsDescendants | Property::TextWrapped | Property::TextScaled => "bool",
+            Property::TextXAlignment => EnumKind::TextXAlignment.kind_name(),
+            Property::TextYAlignment => EnumKind::TextYAlignment.kind_name(),
+            Property::CanvasSize | Property::CellSize | Property::CellPadding => "UDim2",
+            Property::CanvasPosition => "Vec2",
+            Property::PaddingLeft
+            | Property::PaddingRight
+            | Property::PaddingTop
+            | Property::PaddingBottom => "UDim",
+            Property::ZIndex
+            | Property::BorderSizePixel
+            | Property::TextTransparency
+            | Property::ScrollBarThickness
+            | Property::AspectRatio
+            | Property::Scale => "number",
             Property::Rate
             | Property::EffectSize
             | Property::Drag
@@ -369,6 +425,8 @@ impl Property {
             Property::KeyboardKeyCode => Some(EnumKind::KeyCode),
             Property::CameraType => Some(EnumKind::CameraType),
             Property::FillDirection => Some(EnumKind::FillDirection),
+            Property::TextXAlignment => Some(EnumKind::TextXAlignment),
+            Property::TextYAlignment => Some(EnumKind::TextYAlignment),
             _ => None,
         }
     }
@@ -492,6 +550,26 @@ impl Property {
         Property::FillTransparency,
         Property::OutlineColor,
         Property::OutlineTransparency,
+        Property::ZIndex,
+        Property::BorderSizePixel,
+        Property::BorderColor,
+        Property::ClipsDescendants,
+        Property::TextTransparency,
+        Property::TextXAlignment,
+        Property::TextYAlignment,
+        Property::TextWrapped,
+        Property::TextScaled,
+        Property::CanvasSize,
+        Property::CanvasPosition,
+        Property::ScrollBarThickness,
+        Property::PaddingLeft,
+        Property::PaddingRight,
+        Property::PaddingTop,
+        Property::PaddingBottom,
+        Property::CellSize,
+        Property::CellPadding,
+        Property::AspectRatio,
+        Property::Scale,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -614,6 +692,26 @@ impl Property {
             Property::FillTransparency => "fill_transparency",
             Property::OutlineColor => "outline_color",
             Property::OutlineTransparency => "outline_transparency",
+            Property::ZIndex => "z_index",
+            Property::BorderSizePixel => "border_size_pixel",
+            Property::BorderColor => "border_color",
+            Property::ClipsDescendants => "clips_descendants",
+            Property::TextTransparency => "text_transparency",
+            Property::TextXAlignment => "text_x_alignment",
+            Property::TextYAlignment => "text_y_alignment",
+            Property::TextWrapped => "text_wrapped",
+            Property::TextScaled => "text_scaled",
+            Property::CanvasSize => "canvas_size",
+            Property::CanvasPosition => "canvas_position",
+            Property::ScrollBarThickness => "scroll_bar_thickness",
+            Property::PaddingLeft => "padding_left",
+            Property::PaddingRight => "padding_right",
+            Property::PaddingTop => "padding_top",
+            Property::PaddingBottom => "padding_bottom",
+            Property::CellSize => "cell_size",
+            Property::CellPadding => "cell_padding",
+            Property::AspectRatio => "aspect_ratio",
+            Property::Scale => "scale",
         }
     }
 

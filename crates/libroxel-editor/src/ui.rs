@@ -38,6 +38,10 @@ enum Action {
     Select(Option<InstanceId>),
     /// While playing: the player clicked a GUI button.
     ClickButton(InstanceId),
+    /// The pointer is over this GUI object (or none), for MouseEnter and MouseLeave.
+    GuiHover(Option<InstanceId>),
+    /// The mouse wheel moved over a scrolling frame by this much; it can scroll this far.
+    Scroll(InstanceId, egui::Vec2, egui::Vec2),
     /// While playing: the player clicked a part in the world.
     ClickPart(InstanceId),
     /// While playing: the player clicked a proximity prompt.
@@ -87,6 +91,12 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::TextBox,
     ClassKind::UICorner,
     ClassKind::UIListLayout,
+    ClassKind::ScrollingFrame,
+    ClassKind::UIStroke,
+    ClassKind::UIPadding,
+    ClassKind::UIGridLayout,
+    ClassKind::UIAspectRatioConstraint,
+    ClassKind::UIScale,
     ClassKind::Team,
     ClassKind::WeldConstraint,
     ClassKind::Seat,
@@ -177,6 +187,12 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::Fire => "🔥",
         ClassKind::Smoke => "☁",
         ClassKind::Highlight => "🔆",
+        ClassKind::ScrollingFrame => "📜",
+        ClassKind::UIStroke => "▢",
+        ClassKind::UIPadding => "⬚",
+        ClassKind::UIGridLayout => "▦",
+        ClassKind::UIAspectRatioConstraint => "⬌",
+        ClassKind::UIScale => "🔍",
         ClassKind::Teams | ClassKind::Team => "🚩",
     }
 }
@@ -350,7 +366,18 @@ pub fn editor_ui(
         central.contains(p) && ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background)
     });
     let pressed_in_view = ctx.input(|i| i.pointer.press_origin()).is_none_or(|p| central.contains(p));
-    capture.pointer = !(over_view && pressed_in_view) || gizmo_hot;
+    // The mouse wheel over a scrolling frame scrolls it, and not the camera.
+    let scrolling = boxes.scroll.filter(|_| over_view);
+    capture.pointer = !(over_view && pressed_in_view) || gizmo_hot || scrolling.is_some();
+    if let Some((frame, max)) = scrolling {
+        let delta = ctx.input(|i| i.smooth_scroll_delta);
+        if delta != egui::Vec2::ZERO {
+            actions.push(Action::Scroll(frame, delta, max));
+        }
+    }
+    if playing {
+        actions.push(Action::GuiHover(gui_hit.map(|(id, _)| id).filter(|_| over_view)));
+    }
     capture.keyboard = ctx.egui_wants_keyboard_input();
     editor.gizmo_active = gizmo_hot;
     if let Some(session) = engine.session.as_mut() {
@@ -1057,6 +1084,25 @@ fn properties(
             "The older movers: put one inside a loose part. BodyVelocity pushes it at Velocity, \
              BodyPosition pulls it to Position, BodyForce pushes with Force. MaxForce limits each axis.",
         ),
+        ClassKind::ScrollingFrame => Some(
+            "A frame you can scroll with the mouse wheel while playing. CanvasSize is how big its inside is \
+             (2 in Y scale is twice as tall as the frame); CanvasPosition is how far it's scrolled.",
+        ),
+        ClassKind::UIStroke => Some(
+            "Inside a frame or button, outlines it. Inside a text label, outlines the letters. \
+             Thickness is in pixels.",
+        ),
+        ClassKind::UIPadding => {
+            Some("Keeps the text and everything inside this GUI object away from its edges.")
+        }
+        ClassKind::UIGridLayout => Some(
+            "Lines up the other things in this frame in a grid of CellSize cells, CellPadding apart, \
+             filling rows first (or columns, with FillDirection Vertical).",
+        ),
+        ClassKind::UIAspectRatioConstraint => Some(
+            "Keeps this GUI object's width divided by its height at AspectRatio, shrinking the longer side.",
+        ),
+        ClassKind::UIScale => Some("Draws this GUI object Scale times bigger (or smaller, below 1)."),
         ClassKind::ParticleEmitter => Some(
             "Put this inside a part: it sends particles out of the part's top. Rate is how many a second, \
              Lifetime and Speed are ranges (min, max), SpreadAngle scatters them, Acceleration pulls them \
@@ -1879,7 +1925,13 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                 ClassKind::Tool => tree.service(ClassKind::StarterPack).unwrap_or(parent),
                 ClassKind::Team => tree.service(ClassKind::Teams).unwrap_or(parent),
                 // Corners and layouts go inside the selected GUI object.
-                ClassKind::UICorner | ClassKind::UIListLayout => editor
+                ClassKind::UICorner
+                | ClassKind::UIListLayout
+                | ClassKind::UIStroke
+                | ClassKind::UIPadding
+                | ClassKind::UIGridLayout
+                | ClassKind::UIAspectRatioConstraint
+                | ClassKind::UIScale => editor
                     .selection
                     .filter(|s| tree.class(*s).is_ok_and(|c| c.is_gui_object() || c == ClassKind::ScreenGui))
                     .or_else(|| gui_parent(&mut tree, editor.selection))
@@ -2086,6 +2138,24 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             }
         }
         Action::Select(id) => editor.selection = id,
+        Action::GuiHover(id) => {
+            if let Some(session) = engine.session.as_mut() {
+                session.gui_hover(id);
+            }
+        }
+        Action::Scroll(frame, delta, max) => {
+            let mut tree = engine.tree.borrow_mut();
+            if let Ok(PropertyValue::Vec2(at)) = tree.get(frame, Property::CanvasPosition) {
+                // Wheel down (a negative delta) moves further down the canvas.
+                let next = libroxel_instance::Vec2::new(
+                    (at.x - delta.x).clamp(0.0, max.x.max(0.0)),
+                    (at.y - delta.y).clamp(0.0, max.y.max(0.0)),
+                );
+                if next != at {
+                    let _ = tree.set(frame, Property::CanvasPosition, PropertyValue::Vec2(next));
+                }
+            }
+        }
         Action::ClickButton(id) => {
             if let Some(session) = engine.session.as_mut() {
                 session.click_button(id);

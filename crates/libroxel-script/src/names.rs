@@ -12,7 +12,7 @@
 
 use libroxel_instance::{
     CameraType, ClassKind, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection, KeyCode,
-    Material, PartShape, Property, RaycastFilterType, UserInputType,
+    Material, PartShape, Property, RaycastFilterType, TextXAlignment, TextYAlignment, UserInputType,
 };
 
 /// Global variables installed into every script.
@@ -138,6 +138,9 @@ pub mod events {
     pub const CHARACTER_REMOVING: &str = "CharacterRemoving";
     /// On a humanoid: fires with true and the seat when it sits, false and nil when it gets up.
     pub const SEATED: &str = "Seated";
+    /// On a GUI object: the pointer moved onto it, or off it.
+    pub const MOUSE_ENTER: &str = "MouseEnter";
+    pub const MOUSE_LEAVE: &str = "MouseLeave";
 }
 
 /// Methods that only some classes have.
@@ -433,6 +436,8 @@ pub fn enum_name(kind: EnumKind) -> &'static str {
         EnumKind::RaycastFilterType => "RaycastFilterType",
         EnumKind::CameraType => "CameraType",
         EnumKind::FillDirection => "FillDirection",
+        EnumKind::TextXAlignment => "TextXAlignment",
+        EnumKind::TextYAlignment => "TextYAlignment",
     }
 }
 
@@ -545,6 +550,16 @@ pub fn enum_item_name(value: EnumValue) -> &'static str {
         EnumValue::CameraType(t) => match t {
             CameraType::Custom => "Custom",
             CameraType::Scriptable => "Scriptable",
+        },
+        EnumValue::TextXAlignment(a) => match a {
+            TextXAlignment::Left => "Left",
+            TextXAlignment::Center => "Center",
+            TextXAlignment::Right => "Right",
+        },
+        EnumValue::TextYAlignment(a) => match a {
+            TextYAlignment::Top => "Top",
+            TextYAlignment::Center => "Center",
+            TextYAlignment::Bottom => "Bottom",
         },
         EnumValue::FillDirection(d) => match d {
             FillDirection::Vertical => "Vertical",
@@ -739,6 +754,12 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::Smoke => "Smoke",
         ClassKind::Sparkles => "Sparkles",
         ClassKind::Highlight => "Highlight",
+        ClassKind::ScrollingFrame => "ScrollingFrame",
+        ClassKind::UIStroke => "UIStroke",
+        ClassKind::UIPadding => "UIPadding",
+        ClassKind::UIGridLayout => "UIGridLayout",
+        ClassKind::UIAspectRatioConstraint => "UIAspectRatioConstraint",
+        ClassKind::UIScale => "UIScale",
     }
 }
 
@@ -868,6 +889,26 @@ pub fn property_name(property: Property) -> &'static str {
         Property::FillTransparency => "FillTransparency",
         Property::OutlineColor => "OutlineColor",
         Property::OutlineTransparency => "OutlineTransparency",
+        Property::ZIndex => "ZIndex",
+        Property::BorderSizePixel => "BorderSizePixel",
+        Property::BorderColor => "BorderColor3",
+        Property::ClipsDescendants => "ClipsDescendants",
+        Property::TextTransparency => "TextTransparency",
+        Property::TextXAlignment => "TextXAlignment",
+        Property::TextYAlignment => "TextYAlignment",
+        Property::TextWrapped => "TextWrapped",
+        Property::TextScaled => "TextScaled",
+        Property::CanvasSize => "CanvasSize",
+        Property::CanvasPosition => "CanvasPosition",
+        Property::ScrollBarThickness => "ScrollBarThickness",
+        Property::PaddingLeft => "PaddingLeft",
+        Property::PaddingRight => "PaddingRight",
+        Property::PaddingTop => "PaddingTop",
+        Property::PaddingBottom => "PaddingBottom",
+        Property::CellSize => "CellSize",
+        Property::CellPadding => "CellPadding",
+        Property::AspectRatio => "AspectRatio",
+        Property::Scale => "Scale",
     }
 }
 
