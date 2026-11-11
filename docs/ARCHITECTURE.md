@@ -1,7 +1,7 @@
 # Architecture
 
 ```
- Luau scripts ──▶ libroxel-script ──▶ libroxel-instance ◀── libroxel-engine ◀── libroxel-editor
+ Luau scripts ──▶ libroxel-script ──▶ libroxel-instance ◀── libroxel-engine ◀── libroxel (app)
    (sandboxed)     names.rs maps          InstanceTree         play sessions,       panels, gizmo,
                    script names to        + change journal     physics, character,  undo, files
                    engine names           + .lrx files         Bevy rendering

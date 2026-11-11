@@ -1,6 +1,6 @@
 [package]
-name = "libroxel-editor"
-description = "The Libroxel editor: build a world, write scripts, and press Play to test it."
+name = "libroxel"
+description = "Libroxel: play, host and make games, from one home screen."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

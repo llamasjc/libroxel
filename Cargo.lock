@@ -4831,7 +4831,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "libroxel-editor"
+name = "libroxel"
 version = "0.0.1"
 dependencies = [
  "bevy",

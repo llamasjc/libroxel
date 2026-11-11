@@ -128,7 +128,7 @@ impl Platform {
         }
     }
 
-    fn refresh(&mut self) {
+    pub fn refresh(&mut self) {
         if self.fetching {
             return;
         }
@@ -140,6 +140,55 @@ impl Platform {
         std::thread::spawn(move || {
             *out.lock().unwrap() = Some(client.servers(&search));
         });
+    }
+
+    /// The hosted games, as rows with a Join button each. Returns the join
+    /// code and name to join with when one is pressed. Looks again every
+    /// few seconds.
+    pub fn list(&mut self, ui: &mut egui::Ui) -> Option<(String, String)> {
+        if self.last_fetch.is_none_or(|t| t.elapsed() > Duration::from_secs(5)) {
+            self.refresh();
+        }
+        let mut join = None;
+        if let Some(error) = &self.error {
+            ui.colored_label(Color32::from_rgb(255, 120, 110), error);
+        } else if self.servers.is_empty() {
+            ui.label(if self.fetching {
+                "Looking…"
+            } else {
+                "No games are being hosted right now. Press Host to start one."
+            });
+        }
+        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+            egui::Grid::new("browse-servers").num_columns(4).striped(true).spacing([16.0, 6.0]).show(
+                ui,
+                |ui| {
+                    if !self.servers.is_empty() {
+                        ui.strong("Server");
+                        ui.strong("Game");
+                        ui.strong("Players");
+                        ui.label("");
+                        ui.end_row();
+                    }
+                    for server in &self.servers {
+                        ui.label(&server.name).on_hover_text(format!("{} host", server.kind.label()));
+                        ui.label(&server.game);
+                        let players = if server.max_players > 0 {
+                            format!("{}/{}", server.players, server.max_players)
+                        } else {
+                            server.players.to_string()
+                        };
+                        ui.label(players);
+                        let full = server.max_players > 0 && server.players >= server.max_players;
+                        if ui.add_enabled(!full, egui::Button::new("Join")).clicked() {
+                            join = Some((server.code.clone(), self.name.trim().to_owned()));
+                        }
+                        ui.end_row();
+                    }
+                },
+            );
+        });
+        join
     }
 
     /// The Browse window. Returns the join code and name to join with when
@@ -184,37 +233,9 @@ impl Platform {
                 );
             }
             ui.separator();
-            if let Some(error) = &self.error {
-                ui.colored_label(Color32::from_rgb(255, 120, 110), error);
-            } else if self.servers.is_empty() {
-                ui.label(if self.fetching { "Looking…" } else { "No games are being hosted right now. Press Host to start one." });
+            if let Some(picked) = self.list(ui) {
+                join = Some(picked);
             }
-            egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                egui::Grid::new("browse-servers").num_columns(4).striped(true).spacing([16.0, 6.0]).show(ui, |ui| {
-                    if !self.servers.is_empty() {
-                        ui.strong("Server");
-                        ui.strong("Game");
-                        ui.strong("Players");
-                        ui.label("");
-                        ui.end_row();
-                    }
-                    for server in &self.servers {
-                        ui.label(&server.name).on_hover_text(format!("{} host", server.kind.label()));
-                        ui.label(&server.game);
-                        let players = if server.max_players > 0 {
-                            format!("{}/{}", server.players, server.max_players)
-                        } else {
-                            server.players.to_string()
-                        };
-                        ui.label(players);
-                        let full = server.max_players > 0 && server.players >= server.max_players;
-                        if ui.add_enabled(!full, egui::Button::new("Join")).clicked() {
-                            join = Some((server.code.clone(), self.name.trim().to_owned()));
-                        }
-                        ui.end_row();
-                    }
-                });
-            });
             ui.horizontal(|ui| {
                 if ui.button("⟳ Refresh").clicked() {
                     self.refresh();

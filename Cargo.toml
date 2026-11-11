@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# A plain `cargo run` opens the Libroxel app.
+default-members = ["crates/libroxel"]
 
 [workspace.package]
 version = "0.0.1"

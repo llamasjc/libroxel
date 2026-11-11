@@ -1,15 +1,16 @@
-//! The Libroxel editor.
+//! The Libroxel app.
 //!
-//! Build a world out of parts, attach scripts, and press Play to test it
-//! with a character. Stop puts everything back the way it was.
+//! It opens on a home screen: **Play** your games, find and join games
+//! **Online**, **Create** one in the editor, or **Host** one for friends.
+//! In the editor you build a world out of parts, attach scripts, and press
+//! Play to test it with a character. Stop puts everything back.
 //!
-//! It starts at a main menu that edits, plays, hosts and joins games, runs
-//! servers and the Hub. A game file (or `--sample`) on the command line
-//! skips the menu and opens it in the editor.
+//! A game file (or `--sample`) on the command line skips the home screen
+//! and opens it in the editor.
 //!
 //! ```text
-//! cargo run -p libroxel-editor                 # the main menu
-//! cargo run -p libroxel-editor -- my_game.lrx  # edit a saved place
+//! cargo run                             # the home screen
+//! cargo run -p libroxel -- my_game.lrx  # edit a saved place
 //! ```
 
 mod browse;

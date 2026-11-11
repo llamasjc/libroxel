@@ -31,7 +31,7 @@ On Debian or Ubuntu the equivalent is
 Then:
 
 ```sh
-cargo run -p libroxel-editor                      # the libroxel app, starting at its main menu
+cargo run -p libroxel                             # the Libroxel app, opening on its home screen
 cargo run -p libroxel-proto -- my_game.lrx        # play a saved game without the editor
 cargo test --workspace                            # every test, no GPU needed
 ```
@@ -133,17 +133,20 @@ The first build compiles Bevy and takes a while. After that it is quick.
   too, and `libroxel hub` runs only a Hub. Games you host are listed on the
   Hub that Browse points at. Set `LIBROXEL_HUB=host:port` to use another
   Hub from the start.
-- **One app, one main menu:** the build is a single `libroxel` program
-  and it starts at a main menu. Pick a game (the sample, a new world, or
-  one of your saved games) and **✏ Edit**, **▶ Play** or **🌐 Host and
-  play** it; paste a join code (or an address) to **🔗 Join** a friend;
-  **🌍 Browse games** to find hosted ones; **🖥 Start server** to host a game
-  in the background with no player of your own, showing its join code; and
-  turn this computer's Hub on or off. Games played from the menu show only
-  the game: **⏹ Leave game** (or Esc) goes back to the menu, and **File →
-  Main menu** does from the editor. (For scripts and servers without a
-  screen, `libroxel server <game.lrx>`, `libroxel hub` and `libroxel help`
-  still work.)
+- **One app, one home screen:** the build is a single `libroxel` program
+  (`cargo run` starts it) and it opens on a home screen with four tabs.
+  **▶ Play** shows your games as tiles (the sample and every saved game):
+  pick one and press Play, or double-click it, or **Play with friends** to
+  host it. **🌍 Online** lists the games being hosted, with a Join button
+  each, and joins a friend's game from a pasted join code or address.
+  **✏ Create** opens the editor on a new world, the sample or a saved game.
+  **🌐 Host** hosts a game and plays it, starts a server in the background
+  with no player of your own (showing its join code), and turns this
+  computer's Hub on or off. Your player name sits in the top bar. Games
+  played from the home screen show only the game: **⏹ Leave game** (or Esc)
+  goes back, and **File → Main menu** does from the editor. (For scripts
+  and servers without a screen, `libroxel server <game.lrx>`,
+  `libroxel hub` and `libroxel help` still work.)
 - **Undo/redo** with Ctrl+Z and Ctrl+Y. **Save** with Ctrl+S. Games are
   saved as `.lrx` files in `~/Projects/libroxel-games/` by default.
 
@@ -156,7 +159,7 @@ The first build compiles Bevy and takes a while. After that it is quick.
 | [`libroxel-net`](crates/libroxel-net) | Player identity (a keypair) and join codes. Carries a hosted game between computers over iroh, peer to peer with a relay fallback. |
 | [`libroxel-script`](crates/libroxel-script) | The sandboxed Luau runtime (via `mlua`) with a thread scheduler. Every name scripts can see lives in [`names.rs`](crates/libroxel-script/src/names.rs). |
 | [`libroxel-engine`](crates/libroxel-engine) | Play sessions: box physics, the player character, touch events, respawning, and the Bevy integration (rendering and cameras). |
-| [`libroxel-editor`](crates/libroxel-editor) | The `libroxel` app: the editor, plus `libroxel server` and `libroxel hub`. |
+| [`libroxel`](crates/libroxel) | The Libroxel app: the home screen (Play, Online, Create, Host), the editor, plus `libroxel server` and `libroxel hub`. |
 | [`libroxel-proto`](crates/libroxel-proto) | A minimal player that runs a saved game or a single script. |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit together.
