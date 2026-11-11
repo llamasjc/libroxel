@@ -812,6 +812,13 @@ pub fn sample_obby() -> InstanceTree {
     set(&mut tree, label, Property::TextColor, PropertyValue::Color3(Color3::from_rgb8(255, 215, 60)));
     set(&mut tree, label, Property::TextSize, PropertyValue::Number(22.0));
     set(&mut tree, label, Property::Text, PropertyValue::String("Coins: 0".into()));
+    // A picture of a coin beside the count.
+    let icon = add(&mut tree, label, ClassKind::ImageLabel, "Icon");
+    set(&mut tree, icon, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.0, 6.0, 0.5, 0.0)));
+    set(&mut tree, icon, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 30.0, 0.0, 30.0)));
+    set(&mut tree, icon, Property::AnchorPoint, PropertyValue::Vec2(Vec2::new(0.0, 0.5)));
+    set(&mut tree, icon, Property::BackgroundTransparency, PropertyValue::Number(1.0));
+    set(&mut tree, icon, Property::Image, PropertyValue::String("libroxel://coin".into()));
     let button = add(&mut tree, hud, ClassKind::TextButton, "DayNight");
     set(&mut tree, button, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.0, 12.0, 1.0, -12.0)));
     set(&mut tree, button, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 150.0, 0.0, 40.0)));

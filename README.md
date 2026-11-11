@@ -196,6 +196,12 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   text, for a text object) with `Color`, `Thickness`, `Transparency` and
   `Enabled`. `UIScale.Scale` grows its parent and `UIAspectRatioConstraint`
   keeps its `AspectRatio` (width over height).
+- **Images:** `ImageLabel` and `ImageButton` (which has `MouseButton1Click`
+  and `Activated` like a text button) show the PNG named by `Image`. A plain
+  name is looked for beside the game file, in an `images` folder beside it,
+  and in `~/Projects/libroxel-games/images`; `libroxel://coin` is built in.
+  `ImageColor3` tints it, `ImageTransparency` fades it, and `ScaleType` is
+  `Stretch`, `Fit` or `Crop`. Joined computers need the same files.
 - **Scrolling frames:** `ScrollingFrame` has `CanvasSize` (`UDim2`),
   `CanvasPosition` (`Vector2`, changed by the wheel) and
   `ScrollBarThickness`; its children are placed on the canvas and clipped.
@@ -404,7 +410,7 @@ door.ClickDetector.MouseClick:Connect(function(player)
 end)
 ```
 
-**Not yet:** images, tool animations, sounds, and terrain and voxels. Physics is simple: anchored parts can be rotated and shaped
+**Not yet:** pictures on parts (decals and textures), tool animations, sounds, and terrain and voxels. Physics is simple: anchored parts can be rotated and shaped
 (ramps and balls work), but loose parts are upright boxes that fall and
 stack without tipping over. Characters climb steps up to 0.6 studs.
 

@@ -237,6 +237,14 @@ pub enum Property {
     CanvasPosition,
     /// On a scrolling frame: how wide its scroll bar is, in pixels.
     ScrollBarThickness,
+    /// On an image label or button: the picture's file name.
+    Image,
+    /// On an image: a tint multiplied with the picture.
+    ImageColor,
+    /// On an image: how see-through the picture is.
+    ImageTransparency,
+    /// On an image: how the picture fills the box.
+    ScaleType,
     /// On a UI padding: the space on the left.
     PaddingLeft,
     /// On a UI padding: the space on the right.
@@ -321,6 +329,10 @@ impl Property {
             Property::TextYAlignment => EnumKind::TextYAlignment.kind_name(),
             Property::CanvasSize | Property::CellSize | Property::CellPadding => "UDim2",
             Property::CanvasPosition => "Vec2",
+            Property::Image => "string",
+            Property::ImageColor => "Color3",
+            Property::ImageTransparency => "number",
+            Property::ScaleType => EnumKind::ScaleType.kind_name(),
             Property::PaddingLeft
             | Property::PaddingRight
             | Property::PaddingTop
@@ -426,6 +438,7 @@ impl Property {
             Property::CameraType => Some(EnumKind::CameraType),
             Property::FillDirection => Some(EnumKind::FillDirection),
             Property::TextXAlignment => Some(EnumKind::TextXAlignment),
+            Property::ScaleType => Some(EnumKind::ScaleType),
             Property::TextYAlignment => Some(EnumKind::TextYAlignment),
             _ => None,
         }
@@ -562,6 +575,10 @@ impl Property {
         Property::CanvasSize,
         Property::CanvasPosition,
         Property::ScrollBarThickness,
+        Property::Image,
+        Property::ImageColor,
+        Property::ImageTransparency,
+        Property::ScaleType,
         Property::PaddingLeft,
         Property::PaddingRight,
         Property::PaddingTop,
@@ -704,6 +721,10 @@ impl Property {
             Property::CanvasSize => "canvas_size",
             Property::CanvasPosition => "canvas_position",
             Property::ScrollBarThickness => "scroll_bar_thickness",
+            Property::Image => "image",
+            Property::ImageColor => "image_color",
+            Property::ImageTransparency => "image_transparency",
+            Property::ScaleType => "scale_type",
             Property::PaddingLeft => "padding_left",
             Property::PaddingRight => "padding_right",
             Property::PaddingTop => "padding_top",

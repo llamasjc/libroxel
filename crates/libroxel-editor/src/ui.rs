@@ -99,6 +99,8 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::UICorner,
     ClassKind::UIListLayout,
     ClassKind::ScrollingFrame,
+    ClassKind::ImageLabel,
+    ClassKind::ImageButton,
     ClassKind::UIStroke,
     ClassKind::UIPadding,
     ClassKind::UIGridLayout,
@@ -195,6 +197,8 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::Smoke => "☁",
         ClassKind::Highlight => "🔆",
         ClassKind::ScrollingFrame => "📜",
+        ClassKind::ImageLabel => "🖼",
+        ClassKind::ImageButton => "🖲",
         ClassKind::UIStroke => "▢",
         ClassKind::UIPadding => "⬚",
         ClassKind::UIGridLayout => "▦",
@@ -300,6 +304,14 @@ pub fn editor_ui(
         editor.typing = None;
     }
     let mut boxes = gui::TextBoxes { typing: editor.typing, ..Default::default() };
+    // Pictures are looked for beside the game, then in the games folder.
+    let mut folders = Vec::new();
+    if let Some(dir) = editor.file.as_ref().and_then(|f| f.parent()) {
+        folders.push(dir.to_path_buf());
+        folders.push(dir.join("images"));
+    }
+    folders.push(games_dir().join("images"));
+    crate::images::set_folders(folders);
     let central = egui::CentralPanel::no_frame()
         .show(&mut root, |ui| {
             if let Ok((cam, gt, _, _)) = cameras.single() {
@@ -450,7 +462,7 @@ pub fn editor_ui(
                     actions.push(Action::TriggerPrompt(prompt));
                 }
             }
-            Some((id, ClassKind::TextButton)) if playing => actions.push(Action::ClickButton(id)),
+            Some((id, class)) if playing && class.is_button() => actions.push(Action::ClickButton(id)),
             Some((id, ClassKind::TextBox)) if playing => {
                 if editor.typing != Some(id) {
                     actions.push(Action::FocusTextBox(Some(id), false));
@@ -1111,6 +1123,11 @@ fn properties(
         ClassKind::BodyVelocity | ClassKind::BodyPosition | ClassKind::BodyForce => Some(
             "The older movers: put one inside a loose part. BodyVelocity pushes it at Velocity, \
              BodyPosition pulls it to Position, BodyForce pushes with Force. MaxForce limits each axis.",
+        ),
+        ClassKind::ImageLabel | ClassKind::ImageButton => Some(
+            "Shows a PNG picture. Image is a file name, looked for beside the game file, in an images \
+             folder beside it, or in the games folder's images folder; libroxel://coin is built in. \
+             ScaleType says whether it stretches, fits or crops; ImageColor3 tints it.",
         ),
         ClassKind::ScrollingFrame => Some(
             "A frame you can scroll with the mouse wheel while playing. CanvasSize is how big its inside is \

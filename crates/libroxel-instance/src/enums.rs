@@ -165,6 +165,18 @@ pub enum TextYAlignment {
     Bottom,
 }
 
+/// How an image fills its box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ScaleType {
+    /// Stretched to the box's shape.
+    #[default]
+    Stretch,
+    /// As big as fits, keeping its shape.
+    Fit,
+    /// Covering the box, keeping its shape; the overhang is cut off.
+    Crop,
+}
+
 /// Which way a list layout lines things up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum FillDirection {
@@ -312,6 +324,7 @@ pub enum EnumKind {
     FillDirection,
     TextXAlignment,
     TextYAlignment,
+    ScaleType,
 }
 
 /// A value from one of the enumerations.
@@ -328,6 +341,7 @@ pub enum EnumValue {
     FillDirection(FillDirection),
     TextXAlignment(TextXAlignment),
     TextYAlignment(TextYAlignment),
+    ScaleType(ScaleType),
 }
 
 const KEY_CODES: &[EnumValue] = &[
@@ -399,6 +413,7 @@ impl EnumKind {
         EnumKind::FillDirection,
         EnumKind::TextXAlignment,
         EnumKind::TextYAlignment,
+        EnumKind::ScaleType,
     ];
 
     /// Every value of this enumeration, in a stable order.
@@ -465,6 +480,11 @@ impl EnumKind {
                 E::TextYAlignment(TextYAlignment::Center),
                 E::TextYAlignment(TextYAlignment::Bottom),
             ],
+            EnumKind::ScaleType => &[
+                E::ScaleType(ScaleType::Stretch),
+                E::ScaleType(ScaleType::Fit),
+                E::ScaleType(ScaleType::Crop),
+            ],
         }
     }
 
@@ -482,6 +502,7 @@ impl EnumKind {
             EnumKind::FillDirection => "enum:fill_direction",
             EnumKind::TextXAlignment => "enum:text_x_alignment",
             EnumKind::TextYAlignment => "enum:text_y_alignment",
+            EnumKind::ScaleType => "enum:scale_type",
         }
     }
 
@@ -505,6 +526,7 @@ impl EnumValue {
             EnumValue::FillDirection(_) => EnumKind::FillDirection,
             EnumValue::TextXAlignment(_) => EnumKind::TextXAlignment,
             EnumValue::TextYAlignment(_) => EnumKind::TextYAlignment,
+            EnumValue::ScaleType(_) => EnumKind::ScaleType,
         }
     }
 
@@ -631,6 +653,11 @@ impl EnumValue {
                 TextYAlignment::Top => "top",
                 TextYAlignment::Center => "center",
                 TextYAlignment::Bottom => "bottom",
+            },
+            EnumValue::ScaleType(s) => match s {
+                ScaleType::Stretch => "stretch",
+                ScaleType::Fit => "fit",
+                ScaleType::Crop => "crop",
             },
         }
     }

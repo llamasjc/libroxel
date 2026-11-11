@@ -11,6 +11,7 @@
 
 mod gui;
 mod history;
+mod images;
 mod templates;
 mod ui;
 mod viewport;

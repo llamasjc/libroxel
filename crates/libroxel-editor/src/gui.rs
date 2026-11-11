@@ -310,6 +310,30 @@ fn stroke_of(tree: &InstanceTree, id: InstanceId) -> Option<(Color32, f32)> {
     Some((color(c, alpha), tree.get_number(s, Property::Thickness).unwrap_or(1.0).max(0.0) as f32))
 }
 
+/// An image label's or button's picture, tinted and scaled as it says.
+fn draw_image(painter: &egui::Painter, tree: &InstanceTree, id: InstanceId, rect: Rect, darker: bool) {
+    let name = tree.get_string(id, Property::Image).unwrap_or_default();
+    let Some((texture, size)) = crate::images::texture(painter.ctx(), &name) else { return };
+    let scale = match tree.get_enum(id, Property::ScaleType) {
+        Some(libroxel_instance::EnumValue::ScaleType(s)) => s,
+        _ => libroxel_instance::ScaleType::Stretch,
+    };
+    let (at, uv) = crate::images::placement(rect, size, scale);
+    let mut tint = tree.get_color(id, Property::ImageColor).unwrap_or(Color3::WHITE);
+    if darker {
+        tint = tint.lerp(Color3::new(0.0, 0.0, 0.0), 0.15);
+    }
+    let alpha = 1.0 - tree.get_number(id, Property::ImageTransparency).unwrap_or(0.0) as f32;
+    if alpha > 0.0 {
+        painter.with_clip_rect(rect.intersect(painter.clip_rect())).image(
+            texture,
+            at,
+            uv,
+            color(tint, alpha),
+        );
+    }
+}
+
 fn is_text(class: ClassKind) -> bool {
     matches!(class, ClassKind::TextLabel | ClassKind::TextButton | ClassKind::TextBox)
 }
@@ -335,7 +359,7 @@ fn draw_children(
 
         let alpha = 1.0 - tree.get_number(child, Property::BackgroundTransparency).unwrap_or(0.0) as f32;
         let mut background = tree.get_color(child, Property::BackgroundColor).unwrap_or(Color3::WHITE);
-        if class == ClassKind::TextButton && hovered {
+        if class.is_button() && hovered {
             background = background.lerp(Color3::new(0.0, 0.0, 0.0), 0.15);
         }
         if alpha > 0.0 {
@@ -349,6 +373,15 @@ fn draw_children(
         let stroke = stroke_of(tree, child);
         if let Some((c, width)) = stroke.filter(|_| !is_text(class)) {
             painter.rect_stroke(r, round, Stroke::new(width, c), StrokeKind::Outside);
+        }
+        if matches!(class, ClassKind::ImageLabel | ClassKind::ImageButton) {
+            draw_image(
+                painter,
+                tree,
+                child,
+                padded(tree, child, r),
+                class == ClassKind::ImageButton && hovered,
+            );
         }
         let size = tree.get_number(child, Property::TextSize).unwrap_or(14.0).max(1.0) as f32;
         let text_color = tree.get_color(child, Property::TextColor).unwrap_or(Color3::new(0.1, 0.16, 0.2));

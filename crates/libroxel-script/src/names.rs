@@ -12,7 +12,8 @@
 
 use libroxel_instance::{
     CameraType, ClassKind, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection, KeyCode,
-    Material, PartShape, Property, RaycastFilterType, TextXAlignment, TextYAlignment, UserInputType,
+    Material, PartShape, Property, RaycastFilterType, ScaleType, TextXAlignment, TextYAlignment,
+    UserInputType,
 };
 
 /// Global variables installed into every script.
@@ -438,6 +439,7 @@ pub fn enum_name(kind: EnumKind) -> &'static str {
         EnumKind::FillDirection => "FillDirection",
         EnumKind::TextXAlignment => "TextXAlignment",
         EnumKind::TextYAlignment => "TextYAlignment",
+        EnumKind::ScaleType => "ScaleType",
     }
 }
 
@@ -560,6 +562,11 @@ pub fn enum_item_name(value: EnumValue) -> &'static str {
             TextYAlignment::Top => "Top",
             TextYAlignment::Center => "Center",
             TextYAlignment::Bottom => "Bottom",
+        },
+        EnumValue::ScaleType(s) => match s {
+            ScaleType::Stretch => "Stretch",
+            ScaleType::Fit => "Fit",
+            ScaleType::Crop => "Crop",
         },
         EnumValue::FillDirection(d) => match d {
             FillDirection::Vertical => "Vertical",
@@ -755,6 +762,8 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::Sparkles => "Sparkles",
         ClassKind::Highlight => "Highlight",
         ClassKind::ScrollingFrame => "ScrollingFrame",
+        ClassKind::ImageLabel => "ImageLabel",
+        ClassKind::ImageButton => "ImageButton",
         ClassKind::UIStroke => "UIStroke",
         ClassKind::UIPadding => "UIPadding",
         ClassKind::UIGridLayout => "UIGridLayout",
@@ -901,6 +910,10 @@ pub fn property_name(property: Property) -> &'static str {
         Property::CanvasSize => "CanvasSize",
         Property::CanvasPosition => "CanvasPosition",
         Property::ScrollBarThickness => "ScrollBarThickness",
+        Property::Image => "Image",
+        Property::ImageColor => "ImageColor3",
+        Property::ImageTransparency => "ImageTransparency",
+        Property::ScaleType => "ScaleType",
         Property::PaddingLeft => "PaddingLeft",
         Property::PaddingRight => "PaddingRight",
         Property::PaddingTop => "PaddingTop",

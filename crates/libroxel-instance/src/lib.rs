@@ -23,7 +23,7 @@ mod tree;
 
 pub use enums::{
     CameraType, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection, KeyCode, Material,
-    PartShape, RaycastFilterType, TextXAlignment, TextYAlignment, UserInputType,
+    PartShape, RaycastFilterType, ScaleType, TextXAlignment, TextYAlignment, UserInputType,
 };
 pub use math::{CFrame, Color3, Rotation, UDim, UDim2, Vec2, Vec3};
 pub use property::{Property, PropertyValue};
@@ -172,6 +172,10 @@ pub enum ClassKind {
     Highlight,
     /// A frame whose inside (its canvas) can be bigger than it and scrolled.
     ScrollingFrame,
+    /// A box on a GUI showing a picture.
+    ImageLabel,
+    /// A picture on a GUI that can be clicked.
+    ImageButton,
     /// Inside a GUI object: outlines it, or its text.
     UIStroke,
     /// Inside a GUI object: keeps what's inside it away from its edges.
@@ -255,6 +259,8 @@ impl ClassKind {
         ClassKind::Sparkles,
         ClassKind::Highlight,
         ClassKind::ScrollingFrame,
+        ClassKind::ImageLabel,
+        ClassKind::ImageButton,
         ClassKind::UIStroke,
         ClassKind::UIPadding,
         ClassKind::UIGridLayout,
@@ -298,6 +304,11 @@ impl ClassKind {
         self.is_a(ClassKind::GuiObject)
     }
 
+    /// Whether this class is a GUI object that can be clicked.
+    pub fn is_button(self) -> bool {
+        matches!(self, ClassKind::TextButton | ClassKind::ImageButton)
+    }
+
     /// Whether this class is something characters sit in.
     pub fn is_seat(self) -> bool {
         matches!(self, ClassKind::Seat | ClassKind::VehicleSeat)
@@ -318,7 +329,9 @@ impl ClassKind {
             | ClassKind::TextLabel
             | ClassKind::TextButton
             | ClassKind::TextBox
-            | ClassKind::ScrollingFrame => Some(ClassKind::GuiObject),
+            | ClassKind::ScrollingFrame
+            | ClassKind::ImageLabel
+            | ClassKind::ImageButton => Some(ClassKind::GuiObject),
             _ => None,
         }
     }
@@ -522,6 +535,24 @@ impl ClassKind {
             Property::BorderColor,
             Property::ClipsDescendants,
         ];
+        const IMAGE: &[Property] = &[
+            Property::Name,
+            Property::GuiPosition,
+            Property::GuiSize,
+            Property::AnchorPoint,
+            Property::BackgroundColor,
+            Property::BackgroundTransparency,
+            Property::Visible,
+            Property::LayoutOrder,
+            Property::ZIndex,
+            Property::BorderSizePixel,
+            Property::BorderColor,
+            Property::ClipsDescendants,
+            Property::Image,
+            Property::ImageColor,
+            Property::ImageTransparency,
+            Property::ScaleType,
+        ];
         const SCROLLING: &[Property] = &[
             Property::Name,
             Property::GuiPosition,
@@ -712,6 +743,7 @@ impl ClassKind {
             ClassKind::Sparkles => SPARKLES,
             ClassKind::Highlight => HIGHLIGHT,
             ClassKind::ScrollingFrame => SCROLLING,
+            ClassKind::ImageLabel | ClassKind::ImageButton => IMAGE,
             ClassKind::UIStroke => STROKE,
             ClassKind::UIPadding => PADDING,
             ClassKind::UIGridLayout => GRID,
@@ -808,6 +840,10 @@ impl ClassKind {
             Property::CanvasSize => PropertyValue::UDim2(UDim2::new(0.0, 0.0, 2.0, 0.0)),
             Property::CanvasPosition => PropertyValue::Vec2(Vec2::ZERO),
             Property::ScrollBarThickness => PropertyValue::Number(12.0),
+            Property::Image => PropertyValue::String(String::new()),
+            Property::ImageColor => PropertyValue::Color3(Color3::new(1.0, 1.0, 1.0)),
+            Property::ImageTransparency => PropertyValue::Number(0.0),
+            Property::ScaleType => PropertyValue::Enum(EnumValue::ScaleType(ScaleType::Stretch)),
             Property::PaddingLeft
             | Property::PaddingRight
             | Property::PaddingTop
@@ -983,6 +1019,8 @@ impl ClassKind {
             ClassKind::Sparkles => "sparkles",
             ClassKind::Highlight => "highlight",
             ClassKind::ScrollingFrame => "scrolling_frame",
+            ClassKind::ImageLabel => "image_label",
+            ClassKind::ImageButton => "image_button",
             ClassKind::UIStroke => "ui_stroke",
             ClassKind::UIPadding => "ui_padding",
             ClassKind::UIGridLayout => "ui_grid_layout",
