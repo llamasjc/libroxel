@@ -73,15 +73,61 @@ pub fn blank() -> InstanceTree {
     tree
 }
 
-const KILL_SCRIPT: &str = r#"
--- Anything with a Humanoid that touches this part loses all its health.
-local part = script.Parent
+const LAVA_SCRIPT: &str = r#"
+-- Every part tagged "Lava" kills whatever touches it. Tag a part "Lava" in
+-- the Properties panel (or with CollectionService) to make more.
+local CollectionService = game:GetService("CollectionService")
 
-part.Touched:Connect(function(hit)
-	local humanoid = hit.Parent and hit.Parent:FindFirstChild("Humanoid")
-	if humanoid then
-		humanoid.Health = 0
+local function makeDeadly(part)
+	part.Touched:Connect(function(hit)
+		local humanoid = hit.Parent and hit.Parent:FindFirstChild("Humanoid")
+		if humanoid then
+			humanoid.Health = 0
+		end
+	end)
+end
+
+for _, part in CollectionService:GetTagged("Lava") do
+	makeDeadly(part)
+end
+CollectionService:GetInstanceAddedSignal("Lava"):Connect(makeDeadly)
+"#;
+
+const AIM_SCRIPT: &str = r#"
+-- Runs for the player holding the tool: sends where they clicked to the game.
+local tool = script.Parent
+local mouse = game:GetService("Players").LocalPlayer:GetMouse()
+
+tool.Activated:Connect(function()
+	if mouse.Target then
+		tool.Place:FireServer(mouse.Hit.Position)
 	end
+end)
+"#;
+
+const BUILD_SCRIPT: &str = r#"
+-- The game side of the builder: puts a brick where the player clicked,
+-- if it's close enough. Bricks disappear after a while.
+local Debris = game:GetService("Debris")
+local tool = script.Parent
+local REACH, LIFETIME = 40, 20
+
+tool.Place.OnServerEvent:Connect(function(player, position)
+	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	if not root or (position - root.Position).Magnitude > REACH then
+		return
+	end
+	local brick = Instance.new("Part")
+	brick.Name = "BuiltBrick"
+	brick.Size = Vector3.new(2, 1, 2)
+	-- Snap to a 2-stud grid, sitting on what was clicked.
+	local snapped = Vector3.new(math.floor(position.X / 2 + 0.5) * 2, position.Y + 0.5, math.floor(position.Z / 2 + 0.5) * 2)
+	brick.Position = snapped
+	brick.Anchored = true
+	brick.Color = Color3.fromRGB(math.random(80, 255), math.random(80, 255), math.random(80, 255))
+	brick:SetAttribute("Builder", player.Name)
+	brick.Parent = workspace
+	Debris:AddItem(brick, LIFETIME)
 end)
 "#;
 
@@ -266,7 +312,8 @@ end)
 const WELCOME_SCRIPT: &str = r#"
 print("Welcome to the sample obby! Reach the gold pad. Red blocks are lava.")
 print("Grab the spinning coins on the way. Your score is on the leaderboard.")
-print("There's a coin locked in the vault: click its door to open it.")
+print("There's a coin worth 5 locked in the vault: click its door to open it.")
+print("Press 1 to hold the builder, then click to place bricks.")
 "#;
 
 const STATS_MODULE: &str = r#"
@@ -310,6 +357,18 @@ Players.PlayerAdded:Connect(function(player)
 		character:WaitForChild("Humanoid").Died:Connect(function()
 			Stats.add(player, "Deaths", 1)
 		end)
+
+		-- A name tag floating over the character's head.
+		local tag = Instance.new("BillboardGui")
+		tag.Size = UDim2.new(0, 160, 0, 30)
+		tag.StudsOffset = Vector3.new(0, 1.8, 0)
+		local label = Instance.new("TextLabel", tag)
+		label.Size = UDim2.new(1, 0, 1, 0)
+		label.BackgroundTransparency = 1
+		label.TextColor3 = Color3.new(1, 1, 1)
+		label.TextSize = 18
+		label.Text = player.Name
+		tag.Parent = character:WaitForChild("Head")
 	end)
 end)
 
@@ -319,13 +378,15 @@ end)
 "#;
 
 const COINS_SCRIPT: &str = r#"
--- Spins every coin in this folder. Touch one to collect it; it comes back later.
+-- Spins every part tagged "Coin". Touch one to collect it; it comes back
+-- later. A coin's "Value" attribute says how much it's worth (1 if unset).
 local Players = game:GetService("Players")
+local CollectionService = game:GetService("CollectionService")
 local Stats = require(game:GetService("ReplicatedStorage").Stats)
 
 local coins = {}
-for _, coin in script.Parent:GetChildren() do
-	if coin:IsA("Part") then
+for _, coin in CollectionService:GetTagged("Coin") do
+	do
 		table.insert(coins, coin)
 		local taken = false
 		coin.Touched:Connect(function(hit)
@@ -334,7 +395,7 @@ for _, coin in script.Parent:GetChildren() do
 				return
 			end
 			taken = true
-			Stats.add(player, "Coins", 1)
+			Stats.add(player, "Coins", coin:GetAttribute("Value") or 1)
 			coin.Transparency = 1
 			task.wait(8)
 			coin.Transparency = 0
@@ -443,7 +504,7 @@ pub fn sample_obby() -> InstanceTree {
     for (i, line) in [
         "H: show or hide this help",
         "E: use a prompt (hold it)",
-        "Click: doors and buttons",
+        "1: builder tool, click to build",
         "Coins are saved",
     ]
     .iter()
@@ -472,6 +533,35 @@ pub fn sample_obby() -> InstanceTree {
     set(&mut tree, prompt, Property::HoldDuration, PropertyValue::Number(0.5));
     set(&mut tree, prompt, Property::MaxActivationDistance, PropertyValue::Number(8.0));
     script(&mut tree, shop, "Shop", SHOP_SCRIPT);
+    let sign = add(&mut tree, shop, ClassKind::BillboardGui, "Sign");
+    set(&mut tree, sign, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 170.0, 0.0, 34.0)));
+    set(&mut tree, sign, Property::StudsOffset, PropertyValue::Vec3(Vec3::new(0.0, 2.5, 0.0)));
+    let sign_label = add(&mut tree, sign, ClassKind::TextLabel, "Label");
+    set(&mut tree, sign_label, Property::GuiSize, PropertyValue::UDim2(UDim2::new(1.0, 0.0, 1.0, 0.0)));
+    set(
+        &mut tree,
+        sign_label,
+        Property::BackgroundColor,
+        PropertyValue::Color3(Color3::from_rgb8(30, 120, 70)),
+    );
+    set(&mut tree, sign_label, Property::BackgroundTransparency, PropertyValue::Number(0.2));
+    set(&mut tree, sign_label, Property::TextColor, PropertyValue::Color3(white));
+    set(&mut tree, sign_label, Property::TextSize, PropertyValue::Number(18.0));
+    set(&mut tree, sign_label, Property::Text, PropertyValue::String("Speed Shop".into()));
+
+    // One script for every lava brick, found by tag.
+    let server = tree.service(ClassKind::ServerScriptService).expect("every tree has ServerScriptService");
+    script(&mut tree, server, "Lava", LAVA_SCRIPT);
+
+    // A builder tool every player gets: press 1 to hold it, click to place bricks.
+    let pack = tree.service(ClassKind::StarterPack).expect("every tree has StarterPack");
+    let builder = add(&mut tree, pack, ClassKind::Tool, "Builder");
+    let handle = block(&mut tree, builder, "Handle", [0.0, 0.0, 0.0], [0.5, 0.5, 2.5], [240, 140, 40]);
+    set(&mut tree, handle, Property::Anchored, PropertyValue::Bool(false));
+    set(&mut tree, handle, Property::CanCollide, PropertyValue::Bool(false));
+    add(&mut tree, builder, ClassKind::RemoteEvent, "Place");
+    code(&mut tree, builder, ClassKind::LocalScript, "Aim", AIM_SCRIPT);
+    script(&mut tree, builder, "Build", BUILD_SCRIPT);
 
     let coins = add(&mut tree, ws, ClassKind::Folder, "Coins");
     let coin_spots: [[f32; 3]; 7] = [
@@ -488,7 +578,11 @@ pub fn sample_obby() -> InstanceTree {
         shape(&mut tree, coin, PartShape::Cylinder);
         material(&mut tree, coin, Material::Neon);
         set(&mut tree, coin, Property::CanCollide, PropertyValue::Bool(false));
+        tree.add_tag(coin, "Coin").expect("coins exist");
     }
+    // The vault coin is worth more.
+    let vault_coin = tree.find_first_child(coins, "Coin7").ok().flatten().expect("the vault coin exists");
+    tree.set_attribute(vault_coin, "Value", Some(PropertyValue::Number(5.0))).expect("coins take attributes");
     script(&mut tree, coins, "SpinAndCollect", COINS_SCRIPT);
 
     // Simple jumps.
@@ -505,7 +599,7 @@ pub fn sample_obby() -> InstanceTree {
     for i in 0..3 {
         let z = -4.0 + i as f32 * 4.0;
         let brick = block(&mut tree, lava, "LavaBrick", [56.0, 4.0, z], [4.0, 1.0, 2.0], [230, 60, 40]);
-        script(&mut tree, brick, "Kill", KILL_SCRIPT);
+        tree.add_tag(brick, "Lava").expect("bricks exist");
         block(&mut tree, lava, "Stone", [56.0, 4.0, z + 2.0], [4.0, 1.0, 2.0], [120, 120, 130]);
     }
     block(&mut tree, lava, "SafeB", [64.0, 4.0, 0.0], [6.0, 1.0, 6.0], [180, 180, 190]);
@@ -642,8 +736,8 @@ mod tests {
             session.step(1.0 / 60.0, west);
         }
         let log = session.take_log();
-        assert_eq!(leaderstat(&session, "Coins"), 1.0, "{log:?}");
-        assert_eq!(get(&session, label, Property::Text), PropertyValue::String("Coins: 1".into()));
+        assert_eq!(leaderstat(&session, "Coins"), 5.0, "{log:?}");
+        assert_eq!(get(&session, label, Property::Text), PropertyValue::String("Coins: 5".into()));
         assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
     }
 
@@ -730,5 +824,69 @@ mod tests {
         assert_eq!(saved["PlayerData"]["coins_1"], 2.0);
         let errors: Vec<_> = session.take_log().into_iter().filter(|l| l.level == LogLevel::Error).collect();
         assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn builder_tool_name_tags_and_tagged_lava() {
+        use libroxel_instance::KeyCode;
+        use libroxel_script::{MouseRay, UserInput};
+        let frame = |s: &mut libroxel_engine::PlaySession, n: usize| {
+            for _ in 0..n {
+                s.step(1.0 / 60.0, CharacterInput::default());
+            }
+        };
+        let mut session = start_on(sample_obby(), true).unwrap();
+        frame(&mut session, 5);
+        let character = session.character().unwrap();
+        let tree = session.runtime().tree().clone();
+        // The name tag script put a billboard on the head.
+        let tag = tree.borrow().find_first_child_of_class(character.head, ClassKind::BillboardGui).unwrap();
+        assert!(tag.is_some(), "the character has a name tag");
+
+        // The builder is in slot 1; pressing 1 holds it.
+        let hotbar = session.hotbar();
+        assert_eq!(hotbar.len(), 1);
+        assert_eq!(tree.borrow().name(hotbar[0].0).unwrap(), "Builder");
+        session.input_began(UserInput::Key(KeyCode::One), false);
+        session.input_ended(UserInput::Key(KeyCode::One), false);
+        frame(&mut session, 2);
+        assert!(session.hotbar()[0].1, "held");
+        let handle = tree.borrow().find_first_child(hotbar[0].0, "Handle").unwrap().unwrap();
+        let hand = tree.borrow().get_vec3(handle, Property::Position).unwrap();
+        let body = tree.borrow().get_vec3(character.root, Property::Position).unwrap();
+        assert!((hand - body).length() < 3.0, "the handle is in the character's hand: {hand:?} {body:?}");
+
+        // Aim at the start platform and click.
+        session.set_mouse(Some(MouseRay {
+            origin: Vec3::new(4.0, 20.0, 4.0),
+            direction: Vec3::new(0.0, -1.0, 0.0),
+            x: 0.0,
+            y: 0.0,
+        }));
+        session.input_began(UserInput::MouseButton1, false);
+        session.input_ended(UserInput::MouseButton1, false);
+        frame(&mut session, 2);
+        let brick = tree.borrow().find_first_child(tree.borrow().workspace(), "BuiltBrick").unwrap();
+        let brick = brick.expect("a brick was built");
+        assert_eq!(tree.borrow().get_vec3(brick, Property::Position), Some(Vec3::new(4.0, 0.5, 4.0)));
+        assert_eq!(
+            tree.borrow().get_attribute(brick, "Builder").unwrap(),
+            Some(PropertyValue::String("Player1".into()))
+        );
+
+        // Pressing 1 again puts it away.
+        session.input_began(UserInput::Key(KeyCode::One), false);
+        frame(&mut session, 1);
+        assert!(!session.hotbar()[0].1);
+
+        // Lava found by its tag still kills.
+        session
+            .runtime()
+            .run("lava", "workspace.Player1.HumanoidRootPart.Position = workspace.Lava.LavaBrick.Position + Vector3.new(0, 2, 0)")
+            .unwrap();
+        frame(&mut session, 30);
+        let log = session.take_log();
+        assert!(log.iter().any(|l| l.text == "Your character died"), "{log:?}");
+        assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
     }
 }

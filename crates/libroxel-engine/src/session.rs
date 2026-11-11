@@ -1,7 +1,9 @@
 //! A play session: what runs between pressing Play and Stop.
 
-use libroxel_instance::{ClassKind, EnumValue, InstanceId, InstanceTree, KeyCode, Property, PropertyValue};
-use libroxel_script::{OutputLevel, ScriptRuntime, SharedTree, UserInput};
+use libroxel_instance::{
+    ClassKind, EnumValue, InstanceId, InstanceTree, KeyCode, Property, PropertyValue, Rotation, Vec3,
+};
+use libroxel_script::{MouseRay, OutputLevel, ScriptRuntime, SharedTree, UserInput, names};
 
 use crate::character::{Character, CharacterInput};
 use crate::physics::Physics;
@@ -59,7 +61,27 @@ pub struct PlaySession {
     respawn_in: Option<f32>,
     log: Vec<LogEntry>,
     hold: Option<PromptHold>,
+    /// The local player's tool container.
+    backpack: Option<InstanceId>,
+    /// The player's tools in hotbar order (slot 1 first).
+    hotbar: Vec<InstanceId>,
 }
+
+/// Where a character holds its tool's handle, relative to its body.
+const HAND_OFFSET: Vec3 = Vec3::new(1.3, -0.4, -1.0);
+
+/// The number keys that pick hotbar slots 1 to 9.
+const SLOT_KEYS: [KeyCode; 9] = [
+    KeyCode::One,
+    KeyCode::Two,
+    KeyCode::Three,
+    KeyCode::Four,
+    KeyCode::Five,
+    KeyCode::Six,
+    KeyCode::Seven,
+    KeyCode::Eight,
+    KeyCode::Nine,
+];
 
 impl PlaySession {
     /// Spawns a character (when `with_character`) and starts every script.
@@ -89,6 +111,8 @@ impl PlaySession {
             respawn_in: None,
             log: Vec::new(),
             hold: None,
+            backpack: None,
+            hotbar: Vec::new(),
         };
         if let Some(json) = saved_data
             && let Err(err) = session.runtime.load_data(json)
@@ -118,6 +142,13 @@ impl PlaySession {
                 gui
             };
             session.player_gui = Some(gui);
+            let backpack = {
+                let mut t = tree.borrow_mut();
+                let backpack = t.create(ClassKind::Backpack, "Backpack").expect("backpacks can be created");
+                t.set_parent(backpack, Some(player)).expect("fresh backpacks can be parented");
+                backpack
+            };
+            session.backpack = Some(backpack);
             session.copy_starter_gui(&tree, false);
             let errors = session.runtime.player_added(player);
             session.collect(errors);
@@ -135,6 +166,7 @@ impl PlaySession {
             let _ = t.set(player, Property::Character, PropertyValue::Ref(Some(character.model)));
             character
         };
+        self.fill_backpack(tree);
         self.character = Some(character);
         let errors = self.runtime.character_added(player, character.model);
         self.collect(errors);
@@ -186,6 +218,133 @@ impl PlaySession {
             let errors = self.runtime.run_local_scripts(copy);
             self.collect(errors);
         }
+    }
+
+    /// Gives the player a fresh copy of every starter tool, replacing what
+    /// their backpack held, and starts the tools' scripts.
+    fn fill_backpack(&mut self, tree: &SharedTree) {
+        let Some(backpack) = self.backpack else { return };
+        let copies: Vec<InstanceId> = {
+            let mut t = tree.borrow_mut();
+            for old in t.children(backpack).unwrap_or_default().to_vec() {
+                let _ = t.destroy(old);
+            }
+            let Some(pack) = t.service(ClassKind::StarterPack) else { return };
+            let tools: Vec<InstanceId> = t
+                .children(pack)
+                .unwrap_or_default()
+                .iter()
+                .copied()
+                .filter(|c| t.class(*c) == Ok(ClassKind::Tool))
+                .collect();
+            tools
+                .into_iter()
+                .filter_map(|tool| {
+                    let copy = t.clone_subtree(tool).ok()?;
+                    t.set_parent(copy, Some(backpack)).ok()?;
+                    Some(copy)
+                })
+                .collect()
+        };
+        self.hotbar.clear();
+        for copy in copies {
+            let mut errors = self.runtime.run_scripts(copy);
+            errors.extend(self.runtime.run_local_scripts(copy));
+            self.collect(errors);
+        }
+        self.refresh_hotbar();
+    }
+
+    /// Keeps the hotbar in step with the tools the player has: ones that
+    /// are gone drop out, new ones go at the end.
+    fn refresh_hotbar(&mut self) {
+        let tree = self.runtime.tree().borrow();
+        let mut owned: Vec<InstanceId> = Vec::new();
+        for container in [self.backpack, self.character.map(|c| c.model)].into_iter().flatten() {
+            if let Ok(children) = tree.children(container) {
+                owned.extend(children.iter().copied().filter(|c| tree.class(*c) == Ok(ClassKind::Tool)));
+            }
+        }
+        self.hotbar.retain(|t| owned.contains(t));
+        for tool in owned {
+            if !self.hotbar.contains(&tool) {
+                self.hotbar.push(tool);
+            }
+        }
+    }
+
+    /// The player's tools in hotbar order, each with whether it's held.
+    pub fn hotbar(&self) -> Vec<(InstanceId, bool)> {
+        let tree = self.runtime.tree().borrow();
+        let model = self.character.map(|c| c.model);
+        self.hotbar.iter().map(|t| (*t, model.is_some() && tree.parent(*t).ok().flatten() == model)).collect()
+    }
+
+    /// Holds the tool in hotbar `slot` (from 0), or puts it away if it's
+    /// already held. Holding one tool puts any other away.
+    pub fn toggle_tool(&mut self, slot: usize) {
+        let (Some(tool), Some(character), Some(backpack)) =
+            (self.hotbar.get(slot).copied(), self.character, self.backpack)
+        else {
+            return;
+        };
+        let mut tree = self.runtime.tree().borrow_mut();
+        if character.is_dead(&tree) {
+            return;
+        }
+        let held = tree.parent(tool).ok().flatten() == Some(character.model);
+        let holding: Vec<InstanceId> = tree
+            .children(character.model)
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .filter(|c| tree.class(*c) == Ok(ClassKind::Tool))
+            .collect();
+        for other in holding {
+            let _ = tree.set_parent(other, Some(backpack));
+        }
+        if !held {
+            let _ = tree.set_parent(tool, Some(character.model));
+        }
+    }
+
+    /// Tells scripts where the mouse points (`None` when it's off the view).
+    pub fn set_mouse(&mut self, mouse: Option<MouseRay>) {
+        self.runtime.set_mouse(mouse);
+    }
+
+    /// Turns the character to face where it walks and puts its tool's
+    /// handle in its hand.
+    fn pose_character(&mut self, input: CharacterInput) {
+        let Some(character) = self.character else { return };
+        let mut tree = self.runtime.tree().borrow_mut();
+        if character.is_dead(&tree) {
+            return;
+        }
+        let dir = input.move_dir;
+        if dir.x != 0.0 || dir.z != 0.0 {
+            let yaw = (-dir.x).atan2(-dir.z).to_degrees();
+            let facing = PropertyValue::Vec3(Vec3::new(0.0, yaw, 0.0));
+            let _ = tree.set(character.root, Property::Orientation, facing.clone());
+            let _ = tree.set(character.head, Property::Orientation, facing);
+        }
+        let Some(tool) = tree.find_first_child_of_class(character.model, ClassKind::Tool).ok().flatten()
+        else {
+            return;
+        };
+        let Some(handle) = tree.find_first_child(tool, names::TOOL_HANDLE).ok().flatten() else { return };
+        let (Some(pos), orientation) = (
+            tree.get_vec3(character.root, Property::Position),
+            tree.get_vec3(character.root, Property::Orientation),
+        ) else {
+            return;
+        };
+        let orientation = orientation.unwrap_or_default();
+        let at = pos + Rotation::from_orientation(orientation).apply(HAND_OFFSET);
+        let _ = tree.set(handle, Property::Anchored, PropertyValue::Bool(true));
+        let _ = tree.set(handle, Property::CanCollide, PropertyValue::Bool(false));
+        let _ = tree.set(handle, Property::Position, PropertyValue::Vec3(at));
+        let _ = tree.set(handle, Property::Orientation, PropertyValue::Vec3(orientation));
     }
 
     /// The player clicked a GUI button.
@@ -240,6 +399,11 @@ impl PlaySession {
     pub fn input_began(&mut self, input: UserInput, processed: bool) {
         let errors = self.runtime.input_began(input, processed);
         self.collect(errors);
+        if let (UserInput::Key(key), false) = (input, processed)
+            && let Some(slot) = SLOT_KEYS.iter().position(|k| *k == key)
+        {
+            self.toggle_tool(slot);
+        }
         if let (UserInput::Key(key), false) = (input, processed)
             && let Some(active) = self.active_prompt()
             && active.key == key
@@ -400,6 +564,8 @@ impl PlaySession {
             }
             result
         };
+        self.pose_character(input);
+        self.refresh_hotbar();
 
         for (a, b) in result.touches {
             let mut errors = self.runtime.fire_touched(a, b);

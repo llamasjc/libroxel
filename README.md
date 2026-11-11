@@ -44,7 +44,8 @@ The first build compiles Bevy and takes a while. After that it is quick.
   ramp, spinning coins, lava, fading platforms, a lift and a finish pad, plus
   a leaderboard that counts coins and deaths, an on-screen coin counter, a
   day/night button, a vault whose door opens when you click it, and a stand
-  where you hold E to buy a speed boost. Coins are saved between play tests.
+  where you hold E to buy a speed boost. Coins are saved between play tests,
+  and a builder tool (press 1, then click) places bricks.
   Press **▶ Play** (or F5) to try it.
 - **Explorer** (left) shows the instance tree. Click to select, double-click
   a script to edit it, drag one item onto another to move it inside, and
@@ -68,6 +69,14 @@ The first build compiles Bevy and takes a while. After that it is quick.
   while you edit, so you can click one to select it and lay it out with
   Position, Size and AnchorPoint. While playing, every player gets a copy,
   buttons can be clicked, and parts with a `ClickDetector` can be clicked too.
+- **Tools:** put a `Tool` in StarterPack (Insert menu gives it a `Handle` and
+  a script). While playing, tools show on a hotbar at the bottom; press 1 to
+  9 or click a slot to hold one, and click in the world to use it.
+- **Floating text:** a `BillboardGui` inside a part holds labels that float
+  above it and face the camera, like signs and name tags.
+- **Attributes and tags:** the Properties panel lists the selection's
+  attributes (numbers, text, booleans, vectors, colours) and tags, which you
+  can add, change and remove. Both are saved with the game.
 - **Saved data:** what a game's data stores save during a play test is kept
   beside the game's file (as `<name>.data.json`) and loaded next time you
   press Play. **File → Clear saved data** forgets it.
@@ -102,14 +111,33 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `LocalScript`, `ModuleScript`, `Humanoid`, `IntValue`, `NumberValue`,
   `StringValue`, `BoolValue`, `ClickDetector`, `ProximityPrompt`,
   `RemoteEvent`, `BindableEvent`, `ScreenGui`, `Frame`, `TextLabel`,
-  `TextButton`, plus the built-in `Workspace`, `Players` (with
-  one `Player` each, holding a `PlayerGui`), `ReplicatedStorage`,
-  `ServerScriptService`, `StarterGui` and `Lighting`.
+  `TextButton`, `BillboardGui`, `Tool`, plus the built-in `Workspace`,
+  `Players` (with one `Player` each, holding a `PlayerGui` and a
+  `Backpack`), `ReplicatedStorage`, `ServerScriptService`, `StarterGui`,
+  `StarterPack` and `Lighting`.
 - **Instance members:** `Name`, `ClassName`, `Parent`, `FindFirstChild`,
   `FindFirstChildOfClass`, `FindFirstAncestor`, `FindFirstDescendant`,
   `WaitForChild`, `GetChildren`, `GetDescendants`, `ClearAllChildren`, `IsA`,
   `IsDescendantOf`, `GetFullName`, `Clone`, `Destroy`, `instance.ChildName`,
   the `Changed` and `ChildAdded` events, and `GetPropertyChangedSignal(name)`.
+- **Attributes:** `SetAttribute(name, value)` (nil removes it),
+  `GetAttribute`, `GetAttributes`, `GetAttributeChangedSignal(name)` and the
+  `AttributeChanged(name)` event. Values can be booleans, numbers, strings,
+  `Vector3`, `Vector2`, `Color3` and `UDim2`.
+- **Tags:** `AddTag`, `RemoveTag`, `HasTag` and `GetTags` on any instance,
+  and `CollectionService:GetTagged(tag)`, `GetInstanceAddedSignal(tag)` and
+  `GetInstanceRemovedSignal(tag)`.
+- **Tools:** tools in StarterPack are copied into each player's `Backpack`
+  when their character spawns. Holding one moves it into the character and
+  puts its `Handle` part in their hand. A tool fires `Equipped(mouse)`,
+  `Unequipped`, and `Activated` / `Deactivated` on click while `Enabled`.
+  `Humanoid:EquipTool(tool)` and `UnequipTools()` do it from a script.
+- **Mouse:** `Player:GetMouse()` gives `Hit` (a CFrame where the pointer
+  meets the world), `Target` (the part under it), `X`, `Y`, and the
+  `Button1Down` / `Button1Up` events.
+- **Floating text:** `BillboardGui` has `Size` (`UDim2`, scale in studs plus
+  pixels), `StudsOffset`, `AlwaysOnTop`, `MaxDistance` and `Enabled`, and
+  shows the labels inside it over its parent part (or a model's `Head`).
 - **Signals:** `Connect` (returns a connection with `Disconnect`), `Once`,
   and `Wait`, which pauses the script until the signal fires and returns its
   arguments.
@@ -214,7 +242,7 @@ door.ClickDetector.MouseClick:Connect(function(player)
 end)
 ```
 
-**Not yet:** images and other GUI objects, sounds, terrain and voxels, and
+**Not yet:** images and other GUI objects, tool animations, sounds, terrain and voxels, and
 multiplayer (so remote events never cross a network). Physics is simple: anchored parts can be rotated and shaped
 (ramps and balls work), but loose parts are upright boxes that fall and
 stack without tipping over. Characters climb steps up to 0.6 studs.

@@ -48,15 +48,29 @@ pub(crate) enum SignalKind {
     BindableEvent(InstanceId),
     InputBegan,
     InputEnded,
+    AttributeChanged(InstanceId),
+    /// One attribute, by its interned name (see [`intern`]).
+    AttributeNamedChanged(InstanceId, u32),
+    /// A tag, by its interned name, was added to or removed from an instance.
+    TagAdded(u32),
+    TagRemoved(u32),
+    ToolEquipped(InstanceId),
+    ToolUnequipped(InstanceId),
+    ToolActivated(InstanceId),
+    ToolDeactivated(InstanceId),
+    MouseButton1Down,
+    MouseButton1Up,
 }
 
 impl SignalKind {
     /// The instance whose changes this signal follows, if any.
     fn watched(self) -> Option<InstanceId> {
         match self {
-            SignalKind::Changed(id) | SignalKind::PropertyChanged(id, _) | SignalKind::ChildAdded(id) => {
-                Some(id)
-            }
+            SignalKind::Changed(id)
+            | SignalKind::PropertyChanged(id, _)
+            | SignalKind::ChildAdded(id)
+            | SignalKind::AttributeChanged(id)
+            | SignalKind::AttributeNamedChanged(id, _) => Some(id),
             _ => None,
         }
     }
@@ -102,6 +116,32 @@ pub(crate) struct Host {
     pub(crate) data_changed: Cell<bool>,
     /// Instances to destroy, and when.
     pub(crate) debris: RefCell<Vec<(InstanceId, f64)>>,
+    /// Attribute and tag names that signals refer to by number.
+    interned: RefCell<Vec<String>>,
+    /// Where the player's mouse points, set by the host each frame.
+    pub(crate) mouse: Cell<Option<crate::MouseRay>>,
+}
+
+/// The number for `name`, giving it one if it has none yet.
+pub(crate) fn intern(lua: &Lua, name: &str) -> u32 {
+    let host = host(lua);
+    let mut names = host.interned.borrow_mut();
+    if let Some(i) = names.iter().position(|n| n == name) {
+        return i as u32;
+    }
+    names.push(name.to_owned());
+    (names.len() - 1) as u32
+}
+
+/// The number for `name`, if anything has asked for one (so something may be listening).
+fn interned(lua: &Lua, name: &str) -> Option<u32> {
+    host(lua).interned.borrow().iter().position(|n| n == name).map(|i| i as u32)
+}
+
+/// Whether `id` is a character: a model with a humanoid in it.
+pub(crate) fn is_character(tree: &libroxel_instance::InstanceTree, id: InstanceId) -> bool {
+    tree.class(id) == Ok(ClassKind::Model)
+        && tree.find_first_child_of_class(id, ClassKind::Humanoid).ok().flatten().is_some()
 }
 
 pub(crate) fn host(lua: &Lua) -> mlua::AppDataRef<'_, Host> {
@@ -124,6 +164,7 @@ fn describe_tree_error(err: TreeError) -> String {
             names::property_name(property),
             names::class_name(class)
         ),
+        TreeError::BadAttribute(kind) => format!("attributes can't hold a {}", names::value_kind_name(kind)),
         TreeError::WrongType { property, expected, got } => format!(
             "{} expects a {}, got a {}",
             names::property_name(property),
@@ -358,7 +399,7 @@ pub(crate) fn as_instance(value: &Value) -> Option<InstanceId> {
     }
 }
 
-fn property_to_lua(lua: &Lua, value: PropertyValue) -> mlua::Result<Value> {
+pub(crate) fn property_to_lua(lua: &Lua, value: PropertyValue) -> mlua::Result<Value> {
     Ok(match value {
         PropertyValue::Bool(b) => Value::Boolean(b),
         PropertyValue::Number(n) => Value::Number(n),
@@ -440,6 +481,11 @@ fn instance_event(class: ClassKind, id: InstanceId, key: &str) -> Option<SignalK
         CHILD_ADDED => SignalKind::ChildAdded(id),
         MOUSE_BUTTON1_CLICK if class == ClassKind::TextButton => SignalKind::ButtonClicked(id),
         ACTIVATED if class == ClassKind::TextButton => SignalKind::ButtonActivated(id),
+        ACTIVATED if class == ClassKind::Tool => SignalKind::ToolActivated(id),
+        DEACTIVATED if class == ClassKind::Tool => SignalKind::ToolDeactivated(id),
+        EQUIPPED if class == ClassKind::Tool => SignalKind::ToolEquipped(id),
+        UNEQUIPPED if class == ClassKind::Tool => SignalKind::ToolUnequipped(id),
+        ATTRIBUTE_CHANGED => SignalKind::AttributeChanged(id),
         MOUSE_CLICK if class == ClassKind::ClickDetector => SignalKind::MouseClick(id),
         TRIGGERED if class == ClassKind::ProximityPrompt => SignalKind::PromptTriggered(id),
         TRIGGER_ENDED if class == ClassKind::ProximityPrompt => SignalKind::PromptTriggerEnded(id),
@@ -633,6 +679,7 @@ impl UserData for LuaInstance {
             Ok(())
         });
         crate::services::add_instance_methods(methods);
+        crate::items::add_instance_methods(methods);
         methods.add_method(names::methods::TAKE_DAMAGE, |lua, this, amount: f64| {
             require_class(lua, this.0, ClassKind::Humanoid, names::methods::TAKE_DAMAGE)?;
             let host = host(lua);
@@ -1258,6 +1305,8 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         data: RefCell::new(Default::default()),
         data_changed: Cell::new(false),
         debris: RefCell::new(Vec::new()),
+        interned: RefCell::new(Vec::new()),
+        mouse: Cell::new(None),
     });
 
     // Weak-valued cache so each instance has exactly one userdata.
@@ -1530,24 +1579,80 @@ pub(crate) fn fire_plain(lua: &Lua, signal: SignalKind) -> Vec<ScriptError> {
 
 /// Fires change events for everything in `changes` that a script is listening to.
 pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
-    let watched: std::collections::HashSet<InstanceId> =
-        host(lua).connections.borrow().iter().filter_map(|c| c.signal.watched()).collect();
-    if watched.is_empty() {
+    let (watched, tags_heard, tools_heard) = {
+        let host = host(lua);
+        let conns = host.connections.borrow();
+        let watched: std::collections::HashSet<InstanceId> =
+            conns.iter().filter_map(|c| c.signal.watched()).collect();
+        let tags =
+            conns.iter().any(|c| matches!(c.signal, SignalKind::TagAdded(_) | SignalKind::TagRemoved(_)));
+        let tools = conns
+            .iter()
+            .any(|c| matches!(c.signal, SignalKind::ToolEquipped(_) | SignalKind::ToolUnequipped(_)));
+        (watched, tags, tools)
+    };
+    if watched.is_empty() && !tags_heard && !tools_heard {
         return Vec::new();
     }
+    let with_instance = |signal: SignalKind, id: InstanceId| {
+        fire(lua, signal, || Ok(std::iter::once(Value::UserData(push_instance(lua, id)?)).collect()));
+    };
     for change in changes {
-        match *change {
-            Change::PropertyChanged { id, property } if watched.contains(&id) => {
-                let name = names::property_name(property);
-                fire(lua, SignalKind::Changed(id), || {
+        match change {
+            Change::PropertyChanged { id, property } if watched.contains(id) => {
+                let name = names::property_name(*property);
+                fire(lua, SignalKind::Changed(*id), || {
                     Ok(std::iter::once(Value::String(lua.create_string(name)?)).collect())
                 });
-                fire(lua, SignalKind::PropertyChanged(id, property), || Ok(MultiValue::new()));
+                fire(lua, SignalKind::PropertyChanged(*id, *property), || Ok(MultiValue::new()));
             }
-            Change::Reparented { id, new_parent: Some(parent), .. } if watched.contains(&parent) => {
-                fire(lua, SignalKind::ChildAdded(parent), || {
-                    Ok(std::iter::once(Value::UserData(push_instance(lua, id)?)).collect())
+            Change::Reparented { id, old_parent, new_parent } => {
+                if let Some(parent) = new_parent
+                    && watched.contains(parent)
+                {
+                    with_instance(SignalKind::ChildAdded(*parent), *id);
+                }
+                if tools_heard {
+                    let (is_tool, from, to) = {
+                        let host = host(lua);
+                        let tree = host.tree.borrow();
+                        let held = |p: &Option<InstanceId>| p.is_some_and(|p| is_character(&tree, p));
+                        (tree.class(*id) == Ok(ClassKind::Tool), held(old_parent), held(new_parent))
+                    };
+                    if is_tool && from && !to {
+                        fire(lua, SignalKind::ToolUnequipped(*id), || Ok(MultiValue::new()));
+                    }
+                    if is_tool && to && !from {
+                        fire(lua, SignalKind::ToolEquipped(*id), || {
+                            Ok(std::iter::once(Value::UserData(lua.create_userdata(crate::items::Mouse)?))
+                                .collect())
+                        });
+                    }
+                }
+            }
+            Change::AttributeChanged { id, name } if watched.contains(id) => {
+                fire(lua, SignalKind::AttributeChanged(*id), || {
+                    Ok(std::iter::once(Value::String(lua.create_string(name)?)).collect())
                 });
+                if let Some(n) = interned(lua, name) {
+                    fire(lua, SignalKind::AttributeNamedChanged(*id, n), || Ok(MultiValue::new()));
+                }
+            }
+            Change::TagAdded { id, tag } if tags_heard => {
+                if let Some(n) = interned(lua, tag) {
+                    with_instance(SignalKind::TagAdded(n), *id);
+                }
+            }
+            Change::TagRemoved { id, tag } if tags_heard => {
+                if let Some(n) = interned(lua, tag) {
+                    with_instance(SignalKind::TagRemoved(n), *id);
+                }
+            }
+            Change::Destroyed(id) if tags_heard => {
+                let tags = host(lua).tree.borrow().tags(*id).map(|t| t.to_vec()).unwrap_or_default();
+                for n in tags.iter().filter_map(|t| interned(lua, t)) {
+                    with_instance(SignalKind::TagRemoved(n), *id);
+                }
             }
             _ => {}
         }

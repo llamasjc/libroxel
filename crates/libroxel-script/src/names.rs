@@ -91,6 +91,17 @@ pub mod events {
     pub const INPUT_BEGAN: &str = "InputBegan";
     /// On the input service: fires with an input object when a key or button comes up.
     pub const INPUT_ENDED: &str = "InputEnded";
+    /// On any instance: fires with an attribute's name after it changes.
+    pub const ATTRIBUTE_CHANGED: &str = "AttributeChanged";
+    /// On a tool: fires with the player's mouse when the character starts holding it.
+    pub const EQUIPPED: &str = "Equipped";
+    /// On a tool: fires when the character stops holding it.
+    pub const UNEQUIPPED: &str = "Unequipped";
+    /// On a tool: fires when the player releases the mouse button while holding it.
+    pub const DEACTIVATED: &str = "Deactivated";
+    /// On the mouse: the left button went down or came up.
+    pub const BUTTON1_DOWN: &str = "Button1Down";
+    pub const BUTTON1_UP: &str = "Button1Up";
 }
 
 /// Methods that only some classes have.
@@ -127,7 +138,49 @@ pub mod methods {
     pub const FIRE: &str = "Fire";
     /// Workspace: the first part a ray hits.
     pub const RAYCAST: &str = "Raycast";
+    /// Any instance: attach, read and list named values.
+    pub const SET_ATTRIBUTE: &str = "SetAttribute";
+    pub const GET_ATTRIBUTE: &str = "GetAttribute";
+    pub const GET_ATTRIBUTES: &str = "GetAttributes";
+    /// Any instance: a signal for one attribute changing.
+    pub const GET_ATTRIBUTE_CHANGED_SIGNAL: &str = "GetAttributeChangedSignal";
+    /// Any instance, and the tag service (with the instance first): labels.
+    pub const ADD_TAG: &str = "AddTag";
+    pub const REMOVE_TAG: &str = "RemoveTag";
+    pub const HAS_TAG: &str = "HasTag";
+    pub const GET_TAGS: &str = "GetTags";
+    /// Tag service: every instance with a tag, and signals for tags coming and going.
+    pub const GET_TAGGED: &str = "GetTagged";
+    pub const GET_INSTANCE_ADDED_SIGNAL: &str = "GetInstanceAddedSignal";
+    pub const GET_INSTANCE_REMOVED_SIGNAL: &str = "GetInstanceRemovedSignal";
+    /// Humanoid: hold a tool, or put every held tool back in the backpack.
+    pub const EQUIP_TOOL: &str = "EquipTool";
+    pub const UNEQUIP_TOOLS: &str = "UnequipTools";
+    /// Player: the player's mouse.
+    pub const GET_MOUSE: &str = "GetMouse";
 }
+
+/// Members of the player's mouse.
+pub mod mouse {
+    /// Where the mouse points in the world, as a CFrame facing along the ray.
+    pub const HIT: &str = "Hit";
+    /// The part under the mouse, or nil.
+    pub const TARGET: &str = "Target";
+    /// Pixel position on screen.
+    pub const X: &str = "X";
+    pub const Y: &str = "Y";
+    pub const TYPE_NAME: &str = "Mouse";
+    /// How far the mouse ray reaches, in studs.
+    pub const REACH: f32 = 1000.0;
+}
+
+/// Limits on attribute names.
+pub mod attributes {
+    pub const MAX_NAME_LEN: usize = 100;
+}
+
+/// The name of the part a character holds a tool by.
+pub const TOOL_HANDLE: &str = "Handle";
 
 /// Members of the input service and its input objects.
 pub mod user_input {
@@ -425,6 +478,7 @@ pub mod services {
     pub const USER_INPUT_SERVICE: &str = "UserInputService";
     pub const DATA_STORE_SERVICE: &str = "DataStoreService";
     pub const DEBRIS: &str = "Debris";
+    pub const COLLECTION_SERVICE: &str = "CollectionService";
     /// Fires once per frame with the frame's delta time in seconds.
     pub const HEARTBEAT: &str = "Heartbeat";
 }
@@ -476,6 +530,10 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::RemoteEvent => "RemoteEvent",
         ClassKind::BindableEvent => "BindableEvent",
         ClassKind::ProximityPrompt => "ProximityPrompt",
+        ClassKind::Tool => "Tool",
+        ClassKind::StarterPack => "StarterPack",
+        ClassKind::Backpack => "Backpack",
+        ClassKind::BillboardGui => "BillboardGui",
     }
 }
 
@@ -525,6 +583,9 @@ pub fn property_name(property: Property) -> &'static str {
         Property::ObjectText => "ObjectText",
         Property::KeyboardKeyCode => "KeyboardKeyCode",
         Property::HoldDuration => "HoldDuration",
+        Property::StudsOffset => "StudsOffset",
+        Property::AlwaysOnTop => "AlwaysOnTop",
+        Property::MaxDistance => "MaxDistance",
     }
 }
 

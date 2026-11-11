@@ -73,6 +73,22 @@
   value inside the runtime. A session can start with saved JSON and hands it
   back when it stops (after `PlayerRemoving`, so games can save on leave);
   the editor keeps it in a file beside the game.
+- **Attributes and tags** are stored on each instance (a sorted map and a
+  sorted list), journalled like property changes, and saved in `.lrx` files
+  as an `attributes` object (typed values carry a `kind`) and a `tags` array.
+  `CollectionService` reads them straight from the tree.
+- **Tools.** At each spawn the session clears the player's Backpack, clones
+  StarterPack's tools into it and starts their scripts. The hotbar is the
+  backpack's tools plus the one in the character. Holding a tool reparents
+  it into the character; the change journal sees that move and fires
+  `Equipped` or `Unequipped`. Each frame the session turns the character to
+  face where it walks and places the held tool's `Handle` in its hand. The
+  editor sends the mouse ray every frame, so `Mouse.Hit` and `Target` are a
+  raycast that skips the player's own character.
+- **Billboards** are drawn by the editor like screen GUIs, but each one is
+  projected from its part (plus `StudsOffset`), sized in studs by the
+  distance to the camera, and hidden past `MaxDistance` or, unless
+  `AlwaysOnTop`, behind other parts.
 - **Threading.** The Luau VM is single-threaded, so the engine state is a
   Bevy non-send resource and the tree is shared as `Rc<RefCell<_>>`.
 

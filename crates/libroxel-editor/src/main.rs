@@ -70,6 +70,10 @@ pub struct Editor {
     pub reveal_selection: bool,
     /// The fly camera from before Play, restored on Stop.
     pub saved_camera: Option<(Transform, libroxel_engine::view::CameraRig)>,
+    /// The "add attribute" row: its name and which kind of value.
+    pub new_attribute: (String, usize),
+    /// The "add tag" box.
+    pub new_tag: String,
 }
 
 impl Default for Editor {
@@ -93,6 +97,8 @@ impl Default for Editor {
             show_grid: true,
             reveal_selection: false,
             saved_camera: None,
+            new_attribute: (String::new(), 0),
+            new_tag: String::new(),
         }
     }
 }

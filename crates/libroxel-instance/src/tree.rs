@@ -31,6 +31,9 @@ pub enum Change {
     Reparented { id: InstanceId, old_parent: Option<InstanceId>, new_parent: Option<InstanceId> },
     PropertyChanged { id: InstanceId, property: Property },
     Destroyed(InstanceId),
+    AttributeChanged { id: InstanceId, name: String },
+    TagAdded { id: InstanceId, tag: String },
+    TagRemoved { id: InstanceId, tag: String },
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -47,6 +50,8 @@ pub enum TreeError {
     NoSuchProperty { class: ClassKind, property: Property },
     #[error("{property:?} expects a {expected}, got a {got}")]
     WrongType { property: Property, expected: &'static str, got: &'static str },
+    #[error("attributes can't hold a {0}")]
+    BadAttribute(&'static str),
 }
 
 pub type Result<T> = std::result::Result<T, TreeError>;
@@ -61,6 +66,10 @@ struct InstanceData {
     destroyed: bool,
     /// Every property except `Name`, in [`ClassKind::properties`] order.
     props: Vec<(Property, PropertyValue)>,
+    /// Values scripts and the editor attach by name.
+    attributes: std::collections::BTreeMap<String, PropertyValue>,
+    /// Labels for grouping instances, kept sorted.
+    tags: Vec<String>,
 }
 
 impl InstanceData {
@@ -79,6 +88,8 @@ impl InstanceData {
             parent_locked: false,
             destroyed: false,
             props,
+            attributes: Default::default(),
+            tags: Vec::new(),
         }
     }
 
@@ -133,6 +144,7 @@ impl InstanceTree {
                 ClassKind::StarterGui => "StarterGui",
                 ClassKind::Lighting => "Lighting",
                 ClassKind::ServerScriptService => "ServerScriptService",
+                ClassKind::StarterPack => "StarterPack",
                 _ => unreachable!("every service has a name"),
             };
             let id = tree.alloc(InstanceData::new(class, name.into()));
@@ -376,9 +388,10 @@ impl InstanceTree {
                     PropertyValue::Number(n.round())
                 }
                 (Property::ClockTime, PropertyValue::Number(n)) => PropertyValue::Number(n.rem_euclid(24.0)),
-                (Property::HoldDuration | Property::MaxActivationDistance, PropertyValue::Number(n)) => {
-                    PropertyValue::Number(n.max(0.0))
-                }
+                (
+                    Property::HoldDuration | Property::MaxActivationDistance | Property::MaxDistance,
+                    PropertyValue::Number(n),
+                ) => PropertyValue::Number(n.max(0.0)),
                 (_, v) => v,
             };
             replace(slot, value)
@@ -387,6 +400,68 @@ impl InstanceTree {
             self.changes.push(Change::PropertyChanged { id, property });
         }
         Ok(())
+    }
+
+    /// Every attribute on `id`, sorted by name.
+    pub fn attributes(&self, id: InstanceId) -> Result<&std::collections::BTreeMap<String, PropertyValue>> {
+        Ok(&self.data(id)?.attributes)
+    }
+
+    pub fn get_attribute(&self, id: InstanceId, name: &str) -> Result<Option<PropertyValue>> {
+        Ok(self.data(id)?.attributes.get(name).cloned())
+    }
+
+    /// Sets an attribute, or removes it with `None`. Links and enum values
+    /// can't be attributes.
+    pub fn set_attribute(&mut self, id: InstanceId, name: &str, value: Option<PropertyValue>) -> Result<()> {
+        if let Some(v @ (PropertyValue::Ref(_) | PropertyValue::Enum(_))) = &value {
+            return Err(TreeError::BadAttribute(v.kind_name()));
+        }
+        let attributes = &mut self.data_mut(id)?.attributes;
+        let changed = match value {
+            Some(v) => attributes.insert(name.to_owned(), v.clone()).as_ref() != Some(&v),
+            None => attributes.remove(name).is_some(),
+        };
+        if changed {
+            self.changes.push(Change::AttributeChanged { id, name: name.to_owned() });
+        }
+        Ok(())
+    }
+
+    /// The tags on `id`, sorted.
+    pub fn tags(&self, id: InstanceId) -> Result<&[String]> {
+        Ok(&self.data(id)?.tags)
+    }
+
+    pub fn has_tag(&self, id: InstanceId, tag: &str) -> Result<bool> {
+        Ok(self.data(id)?.tags.binary_search_by(|t| t.as_str().cmp(tag)).is_ok())
+    }
+
+    pub fn add_tag(&mut self, id: InstanceId, tag: &str) -> Result<()> {
+        let tags = &mut self.data_mut(id)?.tags;
+        if let Err(at) = tags.binary_search_by(|t| t.as_str().cmp(tag)) {
+            tags.insert(at, tag.to_owned());
+            self.changes.push(Change::TagAdded { id, tag: tag.to_owned() });
+        }
+        Ok(())
+    }
+
+    pub fn remove_tag(&mut self, id: InstanceId, tag: &str) -> Result<()> {
+        let tags = &mut self.data_mut(id)?.tags;
+        if let Ok(at) = tags.binary_search_by(|t| t.as_str().cmp(tag)) {
+            tags.remove(at);
+            self.changes.push(Change::TagRemoved { id, tag: tag.to_owned() });
+        }
+        Ok(())
+    }
+
+    /// Every live instance in the game (under the root) with `tag`, in tree order.
+    pub fn tagged(&self, tag: &str) -> Vec<InstanceId> {
+        self.descendants(self.root)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|id| self.has_tag(*id, tag).unwrap_or(false))
+            .collect()
     }
 
     /// Typed read of a `Vec3` property.

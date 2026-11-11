@@ -4,7 +4,9 @@
 //! starter GUIs are shown as a preview so they can be laid out and selected.
 
 use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Rect, Stroke, StrokeKind};
-use libroxel_instance::{ClassKind, Color3, InstanceId, InstanceTree, Property, PropertyValue, UDim2, Vec2};
+use libroxel_instance::{
+    ClassKind, Color3, InstanceId, InstanceTree, Property, PropertyValue, UDim2, Vec2, Vec3,
+};
 
 /// The GUI object under the pointer, if any, and its class.
 pub type GuiHit = Option<(InstanceId, ClassKind)>;
@@ -165,4 +167,117 @@ pub fn draw_prompt(
         Color32::WHITE,
     );
     rect
+}
+
+/// Draws every enabled billboard in the world at its part, facing the
+/// camera, and returns the topmost GUI object under the pointer.
+pub fn billboards(
+    ui: &egui::Ui,
+    tree: &InstanceTree,
+    camera: (&bevy::prelude::Camera, &bevy::prelude::GlobalTransform),
+    selected: Option<InstanceId>,
+) -> GuiHit {
+    use bevy::prelude::Vec3 as BVec3;
+    let (cam, gt) = camera;
+    let area = ui.max_rect();
+    let pointer = ui.ctx().input(|i| i.pointer.hover_pos()).filter(|p| area.contains(*p));
+    let painter = ui.painter().with_clip_rect(area);
+    let eye = gt.translation();
+    let right = gt.right().as_vec3();
+    let mut hit = None;
+    for board in tree.descendants_of_class(tree.workspace(), ClassKind::BillboardGui) {
+        if tree.get_bool(board, Property::Enabled) == Some(false) {
+            continue;
+        }
+        let Some(part) = tree.parent(board).ok().flatten() else { continue };
+        let Some(pos) = tree.get_vec3(part, Property::Position) else { continue };
+        let offset = tree.get_vec3(board, Property::StudsOffset).unwrap_or_default();
+        let at = pos + offset;
+        let world = BVec3::new(at.x, at.y, at.z);
+        let distance = (world - eye).length();
+        if distance > tree.get_number(board, Property::MaxDistance).unwrap_or(100.0) as f32 {
+            continue;
+        }
+        // Hidden behind other parts unless it's always on top.
+        if tree.get_bool(board, Property::AlwaysOnTop) != Some(true) {
+            // The part's own model (such as the character a name tag is on) doesn't count.
+            let model = tree.parent(part).ok().flatten().filter(|m| tree.class(*m) == Ok(ClassKind::Model));
+            let own = |p: InstanceId| {
+                p == part || model.is_some_and(|m| tree.is_descendant_of(p, m).unwrap_or(false))
+            };
+            let toward = at - Vec3::new(eye.x, eye.y, eye.z);
+            let blocked = libroxel_instance::geometry::raycast(
+                tree,
+                Vec3::new(eye.x, eye.y, eye.z),
+                toward * 0.98,
+                |p| !own(p),
+            );
+            if blocked.is_some() {
+                continue;
+            }
+        }
+        let (Ok(centre), Ok(beside)) =
+            (cam.world_to_viewport(gt, world), cam.world_to_viewport(gt, world + right))
+        else {
+            continue;
+        };
+        let per_stud = (beside - centre).length();
+        let size = udim2(tree, board, Property::GuiSize);
+        let size =
+            egui::vec2(size.x_scale * per_stud + size.x_offset, size.y_scale * per_stud + size.y_offset);
+        let rect = Rect::from_center_size(Pos2::new(centre.x, centre.y), size);
+        if selected == Some(board) {
+            painter.rect_stroke(
+                rect,
+                0.0,
+                Stroke::new(1.0, Color32::from_rgb(80, 170, 255)),
+                StrokeKind::Outside,
+            );
+        }
+        draw_children(&painter, tree, board, rect, pointer, selected, &mut hit);
+    }
+    hit
+}
+
+/// Draws the player's tool slots along the bottom of the view. Returns each
+/// slot's rectangle, so clicks can pick a tool.
+pub fn hotbar(ui: &egui::Ui, tree: &InstanceTree, tools: &[(InstanceId, bool)]) -> Vec<(usize, Rect)> {
+    let area = ui.max_rect();
+    let (slot, gap) = (64.0, 8.0);
+    let count = tools.len().min(9);
+    let width = count as f32 * slot + count.saturating_sub(1) as f32 * gap;
+    let mut x = area.center().x - width / 2.0;
+    let y = area.bottom() - slot - 20.0;
+    let painter = ui.painter();
+    let mut rects = Vec::new();
+    for (i, (tool, held)) in tools.iter().take(9).enumerate() {
+        let rect = Rect::from_min_size(Pos2::new(x, y), egui::vec2(slot, slot));
+        x += slot + gap;
+        painter.rect_filled(rect, 6.0, Color32::from_black_alpha(if *held { 210 } else { 150 }));
+        if *held {
+            painter.rect_stroke(
+                rect,
+                6.0,
+                Stroke::new(2.0, Color32::from_rgb(255, 215, 60)),
+                StrokeKind::Inside,
+            );
+        }
+        painter.text(
+            rect.left_top() + egui::vec2(6.0, 4.0),
+            Align2::LEFT_TOP,
+            (i + 1).to_string(),
+            FontId::proportional(12.0),
+            Color32::from_gray(200),
+        );
+        let name = tree.name(*tool).unwrap_or("?");
+        painter.with_clip_rect(rect.shrink(3.0)).text(
+            rect.center() + egui::vec2(0.0, 6.0),
+            Align2::CENTER_CENTER,
+            name,
+            FontId::proportional(13.0),
+            Color32::WHITE,
+        );
+        rects.push((i, rect));
+    }
+    rects
 }

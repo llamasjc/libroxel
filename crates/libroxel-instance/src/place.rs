@@ -84,6 +84,36 @@ fn value_from_json(property: Property, value: &Value) -> Option<PropertyValue> {
     })
 }
 
+/// Attributes are saved with their kind, since the same JSON (a list of
+/// numbers) could be several kinds: `{"kind": "Vec3", "value": [1, 2, 3]}`.
+/// Booleans, numbers and strings are saved as they are.
+fn attribute_to_json(value: &PropertyValue) -> Value {
+    match value {
+        PropertyValue::Bool(_) | PropertyValue::Number(_) | PropertyValue::String(_) => value_to_json(value),
+        other => json!({ "kind": other.kind_name(), "value": value_to_json(other) }),
+    }
+}
+
+fn attribute_from_json(value: &Value) -> Option<PropertyValue> {
+    Some(match value {
+        Value::Bool(b) => PropertyValue::Bool(*b),
+        Value::Number(n) => PropertyValue::Number(n.as_f64()?),
+        Value::String(s) => PropertyValue::String(s.clone()),
+        Value::Object(obj) => {
+            let raw = obj.get("value")?;
+            let as_kind = |property: Property| value_from_json(property, raw);
+            match obj.get("kind")?.as_str()? {
+                "Vec3" => as_kind(Property::Position)?,
+                "Color3" => as_kind(Property::Color)?,
+                "Vec2" => as_kind(Property::AnchorPoint)?,
+                "UDim2" => as_kind(Property::GuiSize)?,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    })
+}
+
 fn node_to_json(tree: &InstanceTree, id: InstanceId) -> Result<Value, TreeError> {
     let class = tree.class(id)?;
     let mut props = Map::new();
@@ -109,6 +139,16 @@ fn node_to_json(tree: &InstanceTree, id: InstanceId) -> Result<Value, TreeError>
     node.insert("name".into(), json!(tree.name(id)?));
     if !props.is_empty() {
         node.insert("properties".into(), Value::Object(props));
+    }
+    let attributes = tree.attributes(id)?;
+    if !attributes.is_empty() {
+        let map: Map<String, Value> =
+            attributes.iter().map(|(k, v)| (k.clone(), attribute_to_json(v))).collect();
+        node.insert("attributes".into(), Value::Object(map));
+    }
+    let tags = tree.tags(id)?;
+    if !tags.is_empty() {
+        node.insert("tags".into(), json!(tags));
     }
     if !children.is_empty() {
         node.insert("children".into(), Value::Array(children));
@@ -169,6 +209,19 @@ fn load_node(
             }
         }
     }
+    if let Some(attributes) = obj.get("attributes").and_then(Value::as_object) {
+        for (key, raw) in attributes {
+            match attribute_from_json(raw) {
+                Some(value) => tree.set_attribute(id, key, Some(value))?,
+                None => report.warnings.push(format!("{name}: ignored bad attribute `{key}`")),
+            }
+        }
+    }
+    if let Some(tags) = obj.get("tags").and_then(Value::as_array) {
+        for tag in tags.iter().filter_map(Value::as_str) {
+            tree.add_tag(id, tag)?;
+        }
+    }
     if let Some(children) = obj.get("children").and_then(Value::as_array) {
         for child in children {
             load_node(tree, child, id, report)?;
@@ -224,6 +277,11 @@ mod tests {
         let storage = tree.service(ClassKind::ReplicatedStorage).unwrap();
         let module = tree.create(ClassKind::ModuleScript, "Util").unwrap();
         tree.set_parent(module, Some(storage)).unwrap();
+        tree.set_attribute(floor, "Points", Some(PropertyValue::Number(5.0))).unwrap();
+        tree.set_attribute(floor, "Spawn", Some(PropertyValue::Vec3(Vec3::new(1.0, 2.0, 3.0)))).unwrap();
+        tree.set_attribute(floor, "Tint", Some(PropertyValue::Color3(Color3::new(1.0, 0.5, 0.0)))).unwrap();
+        tree.add_tag(floor, "Ground").unwrap();
+        tree.add_tag(floor, "Big").unwrap();
 
         let text = save(&tree).unwrap();
         let (loaded, report) = load(&text).unwrap();
@@ -235,6 +293,13 @@ mod tests {
         let floor = loaded.find_first_child(level, "Floor").unwrap().unwrap();
         assert_eq!(loaded.get_vec3(floor, Property::Size), Some(Vec3::new(32.0, 1.0, 32.0)));
         assert_eq!(loaded.get_bool(floor, Property::Anchored), Some(true));
+        assert_eq!(
+            loaded.get_attribute(floor, "Spawn").unwrap(),
+            Some(PropertyValue::Vec3(Vec3::new(1.0, 2.0, 3.0)))
+        );
+        assert_eq!(loaded.get_attribute(floor, "Points").unwrap(), Some(PropertyValue::Number(5.0)));
+        assert_eq!(loaded.tags(floor).unwrap(), ["Big", "Ground"]);
+        assert_eq!(loaded.tagged("Ground"), vec![floor]);
         let ball = loaded.find_first_child(ws, "Ball").unwrap().unwrap();
         assert_eq!(loaded.get(ball, Property::Shape).unwrap(), shape);
         let storage = loaded.service(ClassKind::ReplicatedStorage).unwrap();

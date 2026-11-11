@@ -782,3 +782,126 @@ fn debris_and_prompts() {
     rt.step(0.3);
     assert!(!spark(&rt));
 }
+
+fn flush(rt: &ScriptRuntime) {
+    let changes = rt.tree().borrow_mut().drain_changes();
+    let errors = rt.fire_changes(&changes);
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[test]
+fn attributes_hold_values_and_signal_changes() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local part = Instance.new("Part", workspace)
+        part:SetAttribute("Points", 5)
+        part:SetAttribute("Owner", "Sam")
+        part:SetAttribute("Tint", Color3.new(1, 0, 0))
+        print(part:GetAttribute("Points"), part:GetAttribute("Owner"), part:GetAttribute("Tint"), part:GetAttribute("Nope"))
+        local names = {}
+        for name in part:GetAttributes() do table.insert(names, name) end
+        table.sort(names)
+        print(table.concat(names, ","))
+        part.AttributeChanged:Connect(function(name) print("changed", name) end)
+        part:GetAttributeChangedSignal("Points"):Connect(function() print("points now", part:GetAttribute("Points")) end)
+        print(pcall(function() part:SetAttribute("bad name", 1) end))
+        print(pcall(function() part:SetAttribute("Where", workspace) end))
+    "#,
+    );
+    let out = printed(&rt);
+    assert_eq!(&out[..2], ["5 Sam 1, 0, 0 nil", "Owner,Points,Tint"]);
+    assert!(out[2].starts_with("false") && out[3].starts_with("false"), "{out:?}");
+    // Changes are delivered once a frame, so this frame's setup shows up too.
+    flush(&rt);
+    printed(&rt);
+    run(&rt, r#"workspace.Part:SetAttribute("Points", 6) workspace.Part:SetAttribute("Owner", nil)"#);
+    flush(&rt);
+    assert_eq!(printed(&rt), vec!["changed Points", "points now 6", "changed Owner"]);
+}
+
+#[test]
+fn collection_service_tags() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local CollectionService = game:GetService("CollectionService")
+        CollectionService:GetInstanceAddedSignal("Lava"):Connect(function(part) print("new lava", part.Name) end)
+        CollectionService:GetInstanceRemovedSignal("Lava"):Connect(function(part) print("lava gone", part.Name) end)
+        for i = 1, 2 do
+            local part = Instance.new("Part", workspace)
+            part.Name = "Lava" .. i
+            CollectionService:AddTag(part, "Lava")
+        end
+        local other = Instance.new("Part", workspace)
+        other:AddTag("Safe")
+        print(#CollectionService:GetTagged("Lava"), other:HasTag("Safe"), CollectionService:HasTag(other, "Lava"))
+        print(table.concat(CollectionService:GetTags(workspace.Lava1), ","))
+    "#,
+    );
+    assert_eq!(printed(&rt), vec!["2 true false", "Lava"]);
+    flush(&rt);
+    assert_eq!(printed(&rt), vec!["new lava Lava1", "new lava Lava2"]);
+    run(&rt, r#"workspace.Lava1:Destroy() workspace.Lava2:RemoveTag("Lava")"#);
+    flush(&rt);
+    assert_eq!(printed(&rt), vec!["lava gone Lava1", "lava gone Lava2"]);
+    run(&rt, r#"print(#game:GetService("CollectionService"):GetTagged("Lava"))"#);
+    assert_eq!(printed(&rt), vec!["0"]);
+}
+
+#[test]
+fn tools_equip_activate_and_read_the_mouse() {
+    use libroxel_script::{MouseRay, UserInput};
+    let rt = runtime();
+    let player = add_player(&rt, "Sam");
+    {
+        let mut tree = rt.tree().borrow_mut();
+        let backpack = tree.create(ClassKind::Backpack, "Backpack").unwrap();
+        tree.set_parent(backpack, Some(player)).unwrap();
+        let character = tree.create(ClassKind::Model, "Sam").unwrap();
+        let ws = tree.workspace();
+        tree.set_parent(character, Some(ws)).unwrap();
+        let humanoid = tree.create(ClassKind::Humanoid, "Humanoid").unwrap();
+        tree.set_parent(humanoid, Some(character)).unwrap();
+        tree.set(player, Property::Character, PropertyValue::Ref(Some(character))).unwrap();
+        let tool = tree.create(ClassKind::Tool, "Wand").unwrap();
+        tree.set_parent(tool, Some(backpack)).unwrap();
+    }
+    run(
+        &rt,
+        r#"
+        local floor = Instance.new("Part", workspace)
+        floor.Name = "Floor"
+        floor.Size = Vector3.new(50, 1, 50)
+        local player = game:GetService("Players").LocalPlayer
+        local wand = player.Backpack.Wand
+        wand.Equipped:Connect(function(mouse)
+            print("equipped", mouse.Target and mouse.Target.Name, mouse.Hit.Position)
+        end)
+        wand.Unequipped:Connect(function() print("unequipped", wand.Parent.Name) end)
+        wand.Activated:Connect(function() print("zap") end)
+        wand.Deactivated:Connect(function() print("done") end)
+        player:GetMouse().Button1Down:Connect(function() print("mouse down") end)
+        workspace.Sam.Humanoid:EquipTool(wand)
+    "#,
+    );
+    rt.set_mouse(Some(MouseRay {
+        origin: Vec3::new(3.0, 10.0, 0.0),
+        direction: Vec3::new(0.0, -1.0, 0.0),
+        x: 100.0,
+        y: 50.0,
+    }));
+    flush(&rt);
+    assert!(rt.input_began(UserInput::MouseButton1, false).is_empty());
+    assert!(rt.input_ended(UserInput::MouseButton1, false).is_empty());
+    // A click the GUI used doesn't reach the tool.
+    assert!(rt.input_began(UserInput::MouseButton1, true).is_empty());
+    run(&rt, "workspace.Sam.Humanoid:UnequipTools()");
+    flush(&rt);
+    assert_eq!(
+        printed(&rt),
+        vec!["equipped Floor 3, 0.5, 0", "mouse down", "zap", "done", "unequipped Backpack"]
+    );
+}

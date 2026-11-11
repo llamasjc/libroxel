@@ -46,6 +46,8 @@ enum Action {
     Mouse(libroxel_script::UserInput, bool, bool),
     /// Forget the current game's saved data.
     ClearData,
+    /// While playing: hold or put away the tool in a hotbar slot.
+    ToggleTool(usize),
     Reparent(InstanceId, InstanceId),
     OpenScript(InstanceId),
     Rename(InstanceId, String),
@@ -67,6 +69,8 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::BoolValue,
     ClassKind::ClickDetector,
     ClassKind::ProximityPrompt,
+    ClassKind::Tool,
+    ClassKind::BillboardGui,
     ClassKind::RemoteEvent,
     ClassKind::BindableEvent,
     ClassKind::ScreenGui,
@@ -111,6 +115,9 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::ProximityPrompt => "💬",
         ClassKind::RemoteEvent => "📡",
         ClassKind::BindableEvent => "🔔",
+        ClassKind::Tool => "🔧",
+        ClassKind::StarterPack | ClassKind::Backpack => "🎒",
+        ClassKind::BillboardGui => "🪧",
     }
 }
 
@@ -193,6 +200,7 @@ pub fn editor_ui(
     let mut gizmo_hot = false;
     let mut gui_hit: gui::GuiHit = None;
     let mut prompt_hit: Option<(InstanceId, egui::Rect)> = None;
+    let mut hotbar_hit: Vec<(usize, egui::Rect)> = Vec::new();
     let gui_root = if playing {
         engine.session.as_ref().and_then(|s| s.player_gui())
     } else {
@@ -211,9 +219,20 @@ pub fn editor_ui(
                     !playing,
                 );
             }
+            if let Ok((cam, gt, _, _)) = cameras.single() {
+                let selected = if playing { None } else { editor.selection };
+                if let Some(hit) = gui::billboards(ui, &tree_rc.borrow(), (cam, gt), selected) {
+                    gui_hit = Some(hit);
+                }
+            }
             if let Some(root) = gui_root {
                 let selected = if playing { None } else { editor.selection };
-                gui_hit = gui::draw(ui, &tree_rc.borrow(), root, ui.max_rect(), selected);
+                if let Some(hit) = gui::draw(ui, &tree_rc.borrow(), root, ui.max_rect(), selected) {
+                    gui_hit = Some(hit);
+                }
+            }
+            if let Some(session) = engine.session.as_ref() {
+                hotbar_hit = gui::hotbar(ui, &tree_rc.borrow(), &session.hotbar());
             }
             if let (Some(active), Ok((cam, gt, _, _))) =
                 (engine.session.as_ref().and_then(|s| s.active_prompt()), cameras.single())
@@ -260,10 +279,30 @@ pub fn editor_ui(
     capture.keyboard = ctx.egui_wants_keyboard_input();
     editor.gizmo_active = gizmo_hot;
 
+    // Where the mouse points, for scripts' `Player:GetMouse()`.
+    if let Some(session) = engine.session.as_mut() {
+        let ray = pointer
+            .filter(|_| over_view)
+            .zip(cameras.single().ok())
+            .and_then(|(pos, (cam, gt, _, _))| cam.viewport_to_world(gt, Vec2::new(pos.x, pos.y)).ok())
+            .map(|ray| {
+                let (o, d) = (ray.origin, ray.direction.as_vec3());
+                libroxel_script::MouseRay {
+                    origin: libroxel_instance::Vec3::new(o.x, o.y, o.z),
+                    direction: libroxel_instance::Vec3::new(d.x, d.y, d.z),
+                    x: pointer.map_or(0.0, |p| p.x - central.min.x),
+                    y: pointer.map_or(0.0, |p| p.y - central.min.y),
+                }
+            });
+        session.set_mouse(ray);
+    }
+    let on_hotbar = hotbar_hit.iter().copied().find(|(_, r)| pointer.is_some_and(|p| r.contains(p)));
+
     // Mouse buttons for the input service, while playing.
     if playing && over_view {
-        let on_ui =
-            gui_hit.is_some() || prompt_hit.is_some_and(|(_, r)| pointer.is_some_and(|p| r.contains(p)));
+        let on_ui = gui_hit.is_some()
+            || on_hotbar.is_some()
+            || prompt_hit.is_some_and(|(_, r)| pointer.is_some_and(|p| r.contains(p)));
         ctx.input(|i| {
             for (button, input) in [
                 (egui::PointerButton::Primary, libroxel_script::UserInput::MouseButton1),
@@ -289,6 +328,11 @@ pub fn editor_ui(
         && let Ok(ray) = cam.viewport_to_world(gt, Vec2::new(pos.x, pos.y))
     {
         match gui_hit {
+            _ if on_hotbar.is_some() => {
+                if let Some((slot, _)) = on_hotbar {
+                    actions.push(Action::ToggleTool(slot));
+                }
+            }
             _ if on_prompt.is_some() => {
                 if let Some((prompt, _)) = on_prompt {
                     actions.push(Action::TriggerPrompt(prompt));
@@ -699,6 +743,7 @@ fn properties(
         }
         let _ = tree.set(id, property, value);
     }
+    attributes_and_tags(ui, editor, tree, id, now, playing, actions);
 
     let hint = match class {
         ClassKind::Script => Some(
@@ -742,6 +787,17 @@ fn properties(
             "Local scripts call `FireServer(...)` and game scripts hear `OnServerEvent(player, ...)`. \
              Game scripts call `FireClient(player, ...)` or `FireAllClients(...)` and local scripts hear `OnClientEvent`.",
         ),
+        ClassKind::Tool => Some(
+            "Tools in StarterPack are given to each player. While playing, press 1-9 or click the hotbar to hold one; \
+             clicking then fires `Activated`. The part called Handle is what the character holds.",
+        ),
+        ClassKind::StarterPack => {
+            Some("Tools in here go into every player's backpack when their character spawns.")
+        }
+        ClassKind::BillboardGui => Some(
+            "Put this inside a part, with text labels or frames inside it. It floats StudsOffset above the part, \
+             facing the camera. Size scale is in studs; offset is in pixels.",
+        ),
         ClassKind::BindableEvent => {
             Some("Any script can call `Fire(...)`; everything connected to `Event` gets the same values.")
         }
@@ -750,6 +806,102 @@ fn properties(
     if let Some(hint) = hint {
         ui.add_space(8.0);
         ui.label(hint);
+    }
+}
+
+/// The kinds of value a new attribute can start as, with their first value.
+fn attribute_kinds() -> [(&'static str, PropertyValue); 5] {
+    [
+        ("number", PropertyValue::Number(0.0)),
+        ("string", PropertyValue::String(String::new())),
+        ("boolean", PropertyValue::Bool(false)),
+        ("Vector3", PropertyValue::Vec3(libroxel_instance::Vec3::ZERO)),
+        ("Color3", PropertyValue::Color3(libroxel_instance::Color3::WHITE)),
+    ]
+}
+
+/// Attribute and tag editing below an instance's properties.
+fn attributes_and_tags(
+    ui: &mut egui::Ui,
+    editor: &mut Editor,
+    tree: &mut InstanceTree,
+    id: InstanceId,
+    now: f64,
+    playing: bool,
+    actions: &mut Vec<Action>,
+) {
+    enum Edit {
+        Set(String, Option<PropertyValue>),
+        AddTag(String),
+        RemoveTag(String),
+    }
+    let mut edits: Vec<Edit> = Vec::new();
+    ui.add_space(10.0);
+    ui.label(RichText::new("Attributes").strong());
+    let attributes = tree.attributes(id).cloned().unwrap_or_default();
+    egui::Grid::new("attributes").num_columns(3).striped(true).spacing([8.0, 6.0]).show(ui, |ui| {
+        for (name, value) in attributes {
+            ui.label(&name);
+            ui.push_id(&name, |ui| {
+                if let Some(new) = property_editor(ui, Property::Name, value, id, actions) {
+                    edits.push(Edit::Set(name.clone(), Some(new)));
+                }
+            });
+            if ui.small_button("✖").on_hover_text("Remove this attribute").clicked() {
+                edits.push(Edit::Set(name, None));
+            }
+            ui.end_row();
+        }
+    });
+    ui.horizontal(|ui| {
+        let (name, kind) = &mut editor.new_attribute;
+        ui.add(egui::TextEdit::singleline(name).hint_text("New attribute").desired_width(110.0));
+        let kinds = attribute_kinds();
+        egui::ComboBox::from_id_salt("attribute-kind").selected_text(kinds[*kind].0).show_ui(ui, |ui| {
+            for (i, (label, _)) in kinds.iter().enumerate() {
+                ui.selectable_value(kind, i, *label);
+            }
+        });
+        let valid = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if ui.add_enabled(valid, egui::Button::new("Add")).clicked() {
+            edits.push(Edit::Set(std::mem::take(name), Some(kinds[*kind].1.clone())));
+        }
+    });
+
+    ui.add_space(8.0);
+    ui.label(RichText::new("Tags").strong());
+    let tags = tree.tags(id).map(|t| t.to_vec()).unwrap_or_default();
+    ui.horizontal_wrapped(|ui| {
+        for tag in tags {
+            if ui.button(format!("{tag}  ✖")).on_hover_text("Remove this tag").clicked() {
+                edits.push(Edit::RemoveTag(tag));
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        let response =
+            ui.add(egui::TextEdit::singleline(&mut editor.new_tag).hint_text("New tag").desired_width(150.0));
+        let entered = response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+        let ready = !editor.new_tag.trim().is_empty();
+        if (ui.add_enabled(ready, egui::Button::new("Add")).clicked() || entered) && ready {
+            edits.push(Edit::AddTag(editor.new_tag.trim().to_owned()));
+            editor.new_tag.clear();
+        }
+    });
+
+    if edits.is_empty() {
+        return;
+    }
+    if !playing {
+        editor.history.begin_edit(tree, now);
+        editor.dirty = true;
+    }
+    for edit in edits {
+        let _ = match edit {
+            Edit::Set(name, value) => tree.set_attribute(id, &name, value),
+            Edit::AddTag(tag) => tree.add_tag(id, &tag),
+            Edit::RemoveTag(tag) => tree.remove_tag(id, &tag),
+        };
     }
 }
 
@@ -1187,6 +1339,34 @@ fn new_instance(
             PropertyValue::String("print(\"Hello from \" .. script.Name)\n".into()),
         );
     }
+    if class == ClassKind::Tool {
+        // A tool needs a part to hold it by.
+        let handle = tree.create(ClassKind::Part, names::TOOL_HANDLE).ok()?;
+        let _ = tree.set(
+            handle,
+            Property::Size,
+            PropertyValue::Vec3(libroxel_instance::Vec3::new(0.6, 0.6, 3.0)),
+        );
+        let _ = tree.set(handle, Property::CanCollide, PropertyValue::Bool(false));
+        tree.set_parent(handle, Some(id)).ok()?;
+        let script = tree.create(ClassKind::Script, "ToolScript").ok()?;
+        let source = "local tool = script.Parent\n\ntool.Activated:Connect(function()\n\tprint(\"Used \" .. tool.Name)\nend)\n";
+        let _ = tree.set(script, Property::Source, PropertyValue::String(source.into()));
+        tree.set_parent(script, Some(id)).ok()?;
+    }
+    if class == ClassKind::BillboardGui {
+        let label = tree.create(ClassKind::TextLabel, "Label").ok()?;
+        let _ = tree.set(
+            label,
+            Property::GuiSize,
+            PropertyValue::UDim2(libroxel_instance::UDim2::new(1.0, 0.0, 1.0, 0.0)),
+        );
+        let _ = tree.set(label, Property::BackgroundTransparency, PropertyValue::Number(1.0));
+        let _ = tree.set(label, Property::TextColor, PropertyValue::Color3(libroxel_instance::Color3::WHITE));
+        let _ = tree.set(label, Property::TextSize, PropertyValue::Number(20.0));
+        let _ = tree.set(label, Property::Text, PropertyValue::String("Hello!".into()));
+        tree.set_parent(label, Some(id)).ok()?;
+    }
     if class == ClassKind::LocalScript {
         let source = "local player = game.Players.LocalPlayer\nprint(\"Hello, \" .. player.Name)\n";
         let _ = tree.set(id, Property::Source, PropertyValue::String(source.into()));
@@ -1294,6 +1474,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                 ClassKind::ModuleScript => tree.service(ClassKind::ReplicatedStorage).unwrap_or(parent),
                 ClassKind::ScreenGui => tree.service(ClassKind::StarterGui).unwrap_or(parent),
                 ClassKind::RemoteEvent => tree.service(ClassKind::ReplicatedStorage).unwrap_or(parent),
+                ClassKind::Tool => tree.service(ClassKind::StarterPack).unwrap_or(parent),
                 c if c.is_gui_object() => gui_parent(&mut tree, editor.selection).unwrap_or(parent),
                 _ => parent,
             };
@@ -1303,6 +1484,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     | ClassKind::LocalScript
                     | ClassKind::ClickDetector
                     | ClassKind::ProximityPrompt
+                    | ClassKind::BillboardGui
                     | ClassKind::BindableEvent
                     | ClassKind::ModuleScript
                     | ClassKind::IntValue
@@ -1420,6 +1602,11 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
         Action::ClickButton(id) => {
             if let Some(session) = engine.session.as_mut() {
                 session.click_button(id);
+            }
+        }
+        Action::ToggleTool(slot) => {
+            if let Some(session) = engine.session.as_mut() {
+                session.toggle_tool(slot);
             }
         }
         Action::TriggerPrompt(id) => {

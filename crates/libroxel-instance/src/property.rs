@@ -59,6 +59,12 @@ pub enum Property {
     KeyboardKeyCode,
     /// On a prompt: how long the key must be held, in seconds.
     HoldDuration,
+    /// On a billboard: how far from its part it floats, in studs.
+    StudsOffset,
+    /// On a billboard: drawn even when something is in front of it.
+    AlwaysOnTop,
+    /// On a billboard: hidden when the camera is further away than this, in studs.
+    MaxDistance,
 }
 
 /// The value of a property.
@@ -103,7 +109,7 @@ impl Property {
             | Property::Text
             | Property::ActionText
             | Property::ObjectText => "string",
-            Property::Position | Property::Size | Property::Orientation => "Vec3",
+            Property::Position | Property::Size | Property::Orientation | Property::StudsOffset => "Vec3",
             Property::Color | Property::BackgroundColor | Property::TextColor => "Color3",
             Property::Anchored
             | Property::CanCollide
@@ -111,7 +117,8 @@ impl Property {
             | Property::BoolValue
             | Property::Visible
             | Property::Enabled
-            | Property::ResetOnSpawn => "bool",
+            | Property::ResetOnSpawn
+            | Property::AlwaysOnTop => "bool",
             Property::GuiPosition | Property::GuiSize => "UDim2",
             Property::AnchorPoint => "Vec2",
             Property::BackgroundTransparency
@@ -119,7 +126,8 @@ impl Property {
             | Property::MaxActivationDistance
             | Property::ClockTime
             | Property::Brightness
-            | Property::HoldDuration => "number",
+            | Property::HoldDuration
+            | Property::MaxDistance => "number",
             Property::KeyboardKeyCode => EnumKind::KeyCode.kind_name(),
             Property::Transparency
             | Property::Health
@@ -185,6 +193,9 @@ impl Property {
         Property::ObjectText,
         Property::KeyboardKeyCode,
         Property::HoldDuration,
+        Property::StudsOffset,
+        Property::AlwaysOnTop,
+        Property::MaxDistance,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -229,6 +240,9 @@ impl Property {
             Property::ObjectText => "object_text",
             Property::KeyboardKeyCode => "keyboard_key_code",
             Property::HoldDuration => "hold_duration",
+            Property::StudsOffset => "studs_offset",
+            Property::AlwaysOnTop => "always_on_top",
+            Property::MaxDistance => "max_distance",
         }
     }
 

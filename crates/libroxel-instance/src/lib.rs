@@ -95,6 +95,14 @@ pub enum ClassKind {
     BindableEvent,
     /// Inside a part: shows a "press a key" prompt when a player is near.
     ProximityPrompt,
+    /// Something a player carries and uses, with a part called `Handle` to hold.
+    Tool,
+    /// A service whose tools are given to each player when they spawn.
+    StarterPack,
+    /// Inside a player: the tools they carry but aren't holding. Made by the engine.
+    Backpack,
+    /// Inside a part: GUI drawn in the world, floating at the part.
+    BillboardGui,
 }
 
 impl ClassKind {
@@ -130,6 +138,10 @@ impl ClassKind {
         ClassKind::RemoteEvent,
         ClassKind::BindableEvent,
         ClassKind::ProximityPrompt,
+        ClassKind::Tool,
+        ClassKind::StarterPack,
+        ClassKind::Backpack,
+        ClassKind::BillboardGui,
     ];
 
     /// The services every tree has under its root, in order. They can't be
@@ -141,6 +153,7 @@ impl ClassKind {
         ClassKind::StarterGui,
         ClassKind::Lighting,
         ClassKind::ServerScriptService,
+        ClassKind::StarterPack,
     ];
 
     /// Whether this class is one of the [`SERVICES`](Self::SERVICES).
@@ -156,7 +169,7 @@ impl ClassKind {
     /// Whether scripts and the editor may create this class. Players and
     /// their GUI containers are made by the engine when someone joins.
     pub fn is_user_creatable(self) -> bool {
-        self.is_creatable() && !matches!(self, ClassKind::Player | ClassKind::PlayerGui)
+        self.is_creatable() && !matches!(self, ClassKind::Player | ClassKind::PlayerGui | ClassKind::Backpack)
     }
 
     /// Whether this class is drawn on screen as a rectangle.
@@ -245,6 +258,15 @@ impl ClassKind {
             Property::MaxActivationDistance,
             Property::Enabled,
         ];
+        const TOOL: &[Property] = &[Property::Name, Property::Enabled];
+        const BILLBOARD: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::GuiSize,
+            Property::StudsOffset,
+            Property::AlwaysOnTop,
+            Property::MaxDistance,
+        ];
         const LIGHTING: &[Property] = &[Property::Name, Property::ClockTime, Property::Brightness];
         const HUMANOID: &[Property] = &[
             Property::Name,
@@ -267,6 +289,8 @@ impl ClassKind {
             ClassKind::TextLabel | ClassKind::TextButton => TEXT,
             ClassKind::ClickDetector => CLICK,
             ClassKind::ProximityPrompt => PROMPT,
+            ClassKind::Tool => TOOL,
+            ClassKind::BillboardGui => BILLBOARD,
             ClassKind::Lighting => LIGHTING,
             _ => COMMON,
         }
@@ -293,6 +317,7 @@ impl ClassKind {
             Property::GuiPosition => PropertyValue::UDim2(UDim2::default()),
             Property::GuiSize => PropertyValue::UDim2(match self {
                 ClassKind::Frame => UDim2::new(0.0, 100.0, 0.0, 100.0),
+                ClassKind::BillboardGui => UDim2::new(0.0, 200.0, 0.0, 50.0),
                 _ => UDim2::new(0.0, 200.0, 0.0, 50.0),
             }),
             Property::AnchorPoint => PropertyValue::Vec2(Vec2::ZERO),
@@ -313,6 +338,9 @@ impl ClassKind {
             Property::ObjectText => PropertyValue::String(String::new()),
             Property::KeyboardKeyCode => PropertyValue::Enum(EnumValue::KeyCode(KeyCode::E)),
             Property::HoldDuration => PropertyValue::Number(0.0),
+            Property::StudsOffset => PropertyValue::Vec3(Vec3::new(0.0, 2.0, 0.0)),
+            Property::AlwaysOnTop => PropertyValue::Bool(false),
+            Property::MaxDistance => PropertyValue::Number(100.0),
             Property::ClockTime => PropertyValue::Number(14.0),
             Property::Brightness => PropertyValue::Number(2.0),
             Property::Size => PropertyValue::Vec3(Vec3::new(4.0, 1.0, 2.0)),
@@ -363,6 +391,10 @@ impl ClassKind {
             ClassKind::RemoteEvent => "remote_event",
             ClassKind::BindableEvent => "bindable_event",
             ClassKind::ProximityPrompt => "proximity_prompt",
+            ClassKind::Tool => "tool",
+            ClassKind::StarterPack => "starter_pack",
+            ClassKind::Backpack => "backpack",
+            ClassKind::BillboardGui => "billboard_gui",
         }
     }
 

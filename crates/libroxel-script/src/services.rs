@@ -28,6 +28,7 @@ pub(crate) fn get_service(lua: &Lua, name: &str) -> mlua::Result<Option<Value>> 
         services::USER_INPUT_SERVICE => lua.create_userdata(UserInputService)?,
         services::DATA_STORE_SERVICE => lua.create_userdata(DataStoreService)?,
         services::DEBRIS => lua.create_userdata(Debris)?,
+        services::COLLECTION_SERVICE => lua.create_userdata(crate::items::CollectionService)?,
         _ => return Ok(None),
     })))
 }
@@ -116,6 +117,9 @@ pub(crate) fn input(lua: &Lua, input: UserInput, began: bool, processed: bool) -
         let object = Value::UserData(lua.create_userdata(InputObject(input))?);
         Ok([object, Value::Boolean(processed)].into_iter().collect())
     });
+    if input == UserInput::MouseButton1 && !processed {
+        crate::items::mouse_button(lua, began);
+    }
     take_errors(lua)
 }
 
@@ -440,7 +444,7 @@ fn workspace_raycast(
 // ---------------------------------------------------------------------------
 
 /// The player on this computer: the first one in the players service.
-fn local_player(lua: &Lua) -> Option<InstanceId> {
+pub(crate) fn local_player(lua: &Lua) -> Option<InstanceId> {
     let host = host(lua);
     let tree = host.tree.borrow();
     let players = tree.service(ClassKind::Players)?;

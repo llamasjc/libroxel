@@ -20,6 +20,7 @@
 //! ```
 
 mod bindings;
+mod items;
 pub mod names;
 mod services;
 mod types;
@@ -66,6 +67,17 @@ pub enum UserInput {
     Key(KeyCode),
     MouseButton1,
     MouseButton2,
+}
+
+/// Where the player's mouse points: a ray into the world from the camera,
+/// and the pointer's position on screen in pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MouseRay {
+    pub origin: libroxel_instance::Vec3,
+    /// A unit direction.
+    pub direction: libroxel_instance::Vec3,
+    pub x: f32,
+    pub y: f32,
 }
 
 /// A sandboxed Luau VM bound to an instance tree.
@@ -192,6 +204,17 @@ impl ScriptRuntime {
     /// Everything data stores hold, as JSON to keep between play sessions.
     pub fn save_data(&self) -> String {
         services::save_data(&self.lua)
+    }
+
+    /// Tells scripts where the mouse points (for `Player:GetMouse()`), or
+    /// that it is off the view with `None`.
+    pub fn set_mouse(&self, mouse: Option<MouseRay>) {
+        items::set_mouse(&self.lua, mouse)
+    }
+
+    /// Starts every enabled `Script` under `ancestor` (such as a tool copied into a backpack).
+    pub fn run_scripts(&self, ancestor: InstanceId) -> Vec<ScriptError> {
+        bindings::run_scripts_under(&self.lua, ancestor, libroxel_instance::ClassKind::Script)
     }
 
     /// Seconds of game time so far (the sum of every `step`).
