@@ -60,6 +60,9 @@ pub enum Dialog {
 pub struct Editor {
     pub selection: Option<InstanceId>,
     pub tool: Tool,
+    /// The terrain brush, and when it may next be used while held down.
+    pub brush: terrain_tools::Brush,
+    pub brush_ready: f64,
     /// Grid snap in studs; 0 turns snapping off.
     pub snap: f32,
     /// Rotation snap in degrees; 0 turns it off.
@@ -91,9 +94,6 @@ pub struct Editor {
     /// still needs to take the keyboard.
     pub typing: Option<InstanceId>,
     pub focus_typing: bool,
-    /// The terrain brush, and when it may next be used while held down.
-    pub brush: terrain_tools::Brush,
-    pub brush_ready: f64,
 }
 
 impl Default for Editor {
@@ -101,6 +101,8 @@ impl Default for Editor {
         Self {
             selection: None,
             tool: Tool::Move,
+            brush: Default::default(),
+            brush_ready: 0.0,
             snap: 1.0,
             angle_snap: 15.0,
             history: History::default(),
@@ -121,8 +123,6 @@ impl Default for Editor {
             new_tag: String::new(),
             typing: None,
             focus_typing: false,
-            brush: Default::default(),
-            brush_ready: 0.0,
         }
     }
 }
