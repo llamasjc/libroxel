@@ -320,6 +320,10 @@ pub struct Physics {
     tipping: HashSet<InstanceId>,
     /// Parts a spinner turns this step, which don't tip or settle.
     driven: HashSet<InstanceId>,
+    /// How carried parts move this step (a turning hinge arm), so they push
+    /// what they run into: a point on the turning axis, the spin about it,
+    /// and how fast that point moves.
+    motions: HashMap<InstanceId, (GVec3, GVec3, GVec3)>,
 }
 
 fn ordered(a: InstanceId, b: InstanceId) -> (InstanceId, InstanceId) {
@@ -388,6 +392,18 @@ impl Physics {
         for &other in together {
             self.ignored.insert(ordered(id, other));
         }
+    }
+
+    /// Says how a carried part moves during the next step (it turns at
+    /// `spin` about an axis through `pivot`, which moves at `velocity`), so
+    /// loose things it runs into are shoved along with it.
+    pub fn set_motion(&mut self, id: InstanceId, pivot: Vec3, spin: Vec3, velocity: Vec3) {
+        self.motions.insert(id, (g(pivot), g(spin), g(velocity)));
+    }
+
+    /// Whether `id` is held still by something else this step (a weld or a hinge).
+    pub fn is_carried(&self, id: InstanceId) -> bool {
+        self.carried.contains(&id)
     }
 
     fn ignores(&self, a: InstanceId, b: InstanceId) -> bool {
@@ -562,6 +578,7 @@ impl Physics {
         self.contacts = current;
         self.held.clear();
         self.driven.clear();
+        self.motions.clear();
         result
     }
 
@@ -856,9 +873,10 @@ impl Physics {
                     let mut pushed = false;
                     for &j in &near[i] {
                         let other = bodies[j];
+                        let moving = self.motions.get(&other.id).copied();
                         if i == j
                             || !other.can_collide
-                            || other.collider == Collider::Aabb
+                            || (other.collider == Collider::Aabb && moving.is_none())
                             || !overlaps(&bodies[i], &other, -EPS)
                             || self.ignores(bodies[i].id, other.id)
                         {
@@ -884,6 +902,14 @@ impl Physics {
                             }
                             if n.y > 0.3 {
                                 grounded = true;
+                            }
+                        }
+                        // Something turning (a hinge arm) carries what it shoves.
+                        if let Some((pivot, spin, along)) = moving {
+                            let surface = along + spin.cross(pos - pivot);
+                            let gap = surface.dot(n) - vel.dot(n);
+                            if gap > 0.0 {
+                                vel += n * gap;
                             }
                         }
                         bodies[i].pos = l(pos);

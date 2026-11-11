@@ -14,6 +14,11 @@
 //! `AngularVelocity` radians a second with up to `MotorMaxTorque`; a Servo
 //! turns it to `TargetAngle` degrees at up to `AngularSpeed`, with up to
 //! `ServoMaxTorque`.
+//!
+//! A turning arm shoves loose things it runs into. Round arms (balls, and
+//! cylinders whose length runs along the hinge) on a loose base are wheels:
+//! where one rests on the ground it holds the base up, and as it turns it
+//! drives the base along, gripping the ground so it doesn't slide sideways.
 
 use std::collections::HashMap;
 
@@ -24,6 +29,10 @@ use libroxel_instance::{
 use libroxel_script::names;
 
 use crate::physics::{GRAVITY, Physics};
+
+/// How quickly a wheel on the ground brings its base to the wheel's speed
+/// (and stops it sliding sideways), per second.
+const WHEEL_GRIP: f32 = 10.0;
 use crate::weld::assemblies;
 
 /// What a hinge needs to remember between steps.
@@ -100,6 +109,55 @@ fn mass_of(tree: &InstanceTree, part: InstanceId) -> f32 {
 
 fn number(tree: &InstanceTree, id: InstanceId, p: Property) -> f32 {
     tree.get_number(id, p).unwrap_or(0.0) as f32
+}
+
+/// What the wheels on one loose base add up to this step.
+#[derive(Debug, Default)]
+struct Drive {
+    /// How many wheels touch the ground.
+    wheels: f32,
+    /// The wheels' forward directions, added up.
+    ahead: Vec3,
+    /// The wheels' rolling speeds along their forward directions, added up.
+    speed: f32,
+    /// How far the deepest wheel has sunk into the ground.
+    sunk: f32,
+}
+
+/// Where a wheel meets the ground.
+struct Contact {
+    point: Vec3,
+    /// How far into the ground the wheel reaches (negative: just above it).
+    sunk: f32,
+}
+
+/// If `part` is a wheel turning about `axis` (a ball, or a cylinder lying
+/// along it) and it is on the ground (not `car`), where it touches.
+fn wheel_contact(tree: &InstanceTree, part: InstanceId, axis: Vec3, car: &[InstanceId]) -> Option<Contact> {
+    let size = tree.get_vec3(part, Property::Size)?;
+    let at = tree.get_vec3(part, Property::Position)?;
+    let radius = match tree.get_enum(part, Property::Shape) {
+        Some(EnumValue::Shape(libroxel_instance::PartShape::Ball)) => size.x.min(size.y).min(size.z) / 2.0,
+        Some(EnumValue::Shape(libroxel_instance::PartShape::Cylinder)) => {
+            let along =
+                Rotation::from_orientation(tree.get_vec3(part, Property::Orientation).unwrap_or_default())
+                    .apply(Vec3::new(1.0, 0.0, 0.0));
+            if along.dot(axis).abs() < 0.9 {
+                return None;
+            }
+            size.y.min(size.z) / 2.0
+        }
+        _ => return None,
+    };
+    // Rolling needs an axis that lies roughly flat.
+    if axis.y.abs() > 0.5 {
+        return None;
+    }
+    let reach = radius + 0.1;
+    let hit = libroxel_instance::geometry::raycast(tree, at, Vec3::new(0.0, -reach, 0.0), |p| {
+        !car.contains(&p) && tree.get_bool(p, Property::CanCollide) != Some(false)
+    })?;
+    Some(Contact { point: hit.position, sunk: radius - hit.distance })
 }
 
 /// Changes `speed` towards `wanted` by at most `most`.
@@ -231,11 +289,67 @@ impl Hinges {
                 order.extend(left.drain(..).map(|(h, _, _)| h));
             }
         }
-        for (_, base, arm) in &arms {
+        // Wheels hold up and drive their bases, then every arm is held still
+        // for the step, shoving what it meets as it turns.
+        let mut drives: HashMap<InstanceId, Drive> = HashMap::new();
+        for (hinge, base, arm) in &arms {
             let base_parts = group_of(*base);
+            let mover = base_parts.iter().copied().find(|p| !physics.is_carried(*p)).unwrap_or(*base);
+            let Some(joint) = joints.get(hinge) else { continue };
+            let Some(base_cf) = pose(tree, joint.base).map(cframe) else { continue };
+            let pivot = base_cf * joint.pivot;
+            let spin = pivot.rot.x * (joint.sign * joint.speed);
+            let base_velocity = if anchored(&base_parts) { Vec3::ZERO } else { physics.velocity(mover) };
+            if !anchored(&base_parts) {
+                let car: Vec<InstanceId> = arms
+                    .iter()
+                    .filter(|(_, b, _)| base_parts.contains(b))
+                    .flat_map(|(_, _, a)| a.iter().copied())
+                    .chain(base_parts.iter().copied())
+                    .collect();
+                for &part in arm {
+                    if let Some(contact) = wheel_contact(tree, part, pivot.rot.x, &car) {
+                        let drive = drives.entry(mover).or_default();
+                        // The bottom of the wheel moves backwards as it turns,
+                        // so on the ground the base goes the other way.
+                        let r = contact.point - pivot.pos;
+                        let rim = spin.cross(r - pivot.rot.x * r.dot(pivot.rot.x));
+                        let mut ahead = pivot.rot.x.cross(Vec3::new(0.0, 1.0, 0.0)).normalize_or_zero();
+                        // Hinges on either side of a car often face opposite ways.
+                        if ahead.dot(drive.ahead) < 0.0 {
+                            ahead = ahead * -1.0;
+                        }
+                        drive.wheels += 1.0;
+                        drive.ahead = drive.ahead + ahead;
+                        drive.speed += -rim.dot(ahead);
+                        drive.sunk =
+                            if drive.wheels > 1.0 { drive.sunk.max(contact.sunk) } else { contact.sunk };
+                    }
+                }
+            }
             for &part in arm {
                 physics.carry(part, &base_parts);
+                physics.set_motion(part, pivot.pos, spin, base_velocity);
             }
+        }
+        let gravity = tree.get_number(ws, Property::Gravity).map_or(GRAVITY, |g| g as f32);
+        for (mover, drive) in drives {
+            let ahead = (drive.ahead * (1.0 / drive.wheels)).normalize_or_zero();
+            let mut v = physics.velocity(mover);
+            // Held up by the wheels: rise out of the ground, and cancel this
+            // step's fall (gravity is added again in the step).
+            if drive.sunk > -0.02 {
+                v.y = v.y.max(0.0).max(drive.sunk.max(0.0) / dt.max(1e-4)) + gravity * dt;
+            }
+            let grip = (WHEEL_GRIP * dt).min(1.0);
+            let flat = Vec3::new(v.x, 0.0, v.z);
+            let along = flat.dot(ahead);
+            let side = flat - ahead * along;
+            let wanted = drive.speed / drive.wheels;
+            let along = along + (wanted - along) * grip;
+            let side = side * (1.0 - grip);
+            let flat = ahead * along + side;
+            physics.set_velocity(mover, Vec3::new(flat.x, v.y, flat.z));
         }
         self.joints = joints;
         self.order = order;

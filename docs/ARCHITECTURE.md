@@ -223,6 +223,12 @@
   edge (and swings its middle round it); if it is held up and within 8° of
   lying flat, it is laid exactly flat. Parts a spinner drives
   (`Physics::drive_spin`), welded assemblies, balls and characters are skipped.
+- **Hinge pushes and wheels:** `Hinges::before_physics` tells physics how
+  each arm part moves (`Physics::set_motion`: a pivot, a spin and the
+  base's velocity). Physics pushes loose bodies out of moving arms and gives
+  them at least the arm surface's speed along the push. Round arms on a
+  loose base cast a ray down; where they reach the ground they hold the
+  base up and steer its velocity towards the wheels' rolling speed.
 - **Tool swings:** the script runtime notes each `Activated`; the session
   gives the holder's avatar a short `slash` timer, and `character::slash_angle`
   turns it into extra right-arm tilt that the pose and the tool handle share.

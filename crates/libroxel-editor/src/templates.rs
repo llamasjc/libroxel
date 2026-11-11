@@ -141,6 +141,31 @@ gate.ClickDetector.MouseClick:Connect(function()
 end)
 "#;
 
+/// Drives the rover back and forth by turning its wheel motors the other way.
+const ROVER_SCRIPT: &str = r#"
+-- The rover's wheels are on motor hinges. Turning the motors one way and
+-- then the other drives it back and forth across the lawn.
+local wheels = {}
+for _, thing in script.Parent:GetDescendants() do
+	if thing:IsA("HingeConstraint") then
+		table.insert(wheels, thing)
+	end
+end
+local speed = 4
+local function drive(s)
+	for _, hinge in wheels do
+		hinge.AngularVelocity = s
+	end
+end
+drive(speed)
+task.wait(1.5)
+while true do
+	speed = -speed
+	drive(speed)
+	task.wait(3)
+end
+"#;
+
 /// Moves the hover pad's target up and down; its AlignPosition follows.
 const HOVER_SCRIPT: &str = r#"
 local hold = script.Parent.Hold
@@ -1277,7 +1302,7 @@ pub fn sample_obby() -> InstanceTree {
     let mill = add(&mut tree, tower, ClassKind::HingeConstraint, "Motor");
     set(&mut tree, mill, Property::Attachment0, PropertyValue::Ref(Some(axle)));
     set(&mut tree, mill, Property::Attachment1, PropertyValue::Ref(Some(hub)));
-    set(&mut tree, mill, Property::ActuatorType, motor);
+    set(&mut tree, mill, Property::ActuatorType, motor.clone());
     set(&mut tree, mill, Property::MotorVelocity, PropertyValue::Number(1.2));
 
     let gate_post = block(&mut tree, play, "GatePost", [44.0, 3.0, 40.0], [1.0, 6.0, 1.0], wood);
@@ -1298,6 +1323,35 @@ pub fn sample_obby() -> InstanceTree {
     set(&mut tree, gate_hinge, Property::ActuatorType, servo);
     set(&mut tree, gate_hinge, Property::AngularSpeed, PropertyValue::Number(2.0));
     script(&mut tree, gate, "Swing", GATE_SCRIPT);
+
+    // A rover on four motor-hinged wheels, driving back and forth.
+    let rover = add(&mut tree, play, ClassKind::Model, "Rover");
+    let body = block(&mut tree, rover, "Body", [33.0, 1.6, 51.0], [4.0, 0.8, 3.0], [240, 190, 60]);
+    set(&mut tree, body, Property::Anchored, PropertyValue::Bool(false));
+    for (i, (dx, dz)) in [(1.4, 1.75), (-1.4, 1.75), (1.4, -1.75), (-1.4, -1.75)].into_iter().enumerate() {
+        let wheel = block(
+            &mut tree,
+            rover,
+            &format!("Wheel{}", i + 1),
+            [33.0 + dx, 0.8, 51.0 + dz],
+            [0.5, 1.6, 1.6],
+            [40, 40, 45],
+        );
+        shape(&mut tree, wheel, PartShape::Cylinder);
+        set(&mut tree, wheel, Property::Anchored, PropertyValue::Bool(false));
+        // Cylinders lie along X; turned to lie along Z, like the axles.
+        set(&mut tree, wheel, Property::Orientation, PropertyValue::Vec3(Vec3::new(0.0, -90.0, 0.0)));
+        let axle = add(&mut tree, body, ClassKind::Attachment, &format!("Axle{}", i + 1));
+        set(&mut tree, axle, Property::Position, PropertyValue::Vec3(Vec3::new(dx, -0.8, dz)));
+        set(&mut tree, axle, Property::Orientation, PropertyValue::Vec3(Vec3::new(0.0, -90.0, 0.0)));
+        let hub = add(&mut tree, wheel, ClassKind::Attachment, "Hub");
+        let hinge = add(&mut tree, wheel, ClassKind::HingeConstraint, "Motor");
+        set(&mut tree, hinge, Property::Attachment0, PropertyValue::Ref(Some(axle)));
+        set(&mut tree, hinge, Property::Attachment1, PropertyValue::Ref(Some(hub)));
+        set(&mut tree, hinge, Property::ActuatorType, motor.clone());
+        set(&mut tree, hinge, Property::MotorMaxTorque, PropertyValue::Number(1e6));
+    }
+    script(&mut tree, rover, "Drive", ROVER_SCRIPT);
 
     // And a bench on the start platform, to sit on.
     let bench = add(&mut tree, start, ClassKind::Seat, "Bench");
@@ -1974,6 +2028,28 @@ mod tests {
         assert!(
             back.voxels(back.terrain().unwrap()).unwrap().encode() == tree.voxels(terrain).unwrap().encode()
         );
+    }
+
+    #[test]
+    fn sample_rover_drives_on_its_wheels() {
+        let tree = sample_obby();
+        let body = tree
+            .descendants_of_class(tree.workspace(), ClassKind::Part)
+            .into_iter()
+            .find(|p| tree.name(*p) == Ok("Body"))
+            .unwrap();
+        let mut session = start_on(tree, false).unwrap();
+        let shared = session.runtime().tree().clone();
+        let mut xs = Vec::new();
+        for _ in 0..240 {
+            session.step(1.0 / 60.0, CharacterInput::default());
+            xs.push(shared.borrow().get_vec3(body, Property::Position).unwrap());
+        }
+        let (lo, hi) = xs.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.x), hi.max(p.x)));
+        assert!(hi - lo > 6.0, "it drove between {lo} and {hi}");
+        // There and back: it turned round partway.
+        assert!(xs.last().unwrap().x > lo + 2.0);
+        assert!(xs.iter().all(|p| (p.y - 1.6).abs() < 0.1 && (p.z - 51.0).abs() < 0.2), "{xs:?}");
     }
 
     #[test]
