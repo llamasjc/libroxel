@@ -105,7 +105,15 @@ fn until(
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    panic!("gave up waiting");
+    let c = guest.character();
+    let gp = c.and_then(|c| guest.runtime().tree().borrow().get_vec3(c.root, Property::Position));
+    let hp = host.players().get(1).and_then(|p| {
+        let t = host.runtime().tree().borrow();
+        let m = t.get_ref(*p, Property::Character)?;
+        let r = t.find_first_child(m, "HumanoidRootPart").ok()??;
+        t.get_vec3(r, Property::Position)
+    });
+    panic!("gave up waiting: guest at {gp:?}, host has them at {hp:?}");
 }
 
 fn find(
@@ -171,17 +179,43 @@ fn a_joined_player_sees_the_world_and_plays_in_it() {
     assert!(guest_log.contains(&"local script runs for Bea".to_owned()), "{guest_log:?}");
     assert!(guest_log.contains(&"back at you Ball".to_owned()), "{guest_log:?}");
 
-    // The guest walks: the host moves their character, and the guest sees it.
-    let start = {
-        let c = guest.character().unwrap();
-        guest.runtime().tree().borrow().get_vec3(c.root, Property::Position).unwrap()
+    // The guest walks: their character moves on their computer straight
+    // away, without waiting for the host.
+    let root_at = |s: &PlaySession, c: libroxel_engine::Character| {
+        s.runtime().tree().borrow().get_vec3(c.root, Property::Position).unwrap()
     };
+    let mine = guest.character().unwrap();
+    let start = root_at(&guest, mine);
     let walk = CharacterInput { move_dir: Vec3::new(1.0, 0.0, 0.0), ..Default::default() };
-    until(&mut host, &mut guest, walk, |_, g| {
-        let c = g.character().unwrap();
-        let at = g.runtime().tree().borrow().get_vec3(c.root, Property::Position).unwrap();
-        at.x > start.x + 5.0
+    guest.step(DT, walk);
+    guest.step(DT, walk);
+    assert!(root_at(&guest, mine).x > start.x + 0.4, "moved before hearing from the host");
+    // The host follows where the guest says it is.
+    until(&mut host, &mut guest, walk, |h, g| {
+        let theirs = h.runtime().tree().borrow().get_ref(h.players()[1], Property::Character).unwrap();
+        let on_host = h
+            .runtime()
+            .tree()
+            .borrow()
+            .find_first_child(theirs, "HumanoidRootPart")
+            .unwrap()
+            .and_then(|r| h.runtime().tree().borrow().get_vec3(r, Property::Position))
+            .unwrap();
+        root_at(g, mine).x > start.x + 5.0 && on_host.x > start.x + 4.0
     });
+    // A host script teleporting them wins over where the guest thought it was.
+    host.runtime().run("tp", "workspace.Bea.HumanoidRootPart.Position = Vector3.new(-30, 3, 20)").unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| {
+        let at = root_at(g, mine);
+        (at.x + 30.0).abs() < 1.0 && (at.z - 20.0).abs() < 1.0
+    });
+    for _ in 0..30 {
+        host.step(DT, CharacterInput::default());
+        guest.step(DT, CharacterInput::default());
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let at = root_at(&guest, mine);
+    assert!((at.x + 30.0).abs() < 1.0 && (at.z - 20.0).abs() < 1.0, "stayed teleported: {at:?}");
 
     // Leaving takes their player out of the host's game.
     drop(guest);

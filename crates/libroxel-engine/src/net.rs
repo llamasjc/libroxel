@@ -138,6 +138,8 @@ pub(crate) struct Hosting {
     listener: TcpListener,
     peers: Vec<Peer>,
     replicator: Replicator,
+    /// Teleports found but not sent yet: player, number, where, facing.
+    teleports: Vec<(InstanceId, u64, Vec3, f32)>,
 }
 
 struct Peer {
@@ -162,6 +164,13 @@ pub(crate) struct Joined {
     sent_input: Option<CharacterInput>,
     /// Whether the lost connection has been reported.
     reported: bool,
+    /// Whether we move our own character now (it's alive and not sitting).
+    /// The host's word on where its parts are is ignored meanwhile.
+    owning: bool,
+    /// Our character's model, here.
+    own_model: Option<InstanceId>,
+    /// The latest of the host's teleports of our character we have taken.
+    teleports: u64,
 }
 
 /// Something a joined player did, for the host to act on.
@@ -364,7 +373,21 @@ impl Joined {
                 if let Some(name) = op.get("n").and_then(Json::as_str) {
                     let _ = tree.set_name(id, name);
                 }
-                Self::fields(tree, id, op, &mut links);
+                // While we move our character, its parts are where we say.
+                let ours = self.owning
+                    && self
+                        .own_model
+                        .is_some_and(|m| id == m || tree.is_descendant_of(id, m).unwrap_or(false));
+                if ours {
+                    let mut op = op.clone();
+                    if let Some(props) = op.get_mut("v").and_then(Json::as_object_mut) {
+                        props.remove(Property::Position.file_name());
+                        props.remove(Property::Orientation.file_name());
+                    }
+                    Self::fields(tree, id, &op, &mut links);
+                } else {
+                    Self::fields(tree, id, op, &mut links);
+                }
                 if let Some(parent) = op.get("p") {
                     let _ = tree.set_parent(id, self.local_of(parent));
                 }
@@ -436,6 +459,12 @@ fn move_json(input: CharacterInput) -> Json {
     })
 }
 
+fn vec3_from(json: Option<&Json>) -> Option<Vec3> {
+    let items = json?.as_array().filter(|a| a.len() == 3)?;
+    let f = |i: usize| items[i].as_f64().map(|v| v as f32).filter(|v| v.is_finite());
+    Some(Vec3::new(f(0)?, f(1)?, f(2)?))
+}
+
 fn input_from(message: &Json) -> CharacterInput {
     let f = |v: Option<&Json>| v.and_then(Json::as_f64).unwrap_or(0.0) as f32;
     let dir = message.get("move").and_then(Json::as_array);
@@ -478,8 +507,12 @@ impl PlaySession {
             .map_err(|e| format!("could not host on port {port}: {e}"))?;
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let mut session = Self::start_inner(tree, play_here, saved_data, NetRole::Server)?;
-        session.link =
-            Link::Host(Box::new(Hosting { listener, peers: Vec::new(), replicator: Default::default() }));
+        session.link = Link::Host(Box::new(Hosting {
+            listener,
+            peers: Vec::new(),
+            replicator: Default::default(),
+            teleports: Vec::new(),
+        }));
         Ok(session)
     }
 
@@ -508,6 +541,9 @@ impl PlaySession {
             started: HashSet::new(),
             sent_input: None,
             reported: false,
+            owning: false,
+            own_model: None,
+            teleports: 0,
         }));
         session.info(format!("🔗 Joining {address}"));
         Ok(session)
@@ -562,6 +598,9 @@ impl PlaySession {
     /// Lets new computers in and acts on what joined players sent.
     pub(crate) fn serve_incoming(&mut self) {
         let Link::Host(mut host) = std::mem::take(&mut self.link) else { return };
+        // Something may have moved a character since the last step (a
+        // command, say); catch it before the player's moves overwrite it.
+        host.teleports.extend(self.find_teleports());
         while let Ok((stream, _)) = host.listener.accept() {
             if let Ok(conn) = Conn::new(stream) {
                 host.peers.push(Peer { conn, player: None, fresh: true });
@@ -605,6 +644,7 @@ impl PlaySession {
                 let Some(index) = self.avatar_of(player) else { continue };
                 match kind {
                     "input" => self.avatars[index].input = input_from(&message),
+                    "move" => self.remote_move(index, &message),
                     "fire" => {
                         if let Some(remote) = id_in(&message, "r") {
                             let args = message.get("a").cloned().unwrap_or(Json::Array(Vec::new()));
@@ -672,12 +712,15 @@ impl PlaySession {
         if host.peers.iter().all(|p| p.player.is_none()) {
             // No one to send to: forget what was sent, so the first to join gets everything.
             host.replicator = Replicator::default();
+            host.teleports.clear();
             for peer in &mut host.peers {
                 peer.conn.flush();
             }
             self.link = Link::Host(host);
             return;
         }
+        let mut teleports = std::mem::take(&mut host.teleports);
+        teleports.extend(self.find_teleports());
         let delta = host.replicator.delta(&tree.borrow());
         let everything = host
             .peers
@@ -686,6 +729,13 @@ impl PlaySession {
             .then(|| Replicator::everything(&tree.borrow()));
         for peer in &mut host.peers {
             let Some(player) = peer.player else { continue };
+            for (who, seq, pos, yaw) in &teleports {
+                if *who == player {
+                    peer.conn.send(
+                        &json!({ "t": "teleport", "seq": seq, "pos": [pos.x, pos.y, pos.z], "yaw": yaw }),
+                    );
+                }
+            }
             if peer.fresh {
                 let t = tree.borrow();
                 let services: Map<String, Json> = SHARED
@@ -747,6 +797,23 @@ impl PlaySession {
                     joined.apply(&mut tree.borrow_mut(), &ops);
                 }
                 "you" => joined.me = message.get("player").and_then(Json::as_u64),
+                "teleport" => {
+                    let seq = message.get("seq").and_then(Json::as_u64).unwrap_or(0);
+                    let pos = vec3_from(message.get("pos"));
+                    let yaw = message.get("yaw").and_then(Json::as_f64).unwrap_or(0.0) as f32;
+                    if let (Some(pos), Some(c)) = (pos, self.character()) {
+                        let mut t = tree.borrow_mut();
+                        let _ = t.set(c.root, Property::Position, PropertyValue::Vec3(pos));
+                        let _ = t.set(
+                            c.root,
+                            Property::Orientation,
+                            PropertyValue::Vec3(Vec3::new(0.0, yaw, 0.0)),
+                        );
+                        c.follow(&mut t);
+                        self.physics.set_velocity(c.root, Vec3::ZERO);
+                    }
+                    joined.teleports = joined.teleports.max(seq);
+                }
                 "event" => {
                     if let Some(remote) = message.get("r").and_then(|r| joined.local_of(r)) {
                         let mut args = message.get("a").cloned().unwrap_or(Json::Array(Vec::new()));
@@ -783,6 +850,7 @@ impl PlaySession {
         self.collect(errors);
         if let Some(index) = self.avatars.iter().position(|a| !a.remote) {
             self.advance_hold(index, dt);
+            self.move_own_character(&mut joined, index, input, dt);
             self.refresh_hotbar(index);
         }
         // Explosions only flash here: the host does what they do.
@@ -828,6 +896,108 @@ impl PlaySession {
         }
         joined.conn.flush();
         self.link = Link::Client(joined);
+    }
+
+    /// On the host: a joined player's computer says where its character is.
+    fn remote_move(&mut self, index: usize, message: &Json) {
+        let tree = self.runtime.tree().clone();
+        let avatar = &self.avatars[index];
+        let Some(c) = avatar.character else { return };
+        let current = message.get("m").and_then(Json::as_u64) == Some(c.model.to_bits());
+        let seq = message.get("seq").and_then(Json::as_u64).unwrap_or(0);
+        if !current || seq != avatar.teleports || !avatar.moves_itself(&tree.borrow()) {
+            return;
+        }
+        let (Some(pos), vel) = (vec3_from(message.get("pos")), vec3_from(message.get("vel"))) else { return };
+        let yaw = message.get("yaw").and_then(Json::as_f64).filter(|y| y.is_finite()).unwrap_or(0.0) as f32;
+        {
+            let mut t = tree.borrow_mut();
+            let _ = t.set(c.root, Property::Position, PropertyValue::Vec3(pos));
+            let _ = t.set(c.root, Property::Orientation, PropertyValue::Vec3(Vec3::new(0.0, yaw, 0.0)));
+        }
+        self.physics.set_velocity(c.root, vel.unwrap_or_default());
+        self.avatars[index].moved_to = Some(pos);
+    }
+
+    /// On the host: joined players' characters that something here moved
+    /// (a script, a respawn) since their computer last said where they
+    /// were. Each gets a new teleport number, and later moves from before it
+    /// are ignored.
+    fn find_teleports(&mut self) -> Vec<(InstanceId, u64, Vec3, f32)> {
+        let tree = self.runtime.tree().clone();
+        let t = tree.borrow();
+        let mut found = Vec::new();
+        for avatar in &mut self.avatars {
+            if !avatar.moves_itself(&t) {
+                avatar.moved_to = None;
+                continue;
+            }
+            let Some(c) = avatar.character else { continue };
+            let Some(pos) = t.get_vec3(c.root, Property::Position) else { continue };
+            match avatar.moved_to {
+                Some(at) if (at - pos).length() > 0.05 => {
+                    avatar.teleports += 1;
+                    avatar.moved_to = Some(pos);
+                    let yaw = t.get_vec3(c.root, Property::Orientation).unwrap_or_default().y;
+                    found.push((avatar.player, avatar.teleports, pos, yaw));
+                }
+                Some(_) => {}
+                None => avatar.moved_to = Some(pos),
+            }
+        }
+        found
+    }
+
+    /// On a joined computer: walks our own character here, straight away,
+    /// and tells the host where it got to. Everything else stays where the
+    /// host puts it.
+    fn move_own_character(&mut self, joined: &mut Joined, index: usize, input: CharacterInput, dt: f32) {
+        let tree = self.runtime.tree().clone();
+        let Some(c) = self.avatars[index].character else {
+            joined.owning = false;
+            return;
+        };
+        joined.own_model = Some(c.model);
+        let mut input = input;
+        joined.owning = {
+            let mut t = tree.borrow_mut();
+            let owning = !c.is_dead(&t) && t.get_ref(c.humanoid, Property::SeatPart).is_none();
+            if owning {
+                if t.get_bool(c.humanoid, Property::Jump) == Some(true) {
+                    input.jump = true;
+                    let _ = t.set(c.humanoid, Property::Jump, PropertyValue::Bool(false));
+                }
+                let others: HashSet<InstanceId> = t
+                    .descendants_of_class(t.workspace(), ClassKind::Part)
+                    .into_iter()
+                    .filter(|p| *p != c.root && t.get_bool(*p, Property::Anchored) == Some(false))
+                    .collect();
+                self.physics.set_assemblies(others, std::iter::empty());
+                c.drive(&t, &mut self.physics, input);
+                self.physics.step(&mut t, dt);
+                c.follow(&mut t);
+            }
+            owning
+        };
+        self.pose_character(index, input, dt);
+        if !joined.owning {
+            return;
+        }
+        let (Some(model), Some(pos)) =
+            (joined.back.get(&c.model).copied(), tree.borrow().get_vec3(c.root, Property::Position))
+        else {
+            return;
+        };
+        let yaw = tree.borrow().get_vec3(c.root, Property::Orientation).unwrap_or_default().y;
+        let v = self.physics.velocity(c.root);
+        joined.conn.send(&json!({
+            "t": "move",
+            "m": model,
+            "seq": joined.teleports,
+            "pos": [pos.x, pos.y, pos.z],
+            "yaw": yaw,
+            "vel": [v.x, v.y, v.z],
+        }));
     }
 
     /// Keeps our player, character and tools in step with what the host sent.

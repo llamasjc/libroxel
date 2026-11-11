@@ -213,6 +213,18 @@
   in its tools as they arrive. Clicks on click detectors, prompts, hotbar
   keys and the mouse button over the world go to the host, which checks
   reach and fires the events there.
+- **Who moves a joined player's character.** While it is alive and not
+  sitting, the joined computer does, like everything on one computer: it
+  runs physics for that one root part (every other loose part is held where
+  the host put it) and sends a `move` (position, facing, velocity) each
+  step. The host puts the root there and *holds* it for its own physics
+  step: the root doesn't move, but it still touches things, so coins and
+  kill bricks work on the host. Host updates to that character's position
+  are ignored on its own computer. If something on the host moves the
+  character itself (a script, say), the host numbers a `teleport`, sends
+  it, and ignores moves numbered before it until the joined computer
+  catches up. A sitting or dead character is moved by the host, and its
+  computer shows where the host puts it.
 - **Remote events across computers.** The script runtime knows its role
   (`Solo`, `Server` or `Client`) and the local player. Remote calls aimed
   at the other side become `NetMessage`s with their arguments as JSON
@@ -230,8 +242,6 @@
 - Loose parts never rotate, and cylinders collide as boxes.
 - A welded assembly collides with the world through its root part only;
   its carried parts stop other things but don't stop the assembly.
-- A joined player's character moves when the host has moved it, so over a
-  slow connection the controls lag; there is no prediction yet.
 - The host sends everyone the whole shared world, every step something
   changes; there is no interest management or compression.
 - `ParticleEmitter:Emit` bursts and velocities aren't sent to joined

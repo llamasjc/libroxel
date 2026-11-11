@@ -105,6 +105,12 @@ pub(crate) struct Avatar {
     pub(crate) remote: bool,
     /// Their latest input, for players on other computers.
     pub(crate) input: CharacterInput,
+    /// For a player on another computer, which moves its own character:
+    /// where it last said the character is.
+    pub(crate) moved_to: Option<Vec3>,
+    /// How many times the host has put that character somewhere itself
+    /// (a teleport); moves sent before the latest one are ignored.
+    pub(crate) teleports: u64,
 }
 
 impl Avatar {
@@ -122,7 +128,15 @@ impl Avatar {
             stride: 0.0,
             remote,
             input: CharacterInput::default(),
+            moved_to: None,
+            teleports: 0,
         }
+    }
+
+    /// Whether their computer moves their character (it's alive and not
+    /// sitting): the host then only puts it where it is told.
+    pub(crate) fn moves_itself(&self, tree: &InstanceTree) -> bool {
+        self.remote && self.seating.seat().is_none() && self.character.is_some_and(|c| !c.is_dead(tree))
     }
 }
 
@@ -327,6 +341,7 @@ impl PlaySession {
         self.fill_backpack(index);
         let avatar = &mut self.avatars[index];
         avatar.character = Some(character);
+        avatar.moved_to = None;
         avatar.death_seen = false;
         avatar.respawn_in = None;
         let errors = self.runtime.character_added(player, character.model);
@@ -506,7 +521,7 @@ impl PlaySession {
 
     /// Turns a character to face where it walks and puts its tool's
     /// handle in its hand.
-    fn pose_character(&mut self, index: usize, input: CharacterInput, dt: f32) {
+    pub(crate) fn pose_character(&mut self, index: usize, input: CharacterInput, dt: f32) {
         let avatar = &mut self.avatars[index];
         let Some(character) = avatar.character else { return };
         let mut tree = self.runtime.tree().borrow_mut();
@@ -971,7 +986,11 @@ impl PlaySession {
                 self.physics.set_velocity(id, v);
             }
             for (avatar, input) in self.avatars.iter().zip(inputs.iter()) {
-                if let Some(c) = avatar.character.filter(|c| !c.is_dead(&tree)) {
+                if avatar.moves_itself(&tree) {
+                    if let Some(c) = avatar.character {
+                        self.physics.hold(c.root);
+                    }
+                } else if let Some(c) = avatar.character.filter(|c| !c.is_dead(&tree)) {
                     c.drive(&tree, &mut self.physics, *input);
                 }
             }

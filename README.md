@@ -110,8 +110,9 @@ The first build compiles Bevy and takes a while. After that it is quick.
   join on port 7420 (open it in your firewall to play across a network).
   On another computer, **🔗 Join** asks for the host's address (and a port,
   if not 7420) and a name. The host runs every `Script` and all the physics;
-  each joined computer runs its own player's `LocalScript`s and shows the
-  world the host sends. The toolbar shows how many have joined. To host
+  each joined computer runs its own player's `LocalScript`s, moves its own
+  character straight away (telling the host where it went), and shows the
+  rest of the world as the host sends it. The toolbar shows how many have joined. To host
   without a window, run
   `cargo run --release -p libroxel-engine --example server -- mygame.lrx`.
 - **Undo/redo** with Ctrl+Z and Ctrl+Y. **Save** with Ctrl+S. Games are
@@ -403,8 +404,7 @@ door.ClickDetector.MouseClick:Connect(function(player)
 end)
 ```
 
-**Not yet:** images, tool animations, sounds, terrain and voxels, and
-movement prediction for joined players. Physics is simple: anchored parts can be rotated and shaped
+**Not yet:** images, tool animations, sounds, and terrain and voxels. Physics is simple: anchored parts can be rotated and shaped
 (ramps and balls work), but loose parts are upright boxes that fall and
 stack without tipping over. Characters climb steps up to 0.6 studs.
 

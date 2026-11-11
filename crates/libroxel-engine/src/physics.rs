@@ -78,6 +78,8 @@ struct Body {
     pos: Vec3,
     half: Vec3,
     anchored: bool,
+    /// Placed from outside this step: it doesn't move, but still touches.
+    held: bool,
     can_collide: bool,
     collider: Collider,
 }
@@ -284,6 +286,9 @@ pub struct Physics {
     contacts: HashSet<(InstanceId, InstanceId)>,
     /// Parts moved by something else (a weld) that stand still in a step.
     carried: HashSet<InstanceId>,
+    /// Parts placed from outside for the next step (a character another
+    /// computer moves): they stay put but still touch things.
+    held: HashSet<InstanceId>,
     /// Pairs that pass through each other and never touch (parts of one assembly).
     ignored: HashSet<(InstanceId, InstanceId)>,
 }
@@ -333,6 +338,12 @@ impl Physics {
         !self.ignored.is_empty() && self.ignored.contains(&ordered(a, b))
     }
 
+    /// Keeps `id` where it is for the next step (something else moved it
+    /// there), while it still touches what it overlaps.
+    pub fn hold(&mut self, id: InstanceId) {
+        self.held.insert(id);
+    }
+
     /// Whether `id` ended the last step resting on something.
     pub fn is_grounded(&self, id: InstanceId) -> bool {
         self.grounded.contains(&id)
@@ -360,6 +371,7 @@ impl Physics {
                     pos: tree.get_vec3(id, Property::Position)?,
                     half,
                     anchored,
+                    held: self.held.contains(&id),
                     can_collide: tree.get_bool(id, Property::CanCollide)?,
                     collider,
                 })
@@ -385,7 +397,7 @@ impl Physics {
 
         let mut result = StepResult::default();
         for body in &bodies {
-            if body.anchored {
+            if body.anchored || body.held {
                 continue;
             }
             if tree.get_vec3(body.id, Property::Position) != Some(body.pos) {
@@ -419,6 +431,7 @@ impl Physics {
         untouches.sort();
         result.untouches = untouches;
         self.contacts = current;
+        self.held.clear();
         result
     }
 
@@ -501,7 +514,7 @@ impl Physics {
 
     fn integrate(&mut self, bodies: &mut [Body], near: &[Vec<usize>], h: f32, gravity: f32) {
         for i in 0..bodies.len() {
-            if bodies[i].anchored {
+            if bodies[i].anchored || bodies[i].held {
                 continue;
             }
             let id = bodies[i].id;
