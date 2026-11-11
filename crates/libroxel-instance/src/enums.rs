@@ -35,6 +35,8 @@ pub enum Material {
     Sand,
     Rock,
     Snow,
+    /// See-through; terrain water can be swum in and things float in it.
+    Water,
     /// Nothing: filling terrain with air empties it.
     Air,
 }
@@ -479,6 +481,7 @@ impl EnumKind {
                 E::Material(Material::Sand),
                 E::Material(Material::Rock),
                 E::Material(Material::Snow),
+                E::Material(Material::Water),
                 E::Material(Material::Air),
             ],
             EnumKind::EasingStyle => &[
@@ -618,6 +621,7 @@ impl EnumValue {
                 Material::Sand => "sand",
                 Material::Rock => "rock",
                 Material::Snow => "snow",
+                Material::Water => "water",
                 Material::Air => "air",
             },
             EnumValue::EasingStyle(e) => match e {

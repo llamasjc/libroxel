@@ -95,6 +95,9 @@ struct Body {
     collider: Collider,
     /// How high a ledge on this body moving things climb onto without stopping.
     climb: f32,
+    /// In water this step: `Some(true)` floats up, `Some(false)` hangs
+    /// (characters, who swim by themselves).
+    water: Option<bool>,
 }
 
 impl Body {
@@ -298,6 +301,8 @@ pub struct Physics {
     /// How fast moving parts spin, in radians per second about each world axis.
     spins: HashMap<InstanceId, Vec3>,
     grounded: HashSet<InstanceId>,
+    /// Moving parts that were in water last step.
+    wet: HashSet<InstanceId>,
     contacts: HashSet<(InstanceId, InstanceId)>,
     /// Parts moved by something else (a weld) that stand still in a step.
     carried: HashSet<InstanceId>,
@@ -379,6 +384,11 @@ impl Physics {
         self.held.insert(id);
     }
 
+    /// Whether `id` was in terrain water during the last step.
+    pub fn is_in_water(&self, id: InstanceId) -> bool {
+        self.wet.contains(&id)
+    }
+
     /// Whether `id` ended the last step resting on something.
     pub fn is_grounded(&self, id: InstanceId) -> bool {
         self.grounded.contains(&id)
@@ -386,6 +396,14 @@ impl Physics {
 
     fn collect_bodies(&self, tree: &InstanceTree, dt: f32, gravity: f32) -> Vec<Body> {
         let mut bodies = self.part_bodies(tree);
+        // Loose things in terrain water float (or, for characters, hang there).
+        if let Some(voxels) = tree.terrain().and_then(|t| tree.voxels(t).ok()).filter(|v| !v.is_empty()) {
+            for body in bodies.iter_mut().filter(|b| !b.anchored && !b.held) {
+                if voxels.water_at(body.pos) {
+                    body.water = Some(tree.name(body.id) != Ok(names::character::ROOT_PART));
+                }
+            }
+        }
         self.add_terrain(tree, &mut bodies, dt, gravity);
         bodies
     }
@@ -415,6 +433,7 @@ impl Physics {
                         can_collide: true,
                         collider: Collider::Aabb,
                         climb: TERRAIN_STEP,
+                        water: None,
                     });
                 }
             }
@@ -451,6 +470,7 @@ impl Physics {
                     can_collide: tree.get_bool(id, Property::CanCollide)?,
                     collider,
                     climb: STEP_HEIGHT,
+                    water: None,
                 })
             })
             .collect()
@@ -465,6 +485,7 @@ impl Physics {
         self.velocities.retain(|id, _| live.contains(id));
         self.spins.retain(|id, _| live.contains(id));
         self.grounded.clear();
+        self.wet = bodies.iter().filter(|b| b.water.is_some()).map(|b| b.id).collect();
 
         let substeps = ((dt / MAX_SUBSTEP).ceil() as usize).clamp(1, MAX_SUBSTEPS);
         let h = dt / substeps as f32;
@@ -610,7 +631,16 @@ impl Physics {
             }
             let id = bodies[i].id;
             let mut v = self.velocity(id);
-            v.y -= gravity * h;
+            match bodies[i].water {
+                None => v.y -= gravity * h,
+                Some(floats) => {
+                    if floats {
+                        v.y += gravity * 0.3 * h;
+                    }
+                    // Water slows everything down.
+                    v = v * (1.0 - 3.0 * h).max(0.0);
+                }
+            }
             let mut grounded = false;
 
             // Move one axis at a time (Y first, so standing on the floor

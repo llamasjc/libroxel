@@ -94,9 +94,40 @@ pub fn hill(voxels: &mut Voxels, centre: Vec3, radius: f32, height: f32, seed: u
     voxels.set_cells(cells);
 }
 
+/// A square pool of water `depth` deep on the ground at `centre`, `2 * half`
+/// cells across inside, with a rim of rock steps to climb in by.
+pub fn pool(voxels: &mut Voxels, centre: Vec3, half: i32, depth: i32) {
+    let (cx, base, cz) = (centre.x.floor() as i32, centre.y.floor() as i32, centre.z.floor() as i32);
+    let outer = half + depth;
+    let mut cells = Vec::new();
+    for z in -outer..outer {
+        for x in -outer..outer {
+            // How many rings out from the water this column is (0 = water).
+            let ring = (x.max(-x - 1) - half + 1).max(z.max(-z - 1) - half + 1).max(0);
+            let (material, height) =
+                if ring == 0 { (Material::Water, depth) } else { (Material::Rock, depth - ring + 1) };
+            for y in 0..height {
+                cells.push(((cx + x, base + y, cz + z), Some(material)));
+            }
+        }
+    }
+    voxels.set_cells(cells);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pool_has_water_inside_a_stepped_rim() {
+        let mut v = Voxels::new();
+        pool(&mut v, Vec3::new(0.0, 0.0, 0.0), 3, 4);
+        assert!(v.is_water(0, 0, 0) && v.is_water(-3, 3, 2) && !v.is_water(0, 4, 0));
+        // The rim steps down from the water's edge.
+        let height = |x: i32| (0..10).filter(|y| v.is_solid(x, *y, 0)).count();
+        assert_eq!([height(3), height(4), height(5), height(6), height(7)], [4, 3, 2, 1, 0]);
+        assert_eq!([height(-4), height(-7), height(-8)], [4, 1, 0]);
+    }
 
     #[test]
     fn a_hill_is_highest_in_the_middle_with_sand_round_the_edge() {

@@ -188,7 +188,10 @@
   `VoxelsChanged`, so the replicator resends the cells (as `x`) and the
   renderer notices. Physics adds the cells near each moving body as anchored
   boxes (runs along X merged) that can be climbed one stud at a time
-  (`TERRAIN_STEP`). Rays step through cells with a grid walk.
+  (`TERRAIN_STEP`). Water cells aren't solid: a loose body whose middle is
+  in water floats up against drag, and a character's root hangs there while
+  `character::drive` swims it. Rays step through cells with a grid walk
+  and pass through water.
   `terrain_view.rs` draws a mesh per chunk and material from the faces that
   look onto air, rebuilding only chunks whose cells (or neighbours) changed.
 - **Hinges** live in `libroxel-engine/src/hinge.rs`. Each enabled

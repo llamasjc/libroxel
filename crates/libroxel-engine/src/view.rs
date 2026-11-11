@@ -597,6 +597,10 @@ pub(crate) fn material_for(appearance: &PartAppearance, textures: &MaterialTextu
             material.base_color_texture = Some(textures.snow.clone());
             material.perceptual_roughness = 0.6;
         }
+        Material::Water => {
+            material.perceptual_roughness = 0.08;
+            material.reflectance = 0.7;
+        }
         Material::Air => {}
     }
     material

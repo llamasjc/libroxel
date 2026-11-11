@@ -487,6 +487,7 @@ pub fn enum_item_name(value: EnumValue) -> &'static str {
             Material::Sand => "Sand",
             Material::Rock => "Rock",
             Material::Snow => "Snow",
+            Material::Water => "Water",
             Material::Air => "Air",
         },
         EnumValue::EasingStyle(e) => match e {

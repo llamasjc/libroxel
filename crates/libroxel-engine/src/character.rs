@@ -341,6 +341,10 @@ impl Character {
     }
 }
 
+/// How fast swimmers rise holding Space, and drift up otherwise (studs a second).
+const SWIM_UP: f32 = 10.0;
+const FLOAT_UP: f32 = 2.0;
+
 /// Moves any humanoid's root part: walking at its walk speed in the input's
 /// direction, and jumping when on the ground.
 pub fn drive(
@@ -358,6 +362,26 @@ pub fn drive(
             dir = dir.normalize_or_zero();
         }
         let mut v = physics.velocity(root);
+        if physics.is_in_water(root) {
+            // Swimming: a little slower. Swimmers drift up to the top and
+            // tread water there; Space swims up faster, and at the top
+            // leaps out (onto a bank, say).
+            v.x = dir.x * walk * 0.75;
+            v.z = dir.z * walk * 0.75;
+            let head = tree.get_vec3(root, Property::Position).map(|p| p + Vec3::new(0.0, 1.5, 0.0));
+            let surfacing = head.is_some_and(|h| {
+                let wet = tree.terrain().and_then(|t| tree.voxels(t).ok()).is_some_and(|w| w.water_at(h));
+                !wet
+            });
+            v.y = match (input.jump, surfacing) {
+                (true, true) => jump * 0.8,
+                (true, false) => SWIM_UP,
+                (false, true) => 0.0,
+                (false, false) => FLOAT_UP,
+            };
+            physics.set_velocity(root, v);
+            return;
+        }
         let (want_x, want_z) = (dir.x * walk, dir.z * walk);
         let flung = (v.x * v.x + v.z * v.z).sqrt() > walk + 1.0;
         if flung && !physics.is_grounded(root) {

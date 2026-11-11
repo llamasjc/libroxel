@@ -71,7 +71,7 @@ The first build compiles Bevy and takes a while. After that it is quick.
   size, shape, colour, material, anchored, can-collide, transparency, and so on.
 - **Parts** come in four shapes (block, ball, cylinder, wedge) and eleven
   materials (plastic, smooth plastic, neon, metal, glass, wood, brick, grass,
-  sand, rock, snow).
+  sand, rock, snow, water).
   Insert them from **+ Part** or the Insert menu.
 - **Viewport:** hold the right mouse button and use WASD/QE to fly (Shift is
   faster), scroll to move forward. Click a part to select it, then drag the
@@ -217,7 +217,11 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `Enum.Material.Air` digs, and `Clear()` empties it. Characters walk up
   one-stud steps, things land on it and fall into holes, `workspace:Raycast`
   hits it (with the cell's `Material`), it's saved in the game file, and
-  joined computers get it. The sample has a hill behind the start.
+  joined computers get it. `Enum.Material.Water` cells are see-through:
+  loose parts float in them, rays pass through, and characters swim (they
+  drift up and tread water at the top, Space swims up, and Space at the top
+  leaps out). The sample has a hill behind the start and a pool beside the
+  vault.
 - **Pictures on parts:** a `Decal` inside a part stretches the PNG named by
   `Texture` over one `Face` (`Enum.NormalId`: Front, Back, Left, Right,
   Top, Bottom), and a `Texture` repeats it every `StudsPerTileU` by
@@ -443,7 +447,7 @@ door.ClickDetector.MouseClick:Connect(function(player)
 end)
 ```
 
-**Not yet:** tool animations, sounds, and water in terrain (terrain is blocky, not smooth). Physics is simple: anchored parts can be rotated and shaped
+**Not yet:** tool animations and sounds. Terrain is blocky, not smooth, and water doesn't flow. Physics is simple: anchored parts can be rotated and shaped
 (ramps and balls work), but loose parts collide as the upright box around
 them and don't tip over by themselves (they spin only when something spins
 them). A hinge arm is carried by its hinge, so it blocks things but doesn't

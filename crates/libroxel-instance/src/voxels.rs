@@ -27,6 +27,8 @@ pub const TERRAIN_MATERIALS: &[Material] = &[
     Material::Metal,
     Material::Neon,
     Material::Glass,
+    // New materials go at the end, so saved codes keep their meaning.
+    Material::Water,
 ];
 
 /// The code a material is stored as; 0 for air, or anything terrain can't be.
@@ -80,9 +82,20 @@ impl Voxels {
         material_of(chunk[index(lx, ly, lz)])
     }
 
-    /// Whether a cell is filled.
+    /// Whether a cell is filled with something that isn't water.
     pub fn is_solid(&self, x: i32, y: i32, z: i32) -> bool {
-        self.get(x, y, z).is_some()
+        self.get(x, y, z).is_some_and(|m| m != Material::Water)
+    }
+
+    /// Whether a cell is water.
+    pub fn is_water(&self, x: i32, y: i32, z: i32) -> bool {
+        self.get(x, y, z) == Some(Material::Water)
+    }
+
+    /// Whether the point `p` is in water.
+    pub fn water_at(&self, p: Vec3) -> bool {
+        let (x, y, z) = cell_at(p);
+        self.is_water(x, y, z)
     }
 
     fn put(&mut self, x: i32, y: i32, z: i32, code: u8) {

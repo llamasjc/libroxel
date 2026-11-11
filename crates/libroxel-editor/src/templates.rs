@@ -810,6 +810,9 @@ pub fn sample_obby() -> InstanceTree {
     let terrain = tree.terrain_or_make().expect("the workspace can hold terrain");
     tree.edit_voxels(terrain, |v| crate::terrain_tools::hill(v, Vec3::new(30.0, 0.0, -50.0), 22.0, 14.0, 5))
         .expect("terrain exists");
+    // And a pool to swim in, beside the vault.
+    tree.edit_voxels(terrain, |v| crate::terrain_tools::pool(v, Vec3::new(-30.0, 0.0, -45.0), 6, 5))
+        .expect("terrain exists");
 
     // A signpost pointing the way.
     let sign_post = block(&mut tree, start, "SignPost", [5.0, 1.5, -6.0], [0.4, 3.0, 0.4], [150, 105, 65]);
@@ -1953,7 +1956,9 @@ mod tests {
         // It survives saving.
         let (back, _) =
             libroxel_instance::place::load(&libroxel_instance::place::save(&tree).unwrap()).unwrap();
-        assert_eq!(back.voxels(back.terrain().unwrap()).unwrap(), tree.voxels(terrain).unwrap());
+        assert!(
+            back.voxels(back.terrain().unwrap()).unwrap().encode() == tree.voxels(terrain).unwrap().encode()
+        );
     }
 
     #[test]

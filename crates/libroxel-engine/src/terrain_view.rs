@@ -38,7 +38,14 @@ pub(crate) fn chunk_faces(voxels: &Voxels, chunk: (i32, i32, i32)) -> HashMap<Ma
     let mut out: HashMap<Material, Faces> = HashMap::new();
     for ((x, y, z), material) in voxels.cells_in_chunk(chunk) {
         for (normal, corners) in &SIDES {
-            if voxels.is_solid(x + normal[0], y + normal[1], z + normal[2]) {
+            let (nx, ny, nz) = (x + normal[0], y + normal[1], z + normal[2]);
+            // Solid cells show through water; water only shows against air.
+            let hidden = if material == Material::Water {
+                voxels.get(nx, ny, nz).is_some()
+            } else {
+                voxels.is_solid(nx, ny, nz)
+            };
+            if hidden {
                 continue;
             }
             let faces = out.entry(material).or_default();
@@ -83,6 +90,7 @@ pub fn terrain_color(material: Material) -> Color {
         Material::Metal => (150, 150, 160),
         Material::Neon => (90, 200, 255),
         Material::Glass => (170, 210, 240),
+        Material::Water => (50, 130, 210),
         _ => (163, 162, 165),
     };
     Color::srgb_u8(r, g, b)
@@ -154,7 +162,7 @@ pub(crate) fn sync_terrain(
                 .or_insert_with(|| {
                     let look = PartAppearance {
                         color: terrain_color(material),
-                        transparency: 0.0,
+                        transparency: if material == Material::Water { 0.45 } else { 0.0 },
                         material,
                         texture_repeat: 1.0,
                     };

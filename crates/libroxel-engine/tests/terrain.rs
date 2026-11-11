@@ -168,3 +168,54 @@ fn terrain_is_saved_with_the_game_and_reaches_joined_players() {
     assert!(dug, "the guest saw the hole");
     assert!(has_sand(&guest, 0));
 }
+
+#[test]
+fn things_float_and_characters_swim_in_water() {
+    let mut tree = InstanceTree::new();
+    // A rock basin with water 8 deep inside, its top at y = 8.
+    script(
+        &mut tree,
+        r#"
+        local t = workspace.Terrain
+        t:FillBlock(CFrame.new(0, 4, 0), Vector3.new(40, 10, 40), Enum.Material.Rock)
+        t:FillBlock(CFrame.new(0, 5, 0), Vector3.new(30, 8, 30), Enum.Material.Water)
+        local hit = workspace:Raycast(Vector3.new(0, 30, 0), Vector3.new(0, -50, 0))
+        print(hit.Material, hit.Position.Y)
+        "#,
+    );
+    let ws = tree.workspace();
+    let float = tree.create(ClassKind::Part, "Float").unwrap();
+    tree.set(float, Property::Position, PropertyValue::Vec3(Vec3::new(8.0, 3.0, 8.0))).unwrap();
+    tree.set(float, Property::Size, PropertyValue::Vec3(Vec3::new(1.0, 1.0, 1.0))).unwrap();
+    tree.set_parent(float, Some(ws)).unwrap();
+    let mut session = start_on(tree, true).unwrap();
+    // Rays go through water to the bottom.
+    assert_eq!(printed(&mut session), ["Enum.Material.Rock 1"]);
+    let c = session.character().unwrap();
+    let t = session.runtime().tree().clone();
+    let at = |id| t.borrow().get_vec3(id, Property::Position).unwrap();
+    t.borrow_mut().set(c.root, Property::Position, PropertyValue::Vec3(Vec3::new(-5.0, 4.0, 0.0))).unwrap();
+    for _ in 0..240 {
+        session.step(DT, CharacterInput::default());
+    }
+    // The block bobbed up to the top; the character drifted up and treads water.
+    assert!((at(float).y - 8.0).abs() < 1.0, "floats: {:?}", at(float));
+    let treading = at(c.root).y;
+    assert!(treading > 5.5 && treading < 9.0, "{treading}");
+    // Swimming along.
+    let swim = CharacterInput { move_dir: Vec3::new(1.0, 0.0, 0.0), ..Default::default() };
+    for _ in 0..30 {
+        session.step(DT, swim);
+    }
+    let x = at(c.root).x;
+    assert!(x > 0.0 && x < 7.0, "swims slower than walking: {x}");
+    // Jumping at the top leaps out of the water.
+    let jump = CharacterInput { jump: true, ..Default::default() };
+    let mut highest = 0.0f32;
+    for _ in 0..30 {
+        session.step(DT, jump);
+        highest = highest.max(at(c.root).y);
+    }
+    assert!(highest > 10.0, "leapt out: {highest}");
+    printed(&mut session);
+}
