@@ -60,6 +60,9 @@ pub(crate) enum SignalKind {
     ToolDeactivated(InstanceId),
     MouseButton1Down,
     MouseButton1Up,
+    TextBoxFocused(InstanceId),
+    TextBoxFocusLost(InstanceId),
+    ExplosionHit(InstanceId),
 }
 
 impl SignalKind {
@@ -120,6 +123,8 @@ pub(crate) struct Host {
     interned: RefCell<Vec<String>>,
     /// Where the player's mouse points, set by the host each frame.
     pub(crate) mouse: Cell<Option<crate::MouseRay>>,
+    /// Velocities, the focused text box and the view size, shared with the engine.
+    pub(crate) world: RefCell<crate::world::WorldState>,
 }
 
 /// The number for `name`, giving it one if it has none yet.
@@ -411,6 +416,7 @@ pub(crate) fn property_to_lua(lua: &Lua, value: PropertyValue) -> mlua::Result<V
         PropertyValue::Ref(None) => Value::Nil,
         PropertyValue::Vec2(v) => Value::UserData(lua.create_userdata(LuaVector2(v))?),
         PropertyValue::UDim2(u) => Value::UserData(lua.create_userdata(LuaUDim2(u))?),
+        PropertyValue::UDim(u) => Value::UserData(lua.create_userdata(crate::types::LuaUDim(u))?),
     })
 }
 
@@ -435,6 +441,8 @@ fn property_from_lua(property: Property, value: &Value) -> Option<PropertyValue>
                 PropertyValue::Vec2(v)
             } else if let Some(u) = as_udim2(value) {
                 PropertyValue::UDim2(u)
+            } else if let Some(u) = crate::types::as_udim(value) {
+                PropertyValue::UDim(u)
             } else if let Ok(v) = ud.borrow::<LuaVector3>() {
                 PropertyValue::Vec3(v.0)
             } else if let Ok(c) = ud.borrow::<LuaColor3>() {
@@ -492,12 +500,20 @@ fn instance_event(class: ClassKind, id: InstanceId, key: &str) -> Option<SignalK
         ON_SERVER_EVENT if class == ClassKind::RemoteEvent => SignalKind::ServerEvent(id),
         ON_CLIENT_EVENT if class == ClassKind::RemoteEvent => SignalKind::ClientEvent(id),
         EVENT if class == ClassKind::BindableEvent => SignalKind::BindableEvent(id),
+        FOCUSED if class == ClassKind::TextBox => SignalKind::TextBoxFocused(id),
+        FOCUS_LOST if class == ClassKind::TextBox => SignalKind::TextBoxFocusLost(id),
+        HIT if class == ClassKind::Explosion => SignalKind::ExplosionHit(id),
         _ => return None,
     })
 }
 
+/// Whether instances of `class` have a `CFrame` (built from Position and Orientation).
+pub(crate) fn has_cframe(class: ClassKind) -> bool {
+    class.is_physical() || class == ClassKind::Camera
+}
+
 /// A part's position and orientation as one CFrame.
-fn part_cframe(lua: &Lua, id: InstanceId) -> mlua::Result<CFrame> {
+pub(crate) fn part_cframe(lua: &Lua, id: InstanceId) -> mlua::Result<CFrame> {
     let host = host(lua);
     let tree = host.tree.borrow();
     let pos = tree.get_vec3(id, Property::Position).ok_or_else(|| tree_err(TreeError::Dead(id)))?;
@@ -505,7 +521,7 @@ fn part_cframe(lua: &Lua, id: InstanceId) -> mlua::Result<CFrame> {
     Ok(CFrame::new(pos, Rotation::from_orientation(orientation)))
 }
 
-fn set_part_cframe(lua: &Lua, id: InstanceId, cf: CFrame) -> mlua::Result<()> {
+pub(crate) fn set_part_cframe(lua: &Lua, id: InstanceId, cf: CFrame) -> mlua::Result<()> {
     let host = host(lua);
     let mut tree = host.tree.borrow_mut();
     tree.set(id, Property::Position, PropertyValue::Vec3(cf.pos)).map_err(tree_err)?;
@@ -680,6 +696,7 @@ impl UserData for LuaInstance {
         });
         crate::services::add_instance_methods(methods);
         crate::items::add_instance_methods(methods);
+        crate::world::add_instance_methods(methods);
         methods.add_method(names::methods::TAKE_DAMAGE, |lua, this, amount: f64| {
             require_class(lua, this.0, ClassKind::Humanoid, names::methods::TAKE_DAMAGE)?;
             let host = host(lua);
@@ -706,8 +723,11 @@ impl UserData for LuaInstance {
                 return lua.named_registry_value::<Value>(WAIT_FOR_CHILD_FN);
             }
             let class = class_of(lua, id)?;
-            if key == names::PART_CFRAME && class.is_physical() {
+            if key == names::PART_CFRAME && has_cframe(class) {
                 return Ok(Value::UserData(lua.create_userdata(LuaCFrame(part_cframe(lua, id)?))?));
+            }
+            if let Some(value) = crate::world::index(lua, id, class, &key)? {
+                return Ok(value);
             }
             if key == names::methods::LOCAL_PLAYER && class == ClassKind::Players {
                 let first = {
@@ -753,9 +773,12 @@ impl UserData for LuaInstance {
                 return host(lua).tree.borrow_mut().set_parent(id, parent).map_err(tree_err);
             }
             let class = class_of(lua, id)?;
-            if key == names::PART_CFRAME && class.is_physical() {
+            if key == names::PART_CFRAME && has_cframe(class) {
                 let cf = as_cframe(&value).ok_or_else(|| mlua::Error::runtime("CFrame expects a CFrame"))?;
                 return set_part_cframe(lua, id, cf);
+            }
+            if crate::world::new_index(lua, id, class, &key, &value)? {
+                return Ok(());
             }
             let Some(property) = names::property_from_name(class, &key) else {
                 return Err(not_a_member(lua, id, &key));
@@ -863,6 +886,7 @@ enum TweenValue {
     Color(Color3),
     Vec2(Vec2),
     UDim2(UDim2),
+    UDim(libroxel_instance::UDim),
     CFrame(CFrame),
 }
 
@@ -874,6 +898,7 @@ impl TweenValue {
             PropertyValue::Color3(c) => TweenValue::Color(*c),
             PropertyValue::Vec2(v) => TweenValue::Vec2(*v),
             PropertyValue::UDim2(u) => TweenValue::UDim2(*u),
+            PropertyValue::UDim(u) => TweenValue::UDim(*u),
             _ => return None,
         })
     }
@@ -887,6 +912,7 @@ impl TweenValue {
                 TweenValue::Vec2(Vec2::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t))
             }
             (TweenValue::UDim2(a), TweenValue::UDim2(b)) => TweenValue::UDim2(a.lerp(b, t)),
+            (TweenValue::UDim(a), TweenValue::UDim(b)) => TweenValue::UDim(a.lerp(b, t)),
             (TweenValue::CFrame(a), TweenValue::CFrame(b)) => TweenValue::CFrame(a.lerp(b, t)),
             (_, to) => to,
         }
@@ -947,6 +973,7 @@ fn write_tween_value(lua: &Lua, id: InstanceId, target: TweenTarget, value: Twee
                 TweenValue::Color(c) => PropertyValue::Color3(c),
                 TweenValue::Vec2(v) => PropertyValue::Vec2(v),
                 TweenValue::UDim2(u) => PropertyValue::UDim2(u),
+                TweenValue::UDim(u) => PropertyValue::UDim(u),
                 TweenValue::CFrame(_) => return,
             };
             host(lua).tree.borrow_mut().set(id, p, value).map_err(tree_err)
@@ -967,7 +994,7 @@ fn create_tween(lua: &Lua, target: Value, info: Value, goals: Table) -> mlua::Re
     let mut list = Vec::new();
     for pair in goals.pairs::<String, Value>() {
         let (key, value) = pair?;
-        if key == names::PART_CFRAME && class.is_physical() {
+        if key == names::PART_CFRAME && has_cframe(class) {
             let cf = as_cframe(&value).ok_or_else(|| mlua::Error::runtime("CFrame goals must be CFrames"))?;
             list.push((TweenTarget::PartCFrame, None, TweenValue::CFrame(cf)));
             continue;
@@ -1307,6 +1334,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         debris: RefCell::new(Vec::new()),
         interned: RefCell::new(Vec::new()),
         mouse: Cell::new(None),
+        world: RefCell::new(Default::default()),
     });
 
     // Weak-valued cache so each instance has exactly one userdata.

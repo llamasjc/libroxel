@@ -48,6 +48,8 @@ enum Action {
     ClearData,
     /// While playing: hold or put away the tool in a hotbar slot.
     ToggleTool(usize),
+    /// While playing: start typing into a text box, or stop (saying whether Enter was pressed).
+    FocusTextBox(Option<InstanceId>, bool),
     Reparent(InstanceId, InstanceId),
     OpenScript(InstanceId),
     Rename(InstanceId, String),
@@ -71,12 +73,17 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::ProximityPrompt,
     ClassKind::Tool,
     ClassKind::BillboardGui,
+    ClassKind::PointLight,
+    ClassKind::SpotLight,
     ClassKind::RemoteEvent,
     ClassKind::BindableEvent,
     ClassKind::ScreenGui,
     ClassKind::Frame,
     ClassKind::TextLabel,
     ClassKind::TextButton,
+    ClassKind::TextBox,
+    ClassKind::UICorner,
+    ClassKind::UIListLayout,
 ];
 
 const SHAPES: &[(PartShape, &str)] = &[
@@ -118,6 +125,12 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::Tool => "🔧",
         ClassKind::StarterPack | ClassKind::Backpack => "🎒",
         ClassKind::BillboardGui => "🪧",
+        ClassKind::Camera => "🎥",
+        ClassKind::PointLight | ClassKind::SpotLight => "💡",
+        ClassKind::TextBox => "⌨",
+        ClassKind::UICorner => "◜",
+        ClassKind::UIListLayout => "☰",
+        ClassKind::Explosion => "💥",
     }
 }
 
@@ -206,6 +219,17 @@ pub fn editor_ui(
     } else {
         tree_rc.borrow().service(ClassKind::StarterGui)
     };
+    // A script may have moved the keyboard to another text box, or away.
+    if let Some(session) = engine.session.as_ref() {
+        let focused = session.focused_text_box();
+        if focused != editor.typing {
+            editor.typing = focused;
+            editor.focus_typing = focused.is_some();
+        }
+    } else {
+        editor.typing = None;
+    }
+    let mut boxes = gui::TextBoxes { typing: editor.typing, ..Default::default() };
     let central = egui::CentralPanel::no_frame()
         .show(&mut root, |ui| {
             if let Ok((cam, gt, _, _)) = cameras.single() {
@@ -221,15 +245,19 @@ pub fn editor_ui(
             }
             if let Ok((cam, gt, _, _)) = cameras.single() {
                 let selected = if playing { None } else { editor.selection };
-                if let Some(hit) = gui::billboards(ui, &tree_rc.borrow(), (cam, gt), selected) {
+                if let Some(hit) = gui::billboards(ui, &tree_rc.borrow(), (cam, gt), selected, &mut boxes) {
                     gui_hit = Some(hit);
                 }
             }
             if let Some(root) = gui_root {
                 let selected = if playing { None } else { editor.selection };
-                if let Some(hit) = gui::draw(ui, &tree_rc.borrow(), root, ui.max_rect(), selected) {
+                if let Some(hit) = gui::draw(ui, &tree_rc.borrow(), root, ui.max_rect(), selected, &mut boxes)
+                {
                     gui_hit = Some(hit);
                 }
+            }
+            if playing {
+                text_field(ui, editor, &mut tree_rc.borrow_mut(), &boxes, &mut actions);
             }
             if let Some(session) = engine.session.as_ref() {
                 hotbar_hit = gui::hotbar(ui, &tree_rc.borrow(), &session.hotbar());
@@ -278,6 +306,9 @@ pub fn editor_ui(
     capture.pointer = !(over_view && pressed_in_view) || gizmo_hot;
     capture.keyboard = ctx.egui_wants_keyboard_input();
     editor.gizmo_active = gizmo_hot;
+    if let Some(session) = engine.session.as_mut() {
+        session.set_viewport(central.width(), central.height());
+    }
 
     // Where the mouse points, for scripts' `Player:GetMouse()`.
     if let Some(session) = engine.session.as_mut() {
@@ -339,6 +370,11 @@ pub fn editor_ui(
                 }
             }
             Some((id, ClassKind::TextButton)) if playing => actions.push(Action::ClickButton(id)),
+            Some((id, ClassKind::TextBox)) if playing => {
+                if editor.typing != Some(id) {
+                    actions.push(Action::FocusTextBox(Some(id), false));
+                }
+            }
             Some(_) if playing => {}
             Some((id, _)) => {
                 editor.reveal_selection = true;
@@ -395,6 +431,46 @@ pub fn editor_ui(
         }
     }
     Ok(())
+}
+
+/// While playing, the text field for the text box being typed into, drawn
+/// over the box. Typing writes straight into the box's Text.
+fn text_field(
+    ui: &mut egui::Ui,
+    editor: &mut Editor,
+    tree: &mut InstanceTree,
+    boxes: &gui::TextBoxes,
+    actions: &mut Vec<Action>,
+) {
+    let Some(id) = editor.typing else { return };
+    let Some(&(_, rect)) = boxes.found.iter().find(|(b, _)| *b == id) else {
+        // It was hidden or removed: stop typing.
+        actions.push(Action::FocusTextBox(None, false));
+        return;
+    };
+    let mut text = tree.get_string(id, Property::Text).unwrap_or_default().to_owned();
+    let size = tree.get_number(id, Property::TextSize).unwrap_or(14.0).max(1.0) as f32;
+    let c = tree.get_color(id, Property::TextColor).unwrap_or(libroxel_instance::Color3::new(0.1, 0.16, 0.2));
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let hint = tree.get_string(id, Property::PlaceholderText).unwrap_or_default().to_owned();
+    let field = egui::TextEdit::singleline(&mut text)
+        .frame(egui::Frame::NONE)
+        .font(egui::FontId::proportional(size))
+        .text_color(Color32::from_rgb(byte(c.r), byte(c.g), byte(c.b)))
+        .hint_text(hint)
+        .horizontal_align(egui::Align::Center)
+        .vertical_align(egui::Align::Center);
+    let response = ui.put(rect, field);
+    if std::mem::take(&mut editor.focus_typing) {
+        response.request_focus();
+    }
+    if response.changed() {
+        let _ = tree.set(id, Property::Text, PropertyValue::String(text));
+    }
+    if response.lost_focus() {
+        let enter = ui.input(|i| i.key_pressed(Key::Enter));
+        actions.push(Action::FocusTextBox(None, enter));
+    }
 }
 
 fn shortcuts(ctx: &egui::Context, editor: &mut Editor, playing: bool, actions: &mut Vec<Action>) {
@@ -801,6 +877,29 @@ fn properties(
         ClassKind::BindableEvent => {
             Some("Any script can call `Fire(...)`; everything connected to `Event` gets the same values.")
         }
+        ClassKind::PointLight | ClassKind::SpotLight => Some(
+            "Put this inside a part. It lights everything within Range studs; a spot light shines out of the \
+             part's front in a cone Angle degrees wide. Lights show best at night (Lighting.ClockTime).",
+        ),
+        ClassKind::TextBox => Some(
+            "While playing, click it to type. A local script can read `box.Text`, and \
+             `box.FocusLost:Connect(function(enterPressed) ... end)` runs when the player is done.",
+        ),
+        ClassKind::UICorner => {
+            Some("Put this inside a frame, label, button or text box to round its corners.")
+        }
+        ClassKind::UIListLayout => Some(
+            "Put this inside a frame: the other things in that frame line up in a column (or a row), \
+             lowest LayoutOrder first, with Padding between them.",
+        ),
+        ClassKind::Camera => Some(
+            "The player's view. Scripts reach it as `workspace.CurrentCamera`; set CameraType to Scriptable \
+             and move its CFrame to take over the view.",
+        ),
+        ClassKind::Explosion => Some(
+            "Goes off as soon as it is in the workspace while playing: parts within BlastRadius are hit, \
+             characters die and loose parts are thrown.",
+        ),
         _ => None,
     };
     if let Some(hint) = hint {
@@ -994,6 +1093,18 @@ fn property_editor(
                 }
             });
             changed.then_some(PropertyValue::UDim2(u))
+        }
+        PropertyValue::UDim(mut u) => {
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                changed |= ui
+                    .add(egui::DragValue::new(&mut u.scale).speed(0.01).max_decimals(3).prefix("scale "))
+                    .changed();
+                changed |= ui
+                    .add(egui::DragValue::new(&mut u.offset).speed(1.0).max_decimals(1).prefix("px "))
+                    .changed();
+            });
+            changed.then_some(PropertyValue::UDim(u))
         }
         // Shown by the caller, which can look up the name.
         PropertyValue::Ref(_) => None,
@@ -1475,6 +1586,12 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                 ClassKind::ScreenGui => tree.service(ClassKind::StarterGui).unwrap_or(parent),
                 ClassKind::RemoteEvent => tree.service(ClassKind::ReplicatedStorage).unwrap_or(parent),
                 ClassKind::Tool => tree.service(ClassKind::StarterPack).unwrap_or(parent),
+                // Corners and layouts go inside the selected GUI object.
+                ClassKind::UICorner | ClassKind::UIListLayout => editor
+                    .selection
+                    .filter(|s| tree.class(*s).is_ok_and(|c| c.is_gui_object() || c == ClassKind::ScreenGui))
+                    .or_else(|| gui_parent(&mut tree, editor.selection))
+                    .unwrap_or(parent),
                 c if c.is_gui_object() => gui_parent(&mut tree, editor.selection).unwrap_or(parent),
                 _ => parent,
             };
@@ -1485,6 +1602,8 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     | ClassKind::ClickDetector
                     | ClassKind::ProximityPrompt
                     | ClassKind::BillboardGui
+                    | ClassKind::PointLight
+                    | ClassKind::SpotLight
                     | ClassKind::BindableEvent
                     | ClassKind::ModuleScript
                     | ClassKind::IntValue
@@ -1603,6 +1722,13 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             if let Some(session) = engine.session.as_mut() {
                 session.click_button(id);
             }
+        }
+        Action::FocusTextBox(id, enter) => {
+            if let Some(session) = engine.session.as_mut() {
+                session.focus_text_box(id, enter);
+            }
+            editor.typing = id;
+            editor.focus_typing = id.is_some();
         }
         Action::ToggleTool(slot) => {
             if let Some(session) = engine.session.as_mut() {

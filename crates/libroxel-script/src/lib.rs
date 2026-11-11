@@ -24,6 +24,7 @@ mod items;
 pub mod names;
 mod services;
 mod types;
+mod world;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -32,6 +33,7 @@ use libroxel_instance::{InstanceId, InstanceTree, KeyCode};
 use mlua::Lua;
 
 pub use mlua;
+pub use world::VelocityRequest;
 
 /// The tree, shared between the runtime and the host engine.
 ///
@@ -215,6 +217,37 @@ impl ScriptRuntime {
     /// Starts every enabled `Script` under `ancestor` (such as a tool copied into a backpack).
     pub fn run_scripts(&self, ancestor: InstanceId) -> Vec<ScriptError> {
         bindings::run_scripts_under(&self.lua, ancestor, libroxel_instance::ClassKind::Script)
+    }
+
+    /// Tells scripts how big the 3D view is, in pixels (for the camera).
+    pub fn set_viewport(&self, width: f32, height: f32) {
+        world::set_viewport(&self.lua, libroxel_instance::Vec2::new(width, height))
+    }
+
+    /// Tells scripts how fast each moving part is going, after a physics step.
+    pub fn set_velocities(&self, velocities: std::collections::HashMap<InstanceId, libroxel_instance::Vec3>) {
+        world::set_velocities(&self.lua, velocities)
+    }
+
+    /// Takes the velocity changes scripts asked for since the last call, in order.
+    pub fn take_velocity_requests(&self) -> Vec<(InstanceId, VelocityRequest)> {
+        world::take_velocity_requests(&self.lua)
+    }
+
+    /// Fires an explosion's `Hit` event for one part it reached.
+    pub fn explosion_hit(&self, explosion: InstanceId, part: InstanceId, distance: f32) -> Vec<ScriptError> {
+        world::explosion_hit(&self.lua, explosion, part, distance)
+    }
+
+    /// The text box the player is typing into, if any.
+    pub fn focused_text_box(&self) -> Option<InstanceId> {
+        world::focused_text_box(&self.lua)
+    }
+
+    /// The player clicked into a text box (`Some`), or left the focused one
+    /// (`None`, with whether they pressed Enter).
+    pub fn focus_text_box(&self, text_box: Option<InstanceId>, enter: bool) -> Vec<ScriptError> {
+        world::text_box_focus(&self.lua, text_box, enter)
     }
 
     /// Seconds of game time so far (the sum of every `step`).

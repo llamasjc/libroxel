@@ -22,10 +22,10 @@ mod property;
 mod tree;
 
 pub use enums::{
-    EasingDirection, EasingStyle, EnumKind, EnumValue, KeyCode, Material, PartShape, RaycastFilterType,
-    UserInputType,
+    CameraType, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection, KeyCode, Material,
+    PartShape, RaycastFilterType, UserInputType,
 };
-pub use math::{CFrame, Color3, Rotation, UDim2, Vec2, Vec3};
+pub use math::{CFrame, Color3, Rotation, UDim, UDim2, Vec2, Vec3};
 pub use property::{Property, PropertyValue};
 pub use tree::{Change, InstanceId, InstanceTree, TreeError};
 
@@ -103,6 +103,20 @@ pub enum ClassKind {
     Backpack,
     /// Inside a part: GUI drawn in the world, floating at the part.
     BillboardGui,
+    /// In the workspace: where the player's view is and how wide it is.
+    Camera,
+    /// Inside a part: light shining out in every direction.
+    PointLight,
+    /// Inside a part: a cone of light out of the part's front.
+    SpotLight,
+    /// A rectangle the player can type text into.
+    TextBox,
+    /// Inside a GUI object: rounds its corners.
+    UICorner,
+    /// Inside a GUI object: lines its other children up in a row or column.
+    UIListLayout,
+    /// In the workspace: a blast that hits everything nearby, once.
+    Explosion,
 }
 
 impl ClassKind {
@@ -142,6 +156,13 @@ impl ClassKind {
         ClassKind::StarterPack,
         ClassKind::Backpack,
         ClassKind::BillboardGui,
+        ClassKind::Camera,
+        ClassKind::PointLight,
+        ClassKind::SpotLight,
+        ClassKind::TextBox,
+        ClassKind::UICorner,
+        ClassKind::UIListLayout,
+        ClassKind::Explosion,
     ];
 
     /// The services every tree has under its root, in order. They can't be
@@ -188,7 +209,9 @@ impl ClassKind {
             // Workspace behaves like a Model that can't be removed.
             ClassKind::Workspace => Some(ClassKind::Model),
             ClassKind::SpawnLocation => Some(ClassKind::Part),
-            ClassKind::Frame | ClassKind::TextLabel | ClassKind::TextButton => Some(ClassKind::GuiObject),
+            ClassKind::Frame | ClassKind::TextLabel | ClassKind::TextButton | ClassKind::TextBox => {
+                Some(ClassKind::GuiObject)
+            }
             _ => None,
         }
     }
@@ -235,6 +258,7 @@ impl ClassKind {
             Property::BackgroundColor,
             Property::BackgroundTransparency,
             Property::Visible,
+            Property::LayoutOrder,
         ];
         const TEXT: &[Property] = &[
             Property::Name,
@@ -247,7 +271,44 @@ impl ClassKind {
             Property::Text,
             Property::TextColor,
             Property::TextSize,
+            Property::LayoutOrder,
         ];
+        const TEXT_BOX: &[Property] = &[
+            Property::Name,
+            Property::GuiPosition,
+            Property::GuiSize,
+            Property::AnchorPoint,
+            Property::BackgroundColor,
+            Property::BackgroundTransparency,
+            Property::Visible,
+            Property::Text,
+            Property::TextColor,
+            Property::TextSize,
+            Property::LayoutOrder,
+            Property::PlaceholderText,
+            Property::ClearTextOnFocus,
+        ];
+        const CAMERA: &[Property] = &[
+            Property::Name,
+            Property::Position,
+            Property::Orientation,
+            Property::FieldOfView,
+            Property::CameraType,
+        ];
+        const POINT_LIGHT: &[Property] =
+            &[Property::Name, Property::Enabled, Property::Brightness, Property::Color, Property::Range];
+        const SPOT_LIGHT: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::Brightness,
+            Property::Color,
+            Property::Range,
+            Property::Angle,
+        ];
+        const CORNER: &[Property] = &[Property::Name, Property::CornerRadius];
+        const LIST: &[Property] = &[Property::Name, Property::FillDirection, Property::Padding];
+        const EXPLOSION: &[Property] =
+            &[Property::Name, Property::Position, Property::BlastRadius, Property::BlastPressure];
         const CLICK: &[Property] = &[Property::Name, Property::MaxActivationDistance];
         const PROMPT: &[Property] = &[
             Property::Name,
@@ -287,6 +348,13 @@ impl ClassKind {
             ClassKind::ScreenGui => SCREEN_GUI,
             ClassKind::Frame | ClassKind::GuiObject => FRAME,
             ClassKind::TextLabel | ClassKind::TextButton => TEXT,
+            ClassKind::TextBox => TEXT_BOX,
+            ClassKind::Camera => CAMERA,
+            ClassKind::PointLight => POINT_LIGHT,
+            ClassKind::SpotLight => SPOT_LIGHT,
+            ClassKind::UICorner => CORNER,
+            ClassKind::UIListLayout => LIST,
+            ClassKind::Explosion => EXPLOSION,
             ClassKind::ClickDetector => CLICK,
             ClassKind::ProximityPrompt => PROMPT,
             ClassKind::Tool => TOOL,
@@ -326,6 +394,7 @@ impl ClassKind {
             Property::Visible | Property::Enabled | Property::ResetOnSpawn => PropertyValue::Bool(true),
             Property::Text => PropertyValue::String(match self {
                 ClassKind::TextButton => "Button".into(),
+                ClassKind::TextBox => String::new(),
                 _ => "Label".into(),
             }),
             Property::TextColor => PropertyValue::Color3(Color3::from_rgb8(27, 42, 53)),
@@ -342,10 +411,29 @@ impl ClassKind {
             Property::AlwaysOnTop => PropertyValue::Bool(false),
             Property::MaxDistance => PropertyValue::Number(100.0),
             Property::ClockTime => PropertyValue::Number(14.0),
-            Property::Brightness => PropertyValue::Number(2.0),
+            Property::Brightness => PropertyValue::Number(match self {
+                ClassKind::Lighting => 2.0,
+                _ => 1.0,
+            }),
+            Property::LayoutOrder => PropertyValue::Number(0.0),
+            Property::PlaceholderText => PropertyValue::String("Type here".into()),
+            Property::ClearTextOnFocus => PropertyValue::Bool(true),
+            Property::FieldOfView => PropertyValue::Number(70.0),
+            Property::CameraType => PropertyValue::Enum(EnumValue::CameraType(CameraType::Custom)),
+            Property::Range => PropertyValue::Number(match self {
+                ClassKind::SpotLight => 16.0,
+                _ => 8.0,
+            }),
+            Property::Angle => PropertyValue::Number(90.0),
+            Property::CornerRadius => PropertyValue::UDim(UDim::new(0.0, 8.0)),
+            Property::FillDirection => PropertyValue::Enum(EnumValue::FillDirection(FillDirection::Vertical)),
+            Property::Padding => PropertyValue::UDim(UDim::default()),
+            Property::BlastRadius => PropertyValue::Number(4.0),
+            Property::BlastPressure => PropertyValue::Number(500_000.0),
             Property::Size => PropertyValue::Vec3(Vec3::new(4.0, 1.0, 2.0)),
             Property::Color => PropertyValue::Color3(match self {
                 ClassKind::SpawnLocation => Color3::new(0.3, 0.55, 0.95),
+                ClassKind::PointLight | ClassKind::SpotLight => Color3::WHITE,
                 _ => Color3::MEDIUM_GREY,
             }),
             Property::Anchored => PropertyValue::Bool(self == ClassKind::SpawnLocation),
@@ -395,6 +483,13 @@ impl ClassKind {
             ClassKind::StarterPack => "starter_pack",
             ClassKind::Backpack => "backpack",
             ClassKind::BillboardGui => "billboard_gui",
+            ClassKind::Camera => "camera",
+            ClassKind::PointLight => "point_light",
+            ClassKind::SpotLight => "spot_light",
+            ClassKind::TextBox => "text_box",
+            ClassKind::UICorner => "ui_corner",
+            ClassKind::UIListLayout => "ui_list_layout",
+            ClassKind::Explosion => "explosion",
         }
     }
 

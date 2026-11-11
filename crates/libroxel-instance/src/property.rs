@@ -1,6 +1,6 @@
 //! Typed properties.
 
-use crate::{Color3, EnumKind, EnumValue, InstanceId, UDim2, Vec2, Vec3};
+use crate::{Color3, EnumKind, EnumValue, InstanceId, UDim, UDim2, Vec2, Vec3};
 
 /// Every property an instance can have.
 ///
@@ -65,6 +65,30 @@ pub enum Property {
     AlwaysOnTop,
     /// On a billboard: hidden when the camera is further away than this, in studs.
     MaxDistance,
+    /// On a GUI object: where it goes in a list layout (lowest first).
+    LayoutOrder,
+    /// On a text box: the grey hint shown while it is empty.
+    PlaceholderText,
+    /// On a text box: whether clicking into it empties it.
+    ClearTextOnFocus,
+    /// On a camera: how tall the view is, in degrees.
+    FieldOfView,
+    /// On a camera: whether it follows the character or scripts move it.
+    CameraType,
+    /// On a light: how far it reaches, in studs.
+    Range,
+    /// On a spot light: how wide its cone is, in degrees.
+    Angle,
+    /// On a UI corner: how round the corners are.
+    CornerRadius,
+    /// On a list layout: rows or columns.
+    FillDirection,
+    /// On a list layout: the space between items.
+    Padding,
+    /// On an explosion: how far it reaches, in studs.
+    BlastRadius,
+    /// On an explosion: how hard it pushes.
+    BlastPressure,
 }
 
 /// The value of a property.
@@ -80,6 +104,7 @@ pub enum PropertyValue {
     Ref(Option<InstanceId>),
     Vec2(Vec2),
     UDim2(UDim2),
+    UDim(UDim),
 }
 
 impl PropertyValue {
@@ -95,6 +120,7 @@ impl PropertyValue {
             PropertyValue::Ref(_) => "ref",
             PropertyValue::Vec2(_) => "Vec2",
             PropertyValue::UDim2(_) => "UDim2",
+            PropertyValue::UDim(_) => "UDim",
         }
     }
 }
@@ -108,7 +134,8 @@ impl Property {
             | Property::StringValue
             | Property::Text
             | Property::ActionText
-            | Property::ObjectText => "string",
+            | Property::ObjectText
+            | Property::PlaceholderText => "string",
             Property::Position | Property::Size | Property::Orientation | Property::StudsOffset => "Vec3",
             Property::Color | Property::BackgroundColor | Property::TextColor => "Color3",
             Property::Anchored
@@ -118,7 +145,11 @@ impl Property {
             | Property::Visible
             | Property::Enabled
             | Property::ResetOnSpawn
-            | Property::AlwaysOnTop => "bool",
+            | Property::AlwaysOnTop
+            | Property::ClearTextOnFocus => "bool",
+            Property::CornerRadius | Property::Padding => "UDim",
+            Property::CameraType => EnumKind::CameraType.kind_name(),
+            Property::FillDirection => EnumKind::FillDirection.kind_name(),
             Property::GuiPosition | Property::GuiSize => "UDim2",
             Property::AnchorPoint => "Vec2",
             Property::BackgroundTransparency
@@ -127,7 +158,13 @@ impl Property {
             | Property::ClockTime
             | Property::Brightness
             | Property::HoldDuration
-            | Property::MaxDistance => "number",
+            | Property::MaxDistance
+            | Property::LayoutOrder
+            | Property::FieldOfView
+            | Property::Range
+            | Property::Angle
+            | Property::BlastRadius
+            | Property::BlastPressure => "number",
             Property::KeyboardKeyCode => EnumKind::KeyCode.kind_name(),
             Property::Transparency
             | Property::Health
@@ -148,6 +185,8 @@ impl Property {
             Property::Shape => Some(EnumKind::Shape),
             Property::Material => Some(EnumKind::Material),
             Property::KeyboardKeyCode => Some(EnumKind::KeyCode),
+            Property::CameraType => Some(EnumKind::CameraType),
+            Property::FillDirection => Some(EnumKind::FillDirection),
             _ => None,
         }
     }
@@ -196,6 +235,18 @@ impl Property {
         Property::StudsOffset,
         Property::AlwaysOnTop,
         Property::MaxDistance,
+        Property::LayoutOrder,
+        Property::PlaceholderText,
+        Property::ClearTextOnFocus,
+        Property::FieldOfView,
+        Property::CameraType,
+        Property::Range,
+        Property::Angle,
+        Property::CornerRadius,
+        Property::FillDirection,
+        Property::Padding,
+        Property::BlastRadius,
+        Property::BlastPressure,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -243,6 +294,18 @@ impl Property {
             Property::StudsOffset => "studs_offset",
             Property::AlwaysOnTop => "always_on_top",
             Property::MaxDistance => "max_distance",
+            Property::LayoutOrder => "layout_order",
+            Property::PlaceholderText => "placeholder_text",
+            Property::ClearTextOnFocus => "clear_text_on_focus",
+            Property::FieldOfView => "field_of_view",
+            Property::CameraType => "camera_type",
+            Property::Range => "range",
+            Property::Angle => "angle",
+            Property::CornerRadius => "corner_radius",
+            Property::FillDirection => "fill_direction",
+            Property::Padding => "padding",
+            Property::BlastRadius => "blast_radius",
+            Property::BlastPressure => "blast_pressure",
         }
     }
 

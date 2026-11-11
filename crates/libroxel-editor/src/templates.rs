@@ -2,7 +2,7 @@
 
 use libroxel_instance::{
     ClassKind, Color3, EnumValue, InstanceId, InstanceTree, Material, PartShape, Property, PropertyValue,
-    UDim2, Vec2, Vec3,
+    UDim, UDim2, Vec2, Vec3,
 };
 
 fn add(tree: &mut InstanceTree, parent: InstanceId, class: ClassKind, name: &str) -> InstanceId {
@@ -247,6 +247,108 @@ script.Parent.ProximityPrompt.Triggered:Connect(function(player)
 end)
 "#;
 
+const LAUNCH_SCRIPT: &str = r#"
+-- Step on the pad to be thrown into the air.
+local pad = script.Parent
+local cooling = {}
+
+pad.Touched:Connect(function(hit)
+	local character = hit.Parent
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root or cooling[character] then
+		return
+	end
+	cooling[character] = true
+	root.AssemblyLinearVelocity = Vector3.new(0, 110, 0)
+	task.wait(1)
+	cooling[character] = nil
+end)
+"#;
+
+const STREET_LIGHTS_SCRIPT: &str = r#"
+-- Lamps tagged "StreetLight" switch on at dusk and off at dawn.
+local Lighting = game:GetService("Lighting")
+local CollectionService = game:GetService("CollectionService")
+
+local function update()
+	local night = Lighting.ClockTime >= 18 or Lighting.ClockTime < 6
+	for _, lamp in CollectionService:GetTagged("StreetLight") do
+		lamp.PointLight.Enabled = night
+		lamp.Material = if night then Enum.Material.Neon else Enum.Material.Glass
+	end
+end
+Lighting:GetPropertyChangedSignal("ClockTime"):Connect(update)
+update()
+"#;
+
+const TNT_SCRIPT: &str = r#"
+-- Click the TNT to blow up the crates. Everything comes back a few seconds later.
+local tnt = script.Parent
+local detector = tnt.ClickDetector
+local crates = workspace.Quarry.Crates
+local saved = crates:Clone()
+
+detector.MouseClick:Connect(function(player)
+	if tnt.Transparency > 0 then
+		return
+	end
+	local boom = Instance.new("Explosion")
+	boom.Position = tnt.Position
+	boom.BlastRadius = 8
+	local thrown = 0
+	boom.Hit:Connect(function(part)
+		if part.Parent == crates then
+			thrown += 1
+		end
+	end)
+	boom.Parent = workspace
+	tnt.Transparency = 1
+	tnt.Sign.Enabled = false
+	task.wait(0.1)
+	print(player.Name .. " blew up " .. thrown .. " crates!")
+	task.wait(6)
+	crates:Destroy()
+	crates = saved:Clone()
+	crates.Parent = workspace.Quarry
+	tnt.Transparency = 0
+	tnt.Sign.Enabled = true
+end)
+"#;
+
+const CHAT_SCRIPT: &str = r#"
+-- What players type in the chat box floats over their head for a few seconds.
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Debris = game:GetService("Debris")
+
+ReplicatedStorage:WaitForChild("Say").OnServerEvent:Connect(function(player, text)
+	if typeof(text) ~= "string" then
+		return
+	end
+	text = string.sub(text, 1, 80)
+	local head = player.Character and player.Character:FindFirstChild("Head")
+	if text == "" or not head then
+		return
+	end
+	local old = head:FindFirstChild("Bubble")
+	if old then
+		old:Destroy()
+	end
+	local bubble = Instance.new("BillboardGui")
+	bubble.Name = "Bubble"
+	bubble.Size = UDim2.new(0, 240, 0, 36)
+	bubble.StudsOffset = Vector3.new(0, 3.6, 0)
+	local label = Instance.new("TextLabel", bubble)
+	label.Size = UDim2.new(1, 0, 1, 0)
+	label.BackgroundColor3 = Color3.new(1, 1, 1)
+	label.TextSize = 16
+	label.Text = text
+	Instance.new("UICorner", label).CornerRadius = UDim.new(0, 12)
+	bubble.Parent = head
+	Debris:AddItem(bubble, 5)
+	print(player.Name .. ": " .. text)
+end)
+"#;
+
 const HUD_SCRIPT: &str = r#"
 -- Runs for the player: shows their coins and switches between day and night.
 local Players = game:GetService("Players")
@@ -286,11 +388,42 @@ game:GetService("ReplicatedStorage"):WaitForChild("Notify").OnClientEvent:Connec
 	end
 end)
 
+-- The chat box: press / to type, Enter to send.
+local say = game:GetService("ReplicatedStorage"):WaitForChild("Say")
+local chat = hud.ChatBox
+chat.FocusLost:Connect(function(enterPressed)
+	if enterPressed and chat.Text ~= "" then
+		say:FireServer(chat.Text)
+	end
+	chat.Text = ""
+end)
+
+-- C flies the camera up for a look over the whole course, and back.
+local camera = workspace.CurrentCamera
+local overhead = false
+local function toggleOverhead()
+	overhead = not overhead
+	if overhead then
+		camera.CameraType = Enum.CameraType.Scriptable
+		local view = CFrame.lookAt(Vector3.new(30, 45, 50), Vector3.new(40, 0, 0))
+		TweenService:Create(camera, TweenInfo.new(1.5, Enum.EasingStyle.Sine), { CFrame = view }):Play()
+	else
+		camera.CameraType = Enum.CameraType.Custom
+	end
+end
+
 -- H shows or hides the help panel.
 local UserInputService = game:GetService("UserInputService")
 UserInputService.InputBegan:Connect(function(input, processed)
-	if not processed and input.KeyCode == Enum.KeyCode.H then
+	if processed then
+		return
+	end
+	if input.KeyCode == Enum.KeyCode.H then
 		hud.Help.Visible = not hud.Help.Visible
+	elseif input.KeyCode == Enum.KeyCode.Slash then
+		chat:CaptureFocus()
+	elseif input.KeyCode == Enum.KeyCode.C then
+		toggleOverhead()
 	end
 end)
 
@@ -497,32 +630,54 @@ pub fn sample_obby() -> InstanceTree {
     set(&mut tree, height, Property::Text, PropertyValue::String("Height: 0 studs".into()));
     let help = add(&mut tree, hud, ClassKind::Frame, "Help");
     set(&mut tree, help, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.0, 12.0, 0.5, 0.0)));
-    set(&mut tree, help, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 230.0, 0.0, 120.0)));
+    set(&mut tree, help, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 260.0, 0.0, 170.0)));
     set(&mut tree, help, Property::AnchorPoint, PropertyValue::Vec2(Vec2::new(0.0, 0.5)));
     set(&mut tree, help, Property::BackgroundColor, PropertyValue::Color3(dark));
     set(&mut tree, help, Property::BackgroundTransparency, PropertyValue::Number(0.3));
+    // The help lines stack themselves in a column.
+    let list = add(&mut tree, help, ClassKind::UIListLayout, "UIListLayout");
+    set(&mut tree, list, Property::Padding, PropertyValue::UDim(UDim::new(0.0, 2.0)));
     for (i, line) in [
+        "",
         "H: show or hide this help",
         "E: use a prompt (hold it)",
         "1: builder tool, click to build",
+        "/: chat    C: overhead camera",
+        "Green pad: jump!    Click the TNT",
         "Coins are saved",
     ]
     .iter()
     .enumerate()
     {
         let label = add(&mut tree, help, ClassKind::TextLabel, &format!("Line{}", i + 1));
-        let y = 10.0 + i as f32 * 25.0;
-        set(&mut tree, label, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.0, 0.0, 0.0, y)));
-        set(&mut tree, label, Property::GuiSize, PropertyValue::UDim2(UDim2::new(1.0, 0.0, 0.0, 24.0)));
+        set(&mut tree, label, Property::LayoutOrder, PropertyValue::Number(i as f64));
+        let height = if line.is_empty() { 2.0 } else { 20.0 };
+        set(&mut tree, label, Property::GuiSize, PropertyValue::UDim2(UDim2::new(1.0, 0.0, 0.0, height)));
         set(&mut tree, label, Property::BackgroundTransparency, PropertyValue::Number(1.0));
         set(&mut tree, label, Property::TextColor, PropertyValue::Color3(white));
         set(&mut tree, label, Property::TextSize, PropertyValue::Number(15.0));
         set(&mut tree, label, Property::Text, PropertyValue::String((*line).into()));
     }
+    let chat = add(&mut tree, hud, ClassKind::TextBox, "ChatBox");
+    set(&mut tree, chat, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.0, 12.0, 1.0, -62.0)));
+    set(&mut tree, chat, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 260.0, 0.0, 34.0)));
+    set(&mut tree, chat, Property::AnchorPoint, PropertyValue::Vec2(Vec2::new(0.0, 1.0)));
+    set(&mut tree, chat, Property::BackgroundColor, PropertyValue::Color3(dark));
+    set(&mut tree, chat, Property::BackgroundTransparency, PropertyValue::Number(0.3));
+    set(&mut tree, chat, Property::TextColor, PropertyValue::Color3(white));
+    set(&mut tree, chat, Property::TextSize, PropertyValue::Number(16.0));
+    set(&mut tree, chat, Property::PlaceholderText, PropertyValue::String("Press / to chat".into()));
+    // Rounded corners on every box on the HUD.
+    for id in [label, button, message, help, chat] {
+        let corner = add(&mut tree, id, ClassKind::UICorner, "UICorner");
+        set(&mut tree, corner, Property::CornerRadius, PropertyValue::UDim(UDim::new(0.0, 8.0)));
+    }
     code(&mut tree, hud, ClassKind::LocalScript, "HudScript", HUD_SCRIPT);
 
-    // A remote event the game's scripts use to show messages on the HUD.
+    // Remote events: the game's scripts show messages on the HUD, and the
+    // chat box sends what the player types.
     add(&mut tree, storage, ClassKind::RemoteEvent, "Notify");
+    add(&mut tree, storage, ClassKind::RemoteEvent, "Say");
 
     // A stand that sells a speed boost: walk up and hold E.
     let shop = block(&mut tree, ws, "SpeedShop", [6.0, 1.0, -5.0], [3.0, 2.0, 3.0], [60, 200, 120]);
@@ -552,6 +707,68 @@ pub fn sample_obby() -> InstanceTree {
     // One script for every lava brick, found by tag.
     let server = tree.service(ClassKind::ServerScriptService).expect("every tree has ServerScriptService");
     script(&mut tree, server, "Lava", LAVA_SCRIPT);
+    script(&mut tree, server, "StreetLights", STREET_LIGHTS_SCRIPT);
+    script(&mut tree, server, "Chat", CHAT_SCRIPT);
+
+    // A launch pad on the start platform.
+    let pad = block(&mut tree, start, "LaunchPad", [-5.0, 0.1, 5.0], [4.0, 0.2, 4.0], [80, 230, 90]);
+    material(&mut tree, pad, Material::Neon);
+    script(&mut tree, pad, "Launch", LAUNCH_SCRIPT);
+
+    // Street lamps at the corners of the start, lit at night.
+    for (i, (x, z)) in [(7.5, 7.5), (-7.5, 7.5), (7.5, -7.5), (-7.5, -7.5)].into_iter().enumerate() {
+        block(&mut tree, start, &format!("LampPost{}", i + 1), [x, 3.0, z], [0.5, 6.0, 0.5], [60, 60, 70]);
+        let lamp =
+            block(&mut tree, start, &format!("Lamp{}", i + 1), [x, 6.4, z], [1.2, 1.2, 1.2], [255, 220, 150]);
+        shape(&mut tree, lamp, PartShape::Ball);
+        material(&mut tree, lamp, Material::Glass);
+        let light = add(&mut tree, lamp, ClassKind::PointLight, "PointLight");
+        set(&mut tree, light, Property::Range, PropertyValue::Number(18.0));
+        set(&mut tree, light, Property::Brightness, PropertyValue::Number(2.0));
+        set(&mut tree, light, Property::Color, PropertyValue::Color3(Color3::from_rgb8(255, 210, 140)));
+        set(&mut tree, light, Property::Enabled, PropertyValue::Bool(false));
+        tree.add_tag(lamp, "StreetLight").expect("lamps exist");
+    }
+
+    // A quarry in front of the start: a stack of loose crates and some TNT.
+    let quarry = add(&mut tree, ws, ClassKind::Folder, "Quarry");
+    let ground = block(&mut tree, quarry, "Ground", [0.0, -0.5, 14.0], [16.0, 1.0, 12.0], [150, 130, 100]);
+    material(&mut tree, ground, Material::Grass);
+    let crates = add(&mut tree, quarry, ClassKind::Folder, "Crates");
+    for (i, pos) in [
+        [-2.0, 1.0, 16.0],
+        [0.0, 1.0, 16.0],
+        [2.0, 1.0, 16.0],
+        [-1.0, 3.0, 16.0],
+        [1.0, 3.0, 16.0],
+        [0.0, 5.0, 16.0],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let c = block(&mut tree, crates, &format!("Crate{}", i + 1), pos, [2.0, 2.0, 2.0], [170, 120, 70]);
+        material(&mut tree, c, Material::Wood);
+        set(&mut tree, c, Property::Anchored, PropertyValue::Bool(false));
+    }
+    let tnt = block(&mut tree, quarry, "TNT", [5.0, 1.0, 13.0], [2.0, 2.0, 2.0], [220, 40, 40]);
+    add(&mut tree, tnt, ClassKind::ClickDetector, "ClickDetector");
+    let tnt_sign = add(&mut tree, tnt, ClassKind::BillboardGui, "Sign");
+    set(&mut tree, tnt_sign, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 90.0, 0.0, 26.0)));
+    set(&mut tree, tnt_sign, Property::StudsOffset, PropertyValue::Vec3(Vec3::new(0.0, 2.2, 0.0)));
+    let tnt_label = add(&mut tree, tnt_sign, ClassKind::TextLabel, "Label");
+    set(&mut tree, tnt_label, Property::GuiSize, PropertyValue::UDim2(UDim2::new(1.0, 0.0, 1.0, 0.0)));
+    set(
+        &mut tree,
+        tnt_label,
+        Property::BackgroundColor,
+        PropertyValue::Color3(Color3::from_rgb8(120, 20, 20)),
+    );
+    set(&mut tree, tnt_label, Property::TextColor, PropertyValue::Color3(white));
+    set(&mut tree, tnt_label, Property::TextSize, PropertyValue::Number(16.0));
+    set(&mut tree, tnt_label, Property::Text, PropertyValue::String("TNT: click!".into()));
+    let tnt_corner = add(&mut tree, tnt_label, ClassKind::UICorner, "UICorner");
+    set(&mut tree, tnt_corner, Property::CornerRadius, PropertyValue::UDim(UDim::new(0.5, 0.0)));
+    script(&mut tree, tnt, "Blast", TNT_SCRIPT);
 
     // A builder tool every player gets: press 1 to hold it, click to place bricks.
     let pack = tree.service(ClassKind::StarterPack).expect("every tree has StarterPack");
@@ -887,6 +1104,74 @@ mod tests {
         frame(&mut session, 30);
         let log = session.take_log();
         assert!(log.iter().any(|l| l.text == "Your character died"), "{log:?}");
+        assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
+    }
+
+    #[test]
+    fn launch_pad_tnt_chat_and_street_lights() {
+        let frame = |s: &mut libroxel_engine::PlaySession, n: usize| {
+            for _ in 0..n {
+                s.step(1.0 / 60.0, CharacterInput::default());
+            }
+        };
+        let mut session = start_on(sample_obby(), true).unwrap();
+        frame(&mut session, 10);
+        let tree = session.runtime().tree().clone();
+        let character = session.character().unwrap();
+
+        // The pad throws the character high into the air.
+        session
+            .runtime()
+            .run("move", "workspace.Player1.HumanoidRootPart.Position = workspace.Start.LaunchPad.Position + Vector3.new(0, 2.2, 0)")
+            .unwrap();
+        let mut peak: f32 = 0.0;
+        for _ in 0..60 {
+            session.step(1.0 / 60.0, CharacterInput::default());
+            peak = peak.max(tree.borrow().get_vec3(character.root, Property::Position).unwrap().y);
+        }
+        assert!(peak > 20.0, "launched: {peak}");
+        frame(&mut session, 60);
+
+        // Clicking the TNT throws the crates.
+        let (tnt, crate1) = {
+            let t = tree.borrow();
+            let quarry = t.find_first_child(t.workspace(), "Quarry").unwrap().unwrap();
+            let crates = t.find_first_child(quarry, "Crates").unwrap().unwrap();
+            (
+                t.find_first_child(quarry, "TNT").unwrap().unwrap(),
+                t.find_first_child(crates, "Crate1").unwrap().unwrap(),
+            )
+        };
+        let before = tree.borrow().get_vec3(crate1, Property::Position).unwrap();
+        assert!(session.click_part(tnt));
+        frame(&mut session, 30);
+        let after = tree.borrow().get_vec3(crate1, Property::Position).unwrap();
+        assert!((after - before).length() > 2.0, "the crate flew: {before:?} -> {after:?}");
+
+        // Chat floats a bubble over the head.
+        session.runtime().run("say", "game.ReplicatedStorage.Say:FireServer('hello there')").unwrap();
+        frame(&mut session, 2);
+        let bubble = tree.borrow().find_first_child(character.head, "Bubble").unwrap();
+        assert!(bubble.is_some());
+
+        // At night the street lights come on.
+        session.runtime().run("night", "game.Lighting.ClockTime = 20").unwrap();
+        frame(&mut session, 2);
+        let on = {
+            let t = tree.borrow();
+            let start = t.find_first_child(t.workspace(), "Start").unwrap().unwrap();
+            let lamp = t.find_first_child(start, "Lamp1").unwrap().unwrap();
+            let light = t.find_first_child_of_class(lamp, ClassKind::PointLight).unwrap().unwrap();
+            t.get_bool(light, Property::Enabled).unwrap()
+        };
+        assert!(on);
+
+        let log = session.take_log();
+        assert!(
+            log.iter().any(|l| l.text.starts_with("Player1 blew up ") && !l.text.contains(" 0 ")),
+            "{log:?}"
+        );
+        assert!(log.iter().any(|l| l.text == "Player1: hello there"), "{log:?}");
         assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
     }
 }

@@ -89,6 +89,26 @@
   projected from its part (plus `StudsOffset`), sized in studs by the
   distance to the camera, and hidden past `MaxDistance` or, unless
   `AlwaysOnTop`, behind other parts.
+- **Camera.** A play session puts a `Camera` in the workspace. While its
+  `CameraType` is `Custom` the view orbits the character and writes where it
+  is into the camera each frame; when scripts make it `Scriptable`, the view
+  follows the camera's `CFrame` instead. `FieldOfView` sets the Bevy
+  projection, and the editor tells scripts the view's size.
+- **Velocities** stay in the physics engine. Scripts' writes to
+  `AssemblyLinearVelocity` and `ApplyImpulse` calls queue requests that the
+  session applies before physics runs; after the step it hands scripts a
+  copy of every velocity to read. A character keeps a push it gets in the
+  air instead of the walk speed replacing it.
+- **Explosions** go off the first step they are in the workspace: the
+  session finds parts whose box is within the blast radius, fires `Hit`,
+  kills characters and throws loose parts, and keeps a short-lived flash
+  for the renderer.
+- **Lights** are mirrored onto Bevy point and spot lights at their part.
+- **GUI layout.** A `UIListLayout` replaces its siblings' positions with a
+  column or row; a `UICorner` sets the rounding. While playing, the text
+  box being typed into gets an egui text field over it, which writes into
+  `Text`; focus changes go through the runtime so `Focused`, `FocusLost`
+  and `CaptureFocus` agree with the editor.
 - **Threading.** The Luau VM is single-threaded, so the engine state is a
   Bevy non-send resource and the tree is shared as `Rc<RefCell<_>>`.
 

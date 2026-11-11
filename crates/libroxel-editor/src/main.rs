@@ -74,6 +74,10 @@ pub struct Editor {
     pub new_attribute: (String, usize),
     /// The "add tag" box.
     pub new_tag: String,
+    /// While playing: the text box being typed into, and whether its field
+    /// still needs to take the keyboard.
+    pub typing: Option<InstanceId>,
+    pub focus_typing: bool,
 }
 
 impl Default for Editor {
@@ -99,6 +103,8 @@ impl Default for Editor {
             saved_camera: None,
             new_attribute: (String::new(), 0),
             new_tag: String::new(),
+            typing: None,
+            focus_typing: false,
         }
     }
 }

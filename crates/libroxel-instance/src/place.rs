@@ -44,6 +44,7 @@ fn value_to_json(value: &PropertyValue) -> Value {
         PropertyValue::Ref(_) => Value::Null,
         PropertyValue::Vec2(v) => json!([v.x, v.y]),
         PropertyValue::UDim2(u) => json!([u.x_scale, u.x_offset, u.y_scale, u.y_offset]),
+        PropertyValue::UDim(u) => json!([u.scale, u.offset]),
     }
 }
 
@@ -80,6 +81,10 @@ fn value_from_json(property: Property, value: &Value) -> Option<PropertyValue> {
             let n = |i: usize| arr[i].as_f64().map(|v| v as f32);
             PropertyValue::UDim2(crate::UDim2::new(n(0)?, n(1)?, n(2)?, n(3)?))
         }
+        "UDim" => {
+            let arr = value.as_array().filter(|a| a.len() == 2)?;
+            PropertyValue::UDim(crate::UDim::new(arr[0].as_f64()? as f32, arr[1].as_f64()? as f32))
+        }
         _ => return None,
     })
 }
@@ -107,6 +112,7 @@ fn attribute_from_json(value: &Value) -> Option<PropertyValue> {
                 "Color3" => as_kind(Property::Color)?,
                 "Vec2" => as_kind(Property::AnchorPoint)?,
                 "UDim2" => as_kind(Property::GuiSize)?,
+                "UDim" => as_kind(Property::Padding)?,
                 _ => return None,
             }
         }

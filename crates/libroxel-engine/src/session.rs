@@ -3,7 +3,7 @@
 use libroxel_instance::{
     ClassKind, EnumValue, InstanceId, InstanceTree, KeyCode, Property, PropertyValue, Rotation, Vec3,
 };
-use libroxel_script::{MouseRay, OutputLevel, ScriptRuntime, SharedTree, UserInput, names};
+use libroxel_script::{MouseRay, OutputLevel, ScriptRuntime, SharedTree, UserInput, VelocityRequest, names};
 
 use crate::character::{Character, CharacterInput};
 use crate::physics::Physics;
@@ -65,7 +65,25 @@ pub struct PlaySession {
     backpack: Option<InstanceId>,
     /// The player's tools in hotbar order (slot 1 first).
     hotbar: Vec<InstanceId>,
+    /// Explosions that have already gone off.
+    exploded: std::collections::HashSet<InstanceId>,
+    /// Explosions still being drawn: where, how big, and how long ago.
+    blasts: Vec<Blast>,
+    /// The workspace camera the view follows or obeys.
+    camera: Option<InstanceId>,
 }
+
+/// An explosion's flash, for drawing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Blast {
+    pub position: Vec3,
+    pub radius: f32,
+    /// Seconds since it went off.
+    pub age: f32,
+}
+
+/// How long an explosion's flash lasts, in seconds.
+pub const BLAST_TIME: f32 = 0.6;
 
 /// Where a character holds its tool's handle, relative to its body.
 const HAND_OFFSET: Vec3 = Vec3::new(1.3, -0.4, -1.0);
@@ -113,6 +131,24 @@ impl PlaySession {
             hold: None,
             backpack: None,
             hotbar: Vec::new(),
+            exploded: Default::default(),
+            blasts: Vec::new(),
+            camera: None,
+        };
+        // Scripts find the camera through the workspace, so it exists from the start.
+        session.camera = {
+            let mut t = tree.borrow_mut();
+            let ws = t.workspace();
+            match t.find_first_child_of_class(ws, ClassKind::Camera).ok().flatten() {
+                Some(cam) => Some(cam),
+                None => {
+                    let cam = t
+                        .create(ClassKind::Camera, names::extras::CAMERA_NAME)
+                        .expect("cameras can be created");
+                    t.set_parent(cam, Some(ws)).expect("fresh cameras can be parented");
+                    Some(cam)
+                }
+            }
         };
         if let Some(json) = saved_data
             && let Err(err) = session.runtime.load_data(json)
@@ -513,6 +549,38 @@ impl PlaySession {
         self.character
     }
 
+    /// The workspace camera: the view writes where it is each frame, or
+    /// follows it when scripts have taken it over.
+    pub fn camera(&self) -> Option<InstanceId> {
+        let tree = self.runtime.tree().borrow();
+        let ws = tree.workspace();
+        self.camera
+            .filter(|c| tree.parent(*c).ok().flatten() == Some(ws))
+            .or_else(|| tree.find_first_child_of_class(ws, ClassKind::Camera).ok().flatten())
+    }
+
+    /// Explosions being drawn right now.
+    pub fn blasts(&self) -> &[Blast] {
+        &self.blasts
+    }
+
+    /// Tells scripts how big the view is, in pixels.
+    pub fn set_viewport(&mut self, width: f32, height: f32) {
+        self.runtime.set_viewport(width, height);
+    }
+
+    /// The text box the player is typing into, if any.
+    pub fn focused_text_box(&self) -> Option<InstanceId> {
+        self.runtime.focused_text_box()
+    }
+
+    /// The player clicked into a text box (`Some`) or left the focused one
+    /// (`None`, saying whether they pressed Enter).
+    pub fn focus_text_box(&mut self, text_box: Option<InstanceId>, enter: bool) {
+        let errors = self.runtime.focus_text_box(text_box, enter);
+        self.collect(errors);
+    }
+
     /// The part the camera should follow.
     pub fn focus(&self) -> Option<InstanceId> {
         self.character.map(|c| c.root)
@@ -553,8 +621,23 @@ impl PlaySession {
         self.advance_hold(dt);
 
         let tree = self.runtime.tree().clone();
+        self.explode(&tree);
+        self.blasts.retain_mut(|b| {
+            b.age += dt;
+            b.age < BLAST_TIME
+        });
         let result = {
             let mut tree = tree.borrow_mut();
+            for (id, request) in self.runtime.take_velocity_requests() {
+                if tree.get_bool(id, Property::Anchored) != Some(false) {
+                    continue;
+                }
+                let v = match request {
+                    VelocityRequest::Set(v) => v,
+                    VelocityRequest::Add(dv) => self.physics.velocity(id) + dv,
+                };
+                self.physics.set_velocity(id, v);
+            }
             if let Some(c) = self.character.filter(|c| !c.is_dead(&tree)) {
                 c.drive(&tree, &mut self.physics, input);
             }
@@ -564,6 +647,7 @@ impl PlaySession {
             }
             result
         };
+        self.runtime.set_velocities(self.physics.velocities().clone());
         self.pose_character(input);
         self.refresh_hotbar();
 
@@ -577,6 +661,70 @@ impl PlaySession {
         }
 
         self.handle_death(&tree, dt);
+    }
+
+    /// Sets off every explosion that has arrived in the workspace: each
+    /// part in reach is hit, characters in reach die, and loose parts are
+    /// thrown away from the middle.
+    fn explode(&mut self, tree: &SharedTree) {
+        let fresh: Vec<InstanceId> = {
+            let t = tree.borrow();
+            t.descendants_of_class(t.workspace(), ClassKind::Explosion)
+                .into_iter()
+                .filter(|e| !self.exploded.contains(e))
+                .collect()
+        };
+        for explosion in fresh {
+            self.exploded.insert(explosion);
+            let (at, radius, pressure, hits) = {
+                let t = tree.borrow();
+                let at = t.get_vec3(explosion, Property::Position).unwrap_or_default();
+                let radius = t.get_number(explosion, Property::BlastRadius).unwrap_or(4.0) as f32;
+                let pressure = t.get_number(explosion, Property::BlastPressure).unwrap_or(0.0) as f32;
+                let mut hits = Vec::new();
+                for part in t.descendants_of_class(t.workspace(), ClassKind::Part) {
+                    let (Some(pos), Some(size)) =
+                        (t.get_vec3(part, Property::Position), t.get_vec3(part, Property::Size))
+                    else {
+                        continue;
+                    };
+                    // The distance to the nearest point of the part's box.
+                    let half = size / 2.0;
+                    let d = pos - at;
+                    let out = |d: f32, h: f32| (d.abs() - h).max(0.0);
+                    let gap = Vec3::new(out(d.x, half.x), out(d.y, half.y), out(d.z, half.z)).length();
+                    if gap <= radius {
+                        hits.push((part, gap, pos));
+                    }
+                }
+                (at, radius, pressure, hits)
+            };
+            self.blasts.push(Blast { position: at, radius, age: 0.0 });
+            for &(part, distance, pos) in &hits {
+                let errors = self.runtime.explosion_hit(explosion, part, distance);
+                self.collect(errors);
+                let mut t = tree.borrow_mut();
+                if t.is_destroyed(part).unwrap_or(true) {
+                    continue;
+                }
+                // Anything in a character's model takes the character with it.
+                let model = t.parent(part).ok().flatten();
+                if let Some(humanoid) =
+                    model.and_then(|m| t.find_first_child_of_class(m, ClassKind::Humanoid).ok().flatten())
+                {
+                    let _ = t.set(humanoid, Property::Health, PropertyValue::Number(0.0));
+                }
+                if t.get_bool(part, Property::Anchored) == Some(false) && pressure > 0.0 {
+                    let size = t.get_vec3(part, Property::Size).unwrap_or_default();
+                    let mass = (size.x * size.y * size.z * names::extras::DENSITY).max(0.5);
+                    let away = (pos - at).normalize_or_zero() + Vec3::new(0.0, 0.6, 0.0);
+                    let speed = (pressure / 5_000.0).min(250.0) / mass.sqrt()
+                        * (1.0 - distance / radius.max(0.01) * 0.5);
+                    let v = self.physics.velocity(part) + away.normalize_or_zero() * speed;
+                    self.physics.set_velocity(part, v);
+                }
+            }
+        }
     }
 
     fn handle_death(&mut self, tree: &SharedTree, dt: f32) {

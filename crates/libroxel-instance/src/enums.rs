@@ -115,6 +115,7 @@ pub enum KeyCode {
     Down,
     Left,
     Right,
+    Slash,
     /// Not a key: the code an input event has when it came from the mouse.
     Unknown,
 }
@@ -134,6 +135,24 @@ pub enum RaycastFilterType {
     #[default]
     Exclude,
     Include,
+}
+
+/// Whether the camera follows the character or is left to scripts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CameraType {
+    /// Orbits the character; the player turns it with the mouse.
+    #[default]
+    Custom,
+    /// Stays wherever scripts put it.
+    Scriptable,
+}
+
+/// Which way a list layout lines things up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FillDirection {
+    #[default]
+    Vertical,
+    Horizontal,
 }
 
 impl KeyCode {
@@ -189,6 +208,7 @@ impl KeyCode {
         KeyCode::Down,
         KeyCode::Left,
         KeyCode::Right,
+        KeyCode::Slash,
         KeyCode::Unknown,
     ];
 }
@@ -270,6 +290,8 @@ pub enum EnumKind {
     KeyCode,
     UserInputType,
     RaycastFilterType,
+    CameraType,
+    FillDirection,
 }
 
 /// A value from one of the enumerations.
@@ -282,6 +304,8 @@ pub enum EnumValue {
     KeyCode(KeyCode),
     UserInputType(UserInputType),
     RaycastFilterType(RaycastFilterType),
+    CameraType(CameraType),
+    FillDirection(FillDirection),
 }
 
 const KEY_CODES: &[EnumValue] = &[
@@ -336,6 +360,7 @@ const KEY_CODES: &[EnumValue] = &[
     EnumValue::KeyCode(KeyCode::Down),
     EnumValue::KeyCode(KeyCode::Left),
     EnumValue::KeyCode(KeyCode::Right),
+    EnumValue::KeyCode(KeyCode::Slash),
     EnumValue::KeyCode(KeyCode::Unknown),
 ];
 
@@ -348,6 +373,8 @@ impl EnumKind {
         EnumKind::KeyCode,
         EnumKind::UserInputType,
         EnumKind::RaycastFilterType,
+        EnumKind::CameraType,
+        EnumKind::FillDirection,
     ];
 
     /// Every value of this enumeration, in a stable order.
@@ -398,6 +425,12 @@ impl EnumKind {
                 E::RaycastFilterType(RaycastFilterType::Exclude),
                 E::RaycastFilterType(RaycastFilterType::Include),
             ],
+            EnumKind::CameraType => {
+                &[E::CameraType(CameraType::Custom), E::CameraType(CameraType::Scriptable)]
+            }
+            EnumKind::FillDirection => {
+                &[E::FillDirection(FillDirection::Vertical), E::FillDirection(FillDirection::Horizontal)]
+            }
         }
     }
 
@@ -411,6 +444,8 @@ impl EnumKind {
             EnumKind::KeyCode => "enum:key_code",
             EnumKind::UserInputType => "enum:user_input_type",
             EnumKind::RaycastFilterType => "enum:raycast_filter_type",
+            EnumKind::CameraType => "enum:camera_type",
+            EnumKind::FillDirection => "enum:fill_direction",
         }
     }
 
@@ -430,6 +465,8 @@ impl EnumValue {
             EnumValue::KeyCode(_) => EnumKind::KeyCode,
             EnumValue::UserInputType(_) => EnumKind::UserInputType,
             EnumValue::RaycastFilterType(_) => EnumKind::RaycastFilterType,
+            EnumValue::CameraType(_) => EnumKind::CameraType,
+            EnumValue::FillDirection(_) => EnumKind::FillDirection,
         }
     }
 
@@ -527,6 +564,7 @@ impl EnumValue {
                 KeyCode::Down => "down",
                 KeyCode::Left => "left",
                 KeyCode::Right => "right",
+                KeyCode::Slash => "slash",
                 KeyCode::Unknown => "unknown",
             },
             EnumValue::UserInputType(t) => match t {
@@ -537,6 +575,14 @@ impl EnumValue {
             EnumValue::RaycastFilterType(t) => match t {
                 RaycastFilterType::Exclude => "exclude",
                 RaycastFilterType::Include => "include",
+            },
+            EnumValue::CameraType(t) => match t {
+                CameraType::Custom => "custom",
+                CameraType::Scriptable => "scriptable",
+            },
+            EnumValue::FillDirection(d) => match d {
+                FillDirection::Vertical => "vertical",
+                FillDirection::Horizontal => "horizontal",
             },
         }
     }

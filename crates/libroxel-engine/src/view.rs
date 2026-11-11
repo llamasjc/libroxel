@@ -214,6 +214,7 @@ impl Plugin for RenderPlugin {
             .add_systems(Update, (camera_controls, play_input, forward_keys).chain().in_set(EngineSet::Input))
             .add_systems(PostUpdate, (attach_visuals, update_materials, update_meshes).chain())
             .add_systems(PostUpdate, follow_camera.before(TransformSystems::Propagate))
+            .add_systems(Update, (sync_lights, draw_blasts).after(EngineSet::Sync))
             .add_systems(Update, update_lighting.after(EngineSet::Sync));
     }
 }
@@ -667,6 +668,7 @@ pub fn script_key(key: KeyCode) -> Option<libroxel_instance::KeyCode> {
         KeyCode::ArrowDown => K::Down,
         KeyCode::ArrowLeft => K::Left,
         KeyCode::ArrowRight => K::Right,
+        KeyCode::Slash => K::Slash,
         _ => return None,
     })
 }
@@ -696,16 +698,17 @@ fn play_input(
     engine: NonSend<EngineState>,
     capture: Res<InputCapture>,
     keys: Res<ButtonInput<KeyCode>>,
-    rigs: Query<&CameraRig>,
+    rigs: Query<&Transform, With<CameraRig>>,
     mut input: ResMut<PlayInput>,
 ) {
     input.0 = CharacterInput::default();
     if !engine.is_playing() || capture.keyboard {
         return;
     }
-    let yaw = rigs.iter().next().map(|r| r.yaw).unwrap_or(0.0);
-    let forward = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
-    let right = Vec3::new(yaw.cos(), 0.0, -yaw.sin());
+    // Relative to where the camera looks, flattened onto the ground.
+    let look = rigs.iter().next().map(|t| t.forward().as_vec3()).unwrap_or(Vec3::NEG_Z);
+    let forward = Vec3::new(look.x, 0.0, look.z).try_normalize().unwrap_or(Vec3::NEG_Z);
+    let right = Vec3::new(-forward.z, 0.0, forward.x);
     let mut dir = Vec3::ZERO;
     if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) {
         dir += forward;
@@ -726,15 +729,33 @@ fn play_input(
     };
 }
 
-fn follow_camera(engine: NonSend<EngineState>, mut rigs: Query<(&mut CameraRig, &mut Transform)>) {
-    let focus = engine.session.as_ref().and_then(|s| s.focus()).and_then(|id| {
+fn follow_camera(
+    engine: NonSend<EngineState>,
+    mut rigs: Query<(&mut CameraRig, &mut Transform, &mut Projection)>,
+) {
+    let session = engine.session.as_ref();
+    let focus = session.and_then(|s| s.focus()).and_then(|id| {
         let tree = engine.tree.borrow();
         if tree.is_destroyed(id).unwrap_or(true) {
             return None;
         }
         tree.get_vec3(id, Property::Position)
     });
-    for (mut rig, mut transform) in &mut rigs {
+    // The workspace camera: scripts can take it over, or read where it is.
+    let camera = session.and_then(|s| s.camera());
+    let (scripted, fov) = camera.map_or((false, 70.0), |cam| {
+        let tree = engine.tree.borrow();
+        let scripted = tree.get_enum(cam, Property::CameraType)
+            == Some(EnumValue::CameraType(libroxel_instance::CameraType::Scriptable));
+        (scripted, tree.get_number(cam, Property::FieldOfView).unwrap_or(70.0) as f32)
+    });
+    for (mut rig, mut transform, mut projection) in &mut rigs {
+        let wanted_fov = if engine.is_playing() { fov.to_radians() } else { 70f32.to_radians() };
+        if let Projection::Perspective(p) = &mut *projection
+            && (p.fov - wanted_fov).abs() > 1e-4
+        {
+            p.fov = wanted_fov;
+        }
         if engine.is_playing() {
             rig.mode = CameraMode::Follow;
         } else if rig.mode == CameraMode::Follow {
@@ -743,10 +764,181 @@ fn follow_camera(engine: NonSend<EngineState>, mut rigs: Query<(&mut CameraRig, 
         if rig.mode != CameraMode::Follow {
             continue;
         }
+        let Some(cam) = camera else {
+            if let Some(target) = focus {
+                let target = to_bevy(target) + Vec3::Y * 2.0;
+                transform.rotation = rig.rotation();
+                transform.translation = target - transform.forward().as_vec3() * rig.distance;
+            }
+            continue;
+        };
+        let mut tree = engine.tree.borrow_mut();
+        if scripted {
+            let pos = tree.get_vec3(cam, Property::Position).unwrap_or_default();
+            let orientation = tree.get_vec3(cam, Property::Orientation).unwrap_or_default();
+            transform.translation = to_bevy(pos);
+            transform.rotation = crate::physics::orientation_quat(orientation);
+            continue;
+        }
         if let Some(target) = focus {
             let target = to_bevy(target) + Vec3::Y * 2.0;
             transform.rotation = rig.rotation();
             transform.translation = target - transform.forward().as_vec3() * rig.distance;
         }
+        // Tell scripts where the camera is.
+        let (y, x, z) = transform.rotation.to_euler(EulerRot::YXZ);
+        let round = |r: f32| (r.to_degrees() * 1000.0).round() / 1000.0;
+        let t = transform.translation;
+        let _ = tree.set(
+            cam,
+            Property::Position,
+            libroxel_instance::PropertyValue::Vec3(libroxel_instance::Vec3::new(t.x, t.y, t.z)),
+        );
+        let _ = tree.set(
+            cam,
+            Property::Orientation,
+            libroxel_instance::PropertyValue::Vec3(libroxel_instance::Vec3::new(
+                round(x),
+                round(y),
+                round(z),
+            )),
+        );
+    }
+}
+
+/// Links a light entity to the light instance it shows.
+#[derive(Component)]
+struct LightLink(InstanceId);
+
+/// Puts a Bevy light at every enabled point and spot light inside a part.
+fn sync_lights(
+    engine: NonSend<EngineState>,
+    mut commands: Commands,
+    mut points: Query<(Entity, &LightLink, &mut PointLight, &mut Transform), Without<SpotLight>>,
+    mut spots: Query<(Entity, &LightLink, &mut SpotLight, &mut Transform), Without<PointLight>>,
+) {
+    let tree = engine.tree.borrow();
+    let mut wanted: HashMap<InstanceId, (bool, Transform, Color, f32, f32, f32)> = HashMap::new();
+    for class in [ClassKind::PointLight, ClassKind::SpotLight] {
+        for light in tree.descendants_of_class(tree.workspace(), class) {
+            if tree.get_bool(light, Property::Enabled) != Some(true) {
+                continue;
+            }
+            let Some(part) = tree.parent(light).ok().flatten() else { continue };
+            let Some(pos) = tree.get_vec3(part, Property::Position) else { continue };
+            let rotation = crate::physics::orientation_quat(
+                tree.get_vec3(part, Property::Orientation).unwrap_or_default(),
+            );
+            let c = tree.get_color(light, Property::Color).unwrap_or(libroxel_instance::Color3::WHITE);
+            let brightness = tree.get_number(light, Property::Brightness).unwrap_or(1.0).max(0.0) as f32;
+            let range = tree.get_number(light, Property::Range).unwrap_or(8.0).max(0.0) as f32;
+            let angle = tree.get_number(light, Property::Angle).unwrap_or(90.0) as f32;
+            let transform = Transform::from_translation(to_bevy(pos)).with_rotation(rotation);
+            wanted.insert(
+                light,
+                (
+                    class == ClassKind::SpotLight,
+                    transform,
+                    Color::srgb(c.r, c.g, c.b),
+                    brightness,
+                    range,
+                    angle,
+                ),
+            );
+        }
+    }
+    // Brightness 1 lights the edge of the range about as much as a dim room.
+    let intensity = |brightness: f32, range: f32| brightness * 4_000.0 * range.max(1.0).powi(2);
+    for (entity, link, mut light, mut transform) in &mut points {
+        match wanted.remove(&link.0) {
+            Some((false, t, color, brightness, range, _)) => {
+                light.color = color;
+                light.intensity = intensity(brightness, range);
+                light.range = range;
+                transform.set_if_neq(t);
+            }
+            _ => commands.entity(entity).despawn(),
+        }
+    }
+    for (entity, link, mut light, mut transform) in &mut spots {
+        match wanted.get(&link.0).copied() {
+            Some((true, t, color, brightness, range, angle)) => {
+                wanted.remove(&link.0);
+                light.color = color;
+                light.intensity = intensity(brightness, range);
+                light.range = range;
+                light.outer_angle = (angle / 2.0).to_radians().min(1.5);
+                light.inner_angle = light.outer_angle * 0.7;
+                transform.set_if_neq(t);
+            }
+            _ => commands.entity(entity).despawn(),
+        }
+    }
+    for (id, (spot, transform, color, brightness, range, angle)) in wanted {
+        if spot {
+            let outer = (angle / 2.0).to_radians().min(1.5);
+            commands.spawn((
+                LightLink(id),
+                transform,
+                SpotLight {
+                    color,
+                    intensity: intensity(brightness, range),
+                    range,
+                    outer_angle: outer,
+                    inner_angle: outer * 0.7,
+                    shadow_maps_enabled: false,
+                    ..default()
+                },
+            ));
+        } else {
+            commands.spawn((
+                LightLink(id),
+                transform,
+                PointLight {
+                    color,
+                    intensity: intensity(brightness, range),
+                    range,
+                    shadow_maps_enabled: false,
+                    ..default()
+                },
+            ));
+        }
+    }
+}
+
+/// Marks the glowing ball drawn for an explosion.
+#[derive(Component)]
+struct BlastVisual;
+
+/// Draws each explosion as a growing, fading ball of fire.
+fn draw_blasts(
+    engine: NonSend<EngineState>,
+    mut commands: Commands,
+    meshes: Option<Res<PartMeshes>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    visuals: Query<Entity, With<BlastVisual>>,
+) {
+    for entity in &visuals {
+        commands.entity(entity).despawn();
+    }
+    let (Some(session), Some(meshes)) = (engine.session.as_ref(), meshes) else { return };
+    for blast in session.blasts() {
+        let t = (blast.age / crate::session::BLAST_TIME).clamp(0.0, 1.0);
+        let size = blast.radius.max(0.5) * 2.0 * (0.3 + 0.7 * t.sqrt());
+        let alpha = (1.0 - t) * 0.85;
+        let material = materials.add(StandardMaterial {
+            base_color: Color::srgba(1.0, 0.55, 0.1, alpha),
+            emissive: LinearRgba::rgb(6.0 * (1.0 - t), 2.5 * (1.0 - t), 0.3),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            ..default()
+        });
+        commands.spawn((
+            BlastVisual,
+            Mesh3d(meshes.ball.clone()),
+            MeshMaterial3d(material),
+            Transform::from_translation(to_bevy(blast.position)).with_scale(Vec3::splat(size)),
+            bevy::light::NotShadowCaster,
+        ));
     }
 }

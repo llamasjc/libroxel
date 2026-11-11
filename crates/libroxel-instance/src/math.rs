@@ -141,6 +141,28 @@ impl Vec2 {
     }
 }
 
+/// One screen dimension: a fraction of the parent (`scale`) plus pixels (`offset`).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct UDim {
+    pub scale: f32,
+    pub offset: f32,
+}
+
+impl UDim {
+    pub const fn new(scale: f32, offset: f32) -> Self {
+        Self { scale, offset }
+    }
+
+    /// Resolves to pixels inside a parent `parent` pixels long.
+    pub fn resolve(self, parent: f32) -> f32 {
+        self.scale * parent + self.offset
+    }
+
+    pub fn lerp(self, other: UDim, t: f32) -> UDim {
+        UDim::new(self.scale + (other.scale - self.scale) * t, self.offset + (other.offset - self.offset) * t)
+    }
+}
+
 /// A position or size on screen: a fraction of the parent (`scale`) plus pixels (`offset`), per axis.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct UDim2 {

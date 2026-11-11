@@ -389,9 +389,19 @@ impl InstanceTree {
                 }
                 (Property::ClockTime, PropertyValue::Number(n)) => PropertyValue::Number(n.rem_euclid(24.0)),
                 (
-                    Property::HoldDuration | Property::MaxActivationDistance | Property::MaxDistance,
+                    Property::HoldDuration
+                    | Property::MaxActivationDistance
+                    | Property::MaxDistance
+                    | Property::Range
+                    | Property::BlastRadius
+                    | Property::BlastPressure,
                     PropertyValue::Number(n),
                 ) => PropertyValue::Number(n.max(0.0)),
+                (Property::LayoutOrder, PropertyValue::Number(n)) => PropertyValue::Number(n.round()),
+                (Property::FieldOfView, PropertyValue::Number(n)) => {
+                    PropertyValue::Number(n.clamp(1.0, 120.0))
+                }
+                (Property::Angle, PropertyValue::Number(n)) => PropertyValue::Number(n.clamp(0.0, 180.0)),
                 (_, v) => v,
             };
             replace(slot, value)

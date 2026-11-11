@@ -282,6 +282,11 @@ impl Physics {
         self.velocities.insert(id, velocity);
     }
 
+    /// Every moving part's velocity.
+    pub fn velocities(&self) -> &HashMap<InstanceId, Vec3> {
+        &self.velocities
+    }
+
     /// Whether `id` ended the last step resting on something.
     pub fn is_grounded(&self, id: InstanceId) -> bool {
         self.grounded.contains(&id)

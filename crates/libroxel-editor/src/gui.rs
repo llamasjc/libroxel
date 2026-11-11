@@ -5,11 +5,19 @@
 
 use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Rect, Stroke, StrokeKind};
 use libroxel_instance::{
-    ClassKind, Color3, InstanceId, InstanceTree, Property, PropertyValue, UDim2, Vec2, Vec3,
+    ClassKind, Color3, InstanceId, InstanceTree, Property, PropertyValue, UDim, UDim2, Vec2, Vec3,
 };
 
 /// The GUI object under the pointer, if any, and its class.
 pub type GuiHit = Option<(InstanceId, ClassKind)>;
+
+/// Text boxes: where each one was drawn (so the caller can put a text
+/// field there), and the one being typed into, whose text the field draws.
+#[derive(Debug, Default)]
+pub struct TextBoxes {
+    pub found: Vec<(InstanceId, Rect)>,
+    pub typing: Option<InstanceId>,
+}
 
 fn color(c: Color3, alpha: f32) -> Color32 {
     let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -30,6 +38,67 @@ fn vec2(tree: &InstanceTree, id: InstanceId, property: Property) -> Vec2 {
     }
 }
 
+fn udim(tree: &InstanceTree, id: InstanceId, property: Property) -> UDim {
+    match tree.get(id, property) {
+        Ok(PropertyValue::UDim(u)) => u,
+        _ => UDim::default(),
+    }
+}
+
+/// The first child of `id` of `class`.
+fn child_of_class(tree: &InstanceTree, id: InstanceId, class: ClassKind) -> Option<InstanceId> {
+    tree.find_first_child_of_class(id, class).ok().flatten()
+}
+
+/// How round a GUI object's corners are, in pixels, from a UI corner inside it.
+fn rounding(tree: &InstanceTree, id: InstanceId, rect: Rect) -> f32 {
+    child_of_class(tree, id, ClassKind::UICorner).map_or(0.0, |corner| {
+        let short = rect.width().min(rect.height());
+        udim(tree, corner, Property::CornerRadius).resolve(short).clamp(0.0, short / 2.0)
+    })
+}
+
+/// The visible GUI objects inside `parent`, in drawing order, each with its
+/// rectangle. A list layout inside `parent` lines them up instead of using
+/// their positions.
+fn arrange(tree: &InstanceTree, parent: InstanceId, rect: Rect) -> Vec<(InstanceId, ClassKind, Rect)> {
+    let mut items: Vec<(InstanceId, ClassKind)> = tree
+        .children(parent)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|&c| Some((c, tree.class(c).ok()?)))
+        .filter(|(c, class)| class.is_gui_object() && tree.get_bool(*c, Property::Visible) != Some(false))
+        .collect();
+    let Some(list) = child_of_class(tree, parent, ClassKind::UIListLayout) else {
+        return items.into_iter().map(|(c, class)| (c, class, layout(tree, c, rect))).collect();
+    };
+    let horizontal = tree.get_enum(list, Property::FillDirection)
+        == Some(libroxel_instance::EnumValue::FillDirection(libroxel_instance::FillDirection::Horizontal));
+    let along = if horizontal { rect.width() } else { rect.height() };
+    let gap = udim(tree, list, Property::Padding).resolve(along);
+    // Lowest LayoutOrder first; ties keep their order in the tree.
+    items.sort_by(|a, b| {
+        let order = |id| tree.get_number(id, Property::LayoutOrder).unwrap_or(0.0);
+        order(a.0).total_cmp(&order(b.0))
+    });
+    let parent_size = Vec2::new(rect.width(), rect.height());
+    let mut cursor = 0.0;
+    items
+        .into_iter()
+        .map(|(c, class)| {
+            let size = udim2(tree, c, Property::GuiSize).resolve(parent_size);
+            let size = egui::vec2(size.x.max(0.0), size.y.max(0.0));
+            let min = if horizontal {
+                Pos2::new(rect.min.x + cursor, rect.min.y)
+            } else {
+                Pos2::new(rect.min.x, rect.min.y + cursor)
+            };
+            cursor += if horizontal { size.x } else { size.y } + gap;
+            (c, class, Rect::from_min_size(min, size))
+        })
+        .collect()
+}
+
 /// Where a GUI object sits inside its parent's rectangle.
 pub fn layout(tree: &InstanceTree, id: InstanceId, parent: Rect) -> Rect {
     let parent_size = Vec2::new(parent.width(), parent.height());
@@ -48,6 +117,7 @@ pub fn draw(
     container: InstanceId,
     area: Rect,
     selected: Option<InstanceId>,
+    boxes: &mut TextBoxes,
 ) -> GuiHit {
     let pointer = ui.ctx().input(|i| i.pointer.hover_pos()).filter(|p| area.contains(*p));
     let painter = ui.painter().with_clip_rect(area);
@@ -58,11 +128,12 @@ pub fn draw(
         {
             continue;
         }
-        draw_children(&painter, tree, screen, area, pointer, selected, &mut hit);
+        draw_children(&painter, tree, screen, area, pointer, selected, &mut hit, boxes);
     }
     hit
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_children(
     painter: &egui::Painter,
     tree: &InstanceTree,
@@ -71,13 +142,10 @@ fn draw_children(
     pointer: Option<Pos2>,
     selected: Option<InstanceId>,
     hit: &mut GuiHit,
+    boxes: &mut TextBoxes,
 ) {
-    for &child in tree.children(parent).unwrap_or_default() {
-        let Ok(class) = tree.class(child) else { continue };
-        if !class.is_gui_object() || tree.get_bool(child, Property::Visible) == Some(false) {
-            continue;
-        }
-        let r = layout(tree, child, rect);
+    for (child, class, r) in arrange(tree, parent, rect) {
+        let round = rounding(tree, child, r);
         let hovered = pointer.is_some_and(|p| r.contains(p));
         if hovered {
             *hit = Some((child, class));
@@ -89,29 +157,39 @@ fn draw_children(
             background = background.lerp(Color3::new(0.0, 0.0, 0.0), 0.15);
         }
         if alpha > 0.0 {
-            painter.rect_filled(r, 0.0, color(background, alpha));
+            painter.rect_filled(r, round, color(background, alpha));
         }
-        if let Some(text) = tree.get_string(child, Property::Text).filter(|t| !t.is_empty()) {
-            let size = tree.get_number(child, Property::TextSize).unwrap_or(14.0).max(1.0) as f32;
-            let text_color =
-                tree.get_color(child, Property::TextColor).unwrap_or(Color3::new(0.1, 0.16, 0.2));
+        let size = tree.get_number(child, Property::TextSize).unwrap_or(14.0).max(1.0) as f32;
+        let text_color = tree.get_color(child, Property::TextColor).unwrap_or(Color3::new(0.1, 0.16, 0.2));
+        let mut text = tree.get_string(child, Property::Text).unwrap_or_default().to_owned();
+        let mut text_alpha = 1.0;
+        if class == ClassKind::TextBox {
+            boxes.found.push((child, r));
+            if boxes.typing == Some(child) {
+                text.clear();
+            } else if text.is_empty() {
+                text = tree.get_string(child, Property::PlaceholderText).unwrap_or_default().to_owned();
+                text_alpha = 0.45;
+            }
+        }
+        if !text.is_empty() {
             painter.with_clip_rect(r.intersect(painter.clip_rect())).text(
                 r.center(),
                 Align2::CENTER_CENTER,
                 text,
                 FontId::proportional(size),
-                color(text_color, 1.0),
+                color(text_color, text_alpha),
             );
         }
         if selected == Some(child) {
             painter.rect_stroke(
                 r,
-                0.0,
+                round,
                 Stroke::new(2.0, Color32::from_rgb(80, 170, 255)),
                 StrokeKind::Outside,
             );
         }
-        draw_children(painter, tree, child, r, pointer, selected, hit);
+        draw_children(painter, tree, child, r, pointer, selected, hit, boxes);
     }
 }
 
@@ -176,6 +254,7 @@ pub fn billboards(
     tree: &InstanceTree,
     camera: (&bevy::prelude::Camera, &bevy::prelude::GlobalTransform),
     selected: Option<InstanceId>,
+    boxes: &mut TextBoxes,
 ) -> GuiHit {
     use bevy::prelude::Vec3 as BVec3;
     let (cam, gt) = camera;
@@ -234,7 +313,7 @@ pub fn billboards(
                 StrokeKind::Outside,
             );
         }
-        draw_children(&painter, tree, board, rect, pointer, selected, &mut hit);
+        draw_children(&painter, tree, board, rect, pointer, selected, &mut hit, boxes);
     }
     hit
 }

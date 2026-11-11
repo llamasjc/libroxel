@@ -104,8 +104,17 @@ impl Character {
             dir = dir.normalize_or_zero();
         }
         let mut v = physics.velocity(self.root);
-        v.x = dir.x * walk;
-        v.z = dir.z * walk;
+        let (want_x, want_z) = (dir.x * walk, dir.z * walk);
+        let flung = (v.x * v.x + v.z * v.z).sqrt() > walk + 1.0;
+        if flung && !physics.is_grounded(self.root) {
+            // Thrown by something (a launch pad, an explosion): keep the
+            // momentum in the air, steering only a little.
+            v.x += (want_x - v.x) * 0.03;
+            v.z += (want_z - v.z) * 0.03;
+        } else {
+            v.x = want_x;
+            v.z = want_z;
+        }
         if input.jump && physics.is_grounded(self.root) {
             v.y = jump;
         }

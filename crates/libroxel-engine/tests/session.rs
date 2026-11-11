@@ -206,3 +206,50 @@ fn guis_are_copied_and_parts_can_be_clicked() {
     let errors: Vec<_> = session.take_log().into_iter().filter(|l| l.level == LogLevel::Error).collect();
     assert!(errors.is_empty(), "{errors:?}");
 }
+
+#[test]
+fn launch_pads_explosions_and_the_camera() {
+    let mut tree = world();
+    let crate_id =
+        part(&mut tree, ClassKind::Part, "Crate", Vec3::new(20.0, 1.0, 0.0), Vec3::new(2.0, 2.0, 2.0));
+    tree.set(crate_id, Property::Anchored, PropertyValue::Bool(false)).unwrap();
+    script(
+        &mut tree,
+        "Pad",
+        r#"
+        local Players = game:GetService("Players")
+        print("camera", workspace.CurrentCamera ~= nil)
+        Players.PlayerAdded:Connect(function(player)
+            player.CharacterAdded:Connect(function(character)
+                task.wait(0.5)
+                character.HumanoidRootPart.AssemblyLinearVelocity = Vector3.new(0, 120, 0)
+                task.wait(1.5)
+                local boom = Instance.new("Explosion")
+                boom.Position = workspace.Crate.Position + Vector3.new(-2, 0, 0)
+                boom.BlastRadius = 3
+                boom.Hit:Connect(function(part) print("hit", part.Name) end)
+                boom.Parent = workspace
+            end)
+        end)
+        "#,
+    );
+    let mut session = start_on(tree, true).unwrap();
+    let character = session.character().unwrap();
+    let tree = session.runtime().tree().clone();
+    assert!(session.camera().is_some());
+    let mut peak: f32 = 0.0;
+    for _ in 0..90 {
+        session.step(DT, CharacterInput::default());
+        peak = peak.max(tree.borrow().get_vec3(character.root, Property::Position).unwrap().y);
+    }
+    assert!(peak > 30.0, "launched: peak {peak}");
+    for _ in 0..40 {
+        session.step(DT, CharacterInput::default());
+    }
+    let moved = tree.borrow().get_vec3(crate_id, Property::Position).unwrap();
+    assert!(moved.x > 21.0, "the blast threw the crate away: {moved:?}");
+    let log: Vec<String> = session.take_log().into_iter().map(|l| l.text).collect();
+    assert!(log.iter().any(|l| l == "camera true"), "{log:?}");
+    assert!(log.iter().any(|l| l == "hit Crate"), "{log:?}");
+    assert!(!log.iter().any(|l| l.contains("died")), "the character was out of reach: {log:?}");
+}

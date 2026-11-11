@@ -45,7 +45,10 @@ The first build compiles Bevy and takes a while. After that it is quick.
   a leaderboard that counts coins and deaths, an on-screen coin counter, a
   day/night button, a vault whose door opens when you click it, and a stand
   where you hold E to buy a speed boost. Coins are saved between play tests,
-  and a builder tool (press 1, then click) places bricks.
+  and a builder tool (press 1, then click) places bricks. There's also a
+  launch pad, street lamps that light up at night, TNT that blows up a stack
+  of crates, a chat box (press /) that floats what you say over your head,
+  and an overhead camera (press C).
   Press **▶ Play** (or F5) to try it.
 - **Explorer** (left) shows the instance tree. Click to select, double-click
   a script to edit it, drag one item onto another to move it inside, and
@@ -74,6 +77,11 @@ The first build compiles Bevy and takes a while. After that it is quick.
   9 or click a slot to hold one, and click in the world to use it.
 - **Floating text:** a `BillboardGui` inside a part holds labels that float
   above it and face the camera, like signs and name tags.
+- **Lights:** a `PointLight` or `SpotLight` inside a part lights the world
+  around it; they show best at night.
+- **Text boxes and layouts:** a `TextBox` can be typed into while playing.
+  A `UICorner` inside a GUI object rounds its corners, and a `UIListLayout`
+  inside a frame stacks its other children in a column or row.
 - **Attributes and tags:** the Properties panel lists the selection's
   attributes (numbers, text, booleans, vectors, colours) and tags, which you
   can add, change and remove. Both are saved with the game.
@@ -111,7 +119,8 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `LocalScript`, `ModuleScript`, `Humanoid`, `IntValue`, `NumberValue`,
   `StringValue`, `BoolValue`, `ClickDetector`, `ProximityPrompt`,
   `RemoteEvent`, `BindableEvent`, `ScreenGui`, `Frame`, `TextLabel`,
-  `TextButton`, `BillboardGui`, `Tool`, plus the built-in `Workspace`,
+  `TextButton`, `TextBox`, `UICorner`, `UIListLayout`, `BillboardGui`,
+  `Tool`, `PointLight`, `SpotLight`, `Explosion`, `Camera`, plus the built-in `Workspace`,
   `Players` (with one `Player` each, holding a `PlayerGui` and a
   `Backpack`), `ReplicatedStorage`, `ServerScriptService`, `StarterGui`,
   `StarterPack` and `Lighting`.
@@ -135,6 +144,25 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
 - **Mouse:** `Player:GetMouse()` gives `Hit` (a CFrame where the pointer
   meets the world), `Target` (the part under it), `X`, `Y`, and the
   `Button1Down` / `Button1Up` events.
+- **Camera:** `workspace.CurrentCamera` has `CFrame`, `FieldOfView`,
+  `CameraType` (`Custom` follows the character, `Scriptable` stays where
+  scripts put it, and tweens work on it), `ViewportSize` and
+  `WorldToViewportPoint(point)`.
+- **Moving parts:** `AssemblyLinearVelocity` reads or sets how fast a part
+  (or a character's root part) is moving, `ApplyImpulse(vector)` pushes it,
+  and `GetMass()` says how heavy it is.
+- **Explosions:** an `Explosion` (`Position`, `BlastRadius`,
+  `BlastPressure`) goes off when it is put in the workspace. Its `Hit` event
+  fires with each part in reach and the distance; characters in reach die
+  and loose parts are thrown.
+- **Text boxes:** `TextBox` has `Text`, `PlaceholderText` and
+  `ClearTextOnFocus`, the `Focused` and `FocusLost(enterPressed)` events, and
+  `CaptureFocus`, `ReleaseFocus` and `IsFocused`.
+- **Layout helpers:** `UICorner.CornerRadius` and `UIListLayout.Padding` are
+  `UDim`s (`UDim.new(scale, offset)`); `UIListLayout.FillDirection` is
+  `Vertical` or `Horizontal`, and items go in `LayoutOrder` order.
+- **Lights:** `PointLight` and `SpotLight` have `Enabled`, `Brightness`,
+  `Color` and `Range`; spot lights also have `Angle`.
 - **Floating text:** `BillboardGui` has `Size` (`UDim2`, scale in studs plus
   pixels), `StudsOffset`, `AlwaysOnTop`, `MaxDistance` and `Enabled`, and
   shows the labels inside it over its parent part (or a model's `Head`).
@@ -242,7 +270,7 @@ door.ClickDetector.MouseClick:Connect(function(player)
 end)
 ```
 
-**Not yet:** images and other GUI objects, tool animations, sounds, terrain and voxels, and
+**Not yet:** images, scrolling frames, tool animations, particles, sounds, terrain and voxels, and
 multiplayer (so remote events never cross a network). Physics is simple: anchored parts can be rotated and shaped
 (ramps and balls work), but loose parts are upright boxes that fall and
 stack without tipping over. Characters climb steps up to 0.6 studs.

@@ -11,4 +11,4 @@ pub mod session;
 pub mod view;
 
 pub use character::{Character, CharacterInput};
-pub use session::{LogEntry, LogLevel, PlaySession};
+pub use session::{Blast, LogEntry, LogLevel, PlaySession};

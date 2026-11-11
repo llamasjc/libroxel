@@ -905,3 +905,71 @@ fn tools_equip_activate_and_read_the_mouse() {
         vec!["equipped Floor 3, 0.5, 0", "mouse down", "zap", "done", "unequipped Backpack"]
     );
 }
+
+#[test]
+fn camera_velocity_text_boxes_and_explosions() {
+    use libroxel_script::VelocityRequest;
+    let rt = runtime();
+    rt.set_viewport(800.0, 600.0);
+    run(
+        &rt,
+        r#"
+        local cam = workspace.CurrentCamera
+        print(cam.ClassName, cam == workspace.CurrentCamera, cam.FieldOfView, cam.CameraType)
+        cam.CameraType = Enum.CameraType.Scriptable
+        cam.CFrame = CFrame.new(0, 0, 10)
+        local p, visible = cam:WorldToViewportPoint(Vector3.new(0, 0, 0))
+        print(p.X, p.Y, p.Z, visible, cam.ViewportSize.X)
+        local _, behind = cam:WorldToViewportPoint(Vector3.new(0, 0, 20))
+        print(behind)
+
+        local ball = Instance.new("Part", workspace)
+        ball.Size = Vector3.new(1, 1, 1)
+        print(math.floor(ball:GetMass() * 100 + 0.5) / 100)
+        ball.AssemblyLinearVelocity = Vector3.new(0, 10, 0)
+        ball:ApplyImpulse(Vector3.new(0.7, 0, 0))
+        print(ball.AssemblyLinearVelocity)
+
+        local box = Instance.new("TextBox")
+        box.Text = "old"
+        box.Focused:Connect(function() print("focused", box.Text == "") end)
+        box.FocusLost:Connect(function(enter) print("lost", enter, box.Text) end)
+        box:CaptureFocus()
+        print(box:IsFocused())
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0.5, 4)
+        print(corner.CornerRadius.Scale, corner.CornerRadius.Offset, typeof(corner.CornerRadius))
+        local list = Instance.new("UIListLayout")
+        list.FillDirection = "Horizontal"
+        list.Padding = UDim.new(0, 6)
+        print(list.FillDirection, list.Padding)
+
+    "#,
+    );
+    assert_eq!(
+        printed(&rt),
+        vec![
+            "Camera true 70 Enum.CameraType.Custom",
+            "400 300 10 true 800",
+            "false",
+            "0.7",
+            "1, 10, 0",
+            "focused true",
+            "true",
+            "0.5 4 UDim",
+            "Enum.FillDirection.Horizontal 0, 6",
+        ]
+    );
+    let requests = rt.take_velocity_requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].1, VelocityRequest::Set(Vec3::new(0.0, 10.0, 0.0)));
+    assert_eq!(requests[1].1, VelocityRequest::Add(Vec3::new(1.0, 0.0, 0.0)));
+
+    let focused = rt.focused_text_box().expect("the box has focus");
+    rt.tree().borrow_mut().set(focused, Property::Text, PropertyValue::String("typed".into())).unwrap();
+    assert!(rt.focus_text_box(None, true).is_empty());
+    assert_eq!(rt.focused_text_box(), None);
+
+    assert_eq!(printed(&rt), vec!["lost true typed"]);
+}

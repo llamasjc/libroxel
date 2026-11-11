@@ -1,7 +1,7 @@
 //! Value types that don't need the host: CFrame, Vector2 and UDim2.
 //! Every script-visible name comes from [`crate::names`].
 
-use libroxel_instance::{CFrame, Rotation, UDim2, Vec2, Vec3};
+use libroxel_instance::{CFrame, Rotation, UDim, UDim2, Vec2, Vec3};
 use mlua::{Lua, MetaMethod, Table, UserData, UserDataFields, UserDataMethods, Value};
 
 use crate::bindings::{LuaVector3, as_number, as_vector3};
@@ -227,22 +227,36 @@ impl UserData for LuaVector2 {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LuaUDim2(pub UDim2);
 
-/// One axis of a UDim2.
+/// One screen dimension, also each axis of a UDim2.
 #[derive(Debug, Clone, Copy)]
-struct LuaUDim {
-    scale: f32,
-    offset: f32,
+pub(crate) struct LuaUDim(pub UDim);
+
+pub(crate) fn as_udim(value: &Value) -> Option<UDim> {
+    match value {
+        Value::UserData(ud) => ud.borrow::<LuaUDim>().ok().map(|v| v.0),
+        _ => None,
+    }
 }
 
 impl UserData for LuaUDim {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
-        fields.add_field_method_get(gui_values::SCALE, |_, this| Ok(this.scale));
-        fields.add_field_method_get(gui_values::OFFSET, |_, this| Ok(this.offset));
+        fields.add_field_method_get(gui_values::SCALE, |_, this| Ok(this.0.scale));
+        fields.add_field_method_get(gui_values::OFFSET, |_, this| Ok(this.0.offset));
+        fields.add_meta_field(MetaMethod::Type, gui_values::UDIM_TYPE_NAME);
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_meta_method(MetaMethod::ToString, |_, this, ()| {
-            Ok(format!("{}, {}", this.scale, this.offset))
+            Ok(format!("{}, {}", this.0.scale, this.0.offset))
+        });
+        methods.add_meta_function(MetaMethod::Eq, |_, (a, b): (Value, Value)| {
+            Ok(matches!((as_udim(&a), as_udim(&b)), (Some(a), Some(b)) if a == b))
+        });
+        methods.add_meta_function(MetaMethod::Add, |_, (a, b): (Value, Value)| {
+            match (as_udim(&a), as_udim(&b)) {
+                (Some(a), Some(b)) => Ok(LuaUDim(UDim::new(a.scale + b.scale, a.offset + b.offset))),
+                _ => Err(err("UDim arithmetic needs two UDims")),
+            }
         });
     }
 }
@@ -257,8 +271,8 @@ pub(crate) fn as_udim2(value: &Value) -> Option<UDim2> {
 impl UserData for LuaUDim2 {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         use gui_values::*;
-        let x = |u: UDim2| LuaUDim { scale: u.x_scale, offset: u.x_offset };
-        let y = |u: UDim2| LuaUDim { scale: u.y_scale, offset: u.y_offset };
+        let x = |u: UDim2| LuaUDim(UDim::new(u.x_scale, u.x_offset));
+        let y = |u: UDim2| LuaUDim(UDim::new(u.y_scale, u.y_offset));
         fields.add_field_method_get(X, move |_, this| Ok(x(this.0)));
         fields.add_field_method_get(WIDTH, move |_, this| Ok(x(this.0)));
         fields.add_field_method_get(Y, move |_, this| Ok(y(this.0)));
@@ -344,5 +358,14 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     g.set(names::globals::UDIM2, udim2)?;
+
+    let udim = lua.create_table()?;
+    udim.set(
+        constructors::NEW,
+        lua.create_function(|_, (scale, offset): (Option<f32>, Option<f32>)| {
+            Ok(LuaUDim(UDim::new(scale.unwrap_or(0.0), offset.unwrap_or(0.0))))
+        })?,
+    )?;
+    g.set(names::globals::UDIM, udim)?;
     Ok(())
 }

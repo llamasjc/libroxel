@@ -11,8 +11,8 @@
 //! See `CONTRIBUTING.md` for the clean-room rules.
 
 use libroxel_instance::{
-    ClassKind, EasingDirection, EasingStyle, EnumKind, EnumValue, KeyCode, Material, PartShape, Property,
-    RaycastFilterType, UserInputType,
+    CameraType, ClassKind, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection, KeyCode,
+    Material, PartShape, Property, RaycastFilterType, UserInputType,
 };
 
 /// Global variables installed into every script.
@@ -39,6 +39,7 @@ pub mod globals {
     pub const CFRAME: &str = "CFrame";
     pub const VECTOR2: &str = "Vector2";
     pub const UDIM2: &str = "UDim2";
+    pub const UDIM: &str = "UDim";
     pub const TWEEN_INFO: &str = "TweenInfo";
     pub const RAYCAST_PARAMS: &str = "RaycastParams";
 }
@@ -102,6 +103,12 @@ pub mod events {
     /// On the mouse: the left button went down or came up.
     pub const BUTTON1_DOWN: &str = "Button1Down";
     pub const BUTTON1_UP: &str = "Button1Up";
+    /// On a text box: the player clicked into it.
+    pub const FOCUSED: &str = "Focused";
+    /// On a text box: the player clicked away or pressed Enter (passed as true).
+    pub const FOCUS_LOST: &str = "FocusLost";
+    /// On an explosion: fires with each part it reaches and how far away it was.
+    pub const HIT: &str = "Hit";
 }
 
 /// Methods that only some classes have.
@@ -158,6 +165,31 @@ pub mod methods {
     pub const UNEQUIP_TOOLS: &str = "UnequipTools";
     /// Player: the player's mouse.
     pub const GET_MOUSE: &str = "GetMouse";
+    /// Text box: start or stop typing into it, and whether the player is.
+    pub const CAPTURE_FOCUS: &str = "CaptureFocus";
+    pub const RELEASE_FOCUS: &str = "ReleaseFocus";
+    pub const IS_FOCUSED: &str = "IsFocused";
+    /// Part: a push, as a change in momentum (mass times speed).
+    pub const APPLY_IMPULSE: &str = "ApplyImpulse";
+    /// Part: how heavy it is (its volume times its density).
+    pub const GET_MASS: &str = "GetMass";
+    /// Camera: where a point in the world appears on screen.
+    pub const WORLD_TO_VIEWPORT_POINT: &str = "WorldToViewportPoint";
+    pub const WORLD_TO_SCREEN_POINT: &str = "WorldToScreenPoint";
+}
+
+/// Members that some classes have beyond their saved properties.
+pub mod extras {
+    /// Workspace: the camera the player sees through.
+    pub const CURRENT_CAMERA: &str = "CurrentCamera";
+    /// Part: how fast it is moving, in studs per second.
+    pub const ASSEMBLY_LINEAR_VELOCITY: &str = "AssemblyLinearVelocity";
+    /// Camera: the size of the view in pixels.
+    pub const VIEWPORT_SIZE: &str = "ViewportSize";
+    /// The name of the camera the engine puts in the workspace.
+    pub const CAMERA_NAME: &str = "Camera";
+    /// How heavy a part is per cubic stud.
+    pub const DENSITY: f32 = 0.7;
 }
 
 /// Members of the player's mouse.
@@ -268,6 +300,7 @@ pub mod cframe {
 pub mod gui_values {
     pub const VECTOR2_TYPE_NAME: &str = "Vector2";
     pub const UDIM2_TYPE_NAME: &str = "UDim2";
+    pub const UDIM_TYPE_NAME: &str = "UDim";
     pub const FROM_SCALE: &str = "fromScale";
     pub const FROM_OFFSET: &str = "fromOffset";
     pub const X: &str = "X";
@@ -300,6 +333,8 @@ pub fn enum_name(kind: EnumKind) -> &'static str {
         EnumKind::KeyCode => "KeyCode",
         EnumKind::UserInputType => "UserInputType",
         EnumKind::RaycastFilterType => "RaycastFilterType",
+        EnumKind::CameraType => "CameraType",
+        EnumKind::FillDirection => "FillDirection",
     }
 }
 
@@ -397,6 +432,7 @@ pub fn enum_item_name(value: EnumValue) -> &'static str {
             KeyCode::Down => "Down",
             KeyCode::Left => "Left",
             KeyCode::Right => "Right",
+            KeyCode::Slash => "Slash",
             KeyCode::Unknown => "Unknown",
         },
         EnumValue::UserInputType(t) => match t {
@@ -407,6 +443,14 @@ pub fn enum_item_name(value: EnumValue) -> &'static str {
         EnumValue::RaycastFilterType(t) => match t {
             RaycastFilterType::Exclude => "Exclude",
             RaycastFilterType::Include => "Include",
+        },
+        EnumValue::CameraType(t) => match t {
+            CameraType::Custom => "Custom",
+            CameraType::Scriptable => "Scriptable",
+        },
+        EnumValue::FillDirection(d) => match d {
+            FillDirection::Vertical => "Vertical",
+            FillDirection::Horizontal => "Horizontal",
         },
     }
 }
@@ -534,6 +578,13 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::StarterPack => "StarterPack",
         ClassKind::Backpack => "Backpack",
         ClassKind::BillboardGui => "BillboardGui",
+        ClassKind::Camera => "Camera",
+        ClassKind::PointLight => "PointLight",
+        ClassKind::SpotLight => "SpotLight",
+        ClassKind::TextBox => "TextBox",
+        ClassKind::UICorner => "UICorner",
+        ClassKind::UIListLayout => "UIListLayout",
+        ClassKind::Explosion => "Explosion",
     }
 }
 
@@ -586,6 +637,18 @@ pub fn property_name(property: Property) -> &'static str {
         Property::StudsOffset => "StudsOffset",
         Property::AlwaysOnTop => "AlwaysOnTop",
         Property::MaxDistance => "MaxDistance",
+        Property::LayoutOrder => "LayoutOrder",
+        Property::PlaceholderText => "PlaceholderText",
+        Property::ClearTextOnFocus => "ClearTextOnFocus",
+        Property::FieldOfView => "FieldOfView",
+        Property::CameraType => "CameraType",
+        Property::Range => "Range",
+        Property::Angle => "Angle",
+        Property::CornerRadius => "CornerRadius",
+        Property::FillDirection => "FillDirection",
+        Property::Padding => "Padding",
+        Property::BlastRadius => "BlastRadius",
+        Property::BlastPressure => "BlastPressure",
     }
 }
 
@@ -606,6 +669,7 @@ pub fn value_kind_name(kind: &str) -> &str {
         "ref" => INSTANCE_TYPE_NAME,
         "Vec2" => gui_values::VECTOR2_TYPE_NAME,
         "UDim2" => gui_values::UDIM2_TYPE_NAME,
+        "UDim" => gui_values::UDIM_TYPE_NAME,
         other => other,
     }
 }
