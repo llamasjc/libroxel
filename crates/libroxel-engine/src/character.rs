@@ -102,6 +102,11 @@ const EYE_AT: Vec3 = Vec3::new(0.35, 2.65, -0.71);
 /// hanging straight down (it is turned with the arm).
 const GRIP: Vec3 = Vec3::new(0.0, -2.3, 0.1);
 
+/// Sounds every character has in its root part: its name, file and volume.
+/// The session plays `Jumping` on a jump and `Splash` on falling into water.
+pub const CHARACTER_SOUNDS: &[(&str, &str, f64)] =
+    &[("Jumping", "libroxel://jump", 0.3), ("Splash", "libroxel://splash", 0.5)];
+
 /// How long swinging a tool takes, in seconds.
 pub const SLASH_TIME: f32 = 0.35;
 
@@ -313,6 +318,12 @@ impl Character {
         // The root is the collision box; the body drawn around it is the rig.
         set(tree, root, Property::Transparency, PropertyValue::Number(1.0));
         let (head, limbs) = build_rig(tree, model, colors);
+        // The sounds a character makes by itself.
+        for (name, sound, volume) in CHARACTER_SOUNDS {
+            let id = make(tree, ClassKind::Sound, name, root);
+            set(tree, id, Property::SoundId, PropertyValue::String((*sound).into()));
+            set(tree, id, Property::Volume, PropertyValue::Number(*volume));
+        }
         let humanoid = make(tree, ClassKind::Humanoid, names::HUMANOID, model);
         // New characters start with the starter player's walk speed and jump power.
         if let Some(starter) = tree.service(ClassKind::StarterPlayer) {

@@ -101,6 +101,9 @@ pub(crate) struct Avatar {
     pub(crate) stride: f32,
     /// Seconds left of swinging their tool.
     pub(crate) slash: f32,
+    /// Whether their character stood on something, and was in water, last step.
+    pub(crate) was_grounded: bool,
+    pub(crate) was_wet: bool,
     /// Whether they play on another computer, so their input comes over
     /// the network and their GUIs and local scripts run there.
     pub(crate) remote: bool,
@@ -128,6 +131,8 @@ impl Avatar {
             seating: Default::default(),
             stride: 0.0,
             slash: 0.0,
+            was_grounded: false,
+            was_wet: false,
             remote,
             input: CharacterInput::default(),
             moved_to: None,
@@ -552,6 +557,26 @@ impl PlaySession {
         let mut tree = self.runtime.tree().borrow_mut();
         if character.is_dead(&tree) {
             return;
+        }
+        // Jumping off the ground and falling into water make sounds.
+        let (grounded, wet) =
+            (self.physics.is_grounded(character.root), self.physics.is_in_water(character.root));
+        let rising = self.physics.velocity(character.root).y > 10.0;
+        let mut sounds = Vec::new();
+        if avatar.was_grounded && !grounded && rising {
+            sounds.push("Jumping");
+        }
+        if wet && !avatar.was_wet {
+            sounds.push("Splash");
+        }
+        (avatar.was_grounded, avatar.was_wet) = (grounded, wet);
+        for name in sounds {
+            if let Ok(Some(sound)) = tree.find_first_child(character.root, name)
+                && tree.class(sound) == Ok(ClassKind::Sound)
+            {
+                let _ = tree.set(sound, Property::Playing, PropertyValue::Bool(true));
+                self.sound_restarts.push(sound);
+            }
         }
         let dir = input.move_dir;
         if dir.x != 0.0 || dir.z != 0.0 {

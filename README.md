@@ -258,7 +258,9 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   start, `Pause` and `Resume` don't, and `Ended` fires when it finishes.
   `libroxel://coin`, `jump`, `boom`, `click`, `splash`, `chime` and `hum`
   are made by Libroxel. A sound inside a part gets quieter further from the
-  camera. In the sample, coins ding, the TNT booms and the finish chimes.
+  camera. Characters carry `Jumping` and `Splash` sounds in their root part,
+  played when they jump and fall into water. In the sample, coins ding, the
+  TNT booms and the finish chimes.
 - **Tipping over:** a loose part resting on something tips over when its
   middle hangs past the edge of what holds it up, turning about that edge,
   and settles flat on whichever side it lands on.

@@ -788,3 +788,23 @@ fn using_a_tool_swings_the_arm() {
     let (y, tilt) = held(&shared.borrow());
     assert!((y - rest).abs() < 0.05 && tilt.abs() < 0.01, "{y} {tilt}");
 }
+
+#[test]
+fn characters_sound_when_they_jump() {
+    let mut session = start_on(world(), true).unwrap();
+    let shared = session.runtime().tree().clone();
+    for _ in 0..60 {
+        session.step(DT, CharacterInput::default());
+    }
+    let root = session.character().unwrap().root;
+    let jumping = shared.borrow().find_first_child(root, "Jumping").unwrap().unwrap();
+    assert!(session.take_sound_restarts().is_empty(), "standing still is quiet");
+    let mut heard = Vec::new();
+    for i in 0..30 {
+        let jump = CharacterInput { jump: i == 0, ..Default::default() };
+        session.step(DT, jump);
+        heard.extend(session.take_sound_restarts());
+    }
+    assert_eq!(heard, vec![jumping]);
+    assert_eq!(shared.borrow().get_bool(jumping, Property::Playing), Some(true));
+}
