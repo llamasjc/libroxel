@@ -9,9 +9,11 @@
 //! cargo run -p libroxel-editor -- --sample     # open the sample obby
 //! ```
 
+mod browse;
 mod gui;
 mod history;
 mod images;
+mod server;
 mod templates;
 mod terrain_tools;
 mod ui;
@@ -96,6 +98,8 @@ pub struct Editor {
     pub focus_typing: bool,
     /// While hosting or joining by code: the connection over the internet.
     pub tunnel: Option<Tunnel>,
+    /// The Hub: Browse, the built-in Hub, and listing a hosted game.
+    pub platform: browse::Platform,
 }
 
 /// A game carried over the internet with a join code.
@@ -134,6 +138,7 @@ impl Default for Editor {
             typing: None,
             focus_typing: false,
             tunnel: None,
+            platform: browse::Platform::default(),
         }
     }
 }
@@ -159,8 +164,12 @@ pub fn identity() -> Result<libroxel_net::Identity, String> {
 }
 
 fn main() {
-    let mut editor = Editor::default();
-    let tree = match std::env::args().nth(1) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if server::dispatch(&args) {
+        return;
+    }
+    let mut editor = Editor { platform: browse::Platform::start(), ..Editor::default() };
+    let tree = match args.first().cloned() {
         Some(flag) if flag == "--sample" => templates::sample_obby(),
         Some(path) => match std::fs::read_to_string(&path)
             .map_err(|e| e.to_string())
@@ -181,7 +190,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Libroxel Editor".into(),
+                title: "Libroxel".into(),
                 resolution: (1440, 900).into(),
                 ..default()
             }),
@@ -226,7 +235,7 @@ fn update_title(editor: NonSend<Editor>, engine: NonSend<EngineState>, mut windo
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Untitled".into());
     let title = format!(
-        "{}{}{} - Libroxel Editor",
+        "{}{}{} - Libroxel",
         name,
         if editor.dirty { " *" } else { "" },
         if engine.is_playing() { " (playing)" } else { "" }

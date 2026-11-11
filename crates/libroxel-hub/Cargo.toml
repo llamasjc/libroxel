@@ -1,0 +1,22 @@
+[package]
+name = "libroxel-hub"
+description = "The Libroxel Hub: a small self-hostable server that lists live games, and the client that talks to it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time", "sync", "signal"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
+ureq = { version = "3", features = ["json"] }
+data-encoding = "2"
+getrandom = "0.3"
+
+[lints]
+workspace = true

@@ -31,8 +31,10 @@ On Debian or Ubuntu the equivalent is
 Then:
 
 ```sh
-cargo run -p libroxel-editor                      # the editor
-cargo run -p libroxel-editor -- --sample          # the editor, with the sample obby open
+cargo run -p libroxel-editor                      # the app: edit, play, host, browse
+cargo run -p libroxel-editor -- --sample          # the same, with the sample obby open
+cargo run -p libroxel-editor -- server my_game.lrx  # host a game with no window (and a Hub)
+cargo run -p libroxel-editor -- hub               # run only a Hub
 cargo run -p libroxel-proto -- my_game.lrx        # play a saved game without the editor
 cargo test --workspace                            # every test, no GPU needed
 ```
@@ -124,10 +126,19 @@ The first build compiles Bevy and takes a while. After that it is quick.
   computer runs its own player's `LocalScript`s, moves its own character
   straight away (telling the host where it went), and shows the rest of the
   world as the host sends it. The toolbar shows how many have joined. To
-  host without a window, run
-  `cargo run --release -p libroxel-net --example server -- mygame.lrx`,
-  which prints a join code. Your player identity (a key made on first use)
-  lives in `~/.config/libroxel/identity.key`.
+  host without a window, run `libroxel server mygame.lrx`, which prints a
+  join code. Your player identity (a key made on first use) lives in
+  `~/.config/libroxel/identity.key`.
+- **Finding games:** **🌍 Browse** lists the games being hosted right now on
+  a Hub, community servers first, and joins one with a click. Every copy of
+  Libroxel runs a small Hub on port 7430, so friends on your network can put
+  your computer's address in Browse's Hub box; `libroxel server` runs one
+  too, and `libroxel hub` runs only a Hub. Games you host are listed on the
+  Hub that Browse points at. Set `LIBROXEL_HUB=host:port` to use another
+  Hub from the start.
+- **One app:** the build is a single `libroxel` program. `libroxel` opens
+  the editor, `libroxel server <game.lrx>` hosts without a window,
+  `libroxel hub` runs a Hub, and `libroxel help` lists the options.
 - **Undo/redo** with Ctrl+Z and Ctrl+Y. **Save** with Ctrl+S. Games are
   saved as `.lrx` files in `~/Projects/libroxel-games/` by default.
 
@@ -136,10 +147,11 @@ The first build compiles Bevy and takes a while. After that it is quick.
 | Crate | What it is |
 | --- | --- |
 | [`libroxel-instance`](crates/libroxel-instance) | The instance tree: classes, typed properties, parenting, destroy, a change journal, and the `.lrx` file format. No engine dependencies. |
+| [`libroxel-hub`](crates/libroxel-hub) | The Hub: a small self-hostable server (axum and SQLite) that lists live games, and the client and background announcer the app uses. |
 | [`libroxel-net`](crates/libroxel-net) | Player identity (a keypair) and join codes. Carries a hosted game between computers over iroh, peer to peer with a relay fallback. |
 | [`libroxel-script`](crates/libroxel-script) | The sandboxed Luau runtime (via `mlua`) with a thread scheduler. Every name scripts can see lives in [`names.rs`](crates/libroxel-script/src/names.rs). |
 | [`libroxel-engine`](crates/libroxel-engine) | Play sessions: box physics, the player character, touch events, respawning, and the Bevy integration (rendering and cameras). |
-| [`libroxel-editor`](crates/libroxel-editor) | The editor. |
+| [`libroxel-editor`](crates/libroxel-editor) | The `libroxel` app: the editor, plus `libroxel server` and `libroxel hub`. |
 | [`libroxel-proto`](crates/libroxel-proto) | A minimal player that runs a saved game or a single script. |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit together.

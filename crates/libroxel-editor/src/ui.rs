@@ -267,6 +267,14 @@ pub fn editor_ui(
     if engine.session.is_none() {
         editor.tunnel = None;
     }
+    let hosting = engine.session.as_ref().filter(|s| s.host_address().is_some()).map(|s| {
+        let code = match &editor.tunnel {
+            Some(Tunnel::Host(tunnel)) => tunnel.code(),
+            _ => None,
+        };
+        (code, s.joined_count())
+    });
+    editor.platform.tick(hosting);
 
     shortcuts(&ctx, editor, playing, &mut actions);
 
@@ -397,6 +405,9 @@ pub fn editor_ui(
 
     script_editor(&ctx, editor, &mut tree_rc.borrow_mut(), now, playing);
     dialogs(&ctx, editor, &mut actions);
+    if let Some((address, name)) = editor.platform.window(&ctx) {
+        actions.push(Action::Join { address, name });
+    }
 
     // Decide who gets the mouse and keyboard this frame.
     let pointer = ctx.input(|i| i.pointer.hover_pos());
@@ -821,6 +832,9 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
             }
             if ui.button("🔗 Join").on_hover_text("Join a game another computer hosts").clicked() {
                 editor.dialog = Some(Dialog::Join { address: "127.0.0.1".into(), name: "Player".into() });
+            }
+            if ui.button("🌍 Browse").on_hover_text("Find games being hosted right now").clicked() {
+                editor.platform.open = true;
             }
         }
         if let Some(session) = session {
@@ -2147,6 +2161,13 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                         match tunnel {
                             Ok(tunnel) => {
                                 editor.tunnel = Some(Tunnel::Host(tunnel));
+                                if let Ok(me) = crate::identity() {
+                                    let game = editor.file.as_ref().and_then(|f| f.file_stem()).map_or_else(
+                                        || "Untitled game".to_owned(),
+                                        |s| s.to_string_lossy().into_owned(),
+                                    );
+                                    editor.platform.announce(me.player_id(), game);
+                                }
                                 log(
                                     engine,
                                     LogLevel::Info,
