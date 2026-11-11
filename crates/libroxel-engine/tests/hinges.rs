@@ -319,3 +319,51 @@ fn wheels_at_different_speeds_turn_a_car() {
     assert!(turned.abs() > 30.0, "it turned {turned} degrees, to {at:?}");
     assert!((at.y - 2.0).abs() < 0.3, "still held up: {at:?}");
 }
+
+#[test]
+fn front_wheels_on_steering_hinges_turn_a_car() {
+    let mut tree = world();
+    let chassis = part(&mut tree, "Chassis", Vec3::new(0.0, 2.0, 0.0), Vec3::new(4.0, 1.0, 6.0), false);
+    let cylinder =
+        PropertyValue::Enum(libroxel_instance::EnumValue::Shape(libroxel_instance::PartShape::Cylinder));
+    let mut steering = Vec::new();
+    for (x, z) in [(2.5, -2.5), (-2.5, -2.5), (2.5, 2.5), (-2.5, 2.5)] {
+        let wheel = part(&mut tree, "Wheel", Vec3::new(x, 1.0, z), Vec3::new(1.0, 2.0, 2.0), false);
+        tree.set(wheel, Property::Shape, cylinder.clone()).unwrap();
+        let hub = attach_facing(&mut tree, wheel, Vec3::ZERO, Vec3::ZERO);
+        // Wheels turning about +X roll the car towards +Z... so these spin
+        // the other way to drive towards -Z, the front.
+        let drive = motor(-5.0);
+        if z < 0.0 {
+            // A front wheel hangs from a knuckle that a servo turns about the vertical.
+            let knuckle = part(&mut tree, "Knuckle", Vec3::new(x, 1.0, z), Vec3::new(0.4, 0.4, 0.4), false);
+            tree.set(knuckle, Property::CanCollide, PropertyValue::Bool(false)).unwrap();
+            let up = Vec3::new(0.0, 0.0, 90.0);
+            let a0 = attach_facing(&mut tree, chassis, Vec3::new(x, -1.0, z), up);
+            let a1 = attach_facing(&mut tree, knuckle, Vec3::ZERO, up);
+            steering.push(hinge(
+                &mut tree,
+                a0,
+                a1,
+                &[
+                    actuator(ActuatorType::Servo),
+                    (Property::TargetAngle, PropertyValue::Number(25.0)),
+                    (Property::AngularSpeed, PropertyValue::Number(4.0)),
+                    (Property::ServoMaxTorque, PropertyValue::Number(1e9)),
+                ],
+            ));
+            let axle = attach_facing(&mut tree, knuckle, Vec3::ZERO, Vec3::ZERO);
+            hinge(&mut tree, axle, hub, &drive);
+        } else {
+            let axle = attach_facing(&mut tree, chassis, Vec3::new(x, -1.0, z), Vec3::ZERO);
+            hinge(&mut tree, axle, hub, &drive);
+        }
+    }
+    let shared = run(tree, 2.0);
+    let at = vec(&shared, chassis, Property::Position);
+    let turned = vec(&shared, chassis, Property::Orientation).y;
+    assert!(at.z < -4.0, "it drove forwards: {at:?}");
+    assert!(turned.abs() > 15.0, "and turned {turned} degrees");
+    assert!((at.y - 2.0).abs() < 0.3, "{at:?}");
+    assert!((angle(&shared, steering[0]) - 25.0).abs() < 1.0);
+}

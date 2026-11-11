@@ -267,9 +267,10 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
 - **Hinge arms and wheels:** a turning hinge arm shoves loose things it
   runs into. Balls, and cylinders lying along their hinge, are wheels on a
   loose base: on the ground they hold it up, and a Motor drives it along
-  (gripping so it doesn't slide sideways); wheels turning at different
-  speeds on each side turn it, like a tank. The sample's rover drives back
-  and forth on the playground lawn.
+  without sliding sideways. Wheels turning at different speeds turn it like
+  a tank, and a wheel can hang from a knuckle on a Servo hinge about the
+  vertical, so setting the servo's `TargetAngle` steers. The sample's rover
+  drives back and forth on the playground lawn.
 - **Tool swings:** using a held tool (clicking with it)
   swings the arm holding it up and down, with the tool in the hand.
 - **Scrolling frames:** `ScrollingFrame` has `CanvasSize` (`UDim2`),
@@ -494,8 +495,8 @@ end)
 **Not yet:** Terrain is blocky, not smooth, and water doesn't flow. Physics is simple: anchored parts can be rotated and shaped
 (ramps and balls work), but loose parts collide as the upright box around
 them. They tip over edges, tall ones fall when shoved hard, and they settle
-flat, but a turned part sits a little high on its box. Motor-hinged wheels steer only by turning at
-different speeds on each side, like a tank (there are no steering hinges yet). Characters climb steps up to 0.6 studs.
+flat, but a turned part sits a little high on its box. Hinged wheels drive and steer, but the car
+has no suspension: its wheels are rigid. Characters climb steps up to 0.6 studs.
 
 ## Contributing
 

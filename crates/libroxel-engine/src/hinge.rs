@@ -296,21 +296,36 @@ impl Hinges {
         // Wheels hold up and drive their bases, then every arm is held still
         // for the step, shoving what it meets as it turns.
         let mut drives: HashMap<InstanceId, Drive> = HashMap::new();
+        // What a chain of hinges hangs from: for a wheel on a steering
+        // hinge, the car's body.
+        let root_of = |mut base: InstanceId| {
+            for _ in 0..8 {
+                match arms.iter().find(|(_, _, arm)| arm.contains(&base)) {
+                    Some((_, b, _)) => base = *b,
+                    None => break,
+                }
+            }
+            base
+        };
         for (hinge, base, arm) in &arms {
             let base_parts = group_of(*base);
-            let mover = base_parts.iter().copied().find(|p| !physics.is_carried(*p)).unwrap_or(*base);
+            let root = root_of(*base);
+            let root_parts = group_of(root);
+            let mover = root_parts.iter().copied().find(|p| !physics.is_carried(*p)).unwrap_or(root);
             let Some(joint) = joints.get(hinge) else { continue };
             let Some(base_cf) = pose(tree, joint.base).map(cframe) else { continue };
             let pivot = base_cf * joint.pivot;
             let spin = pivot.rot.x * (joint.sign * joint.speed);
-            let base_velocity = if anchored(&base_parts) { Vec3::ZERO } else { physics.velocity(mover) };
-            if !anchored(&base_parts) {
-                let car: Vec<InstanceId> = arms
-                    .iter()
-                    .filter(|(_, b, _)| base_parts.contains(b))
-                    .flat_map(|(_, _, a)| a.iter().copied())
-                    .chain(base_parts.iter().copied())
-                    .collect();
+            let base_velocity = if anchored(&root_parts) { Vec3::ZERO } else { physics.velocity(mover) };
+            // Everything hanging from the same body, which passes through itself.
+            let car: Vec<InstanceId> = arms
+                .iter()
+                .filter(|(_, b, _)| root_parts.contains(&root_of(*b)))
+                .flat_map(|(_, _, a)| a.iter().copied())
+                .chain(root_parts.iter().copied())
+                .chain(base_parts.iter().copied())
+                .collect();
+            if !anchored(&root_parts) {
                 for &part in arm {
                     if let Some(contact) = wheel_contact(tree, part, pivot.rot.x, &car) {
                         let drive = drives.entry(mover).or_default();
@@ -341,7 +356,7 @@ impl Hinges {
                 }
             }
             for &part in arm {
-                physics.carry(part, &base_parts);
+                physics.carry(part, &car);
                 physics.set_motion(part, pivot.pos, spin, base_velocity);
             }
         }
