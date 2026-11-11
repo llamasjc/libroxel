@@ -140,6 +140,16 @@ impl ScriptRuntime {
         bindings::fire_touch_ended(&self.lua, part, other)
     }
 
+    /// Takes the `Seat:Sit(humanoid)` calls since the last call, as (seat, humanoid).
+    pub fn take_sit_requests(&self) -> Vec<(InstanceId, InstanceId)> {
+        world::take_sit_requests(&self.lua)
+    }
+
+    /// Fires `humanoid.Seated(seat ~= nil, seat)`.
+    pub fn seated(&self, humanoid: InstanceId, seat: Option<InstanceId>) -> Vec<ScriptError> {
+        world::seated(&self.lua, humanoid, seat)
+    }
+
     /// Takes the players whose characters `LoadCharacter` asked to respawn.
     pub fn take_load_requests(&self) -> Vec<InstanceId> {
         world::take_load_requests(&self.lua)

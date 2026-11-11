@@ -65,7 +65,9 @@ impl Npcs {
     /// Input that walks `humanoid` (whose root is at `pos`) toward its target.
     pub fn input_for(&self, humanoid: InstanceId, pos: Vec3) -> CharacterInput {
         match self.walks.get(&humanoid) {
-            Some(walk) => CharacterInput { move_dir: toward(pos, walk.target).0, jump: false },
+            Some(walk) => {
+                CharacterInput { move_dir: toward(pos, walk.target).0, jump: false, ..Default::default() }
+            }
             None => CharacterInput::default(),
         }
     }

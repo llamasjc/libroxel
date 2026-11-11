@@ -50,6 +50,7 @@ enum Action {
     ToggleTool(usize),
     /// A model with a body, a head and a humanoid that scripts can walk around.
     InsertNpc,
+    InsertKart,
     /// While playing: start typing into a text box, or stop (saying whether Enter was pressed).
     FocusTextBox(Option<InstanceId>, bool),
     Reparent(InstanceId, InstanceId),
@@ -88,6 +89,8 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::UIListLayout,
     ClassKind::Team,
     ClassKind::WeldConstraint,
+    ClassKind::Seat,
+    ClassKind::VehicleSeat,
 ];
 
 const SHAPES: &[(PartShape, &str)] = &[
@@ -136,6 +139,8 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::UIListLayout => "☰",
         ClassKind::Explosion => "💥",
         ClassKind::WeldConstraint => "🔗",
+        ClassKind::Seat => "🪑",
+        ClassKind::VehicleSeat => "🏎",
         ClassKind::Teams | ClassKind::Team => "🚩",
     }
 }
@@ -636,6 +641,9 @@ fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
             if ui.button("👤 Character (NPC)").clicked() {
                 actions.push(Action::InsertNpc);
             }
+            if ui.button("🏎 Go-kart").clicked() {
+                actions.push(Action::InsertKart);
+            }
         });
         ui.menu_button("View", |ui| {
             ui.checkbox(&mut editor.show_grid, "Show grid");
@@ -950,6 +958,14 @@ fn properties(
         ClassKind::Humanoid => Some(
             "A model with a Humanoid and an unanchored part called HumanoidRootPart walks: \
              `humanoid:MoveTo(point)` sends it, `MoveToFinished` says when it got there, and setting `Jump` jumps.",
+        ),
+        ClassKind::Seat => Some(
+            "Characters that touch it sit down; jumping gets up. Scripts can use `seat:Sit(humanoid)`, \
+             read `Occupant`, and set `Humanoid.Sit` to false. Disabled stops anyone sitting.",
+        ),
+        ClassKind::VehicleSeat => Some(
+            "Sit in it to drive: WASD sets Throttle and Steer, and it pushes whatever it's welded to \
+             (unanchored) at up to MaxSpeed. Insert > Go-kart builds a ready-made kart.",
         ),
         ClassKind::WeldConstraint => Some(
             "Holds Part0 and Part1 together while playing: they move as one, keeping how they sit now. \
@@ -1811,6 +1827,25 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             if let Some(model) = new_npc(&mut tree, near) {
                 editor.selection = Some(model);
             }
+        }
+        Action::InsertKart => {
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            if !playing {
+                editor.history.begin_edit(&tree, now);
+                editor.dirty = true;
+            }
+            let at = editor
+                .selection
+                .filter(|s| tree.class(*s).is_ok_and(|c| c.is_physical()))
+                .and_then(|n| {
+                    Some((tree.get_vec3(n, Property::Position)?, tree.get_vec3(n, Property::Size)?))
+                })
+                .map(|(p, s)| p + libroxel_instance::Vec3::new(0.0, s.y / 2.0, 0.0))
+                .unwrap_or(libroxel_instance::Vec3::ZERO);
+            let ws = tree.workspace();
+            let model = crate::templates::kart(&mut tree, ws, at, 0.0, [60, 120, 220]);
+            editor.selection = Some(model);
         }
         Action::InsertShape(shape) => {
             let tree_rc = engine.tree.clone();

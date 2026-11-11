@@ -307,6 +307,15 @@ impl Physics {
         self.ignored = together.into_iter().map(|(a, b)| ordered(a, b)).collect();
     }
 
+    /// Also holds `id` still for the next step, passing through `together`.
+    pub fn carry(&mut self, id: InstanceId, together: &[InstanceId]) {
+        self.velocities.remove(&id);
+        self.carried.insert(id);
+        for &other in together {
+            self.ignored.insert(ordered(id, other));
+        }
+    }
+
     fn ignores(&self, a: InstanceId, b: InstanceId) -> bool {
         !self.ignored.is_empty() && self.ignored.contains(&ordered(a, b))
     }

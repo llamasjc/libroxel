@@ -17,6 +17,10 @@ pub struct CharacterInput {
     /// Desired direction in world space. Y is ignored; length is clamped to 1.
     pub move_dir: Vec3,
     pub jump: bool,
+    /// The forward (1) and back (-1) keys, for driving a vehicle seat.
+    pub throttle: f32,
+    /// The right (1) and left (-1) keys, for driving a vehicle seat.
+    pub steer: f32,
 }
 
 /// The instances that make up a character.

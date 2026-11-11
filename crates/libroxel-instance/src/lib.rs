@@ -123,6 +123,10 @@ pub enum ClassKind {
     Team,
     /// Holds two parts together so they move as one.
     WeldConstraint,
+    /// A part characters sit in when they touch it.
+    Seat,
+    /// A seat that drives the parts welded to it.
+    VehicleSeat,
 }
 
 impl ClassKind {
@@ -172,6 +176,8 @@ impl ClassKind {
         ClassKind::Teams,
         ClassKind::Team,
         ClassKind::WeldConstraint,
+        ClassKind::Seat,
+        ClassKind::VehicleSeat,
     ];
 
     /// The services every tree has under its root, in order. They can't be
@@ -208,6 +214,11 @@ impl ClassKind {
         self.is_a(ClassKind::GuiObject)
     }
 
+    /// Whether this class is something characters sit in.
+    pub fn is_seat(self) -> bool {
+        matches!(self, ClassKind::Seat | ClassKind::VehicleSeat)
+    }
+
     /// Whether this class is a box in the world (it has a position, size and colour).
     pub fn is_physical(self) -> bool {
         self.is_a(ClassKind::Part)
@@ -218,7 +229,7 @@ impl ClassKind {
         match self {
             // Workspace behaves like a Model that can't be removed.
             ClassKind::Workspace => Some(ClassKind::Model),
-            ClassKind::SpawnLocation => Some(ClassKind::Part),
+            ClassKind::SpawnLocation | ClassKind::Seat | ClassKind::VehicleSeat => Some(ClassKind::Part),
             ClassKind::Frame | ClassKind::TextLabel | ClassKind::TextButton | ClassKind::TextBox => {
                 Some(ClassKind::GuiObject)
             }
@@ -274,6 +285,39 @@ impl ClassKind {
         const WORKSPACE: &[Property] = &[Property::Name, Property::Gravity];
         const PLAYERS: &[Property] = &[Property::Name, Property::RespawnTime, Property::CharacterAutoLoads];
         const WELD: &[Property] = &[Property::Name, Property::Part0, Property::Part1, Property::Enabled];
+        const SEAT: &[Property] = &[
+            Property::Name,
+            Property::Position,
+            Property::Orientation,
+            Property::Size,
+            Property::Shape,
+            Property::Color,
+            Property::Material,
+            Property::Anchored,
+            Property::CanCollide,
+            Property::Transparency,
+            Property::Disabled,
+            Property::Occupant,
+        ];
+        const VEHICLE_SEAT: &[Property] = &[
+            Property::Name,
+            Property::Position,
+            Property::Orientation,
+            Property::Size,
+            Property::Shape,
+            Property::Color,
+            Property::Material,
+            Property::Anchored,
+            Property::CanCollide,
+            Property::Transparency,
+            Property::Disabled,
+            Property::Occupant,
+            Property::MaxSpeed,
+            Property::Torque,
+            Property::TurnSpeed,
+            Property::Throttle,
+            Property::Steer,
+        ];
         const TEAM: &[Property] = &[Property::Name, Property::TeamColor, Property::AutoAssignable];
         const NUMBER: &[Property] = &[Property::Name, Property::NumberValue];
         const STRING: &[Property] = &[Property::Name, Property::StringValue];
@@ -365,6 +409,8 @@ impl ClassKind {
             Property::WalkSpeed,
             Property::JumpPower,
             Property::Jump,
+            Property::Sit,
+            Property::SeatPart,
         ];
         match self {
             ClassKind::Part => PART,
@@ -395,6 +441,8 @@ impl ClassKind {
             ClassKind::Workspace => WORKSPACE,
             ClassKind::Players => PLAYERS,
             ClassKind::WeldConstraint => WELD,
+            ClassKind::Seat => SEAT,
+            ClassKind::VehicleSeat => VEHICLE_SEAT,
             _ => COMMON,
         }
     }
@@ -475,7 +523,14 @@ impl ClassKind {
             Property::AutoAssignable | Property::CharacterAutoLoads => PropertyValue::Bool(true),
             Property::Gravity => PropertyValue::Number(196.2),
             Property::RespawnTime => PropertyValue::Number(5.0),
-            Property::Part0 | Property::Part1 => PropertyValue::Ref(None),
+            Property::Part0 | Property::Part1 | Property::Occupant | Property::SeatPart => {
+                PropertyValue::Ref(None)
+            }
+            Property::Sit => PropertyValue::Bool(false),
+            Property::MaxSpeed => PropertyValue::Number(25.0),
+            Property::Torque => PropertyValue::Number(10.0),
+            Property::TurnSpeed => PropertyValue::Number(1.0),
+            Property::Throttle | Property::Steer => PropertyValue::Number(0.0),
             Property::Size => PropertyValue::Vec3(Vec3::new(4.0, 1.0, 2.0)),
             Property::Color => PropertyValue::Color3(match self {
                 ClassKind::SpawnLocation => Color3::new(0.3, 0.55, 0.95),
@@ -539,6 +594,8 @@ impl ClassKind {
             ClassKind::Teams => "teams",
             ClassKind::Team => "team",
             ClassKind::WeldConstraint => "weld_constraint",
+            ClassKind::Seat => "seat",
+            ClassKind::VehicleSeat => "vehicle_seat",
         }
     }
 

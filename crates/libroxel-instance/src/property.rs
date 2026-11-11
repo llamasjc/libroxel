@@ -109,6 +109,22 @@ pub enum Property {
     Part0,
     /// On a weld: the second part it holds.
     Part1,
+    /// On a seat: the humanoid sitting in it. Set by the engine.
+    Occupant,
+    /// On a humanoid: whether it is sitting.
+    Sit,
+    /// On a humanoid: the seat it sits in.
+    SeatPart,
+    /// On a vehicle seat: top speed, in studs per second.
+    MaxSpeed,
+    /// On a vehicle seat: how quickly it gets up to speed.
+    Torque,
+    /// On a vehicle seat: how fast it turns, in radians per second.
+    TurnSpeed,
+    /// On a vehicle seat: -1 (back), 0 or 1 (forward), from the driver.
+    Throttle,
+    /// On a vehicle seat: -1 (left), 0 or 1 (right), from the driver.
+    Steer,
 }
 
 /// The value of a property.
@@ -170,7 +186,8 @@ impl Property {
             | Property::Jump
             | Property::Neutral
             | Property::AutoAssignable
-            | Property::CharacterAutoLoads => "bool",
+            | Property::CharacterAutoLoads
+            | Property::Sit => "bool",
             Property::TeamColor => "Color3",
             Property::CornerRadius | Property::Padding => "UDim",
             Property::CameraType => EnumKind::CameraType.kind_name(),
@@ -191,7 +208,12 @@ impl Property {
             | Property::BlastRadius
             | Property::BlastPressure
             | Property::Gravity
-            | Property::RespawnTime => "number",
+            | Property::RespawnTime
+            | Property::MaxSpeed
+            | Property::Torque
+            | Property::TurnSpeed
+            | Property::Throttle
+            | Property::Steer => "number",
             Property::KeyboardKeyCode => EnumKind::KeyCode.kind_name(),
             Property::Transparency
             | Property::Health
@@ -202,7 +224,12 @@ impl Property {
             | Property::UserId => "number",
             Property::Shape => EnumKind::Shape.kind_name(),
             Property::Material => EnumKind::Material.kind_name(),
-            Property::Character | Property::Team | Property::Part0 | Property::Part1 => "ref",
+            Property::Character
+            | Property::Team
+            | Property::Part0
+            | Property::Part1
+            | Property::Occupant
+            | Property::SeatPart => "ref",
         }
     }
 
@@ -284,6 +311,14 @@ impl Property {
         Property::CharacterAutoLoads,
         Property::Part0,
         Property::Part1,
+        Property::Occupant,
+        Property::Sit,
+        Property::SeatPart,
+        Property::MaxSpeed,
+        Property::Torque,
+        Property::TurnSpeed,
+        Property::Throttle,
+        Property::Steer,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -353,6 +388,14 @@ impl Property {
             Property::CharacterAutoLoads => "character_auto_loads",
             Property::Part0 => "part0",
             Property::Part1 => "part1",
+            Property::Occupant => "occupant",
+            Property::Sit => "sit",
+            Property::SeatPart => "seat_part",
+            Property::MaxSpeed => "max_speed",
+            Property::Torque => "torque",
+            Property::TurnSpeed => "turn_speed",
+            Property::Throttle => "throttle",
+            Property::Steer => "steer",
         }
     }
 

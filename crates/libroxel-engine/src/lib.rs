@@ -8,6 +8,7 @@
 pub mod character;
 pub mod npc;
 pub mod physics;
+pub mod seat;
 pub mod session;
 pub mod view;
 pub mod weld;

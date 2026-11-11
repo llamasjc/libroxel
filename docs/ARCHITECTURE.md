@@ -130,6 +130,14 @@
   one assembly ignore each other, and after the step each carried part is
   put back at its offset from the root. The offset is taken when the part
   joins, or again if a script moved it since.
+- **Seats and vehicles** live in `libroxel-engine/src/seat.rs`. A sitting
+  character is carried like a welded part: physics holds it still and lets
+  it pass through the seat's assembly, and after the step it is put on the
+  seat. Before physics, every vehicle seat with a `Throttle` or `Steer`
+  sets the velocity of its assembly's root and turns the root's yaw; the
+  welds then carry the rest of the vehicle (and the seat) round with it.
+  The player's raw W/S and A/D keys come in with the character input as
+  `throttle` and `steer`.
 - **Events from the change journal.** `fire_changes` turns reparenting into
   `ChildAdded`/`ChildRemoved` on the parents and `DescendantAdded`/
   `DescendantRemoving` on every watched ancestor (for the moved instance

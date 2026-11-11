@@ -39,7 +39,7 @@ fn character_spawns_on_the_spawn_and_walks() {
     let start = tree.borrow().get_vec3(character.root, Property::Position).unwrap();
     assert!((start.y - 3.0).abs() < 0.01, "standing on the spawn: {start:?}");
 
-    let forward = CharacterInput { move_dir: Vec3::new(1.0, 0.0, 0.0), jump: false };
+    let forward = CharacterInput { move_dir: Vec3::new(1.0, 0.0, 0.0), jump: false, ..Default::default() };
     for _ in 0..60 {
         session.step(DT, forward);
     }
@@ -77,7 +77,7 @@ fn kill_brick_kills_and_the_character_respawns() {
     );
     let mut session = start_on(tree, true).unwrap();
     let first = session.character().unwrap();
-    let walk = CharacterInput { move_dir: Vec3::new(1.0, 0.0, 0.0), jump: false };
+    let walk = CharacterInput { move_dir: Vec3::new(1.0, 0.0, 0.0), jump: false, ..Default::default() };
     for _ in 0..60 {
         session.step(DT, walk);
     }
@@ -482,4 +482,117 @@ fn characters_wait_for_load_character_when_auto_loading_is_off() {
         Some(0.0),
         "stays dead without auto-loading"
     );
+}
+
+#[test]
+fn sitting_and_driving_a_kart() {
+    let mut tree = world();
+    script(
+        &mut tree,
+        "KartMaker",
+        r#"
+        local kart = Instance.new("Model")
+        kart.Name = "Kart"
+        local chassis = Instance.new("Part", kart)
+        chassis.Name = "Chassis"
+        chassis.Size = Vector3.new(4, 1, 4)
+        chassis.Position = Vector3.new(0, 0.5, -20)
+        chassis.Anchored = false
+        local seat = Instance.new("VehicleSeat", kart)
+        seat.Size = Vector3.new(2, 1, 2)
+        seat.Position = Vector3.new(0, 1.5, -20)
+        seat.Anchored = false
+        local weld = Instance.new("WeldConstraint", chassis)
+        weld.Part0 = chassis
+        weld.Part1 = seat
+        kart.Parent = workspace
+
+        local bench = Instance.new("Seat")
+        bench.Name = "Bench"
+        bench.Anchored = true
+        bench.Size = Vector3.new(2, 1, 2)
+        bench.Position = Vector3.new(15, 0.5, 0)
+        bench.Parent = workspace
+
+        game:GetService("Players").PlayerAdded:Connect(function(player)
+            player.CharacterAdded:Connect(function(character)
+                character:WaitForChild("Humanoid").Seated:Connect(function(active, part)
+                    print("seated", active, part and part.Name)
+                end)
+            end)
+        end)
+        "#,
+    );
+    let mut session = start_on(tree, true).unwrap();
+    let tree = session.runtime().tree().clone();
+    let character = session.character().unwrap();
+    let find = |name: &str| {
+        let t = tree.borrow();
+        t.find_first_child(t.workspace(), name).unwrap().unwrap()
+    };
+    let idle = CharacterInput::default();
+    for _ in 0..10 {
+        session.step(DT, idle);
+    }
+    // Walk onto the bench: sitting holds the character on it.
+    let east = CharacterInput { move_dir: Vec3::new(1.0, 0.0, 0.0), ..Default::default() };
+    for _ in 0..90 {
+        session.step(DT, east);
+    }
+    let bench = find("Bench");
+    assert_eq!(tree.borrow().get_ref(bench, Property::Occupant), Some(character.humanoid));
+    assert_eq!(tree.borrow().get_bool(character.humanoid, Property::Sit), Some(true));
+    let sat = tree.borrow().get_vec3(character.root, Property::Position).unwrap();
+    assert!((sat.x - 15.0).abs() < 0.01 && (sat.y - 2.0).abs() < 0.01, "on the bench: {sat:?}");
+
+    // Jumping gets up.
+    session.step(DT, CharacterInput { jump: true, ..Default::default() });
+    for _ in 0..10 {
+        session.step(DT, idle);
+    }
+    assert_eq!(tree.borrow().get_ref(bench, Property::Occupant), None);
+    assert_eq!(tree.borrow().get_bool(character.humanoid, Property::Sit), Some(false));
+
+    // A script puts the character in the kart; the forward key drives it.
+    session.runtime().run("drive", "workspace.Kart.VehicleSeat:Sit(workspace.Player1.Humanoid)").unwrap();
+    session.step(DT, idle);
+    let kart = find("Kart");
+    let (chassis, seat) = {
+        let t = tree.borrow();
+        (
+            t.find_first_child(kart, "Chassis").unwrap().unwrap(),
+            t.find_first_child(kart, "VehicleSeat").unwrap().unwrap(),
+        )
+    };
+    let start = tree.borrow().get_vec3(chassis, Property::Position).unwrap();
+    let gas = CharacterInput { throttle: 1.0, ..Default::default() };
+    for _ in 0..60 {
+        session.step(DT, gas);
+    }
+    let after = tree.borrow().get_vec3(chassis, Property::Position).unwrap();
+    assert!(after.z < start.z - 12.0, "drove forward (toward -Z): {start:?} -> {after:?}");
+    assert_eq!(tree.borrow().get_number(seat, Property::Throttle), Some(1.0));
+    let rider = tree.borrow().get_vec3(character.root, Property::Position).unwrap();
+    let seat_pos = tree.borrow().get_vec3(seat, Property::Position).unwrap();
+    assert!((rider.x - seat_pos.x).abs() < 0.01 && (rider.z - seat_pos.z).abs() < 0.01, "rode along");
+
+    // Steering right turns it clockwise (its yaw goes down).
+    let turn = CharacterInput { throttle: 1.0, steer: 1.0, ..Default::default() };
+    for _ in 0..60 {
+        session.step(DT, turn);
+    }
+    let yaw = tree.borrow().get_vec3(seat, Property::Orientation).unwrap().y;
+    assert!(yaw < -20.0, "turned right: {yaw}");
+
+    // Setting Sit to false gets out, and the seat's controls reset.
+    session.runtime().run("out", "workspace.Player1.Humanoid.Sit = false").unwrap();
+    session.step(DT, idle);
+    assert_eq!(tree.borrow().get_ref(seat, Property::Occupant), None);
+    assert_eq!(tree.borrow().get_number(seat, Property::Throttle), Some(0.0));
+
+    let log: Vec<String> = session.take_log().into_iter().map(|l| l.text).collect();
+    for line in ["seated true Bench", "seated false nil", "seated true VehicleSeat"] {
+        assert!(log.iter().any(|l| l == line), "missing {line:?} in {log:?}");
+    }
+    assert!(session.runtime().run("bad", "workspace.Bench.Occupant = nil").is_err());
 }

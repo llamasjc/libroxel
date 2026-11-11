@@ -52,12 +52,15 @@ The first build compiles Bevy and takes a while. After that it is quick.
   Everyone starts on the Runners team and joins the Winners at the finish.
   A health bar sits in the corner, the quarry has a mine cart (its sides are
   welded on) that you can click to push, and a pressure plate by the shop
-  glows while you stand on it.
+  glows while you stand on it. Past the quarry is a walled kart track with a
+  go-kart to drive (walk into its seat, WASD to drive, Space to hop out), and
+  there's a bench to sit on at the start.
   Press **▶ Play** (or F5) to try it.
 - **Explorer** (left) shows the instance tree. Click to select, double-click
   a script to edit it, drag one item onto another to move it inside, and
   right-click for Insert, Rename, Duplicate and Delete. **Insert → Character
-  (NPC)** drops in a dummy with a script that walks it back and forth.
+  (NPC)** drops in a dummy with a script that walks it back and forth, and
+  **Insert → Go-kart** drops in a ready-to-drive kart.
 - **Properties** (right) edits the selection: name, position, orientation,
   size, shape, colour, material, anchored, can-collide, transparency, and so on.
 - **Parts** come in four shapes (block, ball, cylinder, wedge) and eight
@@ -244,6 +247,16 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   part it touches, and Part0/Part1 can be picked from a list. Welds (and
   other links between saved instances) are saved in places, and `Clone`
   points a copy's welds at the copied parts.
+- **Seats:** a character that touches a `Seat` or `VehicleSeat` sits in it
+  and moves with it; jumping gets up. `seat.Occupant` is the humanoid in it,
+  `seat:Sit(humanoid)` sits one down, `Disabled` keeps everyone off, and the
+  humanoid has `Sit`, `SeatPart` and the `Seated(active, seat)` event (set
+  `Sit` to false to stand up).
+- **Vehicles:** while you sit in a `VehicleSeat`, W/S and A/D set its
+  `Throttle` and `Steer` (scripts can set them too). It pushes the unanchored
+  assembly it's welded into along its front at up to `MaxSpeed` (studs/s),
+  getting there as fast as its `Torque` allows, and turns at up to
+  `TurnSpeed` radians a second while moving.
 - **Gravity:** `workspace.Gravity` (196.2 studs/s² unless changed).
 - **NPCs:** any `Model` in the workspace with a `Humanoid` and an unanchored
   `HumanoidRootPart` is a character. `Humanoid:MoveTo(position)` walks it

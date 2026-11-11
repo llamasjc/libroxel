@@ -73,6 +73,7 @@ pub(crate) enum SignalKind {
     Destroying(InstanceId),
     HealthChanged(InstanceId),
     CharacterRemoving(InstanceId),
+    Seated(InstanceId),
 }
 
 impl SignalKind {
@@ -526,6 +527,7 @@ fn instance_event(class: ClassKind, id: InstanceId, key: &str) -> Option<SignalK
         DESTROYING => SignalKind::Destroying(id),
         HEALTH_CHANGED if class == ClassKind::Humanoid => SignalKind::HealthChanged(id),
         CHARACTER_REMOVING if class == ClassKind::Player => SignalKind::CharacterRemoving(id),
+        SEATED if class == ClassKind::Humanoid => SignalKind::Seated(id),
         _ => return None,
     })
 }

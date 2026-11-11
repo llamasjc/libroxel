@@ -37,6 +37,8 @@ pub(crate) struct WorldState {
     moves: Vec<(InstanceId, Option<Vec3>)>,
     /// Players whose character scripts asked to (re)spawn.
     loads: Vec<InstanceId>,
+    /// Seats scripts asked to sit humanoids in, with `Seat:Sit`.
+    sits: Vec<(InstanceId, InstanceId)>,
 }
 
 fn runtime_err(message: impl Into<String>) -> mlua::Error {
@@ -91,6 +93,18 @@ pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> m
         extras::ASSEMBLY_LINEAR_VELOCITY if class.is_physical() => {
             Value::UserData(lua.create_userdata(LuaVector3(velocity(lua, id)))?)
         }
+        // A method on seats, but a property on humanoids, so it's looked up here.
+        methods::SIT if class.is_seat() => {
+            Value::Function(lua.create_function(|lua, (seat, humanoid): (Value, Value)| {
+                let seat = crate::bindings::as_instance(&seat)
+                    .ok_or_else(|| runtime_err("call Sit with a colon"))?;
+                let humanoid = crate::bindings::as_instance(&humanoid)
+                    .filter(|h| host(lua).tree.borrow().class(*h) == Ok(ClassKind::Humanoid))
+                    .ok_or_else(|| runtime_err("Sit expects a Humanoid"))?;
+                host(lua).world.borrow_mut().sits.push((seat, humanoid));
+                Ok(())
+            })?)
+        }
         extras::VIEWPORT_SIZE if class == ClassKind::Camera => {
             let size = host(lua).world.borrow().viewport;
             Value::UserData(lua.create_userdata(LuaVector2(size))?)
@@ -112,6 +126,14 @@ pub(crate) fn new_index(
             let v = as_vector3(value).ok_or_else(|| runtime_err(format!("{key} expects a Vector3")))?;
             request(lua, id, VelocityRequest::Set(v));
             Ok(true)
+        }
+        // Who sits where is up to the engine.
+        _ if matches!(
+            crate::names::property_from_name(class, key),
+            Some(Property::Occupant | Property::SeatPart)
+        ) =>
+        {
+            Err(runtime_err(format!("{key} can't be set; use Seat:Sit, or set Humanoid.Sit to false")))
         }
         // Putting a player on a team takes them off neutral, and back.
         _ if class == ClassKind::Player
@@ -328,6 +350,23 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
 
 pub(crate) fn take_move_requests(lua: &Lua) -> Vec<(InstanceId, Option<Vec3>)> {
     std::mem::take(&mut host(lua).world.borrow_mut().moves)
+}
+
+pub(crate) fn take_sit_requests(lua: &Lua) -> Vec<(InstanceId, InstanceId)> {
+    std::mem::take(&mut host(lua).world.borrow_mut().sits)
+}
+
+pub(crate) fn seated(lua: &Lua, humanoid: InstanceId, seat: Option<InstanceId>) -> Vec<ScriptError> {
+    fire(lua, SignalKind::Seated(humanoid), || {
+        let mut args = MultiValue::new();
+        args.push_back(Value::Boolean(seat.is_some()));
+        args.push_back(match seat {
+            Some(s) => Value::UserData(push_instance(lua, s)?),
+            None => Value::Nil,
+        });
+        Ok(args)
+    });
+    take_errors(lua)
 }
 
 pub(crate) fn take_load_requests(lua: &Lua) -> Vec<InstanceId> {

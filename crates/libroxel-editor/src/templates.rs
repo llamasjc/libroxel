@@ -5,6 +5,45 @@ use libroxel_instance::{
     UDim, UDim2, Vec2, Vec3,
 };
 
+/// Builds a go-kart standing on the ground at `at`, facing `yaw` degrees
+/// (0 faces -Z): a chassis with a vehicle seat, wheels and a bumper welded on.
+pub fn kart(tree: &mut InstanceTree, parent: InstanceId, at: Vec3, yaw: f32, rgb: [u8; 3]) -> InstanceId {
+    let turn = libroxel_instance::Rotation::about_y(yaw.to_radians());
+    let model = add(tree, parent, ClassKind::Model, "Kart");
+    let place = |tree: &mut InstanceTree, id: InstanceId, offset: [f32; 3]| {
+        let p = at + turn.apply(Vec3::new(offset[0], offset[1], offset[2]));
+        set(tree, id, Property::Position, PropertyValue::Vec3(p));
+        orient(tree, id, [0.0, yaw, 0.0]);
+        set(tree, id, Property::Anchored, PropertyValue::Bool(false));
+    };
+    let chassis = block(tree, model, "Chassis", [0.0; 3], [4.0, 1.0, 5.0], rgb);
+    place(tree, chassis, [0.0, 0.5, 0.0]);
+    let seat = add(tree, model, ClassKind::VehicleSeat, "VehicleSeat");
+    set(tree, seat, Property::Size, PropertyValue::Vec3(Vec3::new(2.0, 1.0, 2.0)));
+    set(tree, seat, Property::Color, PropertyValue::Color3(Color3::from_rgb8(40, 40, 45)));
+    place(tree, seat, [0.0, 1.5, 0.8]);
+    let mut parts = vec![seat];
+    for (i, (x, z)) in [(-2.3, -1.7), (2.3, -1.7), (-2.3, 1.7), (2.3, 1.7)].into_iter().enumerate() {
+        let wheel = block(tree, model, &format!("Wheel{}", i + 1), [0.0; 3], [0.6, 1.4, 1.4], [30, 30, 30]);
+        shape(tree, wheel, PartShape::Cylinder);
+        material(tree, wheel, Material::SmoothPlastic);
+        set(tree, wheel, Property::CanCollide, PropertyValue::Bool(false));
+        place(tree, wheel, [x, 0.5, z]);
+        parts.push(wheel);
+    }
+    let bumper = block(tree, model, "Bumper", [0.0; 3], [4.0, 0.6, 0.4], [230, 230, 235]);
+    material(tree, bumper, Material::Metal);
+    place(tree, bumper, [0.0, 0.6, -2.7]);
+    parts.push(bumper);
+    for part in parts {
+        let name = format!("{}Weld", tree.name(part).unwrap_or("Part"));
+        let weld = add(tree, chassis, ClassKind::WeldConstraint, &name);
+        set(tree, weld, Property::Part0, PropertyValue::Ref(Some(chassis)));
+        set(tree, weld, Property::Part1, PropertyValue::Ref(Some(part)));
+    }
+    model
+}
+
 fn add(tree: &mut InstanceTree, parent: InstanceId, class: ClassKind, name: &str) -> InstanceId {
     let id = tree.create(class, name).expect("template classes are creatable");
     tree.set_parent(id, Some(parent)).expect("template parents are valid");
@@ -788,7 +827,7 @@ pub fn sample_obby() -> InstanceTree {
     set(&mut tree, health_label, Property::Text, PropertyValue::String("Health: 100".into()));
     let help = add(&mut tree, hud, ClassKind::Frame, "Help");
     set(&mut tree, help, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.0, 12.0, 0.5, 0.0)));
-    set(&mut tree, help, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 260.0, 0.0, 236.0)));
+    set(&mut tree, help, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 260.0, 0.0, 258.0)));
     set(&mut tree, help, Property::AnchorPoint, PropertyValue::Vec2(Vec2::new(0.0, 0.5)));
     set(&mut tree, help, Property::BackgroundColor, PropertyValue::Color3(dark));
     set(&mut tree, help, Property::BackgroundTransparency, PropertyValue::Number(0.3));
@@ -805,6 +844,7 @@ pub fn sample_obby() -> InstanceTree {
         "Look out for the quarry zombie",
         "Click the mine cart to push it",
         "Stand on the plate by the shop",
+        "Drive the kart past the quarry",
         "Coins are saved",
     ]
     .iter()
@@ -982,6 +1022,33 @@ pub fn sample_obby() -> InstanceTree {
     material(&mut tree, plate, Material::Metal);
     script(&mut tree, plate, "Plate", PLATE_SCRIPT);
 
+    // A kart track past the quarry, walled in, with a kart to drive and cones to dodge.
+    let track = add(&mut tree, ws, ClassKind::Folder, "KartTrack");
+    let asphalt = block(&mut tree, track, "Ground", [0.0, -0.5, 37.0], [40.0, 1.0, 34.0], [70, 72, 78]);
+    material(&mut tree, asphalt, Material::SmoothPlastic);
+    for (name, pos, size) in [
+        ("WallLeft", [-20.5, 0.5, 37.0], [1.0, 1.0, 34.0]),
+        ("WallRight", [20.5, 0.5, 37.0], [1.0, 1.0, 34.0]),
+        ("WallFar", [0.0, 0.5, 54.5], [42.0, 1.0, 1.0]),
+    ] {
+        block(&mut tree, track, name, pos, size, [220, 60, 50]);
+    }
+    for (i, (x, z)) in
+        [(-8.0, 34.0), (0.0, 40.0), (8.0, 34.0), (-4.0, 47.0), (6.0, 47.0)].into_iter().enumerate()
+    {
+        let cone =
+            block(&mut tree, track, &format!("Cone{}", i + 1), [x, 0.75, z], [1.0, 1.5, 1.0], [255, 140, 30]);
+        material(&mut tree, cone, Material::Neon);
+    }
+    kart(&mut tree, track, Vec3::new(0.0, 0.0, 26.0), 180.0, [220, 50, 60]);
+    // And a bench on the start platform, to sit on.
+    let bench = add(&mut tree, start, ClassKind::Seat, "Bench");
+    set(&mut tree, bench, Property::Position, PropertyValue::Vec3(Vec3::new(-4.0, 0.5, -6.0)));
+    set(&mut tree, bench, Property::Size, PropertyValue::Vec3(Vec3::new(3.0, 1.0, 1.5)));
+    set(&mut tree, bench, Property::Color, PropertyValue::Color3(Color3::from_rgb8(150, 105, 65)));
+    set(&mut tree, bench, Property::Anchored, PropertyValue::Bool(true));
+    material(&mut tree, bench, Material::Wood);
+
     // Characters come back three seconds after they die.
     let players = tree.service(ClassKind::Players).expect("every tree has Players");
     set(&mut tree, players, Property::RespawnTime, PropertyValue::Number(3.0));
@@ -1125,7 +1192,7 @@ mod tests {
         }
         assert_eq!(leaderstat(&session, "Coins"), 0.0);
         // Walk straight back (-Z): up the wedge and over the two ledge coins.
-        let back = CharacterInput { move_dir: Vec3::new(0.0, 0.0, -1.0), jump: false };
+        let back = CharacterInput { move_dir: Vec3::new(0.0, 0.0, -1.0), jump: false, ..Default::default() };
         for _ in 0..90 {
             session.step(1.0 / 60.0, back);
         }
@@ -1172,7 +1239,7 @@ mod tests {
         assert!((open.y - 8.5).abs() < 0.01, "door slid up: {open:?}");
 
         // Walk into the open vault for the coin; the counter follows.
-        let west = CharacterInput { move_dir: Vec3::new(-1.0, 0.0, 0.0), jump: false };
+        let west = CharacterInput { move_dir: Vec3::new(-1.0, 0.0, 0.0), jump: false, ..Default::default() };
         for _ in 0..60 {
             session.step(1.0 / 60.0, west);
         }
@@ -1534,6 +1601,66 @@ mod tests {
         let log = session.take_log();
         assert!(log.iter().any(|l| l.text == "Player1 pushed the mine cart"), "{log:?}");
         assert!(log.iter().any(|l| l.text == "Pressure plate pressed"), "{log:?}");
+        assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
+    }
+
+    #[test]
+    fn the_kart_drives_and_the_bench_seats() {
+        let frame = |s: &mut libroxel_engine::PlaySession, n: usize, input: CharacterInput| {
+            for _ in 0..n {
+                s.step(1.0 / 60.0, input);
+            }
+        };
+        let idle = CharacterInput::default();
+        let mut session = start_on(sample_obby(), true).unwrap();
+        frame(&mut session, 30, idle);
+        let tree = session.runtime().tree().clone();
+        let character = session.character().unwrap();
+        let (chassis, seat) = {
+            let t = tree.borrow();
+            let track = t.find_first_child(t.workspace(), "KartTrack").unwrap().unwrap();
+            let kart = t.find_first_child(track, "Kart").unwrap().unwrap();
+            (
+                t.find_first_child(kart, "Chassis").unwrap().unwrap(),
+                t.find_first_child(kart, "VehicleSeat").unwrap().unwrap(),
+            )
+        };
+        let pos = |id| tree.borrow().get_vec3(id, Property::Position).unwrap();
+        let start = pos(chassis);
+        assert!((start.y - 0.5).abs() < 0.05, "parked on the track: {start:?}");
+
+        // Drop in from above the seat, then drive away from the quarry.
+        let above = pos(seat) + Vec3::new(0.0, 3.0, 0.0);
+        session
+            .runtime()
+            .run(
+                "hop",
+                &format!(
+                    "workspace.Player1.HumanoidRootPart.Position = Vector3.new({}, {}, {})",
+                    above.x, above.y, above.z
+                ),
+            )
+            .unwrap();
+        frame(&mut session, 30, idle);
+        assert_eq!(tree.borrow().get_ref(seat, Property::Occupant), Some(character.humanoid));
+        frame(&mut session, 45, CharacterInput { throttle: 1.0, ..Default::default() });
+        let end = pos(chassis);
+        assert!(end.z > start.z + 8.0, "drove toward the far wall: {start:?} -> {end:?}");
+        assert!((pos(character.root).z - pos(seat).z).abs() < 0.01, "the driver rides along");
+
+        // Jump out and sit on the bench instead.
+        frame(&mut session, 1, CharacterInput { jump: true, ..Default::default() });
+        frame(&mut session, 70, idle);
+        session.runtime().run("bench", "workspace.Start.Bench:Sit(workspace.Player1.Humanoid)").unwrap();
+        frame(&mut session, 2, idle);
+        let bench = {
+            let t = tree.borrow();
+            let start = t.find_first_child(t.workspace(), "Start").unwrap().unwrap();
+            t.find_first_child(start, "Bench").unwrap().unwrap()
+        };
+        assert_eq!(tree.borrow().get_ref(bench, Property::Occupant), Some(character.humanoid));
+        assert_eq!(tree.borrow().get_ref(seat, Property::Occupant), None);
+        let log = session.take_log();
         assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
     }
 }

@@ -78,6 +78,8 @@ pub struct PlaySession {
     welds: crate::weld::Welds,
     /// Whether the current character's death has been seen.
     death_seen: bool,
+    /// The seat the player's character sits in.
+    seating: crate::seat::Seating,
 }
 
 /// An explosion's flash, for drawing.
@@ -144,6 +146,7 @@ impl PlaySession {
             npcs: Default::default(),
             welds: Default::default(),
             death_seen: false,
+            seating: Default::default(),
         };
         // Scripts find the camera through the workspace, so it exists from the start.
         session.camera = {
@@ -655,6 +658,7 @@ impl PlaySession {
             walks_ended.extend(self.npcs.request(humanoid, target).map(|h| (h, false)));
         }
         let mut input = input;
+        let mut seat_changes = Vec::new();
         let (result, died) = {
             let mut tree = tree.borrow_mut();
             // The player's own character walks where MoveTo sends it until they steer.
@@ -669,6 +673,25 @@ impl PlaySession {
                     input.jump = true;
                     let _ = tree.set(c.humanoid, Property::Jump, PropertyValue::Bool(false));
                 }
+            }
+            for (seat, humanoid) in self.runtime.take_sit_requests() {
+                if let Some(c) = self.character.filter(|c| c.humanoid == humanoid && !c.is_dead(&tree)) {
+                    if self.seating.seat().is_some_and(|s| s != seat) {
+                        seat_changes.extend(self.seating.stand(&mut tree, c));
+                    }
+                    seat_changes.extend(self.seating.sit(&mut tree, c, seat));
+                }
+            }
+            let was_seated = self.seating.seat().is_some();
+            let (seated_input, change) = self.seating.before_physics(&mut tree, self.character, input, dt);
+            seat_changes.extend(change);
+            if was_seated {
+                // Sitting: the keys went to the seat. Jumping off leaps up.
+                if let Some(c) = self.character.filter(|_| input.jump && seated_input.jump) {
+                    let power = tree.get_number(c.humanoid, Property::JumpPower).unwrap_or(50.0) as f32;
+                    self.physics.set_velocity(c.root, Vec3::new(0.0, power, 0.0));
+                }
+                input = CharacterInput::default();
             }
             for (id, request) in self.runtime.take_velocity_requests() {
                 if tree.get_bool(id, Property::Anchored) != Some(false) {
@@ -685,13 +708,24 @@ impl PlaySession {
             }
             let player_model = self.character.map(|c| c.model);
             let poses = self.npcs.before_physics(&mut tree, &mut self.physics, player_model);
+            crate::seat::drive_vehicles(&mut tree, &mut self.physics, dt);
             self.welds.before_physics(&tree, &mut self.physics);
+            self.seating.hold(&tree, &mut self.physics, self.character);
             let result = self.physics.step(&mut tree, dt);
             if let Some(c) = self.character.filter(|c| !c.is_dead(&tree)) {
                 c.follow(&mut tree);
             }
             let (ended, died) = self.npcs.after_physics(&mut tree, &poses, dt);
             self.welds.after_physics(&mut tree);
+            self.seating.after_physics(&mut tree, self.character);
+            // Touching a free seat sits the character down.
+            if let Some(c) = self.character.filter(|c| !c.is_dead(&tree))
+                && self.seating.can_sit()
+                && let Some(seat) = crate::seat::touched_seat(&tree, c.root, &result.touches)
+            {
+                seat_changes.extend(self.seating.sit(&mut tree, c, seat));
+                self.seating.after_physics(&mut tree, self.character);
+            }
             walks_ended.extend(ended);
             if let Some(c) = self.character {
                 walks_ended
@@ -699,6 +733,10 @@ impl PlaySession {
             }
             (result, died)
         };
+        for change in seat_changes {
+            let errors = self.runtime.seated(change.humanoid, change.seat);
+            self.collect(errors);
+        }
         for (humanoid, reached) in walks_ended {
             let errors = self.runtime.move_finished(humanoid, reached);
             self.collect(errors);
@@ -833,6 +871,13 @@ impl PlaySession {
     /// Removes the player's character, if any, and spawns a fresh one.
     fn respawn(&mut self, tree: &SharedTree) {
         self.respawn_in = None;
+        if let Some(c) = self.character {
+            let change = self.seating.stand(&mut tree.borrow_mut(), c);
+            if let Some(change) = change {
+                let errors = self.runtime.seated(change.humanoid, change.seat);
+                self.collect(errors);
+            }
+        }
         if let (Some(player), Some(character)) = (self.player, self.character.take()) {
             let errors = self.runtime.character_removing(player, character.model);
             self.collect(errors);

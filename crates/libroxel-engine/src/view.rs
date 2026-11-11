@@ -723,9 +723,14 @@ fn play_input(
         dir -= right;
     }
     let dir = dir.normalize_or_zero();
+    let axis = |plus: [KeyCode; 2], minus: [KeyCode; 2]| {
+        (plus.iter().any(|k| keys.pressed(*k)) as i32 - minus.iter().any(|k| keys.pressed(*k)) as i32) as f32
+    };
     input.0 = CharacterInput {
         move_dir: libroxel_instance::Vec3::new(dir.x, 0.0, dir.z),
         jump: keys.pressed(KeyCode::Space),
+        throttle: axis([KeyCode::KeyW, KeyCode::ArrowUp], [KeyCode::KeyS, KeyCode::ArrowDown]),
+        steer: axis([KeyCode::KeyD, KeyCode::ArrowRight], [KeyCode::KeyA, KeyCode::ArrowLeft]),
     };
 }
 

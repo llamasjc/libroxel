@@ -127,6 +127,8 @@ pub mod events {
     pub const HEALTH_CHANGED: &str = "HealthChanged";
     /// On a player: fires with their character just before it is removed.
     pub const CHARACTER_REMOVING: &str = "CharacterRemoving";
+    /// On a humanoid: fires with true and the seat when it sits, false and nil when it gets up.
+    pub const SEATED: &str = "Seated";
 }
 
 /// Methods that only some classes have.
@@ -185,6 +187,8 @@ pub mod methods {
     pub const GET_MOUSE: &str = "GetMouse";
     /// Player: removes their character (if any) and spawns a fresh one now.
     pub const LOAD_CHARACTER: &str = "LoadCharacter";
+    /// Seat: sits a humanoid in it.
+    pub const SIT: &str = "Sit";
     /// Text box: start or stop typing into it, and whether the player is.
     pub const CAPTURE_FOCUS: &str = "CaptureFocus";
     pub const RELEASE_FOCUS: &str = "ReleaseFocus";
@@ -631,6 +635,8 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::Teams => "Teams",
         ClassKind::Team => "Team",
         ClassKind::WeldConstraint => "WeldConstraint",
+        ClassKind::Seat => "Seat",
+        ClassKind::VehicleSeat => "VehicleSeat",
     }
 }
 
@@ -705,6 +711,14 @@ pub fn property_name(property: Property) -> &'static str {
         Property::CharacterAutoLoads => "CharacterAutoLoads",
         Property::Part0 => "Part0",
         Property::Part1 => "Part1",
+        Property::Occupant => "Occupant",
+        Property::Sit => "Sit",
+        Property::SeatPart => "SeatPart",
+        Property::MaxSpeed => "MaxSpeed",
+        Property::Torque => "Torque",
+        Property::TurnSpeed => "TurnSpeed",
+        Property::Throttle => "Throttle",
+        Property::Steer => "Steer",
     }
 }
 

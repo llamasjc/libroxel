@@ -397,10 +397,16 @@ impl InstanceTree {
                     | Property::BlastRadius
                     | Property::BlastPressure
                     | Property::RespawnTime
-                    | Property::Gravity,
+                    | Property::Gravity
+                    | Property::MaxSpeed
+                    | Property::Torque
+                    | Property::TurnSpeed,
                     PropertyValue::Number(n),
                 ) => PropertyValue::Number(n.max(0.0)),
                 (Property::LayoutOrder, PropertyValue::Number(n)) => PropertyValue::Number(n.round()),
+                (Property::Throttle | Property::Steer, PropertyValue::Number(n)) => {
+                    PropertyValue::Number(n.round().clamp(-1.0, 1.0))
+                }
                 (Property::FieldOfView, PropertyValue::Number(n)) => {
                     PropertyValue::Number(n.clamp(1.0, 120.0))
                 }
