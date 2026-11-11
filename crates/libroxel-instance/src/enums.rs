@@ -165,6 +165,18 @@ pub enum TextYAlignment {
     Bottom,
 }
 
+/// What drives a hinge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ActuatorType {
+    /// Nothing: it swings freely.
+    #[default]
+    None,
+    /// Turns at a steady speed.
+    Motor,
+    /// Turns to an angle and holds it.
+    Servo,
+}
+
 /// How an image fills its box.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ScaleType {
@@ -325,6 +337,7 @@ pub enum EnumKind {
     TextXAlignment,
     TextYAlignment,
     ScaleType,
+    ActuatorType,
 }
 
 /// A value from one of the enumerations.
@@ -342,6 +355,7 @@ pub enum EnumValue {
     TextXAlignment(TextXAlignment),
     TextYAlignment(TextYAlignment),
     ScaleType(ScaleType),
+    ActuatorType(ActuatorType),
 }
 
 const KEY_CODES: &[EnumValue] = &[
@@ -414,6 +428,7 @@ impl EnumKind {
         EnumKind::TextXAlignment,
         EnumKind::TextYAlignment,
         EnumKind::ScaleType,
+        EnumKind::ActuatorType,
     ];
 
     /// Every value of this enumeration, in a stable order.
@@ -485,6 +500,11 @@ impl EnumKind {
                 E::ScaleType(ScaleType::Fit),
                 E::ScaleType(ScaleType::Crop),
             ],
+            EnumKind::ActuatorType => &[
+                E::ActuatorType(ActuatorType::None),
+                E::ActuatorType(ActuatorType::Motor),
+                E::ActuatorType(ActuatorType::Servo),
+            ],
         }
     }
 
@@ -503,6 +523,7 @@ impl EnumKind {
             EnumKind::TextXAlignment => "enum:text_x_alignment",
             EnumKind::TextYAlignment => "enum:text_y_alignment",
             EnumKind::ScaleType => "enum:scale_type",
+            EnumKind::ActuatorType => "enum:actuator_type",
         }
     }
 
@@ -527,6 +548,7 @@ impl EnumValue {
             EnumValue::TextXAlignment(_) => EnumKind::TextXAlignment,
             EnumValue::TextYAlignment(_) => EnumKind::TextYAlignment,
             EnumValue::ScaleType(_) => EnumKind::ScaleType,
+            EnumValue::ActuatorType(_) => EnumKind::ActuatorType,
         }
     }
 
@@ -658,6 +680,11 @@ impl EnumValue {
                 ScaleType::Stretch => "stretch",
                 ScaleType::Fit => "fit",
                 ScaleType::Crop => "crop",
+            },
+            EnumValue::ActuatorType(a) => match a {
+                ActuatorType::None => "none",
+                ActuatorType::Motor => "motor",
+                ActuatorType::Servo => "servo",
             },
         }
     }

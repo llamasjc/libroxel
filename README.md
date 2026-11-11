@@ -57,7 +57,8 @@ The first build compiles Bevy and takes a while. After that it is quick.
   go-kart to drive (walk into its seat, WASD to drive, Space to hop out), and
   there's a bench to sit on at the start. Over the track's right wall is a
   physics playground: a tyre swing on a rope, a hovering pad held up by an
-  AlignPosition, and a weight bouncing on a spring. The quarry has a smoking
+  AlignPosition, a weight bouncing on a spring, a windmill turned by a
+  hinge motor and a gate on a servo hinge (click it). The quarry has a smoking
   campfire, the launch pad fizzes, the finish sparkles, and the zombie
   glows red so you can spot it.
   Press **▶ Play** (or F5) to try it.
@@ -259,8 +260,19 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `Stiffness`, `Damping`) join two attachments, and are drawn when
   `Visible` (`Color`, `Thickness`). The older `BodyVelocity`, `BodyPosition`
   (`P`, `D`) and `BodyForce` work inside a part. Movers push whole welded
-  assemblies. Hinges and motors aren't there yet, because loose parts don't
-  rotate.
+  assemblies.
+- **Spinning and hinges:** loose parts spin with `AssemblyAngularVelocity`
+  (radians a second about X, Y and Z; scripts read and set it), and slow
+  down rubbing on the ground. `AngularVelocity` (`AngularVelocity`,
+  `MaxTorque`, on `Attachment0`) and the older `BodyAngularVelocity`
+  (inside a part) keep them spinning. A `HingeConstraint` lets
+  `Attachment1`'s part, and everything welded to it, turn only about
+  `Attachment0`'s X axis (attachments have an `Orientation` to aim it).
+  `ActuatorType` None swings freely under gravity, `Motor` turns at
+  `AngularVelocity` with up to `MotorMaxTorque`, and `Servo` turns to
+  `TargetAngle` degrees at `AngularSpeed` with up to `ServoMaxTorque`.
+  `CurrentAngle` reads the angle. Hinged parts stay on their hinge exactly,
+  however fast they turn.
 - **Effects:** a `ParticleEmitter` inside a part (or an attachment) sends
   out particles: `Rate`, `Lifetime` and `Speed` (`NumberRange.new(min,
   max)`), `SpreadAngle`, `Size`, `Color`, `Transparency`, `Acceleration`,
@@ -411,8 +423,10 @@ end)
 ```
 
 **Not yet:** pictures on parts (decals and textures), tool animations, sounds, and terrain and voxels. Physics is simple: anchored parts can be rotated and shaped
-(ramps and balls work), but loose parts are upright boxes that fall and
-stack without tipping over. Characters climb steps up to 0.6 studs.
+(ramps and balls work), but loose parts collide as the upright box around
+them and don't tip over by themselves (they spin only when something spins
+them). A hinge arm is carried by its hinge, so it blocks things but doesn't
+push them, and wheels on hinges don't drive a car. Characters climb steps up to 0.6 studs.
 
 ## Contributing
 

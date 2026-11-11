@@ -1,8 +1,8 @@
 //! Starter worlds: the blank template and a sample obby.
 
 use libroxel_instance::{
-    ClassKind, Color3, EnumValue, InstanceId, InstanceTree, Material, PartShape, Property, PropertyValue,
-    UDim, UDim2, Vec2, Vec3,
+    ActuatorType, ClassKind, Color3, EnumValue, InstanceId, InstanceTree, Material, PartShape, Property,
+    PropertyValue, UDim, UDim2, Vec2, Vec3,
 };
 
 /// Builds a go-kart standing on the ground at `at`, facing `yaw` degrees
@@ -105,6 +105,17 @@ const SWING_SCRIPT: &str = r#"
 local tyre = script.Parent
 task.wait(0.5)
 tyre:ApplyImpulse(Vector3.new(0, 0, tyre:GetMass() * 30))
+"#;
+
+/// Opens and shuts the playground gate when it's clicked.
+const GATE_SCRIPT: &str = r#"
+local gate = script.Parent
+local hinge = gate.Hinge
+local open = false
+gate.ClickDetector.MouseClick:Connect(function()
+	open = not open
+	hinge.TargetAngle = if open then 90 else 0
+end)
 "#;
 
 /// Moves the hover pad's target up and down; its AlignPosition follows.
@@ -1132,8 +1143,9 @@ pub fn sample_obby() -> InstanceTree {
     }
     kart(&mut tree, track, Vec3::new(0.0, 0.0, 26.0), 180.0, [220, 50, 60]);
     // A physics playground over the track's right wall: a tyre swing on a
-    // rope, a hovering platform held up by an AlignPosition, and a weight
-    // bouncing on a spring.
+    // rope, a hovering platform held up by an AlignPosition, a weight
+    // bouncing on a spring, a windmill turned by a hinge motor and a gate
+    // on a servo hinge.
     let play = add(&mut tree, ws, ClassKind::Folder, "Playground");
     let lawn = block(&mut tree, play, "Ground", [33.0, -0.5, 37.0], [24.0, 1.0, 34.0], [96, 160, 90]);
     material(&mut tree, lawn, Material::Grass);
@@ -1185,6 +1197,54 @@ pub fn sample_obby() -> InstanceTree {
     set(&mut tree, spring, Property::FreeLength, PropertyValue::Number(2.0));
     set(&mut tree, spring, Property::Stiffness, PropertyValue::Number(40.0));
     set(&mut tree, spring, Property::Damping, PropertyValue::Number(0.3));
+
+    // Hinge axes run along their attachment's X axis: turned about Y by -90
+    // it points along Z, turned about Z by 90 it points up.
+    let along_z = PropertyValue::Vec3(Vec3::new(0.0, -90.0, 0.0));
+    let upright = PropertyValue::Vec3(Vec3::new(0.0, 0.0, 90.0));
+    let motor = PropertyValue::Enum(EnumValue::ActuatorType(ActuatorType::Motor));
+    let servo = PropertyValue::Enum(EnumValue::ActuatorType(ActuatorType::Servo));
+    let tower = block(&mut tree, play, "MillTower", [40.0, 5.0, 24.0], [1.5, 10.0, 1.5], [235, 230, 215]);
+    material(&mut tree, tower, Material::Wood);
+    let sail = [250, 250, 245];
+    let sail_a = block(&mut tree, play, "SailA", [40.0, 10.0, 23.0], [9.0, 1.0, 0.3], sail);
+    let sail_b = block(&mut tree, play, "SailB", [40.0, 10.0, 23.0], [1.0, 9.0, 0.3], sail);
+    for s in [sail_a, sail_b] {
+        set(&mut tree, s, Property::Anchored, PropertyValue::Bool(false));
+        material(&mut tree, s, Material::SmoothPlastic);
+    }
+    let weld = add(&mut tree, sail_a, ClassKind::WeldConstraint, "Weld");
+    set(&mut tree, weld, Property::Part0, PropertyValue::Ref(Some(sail_a)));
+    set(&mut tree, weld, Property::Part1, PropertyValue::Ref(Some(sail_b)));
+    let axle = add(&mut tree, tower, ClassKind::Attachment, "Axle");
+    set(&mut tree, axle, Property::Position, PropertyValue::Vec3(Vec3::new(0.0, 5.0, -1.0)));
+    set(&mut tree, axle, Property::Orientation, along_z.clone());
+    let hub = add(&mut tree, sail_a, ClassKind::Attachment, "Hub");
+    set(&mut tree, hub, Property::Orientation, along_z);
+    let mill = add(&mut tree, tower, ClassKind::HingeConstraint, "Motor");
+    set(&mut tree, mill, Property::Attachment0, PropertyValue::Ref(Some(axle)));
+    set(&mut tree, mill, Property::Attachment1, PropertyValue::Ref(Some(hub)));
+    set(&mut tree, mill, Property::ActuatorType, motor);
+    set(&mut tree, mill, Property::MotorVelocity, PropertyValue::Number(1.2));
+
+    let gate_post = block(&mut tree, play, "GatePost", [44.0, 3.0, 40.0], [1.0, 6.0, 1.0], wood);
+    material(&mut tree, gate_post, Material::Wood);
+    let gate = block(&mut tree, play, "Gate", [44.0, 3.0, 43.5], [0.4, 5.0, 6.0], [190, 150, 100]);
+    material(&mut tree, gate, Material::Wood);
+    set(&mut tree, gate, Property::Anchored, PropertyValue::Bool(false));
+    add(&mut tree, gate, ClassKind::ClickDetector, "ClickDetector");
+    let pin = add(&mut tree, gate_post, ClassKind::Attachment, "Pin");
+    set(&mut tree, pin, Property::Position, PropertyValue::Vec3(Vec3::new(0.0, 0.0, 0.5)));
+    set(&mut tree, pin, Property::Orientation, upright.clone());
+    let edge = add(&mut tree, gate, ClassKind::Attachment, "Edge");
+    set(&mut tree, edge, Property::Position, PropertyValue::Vec3(Vec3::new(0.0, 0.0, -3.0)));
+    set(&mut tree, edge, Property::Orientation, upright);
+    let gate_hinge = add(&mut tree, gate, ClassKind::HingeConstraint, "Hinge");
+    set(&mut tree, gate_hinge, Property::Attachment0, PropertyValue::Ref(Some(pin)));
+    set(&mut tree, gate_hinge, Property::Attachment1, PropertyValue::Ref(Some(edge)));
+    set(&mut tree, gate_hinge, Property::ActuatorType, servo);
+    set(&mut tree, gate_hinge, Property::AngularSpeed, PropertyValue::Number(2.0));
+    script(&mut tree, gate, "Swing", GATE_SCRIPT);
 
     // And a bench on the start platform, to sit on.
     let bench = add(&mut tree, start, ClassKind::Seat, "Bench");
@@ -1841,6 +1901,46 @@ mod tests {
         assert!((pos(tyre) - Vec3::new(30.0, 14.0, 30.0)).length() < 10.7, "on its rope");
         assert!(highest > 8.0, "the pad rose to its high point: {highest}");
         assert!(bounce.1 - bounce.0 > 1.0, "the weight bounces: {bounce:?}");
+        let log = session.take_log();
+        assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
+    }
+
+    #[test]
+    fn sample_windmill_turns_and_the_gate_opens_when_clicked() {
+        let mut session = start_on(sample_obby(), true).unwrap();
+        let tree = session.runtime().tree().clone();
+        let find = |name: &str| {
+            let t = tree.borrow();
+            let play = t.find_first_child(t.workspace(), "Playground").unwrap().unwrap();
+            t.find_first_child(play, name).unwrap().unwrap()
+        };
+        let (sail_a, sail_b, gate) = (find("SailA"), find("SailB"), find("Gate"));
+        let get = |id, p| tree.borrow().get_vec3(id, p).unwrap();
+        for _ in 0..60 {
+            session.step(1.0 / 60.0, CharacterInput::default());
+        }
+        // About 69 degrees in a second, the sails turning together about their hub.
+        let turn = get(sail_a, Property::Orientation).z;
+        assert!((turn.abs() - 69.0).abs() < 5.0, "{turn}");
+        assert_eq!(get(sail_a, Property::Orientation), get(sail_b, Property::Orientation));
+        assert!((get(sail_a, Property::Position) - Vec3::new(40.0, 10.0, 23.0)).length() < 1e-3);
+        assert!((get(gate, Property::Position) - Vec3::new(44.0, 3.0, 43.5)).length() < 1e-3, "shut");
+        // Walk up to it (well, appear next to it) and click it.
+        let root = session.character().unwrap().root;
+        tree.borrow_mut()
+            .set(root, Property::Position, PropertyValue::Vec3(Vec3::new(36.0, 3.0, 44.0)))
+            .unwrap();
+        assert!(session.click_part(gate));
+        for _ in 0..90 {
+            session.step(1.0 / 60.0, CharacterInput::default());
+        }
+        // Swung a quarter turn about the post's edge.
+        let open = get(gate, Property::Position);
+        assert!(
+            (open - Vec3::new(41.0, 3.0, 40.5)).length() < 0.1
+                || (open - Vec3::new(47.0, 3.0, 40.5)).length() < 0.1,
+            "{open:?}"
+        );
         let log = session.take_log();
         assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
     }

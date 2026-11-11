@@ -56,7 +56,10 @@
 - **CFrames.** Parts store `Position` and `Orientation` (degrees, applied Y,
   then X, then Z). `CFrame` is built from and written back to those two, so
   saved games stay readable.
-- **Physics.** Unanchored parts are upright boxes. They fall, are moved one
+- **Physics.** Unanchored parts collide as the axis-aligned box around them
+  (characters' root parts as their own size, whichever way they face). They
+  can spin: physics keeps an angular velocity for each, turns its
+  `Orientation` by it each step, and slows it on the ground. They fall, are moved one
   axis at a time and pushed out of anything with `CanCollide`, and step up
   ledges up to 0.6 studs. Anchored parts can be rotated and shaped: boxes
   turned by right angles stay on the fast axis-aligned path, tilted boxes and
@@ -175,7 +178,20 @@
   things up add it back). Springs, `AlignPosition` and `BodyPosition` are
   solved implicitly, so stiff ones don't blow up; ropes cancel stretching
   and close a share of any overshoot each step. Visible ropes and springs
-  are drawn by `view::sync_ropes` as thin rods.
+  are drawn by `view::sync_ropes` as thin rods. `AngularVelocity` and
+  `BodyAngularVelocity` change the root's angular velocity the same way,
+  using a rough moment of inertia for the assembly.
+- **Hinges** live in `libroxel-engine/src/hinge.rs`. Each enabled
+  `HingeConstraint` has a base (Attachment0's part, unless only the other
+  side is anchored) and an arm (the other part and everything welded to it).
+  The hinge keeps its own angle and speed: gravity's torque about the axis
+  and the actuator (motor or servo, limited by its torque over the arm's
+  inertia) change the speed before the step. Arms are held still during the
+  step like welded parts, then placed afterwards at the base's frame times
+  Attachment0's frame turned by the angle, times each arm part's pose taken
+  when the hinge started (so nothing drifts). Bases are placed before the
+  arms hanging from them, so hinges can chain. A script moving an arm part
+  starts the hinge again from where it is.
 - **Effects** live in `libroxel-engine/src/effects.rs` and only exist on
   screen. Each particle is a small entity; each emitter has four materials
   from the start of a particle's life to its end, and particles switch

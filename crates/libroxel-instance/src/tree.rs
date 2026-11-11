@@ -447,6 +447,10 @@ impl InstanceTree {
                     | Property::Thickness
                     | Property::BodyPower
                     | Property::BodyDamping
+                    | Property::MotorMaxTorque
+                    | Property::AngularSpeed
+                    | Property::ServoMaxTorque
+                    | Property::MaxTorque
                     | Property::Rate
                     | Property::EffectSize
                     | Property::Drag

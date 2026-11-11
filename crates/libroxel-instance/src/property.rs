@@ -177,6 +177,26 @@ pub enum Property {
     BodyPower,
     /// On a body position: how much it slows down to stop overshooting.
     BodyDamping,
+    /// On a hinge: whether it swings freely, runs as a motor, or holds an angle.
+    ActuatorType,
+    /// On a hinge motor: how fast it turns, in radians per second.
+    MotorVelocity,
+    /// On a hinge motor: the most turning force it has.
+    MotorMaxTorque,
+    /// On a hinge servo: the angle it turns to, in degrees.
+    TargetAngle,
+    /// On a hinge servo: how fast it turns there, in radians per second.
+    AngularSpeed,
+    /// On a hinge servo: the most turning force it has.
+    ServoMaxTorque,
+    /// On a hinge: the angle it's at now, in degrees (set while playing).
+    CurrentAngle,
+    /// On a spinner: the spin it aims for, in radians per second about each axis.
+    AngularVelocity,
+    /// On an angular velocity: the most turning force it has.
+    MaxTorque,
+    /// On a body angular velocity: the most turning force about each axis.
+    BodyMaxTorque,
     /// On a particle emitter: particles sent out each second.
     Rate,
     /// On a particle emitter: how long each particle lasts, as a range of seconds.
@@ -361,7 +381,16 @@ impl Property {
             | Property::Damping
             | Property::Thickness
             | Property::BodyPower
-            | Property::BodyDamping => "number",
+            | Property::BodyDamping
+            | Property::MotorVelocity
+            | Property::MotorMaxTorque
+            | Property::TargetAngle
+            | Property::AngularSpeed
+            | Property::ServoMaxTorque
+            | Property::CurrentAngle
+            | Property::MaxTorque => "number",
+            Property::AngularVelocity | Property::BodyMaxTorque => "Vec3",
+            Property::ActuatorType => EnumKind::ActuatorType.kind_name(),
             Property::CharacterWalkSpeed
             | Property::CharacterJumpPower
             | Property::FogStart
@@ -439,6 +468,7 @@ impl Property {
             Property::FillDirection => Some(EnumKind::FillDirection),
             Property::TextXAlignment => Some(EnumKind::TextXAlignment),
             Property::ScaleType => Some(EnumKind::ScaleType),
+            Property::ActuatorType => Some(EnumKind::ActuatorType),
             Property::TextYAlignment => Some(EnumKind::TextYAlignment),
             _ => None,
         }
@@ -545,6 +575,16 @@ impl Property {
         Property::BodyMaxForce,
         Property::BodyPower,
         Property::BodyDamping,
+        Property::ActuatorType,
+        Property::MotorVelocity,
+        Property::MotorMaxTorque,
+        Property::TargetAngle,
+        Property::AngularSpeed,
+        Property::ServoMaxTorque,
+        Property::CurrentAngle,
+        Property::AngularVelocity,
+        Property::MaxTorque,
+        Property::BodyMaxTorque,
         Property::Rate,
         Property::Lifetime,
         Property::Speed,
@@ -691,6 +731,16 @@ impl Property {
             Property::BodyMaxForce => "body_max_force",
             Property::BodyPower => "body_power",
             Property::BodyDamping => "body_damping",
+            Property::ActuatorType => "actuator_type",
+            Property::MotorVelocity => "motor_velocity",
+            Property::MotorMaxTorque => "motor_max_torque",
+            Property::TargetAngle => "target_angle",
+            Property::AngularSpeed => "angular_speed",
+            Property::ServoMaxTorque => "servo_max_torque",
+            Property::CurrentAngle => "current_angle",
+            Property::AngularVelocity => "angular_velocity",
+            Property::MaxTorque => "max_torque",
+            Property::BodyMaxTorque => "body_max_torque",
             Property::Rate => "rate",
             Property::Lifetime => "lifetime",
             Property::Speed => "speed",

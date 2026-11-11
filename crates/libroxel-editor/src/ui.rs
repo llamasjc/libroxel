@@ -124,6 +124,9 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::BodyVelocity,
     ClassKind::BodyPosition,
     ClassKind::BodyForce,
+    ClassKind::HingeConstraint,
+    ClassKind::AngularVelocity,
+    ClassKind::BodyAngularVelocity,
     ClassKind::ParticleEmitter,
     ClassKind::Fire,
     ClassKind::Smoke,
@@ -192,6 +195,8 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::AlignPosition | ClassKind::BodyPosition => "🎯",
         ClassKind::RopeConstraint => "➰",
         ClassKind::SpringConstraint => "🌀",
+        ClassKind::HingeConstraint => "🚪",
+        ClassKind::AngularVelocity | ClassKind::BodyAngularVelocity => "🔄",
         ClassKind::ParticleEmitter | ClassKind::Sparkles => "✨",
         ClassKind::Fire => "🔥",
         ClassKind::Smoke => "☁",
@@ -1119,6 +1124,15 @@ fn properties(
         ClassKind::SpringConstraint => Some(
             "Pulls Attachment0 and Attachment1 towards FreeLength studs apart. Stiffness is how hard, \
              Damping how quickly the bouncing stops.",
+        ),
+        ClassKind::HingeConstraint => Some(
+            "Joins Attachment1's part to Attachment0's so it can only turn about Attachment0's X axis              (turn the attachment to aim it). ActuatorType None swings freely, Motor turns at              AngularVelocity radians a second, Servo turns to TargetAngle degrees at AngularSpeed.",
+        ),
+        ClassKind::AngularVelocity => Some(
+            "While playing, spins Attachment0's part at AngularVelocity (radians a second about X, Y              and Z), with up to MaxTorque. Unanchor the part first.",
+        ),
+        ClassKind::BodyAngularVelocity => Some(
+            "The older spinner: put one inside a loose part to spin it at AngularVelocity, with up to              MaxTorque about each axis.",
         ),
         ClassKind::BodyVelocity | ClassKind::BodyPosition | ClassKind::BodyForce => Some(
             "The older movers: put one inside a loose part. BodyVelocity pushes it at Velocity, \
@@ -2076,6 +2090,9 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     | ClassKind::BodyVelocity
                     | ClassKind::BodyPosition
                     | ClassKind::BodyForce
+                    | ClassKind::HingeConstraint
+                    | ClassKind::AngularVelocity
+                    | ClassKind::BodyAngularVelocity
                     | ClassKind::ParticleEmitter
                     | ClassKind::Fire
                     | ClassKind::Smoke

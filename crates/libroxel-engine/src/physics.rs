@@ -1,6 +1,8 @@
 //! A small box physics engine.
 //!
-//! Moving (unanchored) parts are axis-aligned boxes; they don't tumble.
+//! Moving (unanchored) parts collide as the axis-aligned box around them.
+//! They can spin (scripts, spinners and hinges turn them), but they don't
+//! tip over by themselves.
 //! Anchored parts can be rotated and shaped: boxes and parts turned in
 //! right angles are handled as axis-aligned boxes (exact and cheap), while
 //! tilted boxes and wedges use a separating-axis test and balls use a
@@ -15,6 +17,7 @@ use bevy::math::{EulerRot, Mat3, Quat, Vec3 as GVec3};
 use libroxel_instance::{
     ClassKind, EnumValue, InstanceId, InstanceTree, PartShape, Property, PropertyValue, Vec3,
 };
+use libroxel_script::names;
 
 /// Downward acceleration, in studs per second squared.
 pub const GRAVITY: f32 = 196.2;
@@ -45,6 +48,12 @@ pub const STEP_HEIGHT: f32 = 0.6;
 /// Turns an orientation in degrees (Y, then X, then Z) into a rotation.
 pub fn orientation_quat(degrees: Vec3) -> Quat {
     Quat::from_euler(EulerRot::YXZ, degrees.y.to_radians(), degrees.x.to_radians(), degrees.z.to_radians())
+}
+
+/// The orientation in degrees (Y, then X, then Z) of a rotation.
+pub fn degrees_of(q: Quat) -> Vec3 {
+    let (y, x, z) = q.to_euler(EulerRot::YXZ);
+    Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees())
 }
 
 fn g(v: Vec3) -> GVec3 {
@@ -282,6 +291,8 @@ pub struct StepResult {
 #[derive(Debug, Default)]
 pub struct Physics {
     velocities: HashMap<InstanceId, Vec3>,
+    /// How fast moving parts spin, in radians per second about each world axis.
+    spins: HashMap<InstanceId, Vec3>,
     grounded: HashSet<InstanceId>,
     contacts: HashSet<(InstanceId, InstanceId)>,
     /// Parts moved by something else (a weld) that stand still in a step.
@@ -306,6 +317,24 @@ impl Physics {
         self.velocities.insert(id, velocity);
     }
 
+    /// How fast uid=0(root) gid=0(root) groups=0(root) spins, in radians per second about each world axis.
+    pub fn angular_velocity(&self, id: InstanceId) -> Vec3 {
+        self.spins.get(&id).copied().unwrap_or_default()
+    }
+
+    pub fn set_angular_velocity(&mut self, id: InstanceId, spin: Vec3) {
+        if spin == Vec3::ZERO {
+            self.spins.remove(&id);
+        } else {
+            self.spins.insert(id, spin);
+        }
+    }
+
+    /// Every spinning part's angular velocity.
+    pub fn angular_velocities(&self) -> &HashMap<InstanceId, Vec3> {
+        &self.spins
+    }
+
     /// Every moving part's velocity.
     pub fn velocities(&self) -> &HashMap<InstanceId, Vec3> {
         &self.velocities
@@ -320,6 +349,7 @@ impl Physics {
     ) {
         for id in &carried {
             self.velocities.remove(id);
+            self.spins.remove(id);
         }
         self.carried = carried;
         self.ignored = together.into_iter().map(|(a, b)| ordered(a, b)).collect();
@@ -328,6 +358,7 @@ impl Physics {
     /// Also holds `id` still for the next step, passing through `together`.
     pub fn carry(&mut self, id: InstanceId, together: &[InstanceId]) {
         self.velocities.remove(&id);
+        self.spins.remove(&id);
         self.carried.insert(id);
         for &other in together {
             self.ignored.insert(ordered(id, other));
@@ -362,9 +393,12 @@ impl Physics {
                 let orientation = tree.get_vec3(id, Property::Orientation).unwrap_or_default();
                 let (half, collider) = if anchored {
                     collider_for(size, shape, orientation)
-                } else {
-                    // Moving parts stay upright boxes.
+                } else if orientation == Vec3::ZERO || tree.name(id) == Ok(names::character::ROOT_PART) {
+                    // Characters stay upright, whichever way they face.
                     (size * 0.5, Collider::Aabb)
+                } else {
+                    // Turned moving parts collide as the box around them.
+                    (collider_for(size, PartShape::Block, orientation).0, Collider::Aabb)
                 };
                 Some(Body {
                     id,
@@ -386,6 +420,7 @@ impl Physics {
         let fallen_height = fallen_parts_height(tree);
         let live: HashSet<InstanceId> = bodies.iter().map(|b| b.id).collect();
         self.velocities.retain(|id, _| live.contains(id));
+        self.spins.retain(|id, _| live.contains(id));
         self.grounded.clear();
 
         let substeps = ((dt / MAX_SUBSTEP).ceil() as usize).clamp(1, MAX_SUBSTEPS);
@@ -402,6 +437,19 @@ impl Physics {
             }
             if tree.get_vec3(body.id, Property::Position) != Some(body.pos) {
                 let _ = tree.set(body.id, Property::Position, PropertyValue::Vec3(body.pos));
+            }
+            if let Some(spin) = self.spins.get_mut(&body.id) {
+                let turn = g(*spin) * dt;
+                let now = tree.get_vec3(body.id, Property::Orientation).unwrap_or_default();
+                let q = (Quat::from_scaled_axis(turn) * orientation_quat(now)).normalize();
+                let _ = tree.set(body.id, Property::Orientation, PropertyValue::Vec3(degrees_of(q)));
+                if self.grounded.contains(&body.id) {
+                    // Rubbing on the ground slows the spin, like sliding.
+                    *spin = *spin * (1.0 - 4.0 * dt).max(0.0);
+                    if spin.length() < 0.01 {
+                        *spin = Vec3::ZERO;
+                    }
+                }
             }
             if body.pos.y < fallen_height {
                 result.fell.push(body.id);

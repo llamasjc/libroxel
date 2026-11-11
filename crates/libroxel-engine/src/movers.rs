@@ -9,6 +9,8 @@
 //!   spring with damping.
 //! - `RopeConstraint` keeps two attachments within a length.
 //! - `SpringConstraint` pulls two attachments towards a length.
+//! - `AngularVelocity` and `BodyAngularVelocity` spin towards an angular
+//!   velocity. An assembly spins about its root part's middle.
 //!
 //! Springs are solved implicitly, so even very stiff ones stay steady.
 
@@ -74,6 +76,18 @@ fn parent_end(tree: &InstanceTree, welds: &Welds, mover: InstanceId) -> Option<E
     Some(End { root, point: tree.get_vec3(part, Property::Position)?, inv_mass: 1.0 / mass })
 }
 
+/// Roughly how hard an assembly is to spin, about any axis through its root.
+fn inertia_of(tree: &InstanceTree, welds: &Welds, root: InstanceId) -> f32 {
+    let at = tree.get_vec3(root, Property::Position).unwrap_or_default();
+    let one = |p: InstanceId| {
+        let s = tree.get_vec3(p, Property::Size).unwrap_or_default();
+        let r = tree.get_vec3(p, Property::Position).unwrap_or_default() - at;
+        // A box's own spin, averaged over the three axes, plus its distance.
+        mass_of(tree, p) * (s.dot(s) / 18.0 + r.dot(r) * 2.0 / 3.0)
+    };
+    (one(root) + welds.carried_by(root).map(one).sum::<f32>()).max(0.01)
+}
+
 fn enabled(tree: &InstanceTree, id: InstanceId) -> bool {
     !tree.class(id).is_ok_and(|c| c.has_property(Property::Enabled))
         || tree.get_bool(id, Property::Enabled) == Some(true)
@@ -137,6 +151,8 @@ pub fn apply(tree: &InstanceTree, welds: &Welds, physics: &mut Physics, dt: f32)
                 | ClassKind::BodyVelocity
                 | ClassKind::BodyPosition
                 | ClassKind::BodyForce
+                | ClassKind::AngularVelocity
+                | ClassKind::BodyAngularVelocity
         ) || !enabled(tree, id)
         {
             continue;
@@ -240,6 +256,22 @@ pub fn apply(tree: &InstanceTree, welds: &Welds, physics: &mut Physics, dt: f32)
                 let impulse = change / w;
                 push(physics, &e1, n * (impulse * e1.inv_mass));
                 push(physics, &e0, n * (-impulse * e0.inv_mass));
+            }
+            ClassKind::AngularVelocity => {
+                let Some(e) = end(tree, welds, a0).filter(|e| e.inv_mass > 0.0) else { continue };
+                let target = vec(tree, id, Property::AngularVelocity);
+                let spin = physics.angular_velocity(e.root);
+                let most = number(tree, id, Property::MaxTorque) / inertia_of(tree, welds, e.root) * dt;
+                physics.set_angular_velocity(e.root, spin + clamp_length(target - spin, most));
+            }
+            ClassKind::BodyAngularVelocity => {
+                let Some(e) = parent_end(tree, welds, id) else { continue };
+                let target = vec(tree, id, Property::AngularVelocity);
+                let spin = physics.angular_velocity(e.root);
+                let inertia = inertia_of(tree, welds, e.root);
+                let rate = (number(tree, id, Property::BodyPower) / inertia).min(1.0 / dt);
+                let most = vec(tree, id, Property::BodyMaxTorque) * (dt / inertia);
+                physics.set_angular_velocity(e.root, spin + clamp_axes((target - spin) * (rate * dt), most));
             }
             _ => {}
         }

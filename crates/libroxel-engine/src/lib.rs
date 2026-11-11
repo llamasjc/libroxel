@@ -7,6 +7,7 @@
 
 pub mod character;
 pub mod effects;
+pub mod hinge;
 pub mod movers;
 pub mod net;
 pub mod npc;

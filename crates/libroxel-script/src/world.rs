@@ -21,6 +21,8 @@ pub enum VelocityRequest {
     Set(Vec3),
     /// Add to the velocity (already divided by the part's mass).
     Add(Vec3),
+    /// Set how fast it spins, in radians per second about each axis.
+    Spin(Vec3),
 }
 
 /// Engine-owned state that scripts can read and ask to change.
@@ -28,6 +30,8 @@ pub enum VelocityRequest {
 pub(crate) struct WorldState {
     /// The velocity of every moving part, as of the last physics step.
     velocities: HashMap<InstanceId, Vec3>,
+    /// How fast every spinning part spins, as of the last physics step.
+    spins: HashMap<InstanceId, Vec3>,
     requests: Vec<(InstanceId, VelocityRequest)>,
     /// The text box the player is typing into.
     focused: Option<InstanceId>,
@@ -63,10 +67,23 @@ fn velocity(lua: &Lua, id: InstanceId) -> Vec3 {
             match request {
                 VelocityRequest::Set(set) => v = *set,
                 VelocityRequest::Add(add) => v = v + *add,
+                VelocityRequest::Spin(_) => {}
             }
         }
     }
     v
+}
+
+fn spin(lua: &Lua, id: InstanceId) -> Vec3 {
+    let host = host(lua);
+    let world = host.world.borrow();
+    let mut spin = world.spins.get(&id).copied().unwrap_or_default();
+    for (target, request) in &world.requests {
+        if let (true, VelocityRequest::Spin(s)) = (*target == id, request) {
+            spin = *s;
+        }
+    }
+    spin
 }
 
 fn request(lua: &Lua, id: InstanceId, request: VelocityRequest) {
@@ -94,6 +111,9 @@ pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> m
         }
         extras::ASSEMBLY_LINEAR_VELOCITY if class.is_physical() => {
             Value::UserData(lua.create_userdata(LuaVector3(velocity(lua, id)))?)
+        }
+        extras::ASSEMBLY_ANGULAR_VELOCITY if class.is_physical() => {
+            Value::UserData(lua.create_userdata(LuaVector3(spin(lua, id)))?)
         }
         // A method on seats, but a property on humanoids, so it's looked up here.
         methods::SIT if class.is_seat() => {
@@ -127,6 +147,11 @@ pub(crate) fn new_index(
         extras::ASSEMBLY_LINEAR_VELOCITY if class.is_physical() => {
             let v = as_vector3(value).ok_or_else(|| runtime_err(format!("{key} expects a Vector3")))?;
             request(lua, id, VelocityRequest::Set(v));
+            Ok(true)
+        }
+        extras::ASSEMBLY_ANGULAR_VELOCITY if class.is_physical() => {
+            let v = as_vector3(value).ok_or_else(|| runtime_err(format!("{key} expects a Vector3")))?;
+            request(lua, id, VelocityRequest::Spin(v));
             Ok(true)
         }
         // Who sits where is up to the engine.
@@ -404,6 +429,10 @@ pub(crate) fn set_viewport(lua: &Lua, size: Vec2) {
 
 pub(crate) fn set_velocities(lua: &Lua, velocities: HashMap<InstanceId, Vec3>) {
     host(lua).world.borrow_mut().velocities = velocities;
+}
+
+pub(crate) fn set_angular_velocities(lua: &Lua, spins: HashMap<InstanceId, Vec3>) {
+    host(lua).world.borrow_mut().spins = spins;
 }
 
 pub(crate) fn take_velocity_requests(lua: &Lua) -> Vec<(InstanceId, VelocityRequest)> {

@@ -268,6 +268,14 @@ impl ScriptRuntime {
         world::set_velocities(&self.lua, velocities)
     }
 
+    /// Tells scripts how fast each part spins (`AssemblyAngularVelocity`).
+    pub fn set_angular_velocities(
+        &self,
+        spins: std::collections::HashMap<InstanceId, libroxel_instance::Vec3>,
+    ) {
+        world::set_angular_velocities(&self.lua, spins)
+    }
+
     /// Takes the velocity changes scripts asked for since the last call, in order.
     pub fn take_velocity_requests(&self) -> Vec<(InstanceId, VelocityRequest)> {
         world::take_velocity_requests(&self.lua)

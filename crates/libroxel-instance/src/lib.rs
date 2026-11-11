@@ -22,8 +22,8 @@ mod property;
 mod tree;
 
 pub use enums::{
-    CameraType, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection, KeyCode, Material,
-    PartShape, RaycastFilterType, ScaleType, TextXAlignment, TextYAlignment, UserInputType,
+    ActuatorType, CameraType, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection, KeyCode,
+    Material, PartShape, RaycastFilterType, ScaleType, TextXAlignment, TextYAlignment, UserInputType,
 };
 pub use math::{CFrame, Color3, Rotation, UDim, UDim2, Vec2, Vec3};
 pub use property::{Property, PropertyValue};
@@ -160,6 +160,13 @@ pub enum ClassKind {
     BodyPosition,
     /// Inside a part: the older way to push it with a steady Force.
     BodyForce,
+    /// Lets Attachment1's part turn about Attachment0's X axis, freely,
+    /// driven by a motor, or held at an angle by a servo.
+    HingeConstraint,
+    /// Spins Attachment0's part at AngularVelocity, with up to MaxTorque.
+    AngularVelocity,
+    /// Inside a part: the older way to make it spin at AngularVelocity.
+    BodyAngularVelocity,
     /// Inside a part: sends out little particles.
     ParticleEmitter,
     /// Inside a part: flames.
@@ -253,6 +260,9 @@ impl ClassKind {
         ClassKind::BodyVelocity,
         ClassKind::BodyPosition,
         ClassKind::BodyForce,
+        ClassKind::HingeConstraint,
+        ClassKind::AngularVelocity,
+        ClassKind::BodyAngularVelocity,
         ClassKind::ParticleEmitter,
         ClassKind::Fire,
         ClassKind::Smoke,
@@ -386,7 +396,8 @@ impl ClassKind {
         const OBJECT: &[Property] = &[Property::Name, Property::ObjectValue];
         const VECTOR3: &[Property] = &[Property::Name, Property::Vector3Value];
         const COLOR3: &[Property] = &[Property::Name, Property::Color3Value];
-        const ATTACHMENT: &[Property] = &[Property::Name, Property::Position, Property::Visible];
+        const ATTACHMENT: &[Property] =
+            &[Property::Name, Property::Position, Property::Orientation, Property::Visible];
         const LINEAR_VELOCITY: &[Property] = &[
             Property::Name,
             Property::Enabled,
@@ -439,6 +450,28 @@ impl ClassKind {
             Property::BodyDamping,
         ];
         const BODY_FORCE: &[Property] = &[Property::Name, Property::Force];
+        const HINGE: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::Attachment0,
+            Property::Attachment1,
+            Property::ActuatorType,
+            Property::MotorVelocity,
+            Property::MotorMaxTorque,
+            Property::TargetAngle,
+            Property::AngularSpeed,
+            Property::ServoMaxTorque,
+            Property::CurrentAngle,
+        ];
+        const ANGULAR_VELOCITY: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::Attachment0,
+            Property::AngularVelocity,
+            Property::MaxTorque,
+        ];
+        const BODY_ANGULAR_VELOCITY: &[Property] =
+            &[Property::Name, Property::AngularVelocity, Property::BodyMaxTorque, Property::BodyPower];
         const PARTICLES: &[Property] = &[
             Property::Name,
             Property::Enabled,
@@ -737,6 +770,9 @@ impl ClassKind {
             ClassKind::BodyVelocity => BODY_VELOCITY,
             ClassKind::BodyPosition => BODY_POSITION,
             ClassKind::BodyForce => BODY_FORCE,
+            ClassKind::HingeConstraint => HINGE,
+            ClassKind::AngularVelocity => ANGULAR_VELOCITY,
+            ClassKind::BodyAngularVelocity => BODY_ANGULAR_VELOCITY,
             ClassKind::ParticleEmitter => PARTICLES,
             ClassKind::Fire => FIRE,
             ClassKind::Smoke => SMOKE,
@@ -906,6 +942,16 @@ impl ClassKind {
                 _ => 1_250.0,
             }),
             Property::BodyDamping => PropertyValue::Number(1_250.0),
+            Property::ActuatorType => PropertyValue::Enum(EnumValue::ActuatorType(ActuatorType::None)),
+            Property::MotorVelocity | Property::TargetAngle | Property::CurrentAngle => {
+                PropertyValue::Number(0.0)
+            }
+            Property::MotorMaxTorque | Property::ServoMaxTorque | Property::MaxTorque => {
+                PropertyValue::Number(100_000.0)
+            }
+            Property::AngularSpeed => PropertyValue::Number(1.0),
+            Property::AngularVelocity => PropertyValue::Vec3(Vec3::ZERO),
+            Property::BodyMaxTorque => PropertyValue::Vec3(Vec3::new(4000.0, 4000.0, 4000.0)),
             Property::Rate => PropertyValue::Number(20.0),
             Property::Lifetime => PropertyValue::Vec2(Vec2::new(5.0, 10.0)),
             Property::Speed => PropertyValue::Vec2(Vec2::new(5.0, 5.0)),
@@ -1013,6 +1059,9 @@ impl ClassKind {
             ClassKind::BodyVelocity => "body_velocity",
             ClassKind::BodyPosition => "body_position",
             ClassKind::BodyForce => "body_force",
+            ClassKind::HingeConstraint => "hinge_constraint",
+            ClassKind::AngularVelocity => "angular_velocity",
+            ClassKind::BodyAngularVelocity => "body_angular_velocity",
             ClassKind::ParticleEmitter => "particle_emitter",
             ClassKind::Fire => "fire",
             ClassKind::Smoke => "smoke",

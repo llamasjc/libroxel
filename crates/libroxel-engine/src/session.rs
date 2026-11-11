@@ -162,6 +162,8 @@ pub struct PlaySession {
     npcs: crate::npc::Npcs,
     /// Parts that welds hold together.
     welds: crate::weld::Welds,
+    /// Parts that hinges let turn.
+    hinges: crate::hinge::Hinges,
     /// The network connection, when the game is hosted or joined.
     pub(crate) link: crate::net::Link,
     /// The next `UserId` to give a player who joins.
@@ -201,6 +203,7 @@ impl PlaySession {
             camera: None,
             npcs: Default::default(),
             welds: Default::default(),
+            hinges: Default::default(),
             link: Default::default(),
             next_user_id: 1,
         };
@@ -982,6 +985,11 @@ impl PlaySession {
                 let v = match request {
                     VelocityRequest::Set(v) => v,
                     VelocityRequest::Add(dv) => self.physics.velocity(id) + dv,
+                    VelocityRequest::Spin(spin) => {
+                        let root = self.welds.root_for(id);
+                        self.physics.set_angular_velocity(root, spin);
+                        continue;
+                    }
                 };
                 self.physics.set_velocity(id, v);
             }
@@ -999,6 +1007,7 @@ impl PlaySession {
             let poses = self.npcs.before_physics(&mut tree, &mut self.physics, &player_models);
             crate::seat::drive_vehicles(&mut tree, &mut self.physics, dt);
             self.welds.before_physics(&tree, &mut self.physics);
+            self.hinges.before_physics(&tree, &mut self.physics, dt);
             crate::movers::apply(&tree, &self.welds, &mut self.physics, dt);
             for avatar in &self.avatars {
                 avatar.seating.hold(&tree, &mut self.physics, avatar.character);
@@ -1011,6 +1020,7 @@ impl PlaySession {
             }
             let (ended, died) = self.npcs.after_physics(&mut tree, &poses, dt);
             self.welds.after_physics(&mut tree);
+            self.hinges.after_physics(&mut tree);
             for avatar in &mut self.avatars {
                 avatar.seating.after_physics(&mut tree, avatar.character);
                 // Touching a free seat sits the character down.
@@ -1044,6 +1054,7 @@ impl PlaySession {
             self.collect(errors);
         }
         self.runtime.set_velocities(self.physics.velocities().clone());
+        self.runtime.set_angular_velocities(self.physics.angular_velocities().clone());
         for (index, input) in inputs.into_iter().enumerate() {
             self.pose_character(index, input, dt);
             self.refresh_hotbar(index);

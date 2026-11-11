@@ -11,8 +11,8 @@
 //! See `CONTRIBUTING.md` for the clean-room rules.
 
 use libroxel_instance::{
-    CameraType, ClassKind, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection, KeyCode,
-    Material, PartShape, Property, RaycastFilterType, ScaleType, TextXAlignment, TextYAlignment,
+    ActuatorType, CameraType, ClassKind, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection,
+    KeyCode, Material, PartShape, Property, RaycastFilterType, ScaleType, TextXAlignment, TextYAlignment,
     UserInputType,
 };
 
@@ -237,6 +237,8 @@ pub mod extras {
     pub const CURRENT_CAMERA: &str = "CurrentCamera";
     /// Part: how fast it is moving, in studs per second.
     pub const ASSEMBLY_LINEAR_VELOCITY: &str = "AssemblyLinearVelocity";
+    /// Part: how fast it is spinning, in radians per second about each axis.
+    pub const ASSEMBLY_ANGULAR_VELOCITY: &str = "AssemblyAngularVelocity";
     /// Camera: the size of the view in pixels.
     pub const VIEWPORT_SIZE: &str = "ViewportSize";
     /// The name of the camera the engine puts in the workspace.
@@ -440,6 +442,7 @@ pub fn enum_name(kind: EnumKind) -> &'static str {
         EnumKind::TextXAlignment => "TextXAlignment",
         EnumKind::TextYAlignment => "TextYAlignment",
         EnumKind::ScaleType => "ScaleType",
+        EnumKind::ActuatorType => "ActuatorType",
     }
 }
 
@@ -562,6 +565,11 @@ pub fn enum_item_name(value: EnumValue) -> &'static str {
             TextYAlignment::Top => "Top",
             TextYAlignment::Center => "Center",
             TextYAlignment::Bottom => "Bottom",
+        },
+        EnumValue::ActuatorType(a) => match a {
+            ActuatorType::None => "None",
+            ActuatorType::Motor => "Motor",
+            ActuatorType::Servo => "Servo",
         },
         EnumValue::ScaleType(s) => match s {
             ScaleType::Stretch => "Stretch",
@@ -754,6 +762,9 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::RopeConstraint => "RopeConstraint",
         ClassKind::SpringConstraint => "SpringConstraint",
         ClassKind::BodyVelocity => "BodyVelocity",
+        ClassKind::HingeConstraint => "HingeConstraint",
+        ClassKind::AngularVelocity => "AngularVelocity",
+        ClassKind::BodyAngularVelocity => "BodyAngularVelocity",
         ClassKind::BodyPosition => "BodyPosition",
         ClassKind::BodyForce => "BodyForce",
         ClassKind::ParticleEmitter => "ParticleEmitter",
@@ -880,6 +891,17 @@ pub fn property_name(property: Property) -> &'static str {
         Property::BodyMaxForce => "MaxForce",
         Property::BodyPower => "P",
         Property::BodyDamping => "D",
+        Property::ActuatorType => "ActuatorType",
+        // A hinge's motor speed; spinners use the Vector3 one below.
+        Property::MotorVelocity => "AngularVelocity",
+        Property::MotorMaxTorque => "MotorMaxTorque",
+        Property::TargetAngle => "TargetAngle",
+        Property::AngularSpeed => "AngularSpeed",
+        Property::ServoMaxTorque => "ServoMaxTorque",
+        Property::CurrentAngle => "CurrentAngle",
+        Property::AngularVelocity => "AngularVelocity",
+        Property::MaxTorque => "MaxTorque",
+        Property::BodyMaxTorque => "MaxTorque",
         Property::Rate => "Rate",
         Property::Lifetime => "Lifetime",
         Property::Speed => "Speed",
