@@ -172,6 +172,9 @@ pub enum ClassKind {
     /// In the workspace: ground made of one-stud cubes, built by scripts
     /// (FillBlock, FillBall) or the editor's terrain tools.
     Terrain,
+    /// Plays a WAV or OGG file (SoundId) while playing: Play, Stop, Pause,
+    /// Resume. Inside a part it sounds quieter further away.
+    Sound,
     /// Inside a part: a picture stretched over one Face.
     Decal,
     /// Inside a part: a picture tiled over one Face, StudsPerTileU by StudsPerTileV.
@@ -273,6 +276,7 @@ impl ClassKind {
         ClassKind::AngularVelocity,
         ClassKind::BodyAngularVelocity,
         ClassKind::Terrain,
+        ClassKind::Sound,
         ClassKind::Decal,
         ClassKind::Texture,
         ClassKind::ParticleEmitter,
@@ -483,6 +487,14 @@ impl ClassKind {
             Property::MaxTorque,
         ];
         const TERRAIN: &[Property] = &[Property::Name];
+        const SOUND: &[Property] = &[
+            Property::Name,
+            Property::SoundId,
+            Property::Volume,
+            Property::PlaybackSpeed,
+            Property::Looped,
+            Property::Playing,
+        ];
         const DECAL: &[Property] = &[
             Property::Name,
             Property::Texture,
@@ -803,6 +815,7 @@ impl ClassKind {
             ClassKind::AngularVelocity => ANGULAR_VELOCITY,
             ClassKind::BodyAngularVelocity => BODY_ANGULAR_VELOCITY,
             ClassKind::Terrain => TERRAIN,
+            ClassKind::Sound => SOUND,
             ClassKind::Decal => DECAL,
             ClassKind::Texture => TEXTURE,
             ClassKind::ParticleEmitter => PARTICLES,
@@ -983,6 +996,10 @@ impl ClassKind {
             }
             Property::AngularSpeed => PropertyValue::Number(1.0),
             Property::Texture => PropertyValue::String(String::new()),
+            Property::SoundId => PropertyValue::String(String::new()),
+            Property::Volume => PropertyValue::Number(0.5),
+            Property::PlaybackSpeed => PropertyValue::Number(1.0),
+            Property::Looped | Property::Playing => PropertyValue::Bool(false),
             Property::Face => PropertyValue::Enum(EnumValue::NormalId(NormalId::Front)),
             Property::DecalColor => PropertyValue::Color3(Color3::WHITE),
             Property::StudsPerTileU | Property::StudsPerTileV => PropertyValue::Number(2.0),
@@ -1099,6 +1116,7 @@ impl ClassKind {
             ClassKind::AngularVelocity => "angular_velocity",
             ClassKind::BodyAngularVelocity => "body_angular_velocity",
             ClassKind::Terrain => "terrain",
+            ClassKind::Sound => "sound",
             ClassKind::Decal => "decal",
             ClassKind::Texture => "texture",
             ClassKind::ParticleEmitter => "particle_emitter",

@@ -76,6 +76,7 @@ pub(crate) enum SignalKind {
     Seated(InstanceId),
     MouseEnter(InstanceId),
     MouseLeave(InstanceId),
+    SoundEnded(InstanceId),
 }
 
 impl SignalKind {
@@ -606,6 +607,7 @@ fn instance_event(class: ClassKind, id: InstanceId, key: &str) -> Option<SignalK
         FOCUSED if class == ClassKind::TextBox => SignalKind::TextBoxFocused(id),
         FOCUS_LOST if class == ClassKind::TextBox => SignalKind::TextBoxFocusLost(id),
         HIT if class == ClassKind::Explosion => SignalKind::ExplosionHit(id),
+        names::sound::ENDED if class == ClassKind::Sound => SignalKind::SoundEnded(id),
         MOVE_TO_FINISHED if class == ClassKind::Humanoid => SignalKind::MoveToFinished(id),
         TOUCH_ENDED if class.is_physical() => SignalKind::TouchEnded(id),
         CHILD_REMOVED => SignalKind::ChildRemoved(id),
@@ -860,6 +862,9 @@ impl UserData for LuaInstance {
                 return Ok(value);
             }
             if let Some(value) = crate::calls::index(lua, id, class, &key)? {
+                return Ok(value);
+            }
+            if let Some(value) = crate::sound::index(lua, class, &key)? {
                 return Ok(value);
             }
             if key == names::methods::LOCAL_PLAYER && class == ClassKind::Players {
@@ -1626,6 +1631,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     g.set(globals::WAIT, wait)?;
     g.set(globals::TIME, lua.create_function(|lua, ()| Ok(host(lua).clock.get()))?)?;
     crate::calls::install(lua)?;
+    crate::sound::install(lua)?;
     crate::effects::install(lua)?;
 
     g.set(

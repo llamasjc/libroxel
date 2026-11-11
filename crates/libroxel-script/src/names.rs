@@ -231,6 +231,20 @@ pub mod random {
     pub const TYPE_NAME: &str = "Random";
 }
 
+/// Sound methods and events.
+pub mod sound {
+    /// Starts it from the beginning.
+    pub const PLAY: &str = "Play";
+    /// Stops it and goes back to the beginning.
+    pub const STOP: &str = "Stop";
+    /// Stops it where it is.
+    pub const PAUSE: &str = "Pause";
+    /// Carries on from where it was paused.
+    pub const RESUME: &str = "Resume";
+    /// Fires when it plays to its end (not when looped or stopped).
+    pub const ENDED: &str = "Ended";
+}
+
 /// Terrain methods.
 pub mod terrain {
     /// Fills a box (a CFrame and a size) with a material.
@@ -794,6 +808,7 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::AngularVelocity => "AngularVelocity",
         ClassKind::BodyAngularVelocity => "BodyAngularVelocity",
         ClassKind::Terrain => "Terrain",
+        ClassKind::Sound => "Sound",
         ClassKind::Decal => "Decal",
         ClassKind::Texture => "Texture",
         ClassKind::BodyPosition => "BodyPosition",
@@ -933,6 +948,11 @@ pub fn property_name(property: Property) -> &'static str {
         Property::AngularVelocity => "AngularVelocity",
         Property::MaxTorque => "MaxTorque",
         Property::BodyMaxTorque => "MaxTorque",
+        Property::SoundId => "SoundId",
+        Property::Volume => "Volume",
+        Property::PlaybackSpeed => "PlaybackSpeed",
+        Property::Looped => "Looped",
+        Property::Playing => "Playing",
         Property::Texture => "Texture",
         Property::Face => "Face",
         Property::DecalColor => "Color3",

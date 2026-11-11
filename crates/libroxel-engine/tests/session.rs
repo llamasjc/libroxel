@@ -698,3 +698,93 @@ fn the_pointer_entering_and_leaving_gui_objects_fires_events() {
     let printed: Vec<_> = session.take_log().into_iter().map(|l| l.text).collect();
     assert_eq!(printed, ["enter Panel", "enter Play", "leave Play", "leave Panel"]);
 }
+
+#[test]
+fn sounds_play_stop_and_end() {
+    let mut tree = world();
+    let bell = part(&mut tree, ClassKind::Part, "Bell", Vec3::new(0.0, 5.0, 0.0), Vec3::new(2.0, 2.0, 2.0));
+    let ding = tree.create(ClassKind::Sound, "Ding").unwrap();
+    tree.set(ding, Property::SoundId, PropertyValue::String("libroxel://chime".into())).unwrap();
+    tree.set_parent(ding, Some(bell)).unwrap();
+    script(
+        &mut tree,
+        "Ring",
+        r#"
+        local ding = workspace.Bell.Ding
+        assert(ding.Volume == 0.5 and ding.PlaybackSpeed == 1 and not ding.Playing and not ding.Looped)
+        ding.Ended:Connect(function(id) print("ended " .. id) end)
+        ding:Play()
+        assert(ding.Playing)
+        ding:Pause()
+        assert(not ding.Playing)
+        ding:Resume()
+        print("playing", ding.Playing)
+        "#,
+    );
+    let mut session = start_on(tree, false).unwrap();
+    let shared = session.runtime().tree().clone();
+    session.step(DT, CharacterInput::default());
+    assert_eq!(session.take_sound_restarts(), vec![ding]);
+    assert!(session.take_sound_restarts().is_empty());
+    assert_eq!(shared.borrow().get_bool(ding, Property::Playing), Some(true));
+
+    // What the renderer hears: a sound in a part, quieter far away.
+    let heard = libroxel_engine::sounds::audible_sounds(
+        &shared.borrow(),
+        Some(bevy::math::Vec3::new(0.0, 5.0, 40.0)),
+    );
+    assert_eq!(heard.len(), 1);
+    assert!(heard[0].1.playing && heard[0].1.volume < 0.5 * 0.5 && heard[0].1.volume > 0.0);
+
+    session.sound_ended(ding);
+    assert_eq!(shared.borrow().get_bool(ding, Property::Playing), Some(false));
+    let log: Vec<String> = session.take_log().into_iter().map(|e| e.text).collect();
+    assert!(log.contains(&"playing true".to_string()), "{log:?}");
+    assert!(log.contains(&"ended libroxel://chime".to_string()), "{log:?}");
+}
+
+#[test]
+fn using_a_tool_swings_the_arm() {
+    let mut tree = world();
+    let pack = tree.service(ClassKind::StarterPack).unwrap();
+    let sword = tree.create(ClassKind::Tool, "Sword").unwrap();
+    tree.set_parent(sword, Some(pack)).unwrap();
+    let handle = tree.create(ClassKind::Part, "Handle").unwrap();
+    tree.set(handle, Property::Size, PropertyValue::Vec3(Vec3::new(0.4, 0.4, 3.0))).unwrap();
+    tree.set_parent(handle, Some(sword)).unwrap();
+    let mut session = start_on(tree, true).unwrap();
+    let shared = session.runtime().tree().clone();
+    for _ in 0..30 {
+        session.step(DT, CharacterInput::default());
+    }
+    session.toggle_tool(0);
+    session.step(DT, CharacterInput::default());
+    let character = session.character().unwrap();
+    let held = |t: &InstanceTree| {
+        let tool = t.find_first_child_of_class(character.model, ClassKind::Tool).unwrap().unwrap();
+        let handle = t.find_first_child(tool, "Handle").unwrap().unwrap();
+        let root = t.get_vec3(character.root, Property::Position).unwrap();
+        (
+            t.get_vec3(handle, Property::Position).unwrap().y - root.y,
+            t.get_vec3(handle, Property::Orientation).unwrap().x,
+        )
+    };
+    let (rest, tilt) = held(&shared.borrow());
+    assert!((rest - 1.6).abs() < 0.05 && tilt.abs() < 0.01, "{rest} {tilt}");
+
+    session.input_began(libroxel_script::UserInput::MouseButton1, false);
+    let mut highest = rest;
+    let mut lowest = rest;
+    for _ in 0..30 {
+        session.step(DT, CharacterInput::default());
+        let (y, _) = held(&shared.borrow());
+        highest = highest.max(y);
+        lowest = lowest.min(y);
+    }
+    session.input_ended(libroxel_script::UserInput::MouseButton1, false);
+    assert!(highest > rest + 1.0, "raised to {highest}");
+    assert!(lowest < rest - 1.0, "brought down to {lowest}");
+    // Back to holding it out.
+    let (y, tilt) = held(&shared.borrow());
+    assert!((y - rest).abs() < 0.05 && tilt.abs() < 0.01, "{y} {tilt}");
+}

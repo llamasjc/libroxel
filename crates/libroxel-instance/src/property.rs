@@ -197,6 +197,16 @@ pub enum Property {
     MaxTorque,
     /// On a body angular velocity: the most turning force about each axis.
     BodyMaxTorque,
+    /// On a sound: the file to play (or a built-in libroxel:// sound).
+    SoundId,
+    /// On a sound: how loud, 0 to 10 (1 is the file as it is).
+    Volume,
+    /// On a sound: how fast (and how high) it plays; 1 is normal.
+    PlaybackSpeed,
+    /// On a sound: whether it starts again when it ends.
+    Looped,
+    /// On a sound: whether it's playing now.
+    Playing,
     /// On a decal or texture: the picture's file name.
     Texture,
     /// On a decal or texture: which side of its part it's on.
@@ -401,7 +411,9 @@ impl Property {
             | Property::MaxTorque
             | Property::StudsPerTileU
             | Property::StudsPerTileV => "number",
-            Property::Texture => "string",
+            Property::Texture | Property::SoundId => "string",
+            Property::Volume | Property::PlaybackSpeed => "number",
+            Property::Looped | Property::Playing => "bool",
             Property::DecalColor => "Color3",
             Property::Face => EnumKind::NormalId.kind_name(),
             Property::AngularVelocity | Property::BodyMaxTorque => "Vec3",
@@ -601,6 +613,11 @@ impl Property {
         Property::AngularVelocity,
         Property::MaxTorque,
         Property::BodyMaxTorque,
+        Property::SoundId,
+        Property::Volume,
+        Property::PlaybackSpeed,
+        Property::Looped,
+        Property::Playing,
         Property::Texture,
         Property::Face,
         Property::DecalColor,
@@ -762,6 +779,11 @@ impl Property {
             Property::AngularVelocity => "angular_velocity",
             Property::MaxTorque => "max_torque",
             Property::BodyMaxTorque => "body_max_torque",
+            Property::SoundId => "sound_id",
+            Property::Volume => "volume",
+            Property::PlaybackSpeed => "playback_speed",
+            Property::Looped => "looped",
+            Property::Playing => "playing",
             Property::Texture => "texture",
             Property::Face => "face",
             Property::DecalColor => "decal_color",

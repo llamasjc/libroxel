@@ -211,6 +211,15 @@
   `Texture` as a square on its part's side (`decal_transform`), lifted a
   hundredth of a stud with a depth bias; textures tile with a repeating
   sampler and the material's `uv_transform`.
+- **Sounds** live in `libroxel-engine/src/sounds.rs`. Scripts only change
+  `Playing` (and `Play`/`Stop` queue a restart); each frame `play_sounds`
+  turns the sounds under Workspace and Players into Bevy audio players,
+  pausing, resuming and adjusting them, and tells the session when one has
+  finished so `Ended` fires. Built-in sounds are synthesised into WAV bytes
+  in code. Without Bevy's audio plugin the system does nothing.
+- **Tool swings:** the script runtime notes each `Activated`; the session
+  gives the holder's avatar a short `slash` timer, and `character::slash_angle`
+  turns it into extra right-arm tilt that the pose and the tool handle share.
 - **Effects** live in `libroxel-engine/src/effects.rs` and only exist on
   screen. Each particle is a small entity; each emitter has four materials
   from the start of a particle's life to its end, and particles switch

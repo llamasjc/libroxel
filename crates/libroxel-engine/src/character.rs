@@ -98,8 +98,33 @@ const HIP: Vec3 = Vec3::new(0.5, 0.0, 0.0);
 const TORSO_AT: Vec3 = Vec3::new(0.0, 0.9, 0.0);
 const HEAD_AT: Vec3 = Vec3::new(0.0, 2.55, 0.0);
 const EYE_AT: Vec3 = Vec3::new(0.35, 2.65, -0.71);
-/// Where a held tool's handle goes, relative to the root, with the arm raised.
-pub const HAND_OFFSET: Vec3 = Vec3::new(1.5, 1.6, -2.3);
+/// Where a held tool's handle goes, relative to the shoulder, with the arm
+/// hanging straight down (it is turned with the arm).
+const GRIP: Vec3 = Vec3::new(0.0, -2.3, 0.1);
+
+/// How long swinging a tool takes, in seconds.
+pub const SLASH_TIME: f32 = 0.35;
+
+/// How far a tool swing has the arm from pointing forward, in radians,
+/// `left` seconds before the swing ends: up, down hard, then back.
+pub fn slash_angle(left: f32) -> f32 {
+    let p = (1.0 - left / SLASH_TIME).clamp(0.0, 1.0);
+    let degrees = if p < 0.3 {
+        55.0 * p / 0.3
+    } else if p < 0.55 {
+        55.0 - 110.0 * (p - 0.3) / 0.25
+    } else {
+        -55.0 * (1.0 - (p - 0.55) / 0.45)
+    };
+    degrees.to_radians()
+}
+
+/// Where a held tool's handle goes, relative to the root, and how far it
+/// tips forward (radians about the character's sideways axis), with the arm
+/// pointing forward and turned `slash` further up.
+pub fn hand_offset(slash: f32) -> (Vec3, f32) {
+    (SHOULDER + Rotation::about_x(90f32.to_radians() + slash).apply(GRIP), slash)
+}
 
 /// How the body is held this frame.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -109,6 +134,9 @@ pub struct Pose {
     pub sitting: bool,
     /// The right arm points forward, holding a tool.
     pub holding: bool,
+    /// While holding a tool: how much further up the arm is, in radians
+    /// (see [`slash_angle`]).
+    pub slash: f32,
 }
 
 /// Adds a head and limbs to `model`, coloured `colors`. Returns the head
@@ -192,7 +220,7 @@ pub fn pose_rig(tree: &mut InstanceTree, root: InstanceId, head: InstanceId, lim
     let (left_leg, right_leg) = if pose.sitting { (legs, legs) } else { (legs, -legs) };
     let (left_arm, mut right_arm) = if pose.sitting { (arms, arms) } else { (-arms, arms) };
     if pose.holding {
-        right_arm = 90f32.to_radians();
+        right_arm = 90f32.to_radians() + pose.slash;
     }
     let flip = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
     let still = Vec3::ZERO;

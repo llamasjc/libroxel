@@ -144,6 +144,9 @@ pub(crate) fn activate(lua: &Lua, tool: InstanceId, down: bool) {
     if host(lua).tree.borrow().get_bool(tool, Property::Enabled) == Some(false) {
         return;
     }
+    if down {
+        host(lua).world.borrow_mut().swings.push(tool);
+    }
     let signal = if down { SignalKind::ToolActivated(tool) } else { SignalKind::ToolDeactivated(tool) };
     fire(lua, signal, || Ok(mlua::MultiValue::new()));
 }

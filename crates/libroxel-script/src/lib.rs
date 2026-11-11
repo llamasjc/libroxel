@@ -26,6 +26,7 @@ mod items;
 pub mod names;
 mod net;
 mod services;
+mod sound;
 mod terrain;
 mod types;
 mod world;
@@ -153,6 +154,22 @@ impl ScriptRuntime {
     /// Particle emitters scripts asked to `Emit`, with how many particles.
     pub fn take_emit_requests(&self) -> Vec<(InstanceId, u32)> {
         std::mem::take(&mut bindings::host(&self.lua).world.borrow_mut().emits)
+    }
+
+    /// Takes the tools used since the last call (each `Activated` that fired).
+    pub fn take_tool_swings(&self) -> Vec<InstanceId> {
+        std::mem::take(&mut bindings::host(&self.lua).world.borrow_mut().swings)
+    }
+
+    /// Takes the sounds that `Play` or `Stop` sent back to their beginning
+    /// since the last call.
+    pub fn take_sound_restarts(&self) -> Vec<InstanceId> {
+        sound::take_sound_restarts(&self.lua)
+    }
+
+    /// A sound played to its end: sets `Playing` to false and fires `Ended`.
+    pub fn sound_ended(&self, sound: InstanceId) -> Vec<ScriptError> {
+        sound::sound_ended(&self.lua, sound)
     }
 
     /// Fires `humanoid.Seated(seat ~= nil, seat)`.

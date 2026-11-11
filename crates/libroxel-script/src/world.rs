@@ -45,6 +45,10 @@ pub(crate) struct WorldState {
     sits: Vec<(InstanceId, InstanceId)>,
     /// Particle emitters asked to send out particles at once, and how many.
     pub(crate) emits: Vec<(InstanceId, u32)>,
+    /// Sounds that `Play` or `Stop` sent back to the beginning.
+    pub(crate) sound_restarts: Vec<InstanceId>,
+    /// Tools that were just used (their `Activated` fired).
+    pub(crate) swings: Vec<InstanceId>,
 }
 
 fn runtime_err(message: impl Into<String>) -> mlua::Error {

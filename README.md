@@ -247,6 +247,15 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `StudsPerTileV` studs. `Color3` tints it and `Transparency` fades it.
   Names are found like an `ImageLabel`'s. The sample has an arrow sign, a
   star on the vault door and a checkered finish.
+- **Sounds:** a `Sound` plays the WAV or OGG file named by `SoundId` (found
+  like a picture) while `Playing` is true, at `Volume` and `PlaybackSpeed`,
+  starting over when it ends if `Looped`. `Play` and `Stop` go back to the
+  start, `Pause` and `Resume` don't, and `Ended` fires when it finishes.
+  `libroxel://coin`, `jump`, `boom`, `click`, `splash`, `chime` and `hum`
+  are made by Libroxel. A sound inside a part gets quieter further from the
+  camera. In the sample, coins ding, the TNT booms and the finish chimes.
+- **Tool swings:** using a held tool (clicking with it)
+  swings the arm holding it up and down, with the tool in the hand.
 - **Scrolling frames:** `ScrollingFrame` has `CanvasSize` (`UDim2`),
   `CanvasPosition` (`Vector2`, changed by the wheel) and
   `ScrollBarThickness`; its children are placed on the canvas and clipped.
@@ -466,7 +475,7 @@ door.ClickDetector.MouseClick:Connect(function(player)
 end)
 ```
 
-**Not yet:** tool animations and sounds. Terrain is blocky, not smooth, and water doesn't flow. Physics is simple: anchored parts can be rotated and shaped
+**Not yet:** Terrain is blocky, not smooth, and water doesn't flow. Physics is simple: anchored parts can be rotated and shaped
 (ramps and balls work), but loose parts collide as the upright box around
 them and don't tip over by themselves (they spin only when something spins
 them). A hinge arm is carried by its hinge, so it blocks things but doesn't

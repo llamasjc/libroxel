@@ -474,6 +474,7 @@ impl InstanceTree {
                     | Property::MaxTorque
                     | Property::StudsPerTileU
                     | Property::StudsPerTileV
+                    | Property::PlaybackSpeed
                     | Property::Rate
                     | Property::EffectSize
                     | Property::Drag

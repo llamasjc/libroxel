@@ -134,6 +134,7 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::BodyAngularVelocity,
     ClassKind::Decal,
     ClassKind::Texture,
+    ClassKind::Sound,
     ClassKind::ParticleEmitter,
     ClassKind::Fire,
     ClassKind::Smoke,
@@ -206,6 +207,7 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::AngularVelocity | ClassKind::BodyAngularVelocity => "🔄",
         ClassKind::Terrain => "🗻",
         ClassKind::Decal => "🏷",
+        ClassKind::Sound => "🔊",
         ClassKind::Texture => "🏁",
         ClassKind::ParticleEmitter | ClassKind::Sparkles => "✨",
         ClassKind::Fire => "🔥",
@@ -1272,6 +1274,12 @@ fn properties(
              studs. Texture is a file name, found like an ImageLabel's; libroxel://smile, star, arrow, \
              checker and coin are built in. Color3 tints it.",
         ),
+        ClassKind::Sound => Some(
+            "Plays a WAV or OGG file while the game runs: tick Playing, or call Play, Stop, Pause and \
+             Resume from a script (Ended fires when it finishes). SoundId is found like a picture; \
+             libroxel://coin, jump, boom, click, splash, chime and hum are built in. Inside a part it \
+             gets quieter further from the camera.",
+        ),
         ClassKind::BodyAngularVelocity => Some(
             "The older spinner: put one inside a loose part to spin it at AngularVelocity, with up to              MaxTorque about each axis.",
         ),
@@ -2283,6 +2291,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     | ClassKind::BodyAngularVelocity
                     | ClassKind::Decal
                     | ClassKind::Texture
+                    | ClassKind::Sound
                     | ClassKind::ParticleEmitter
                     | ClassKind::Fire
                     | ClassKind::Smoke

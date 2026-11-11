@@ -64,7 +64,6 @@ pub struct Blast {
 /// How long an explosion's flash lasts, in seconds.
 pub const BLAST_TIME: f32 = 0.6;
 
-use crate::character::HAND_OFFSET;
 /// Radians of stride per stud walked.
 const STRIDE_PER_STUD: f32 = 0.55;
 
@@ -100,6 +99,8 @@ pub(crate) struct Avatar {
     pub(crate) seating: crate::seat::Seating,
     /// How far through a stride the character's walk is, in radians.
     pub(crate) stride: f32,
+    /// Seconds left of swinging their tool.
+    pub(crate) slash: f32,
     /// Whether they play on another computer, so their input comes over
     /// the network and their GUIs and local scripts run there.
     pub(crate) remote: bool,
@@ -126,6 +127,7 @@ impl Avatar {
             hold: None,
             seating: Default::default(),
             stride: 0.0,
+            slash: 0.0,
             remote,
             input: CharacterInput::default(),
             moved_to: None,
@@ -154,6 +156,8 @@ pub struct PlaySession {
     pub(crate) blasts: Vec<Blast>,
     /// Particle bursts scripts asked for, for the renderer to send out.
     pub(crate) emits: Vec<(InstanceId, u32)>,
+    /// Sounds that `Play` or `Stop` sent back to their beginning.
+    sound_restarts: Vec<InstanceId>,
     /// The GUI objects under the pointer, outermost first.
     hovered: Vec<InstanceId>,
     /// The workspace camera the view follows or obeys.
@@ -199,6 +203,7 @@ impl PlaySession {
             exploded: Default::default(),
             blasts: Vec::new(),
             emits: Vec::new(),
+            sound_restarts: Vec::new(),
             hovered: Vec::new(),
             camera: None,
             npcs: Default::default(),
@@ -517,6 +522,23 @@ impl PlaySession {
         }
     }
 
+    /// Starts the arm swing of whoever holds each tool that was just used.
+    fn start_swings(&mut self) {
+        let swings = self.runtime.take_tool_swings();
+        if swings.is_empty() {
+            return;
+        }
+        let tree = self.runtime.tree().borrow();
+        for tool in swings {
+            let holder = tree.parent(tool).ok().flatten();
+            for avatar in &mut self.avatars {
+                if avatar.character.is_some_and(|c| Some(c.model) == holder) && avatar.slash <= 0.0 {
+                    avatar.slash = crate::character::SLASH_TIME;
+                }
+            }
+        }
+    }
+
     /// Tells scripts where the mouse points (`None` when it's off the view).
     pub fn set_mouse(&mut self, mouse: Option<MouseRay>) {
         self.runtime.set_mouse(mouse);
@@ -548,7 +570,13 @@ impl PlaySession {
         }
         let tool = tree.find_first_child_of_class(character.model, ClassKind::Tool).ok().flatten();
         let swing = crate::character::swing_for(speed, avatar.stride);
-        character.pose(&mut tree, crate::character::Pose { swing, sitting, holding: tool.is_some() });
+        if tool.is_none() {
+            avatar.slash = 0.0;
+        }
+        let slash = if avatar.slash > 0.0 { crate::character::slash_angle(avatar.slash) } else { 0.0 };
+        avatar.slash = (avatar.slash - dt).max(0.0);
+        let pose = crate::character::Pose { swing, sitting, holding: tool.is_some(), slash };
+        character.pose(&mut tree, pose);
         let Some(tool) = tool else {
             return;
         };
@@ -560,7 +588,9 @@ impl PlaySession {
             return;
         };
         let orientation = orientation.unwrap_or_default();
-        let at = pos + Rotation::from_orientation(orientation).apply(HAND_OFFSET);
+        let (offset, tip) = crate::character::hand_offset(slash);
+        let at = pos + Rotation::from_orientation(orientation).apply(offset);
+        let orientation = Vec3::new(tip.to_degrees(), orientation.y, orientation.z);
         let _ = tree.set(handle, Property::Anchored, PropertyValue::Bool(true));
         let _ = tree.set(handle, Property::CanCollide, PropertyValue::Bool(false));
         let _ = tree.set(handle, Property::Position, PropertyValue::Vec3(at));
@@ -828,6 +858,17 @@ impl PlaySession {
         std::mem::take(&mut self.emits)
     }
 
+    /// Sounds that `Play` or `Stop` sent back to their beginning since the last call.
+    pub fn take_sound_restarts(&mut self) -> Vec<InstanceId> {
+        std::mem::take(&mut self.sound_restarts)
+    }
+
+    /// A sound played to its end: it stops and fires `Ended`.
+    pub fn sound_ended(&mut self, sound: InstanceId) {
+        let errors = self.runtime.sound_ended(sound);
+        self.collect(errors);
+    }
+
     /// Explosions being drawn right now.
     pub fn blasts(&self) -> &[Blast] {
         &self.blasts
@@ -953,6 +994,7 @@ impl PlaySession {
                 }
             }
             self.emits.extend(self.runtime.take_emit_requests());
+            self.sound_restarts.extend(self.runtime.take_sound_restarts());
             for (seat, humanoid) in self.runtime.take_sit_requests() {
                 for avatar in &mut self.avatars {
                     if let Some(c) = avatar.character.filter(|c| c.humanoid == humanoid && !c.is_dead(&tree))
@@ -1055,6 +1097,7 @@ impl PlaySession {
         }
         self.runtime.set_velocities(self.physics.velocities().clone());
         self.runtime.set_angular_velocities(self.physics.angular_velocities().clone());
+        self.start_swings();
         for (index, input) in inputs.into_iter().enumerate() {
             self.pose_character(index, input, dt);
             self.refresh_hotbar(index);

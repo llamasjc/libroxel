@@ -261,6 +261,10 @@ local Debris = game:GetService("Debris")
 local notify = game:GetService("ReplicatedStorage"):WaitForChild("Notify")
 local pad = script.Parent
 local celebrated = false
+local cheer = Instance.new("Sound")
+cheer.Name = "Cheer"
+cheer.SoundId = "libroxel://chime"
+cheer.Parent = pad
 
 pad.Touched:Connect(function(hit)
 	local humanoid = hit.Parent and hit.Parent:FindFirstChild("Humanoid")
@@ -268,6 +272,7 @@ pad.Touched:Connect(function(hit)
 		return
 	end
 	celebrated = true
+	pad.Cheer:Play()
 	print(hit.Parent.Name .. " finished the obby!")
 	notify:FireAllClients(hit.Parent.Name .. " finished the obby!")
 	-- Finishers move to the Winners team on the leaderboard.
@@ -385,6 +390,11 @@ local tnt = script.Parent
 local detector = tnt.ClickDetector
 local crates = workspace.Quarry.Crates
 local saved = crates:Clone()
+local bang = Instance.new("Sound")
+bang.Name = "Bang"
+bang.SoundId = "libroxel://boom"
+bang.Volume = 1
+bang.Parent = tnt
 
 detector.MouseClick:Connect(function(player)
 	if tnt.Transparency > 0 then
@@ -400,6 +410,7 @@ detector.MouseClick:Connect(function(player)
 		end
 	end)
 	boom.Parent = workspace
+	tnt.Bang:Play()
 	tnt.Transparency = 1
 	tnt.Sign.Enabled = false
 	task.wait(0.1)
@@ -765,6 +776,9 @@ local coins = {}
 for _, coin in CollectionService:GetTagged("Coin") do
 	do
 		table.insert(coins, coin)
+		local ding = Instance.new("Sound")
+		ding.SoundId = "libroxel://coin"
+		ding.Parent = coin
 		local taken = false
 		coin.Touched:Connect(function(hit)
 			local player = Players:GetPlayerFromCharacter(hit.Parent)
@@ -772,6 +786,7 @@ for _, coin in CollectionService:GetTagged("Coin") do
 				return
 			end
 			taken = true
+			ding:Play()
 			Stats.add(player, "Coins", coin:GetAttribute("Value") or 1)
 			coin.Transparency = 1
 			task.wait(8)

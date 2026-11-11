@@ -239,7 +239,7 @@ impl Plugin for RenderPlugin {
             .add_systems(Update, (sync_lights, draw_blasts, sync_ropes, sync_decals).after(EngineSet::Sync))
             .add_systems(Update, crate::terrain_view::sync_terrain.after(EngineSet::Sync))
             .add_systems(Update, update_lighting.after(EngineSet::Sync))
-            .add_plugins(crate::effects::EffectsPlugin);
+            .add_plugins((crate::effects::EffectsPlugin, crate::sounds::SoundPlugin));
     }
 }
 
