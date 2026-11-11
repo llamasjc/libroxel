@@ -99,6 +99,8 @@ struct Connection {
     id: u64,
     signal: SignalKind,
     script: String,
+    /// The script instance that connected it; destroying that script disconnects it.
+    owner: Option<InstanceId>,
     handler: RegistryKey,
     /// Disconnect after the first time it fires.
     once: bool,
@@ -112,6 +114,7 @@ struct Waiting {
     /// `None`: resume with the elapsed time (a wait). `Some`: resume with these (a delay).
     args: Option<Vec<Value>>,
     script: String,
+    owner: Option<InstanceId>,
 }
 
 /// Host state stored in the VM's app data.
@@ -122,6 +125,8 @@ pub(crate) struct Host {
     output: RefCell<Vec<OutputLine>>,
     errors: RefCell<Vec<ScriptError>>,
     current_script: RefCell<String>,
+    /// The script instance whose code is running, if it came from one.
+    current_owner: Cell<Option<InstanceId>>,
     pub(crate) clock: Cell<f64>,
     waiting: RefCell<Vec<Waiting>>,
     /// When the running thread must have yielded by. Checked by the VM's interrupt.
@@ -202,13 +207,21 @@ fn describe_tree_error(err: TreeError) -> String {
 /// Resumes `thread`; if it yields, it is parked until the time it asked for.
 /// Errors are recorded against `script`. Returns the error, if any, so the
 /// first resume of a script can report it directly.
-fn resume(lua: &Lua, thread: Thread, args: MultiValue, script: &str) -> Option<ScriptError> {
+fn resume(
+    lua: &Lua,
+    thread: Thread,
+    args: MultiValue,
+    script: &str,
+    owner: Option<InstanceId>,
+) -> Option<ScriptError> {
     let previous = host(lua).current_script.replace(script.to_owned());
+    let previous_owner = host(lua).current_owner.replace(owner);
     let deadline = host(lua).deadline.clone();
     let previous_deadline = deadline.replace(Some(Instant::now() + RUN_LIMIT));
     let result = thread.resume::<MultiValue>(args);
     deadline.set(previous_deadline);
     *host(lua).current_script.borrow_mut() = previous;
+    host(lua).current_owner.set(previous_owner);
     match result {
         Ok(yielded) => {
             if thread.is_resumable() {
@@ -225,6 +238,7 @@ fn resume(lua: &Lua, thread: Thread, args: MultiValue, script: &str) -> Option<S
                     since: now,
                     args: None,
                     script: script.to_owned(),
+                    owner,
                 });
             }
             None
@@ -233,9 +247,15 @@ fn resume(lua: &Lua, thread: Thread, args: MultiValue, script: &str) -> Option<S
     }
 }
 
-fn spawn(lua: &Lua, func: Function, args: MultiValue, script: &str) -> mlua::Result<()> {
+fn spawn(
+    lua: &Lua,
+    func: Function,
+    args: MultiValue,
+    script: &str,
+    owner: Option<InstanceId>,
+) -> mlua::Result<()> {
     let thread = lua.create_thread(func)?;
-    if let Some(err) = resume(lua, thread, args, script) {
+    if let Some(err) = resume(lua, thread, args, script, owner) {
         host(lua).errors.borrow_mut().push(err);
     }
     Ok(())
@@ -1202,6 +1222,7 @@ impl UserData for Signal {
                 id,
                 signal: this.0,
                 script,
+                owner: host.current_owner.get(),
                 handler,
                 once: false,
             });
@@ -1217,6 +1238,7 @@ impl UserData for Signal {
                 id,
                 signal: this.0,
                 script,
+                owner: host.current_owner.get(),
                 handler,
                 once: true,
             });
@@ -1260,13 +1282,16 @@ impl UserData for ConnectionHandle {
 
 pub(crate) fn fire(lua: &Lua, signal: SignalKind, args: impl Fn() -> mlua::Result<MultiValue>) {
     // Snapshot handlers first: a handler may connect or disconnect others.
-    let handlers: Vec<(String, mlua::Result<Function>)> = host(lua)
-        .connections
-        .borrow()
-        .iter()
-        .filter(|c| c.signal == signal)
-        .map(|c| (c.script.clone(), lua.registry_value::<Function>(&c.handler)))
-        .collect();
+    let handlers: Vec<(String, Option<InstanceId>, mlua::Result<Function>)> = {
+        let host = host(lua);
+        let tree = host.tree.borrow();
+        host.connections
+            .borrow()
+            .iter()
+            .filter(|c| c.signal == signal && owner_alive(&tree, c.owner))
+            .map(|c| (c.script.clone(), c.owner, lua.registry_value::<Function>(&c.handler)))
+            .collect()
+    };
     // One-shot connections are gone once they have fired.
     let spent: Vec<Connection> = {
         let host = host(lua);
@@ -1279,8 +1304,8 @@ pub(crate) fn fire(lua: &Lua, signal: SignalKind, args: impl Fn() -> mlua::Resul
     for conn in spent {
         let _ = lua.remove_registry_value(conn.handler);
     }
-    for (script, handler) in handlers {
-        let result = handler.and_then(|f| spawn(lua, f, args()?, &script));
+    for (script, owner, handler) in handlers {
+        let result = handler.and_then(|f| spawn(lua, f, args()?, &script, owner));
         if let Err(err) = result {
             host(lua).errors.borrow_mut().push(ScriptError { script, message: err.to_string() });
         }
@@ -1372,6 +1397,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         output: RefCell::new(Vec::new()),
         errors: RefCell::new(Vec::new()),
         current_script: RefCell::new(String::new()),
+        current_owner: Cell::new(None),
         clock: Cell::new(0.0),
         waiting: RefCell::new(Vec::new()),
         tweens: RefCell::new(Vec::new()),
@@ -1454,7 +1480,8 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         names::task::SPAWN,
         lua.create_function(|lua, (func, args): (Function, Variadic<Value>)| {
             let script = host(lua).current_script.borrow().clone();
-            spawn(lua, func, args.into_iter().collect(), &script)
+            let owner = host(lua).current_owner.get();
+            spawn(lua, func, args.into_iter().collect(), &script, owner)
         })?,
     )?;
     task_lib.set(
@@ -1470,6 +1497,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
                 since: now,
                 args: Some(args.into_iter().collect()),
                 script,
+                owner: host.current_owner.get(),
             });
             Ok(())
         })?,
@@ -1567,7 +1595,7 @@ pub(crate) fn run_chunk(
         .into_function()
         .map_err(fail)?;
     let thread = lua.create_thread(func).map_err(fail)?;
-    match resume(lua, thread, MultiValue::new(), script_name) {
+    match resume(lua, thread, MultiValue::new(), script_name, script_instance) {
         Some(err) => Err(err),
         None => Ok(()),
     }
@@ -1611,6 +1639,29 @@ pub(crate) fn run_scripts_under(lua: &Lua, ancestor: InstanceId, class: ClassKin
         .collect()
 }
 
+/// Whether the script that owns a thread or connection still exists.
+fn owner_alive(tree: &libroxel_instance::InstanceTree, owner: Option<InstanceId>) -> bool {
+    owner.is_none_or(|id| tree.exists(id) && !tree.is_destroyed(id).unwrap_or(true))
+}
+
+/// Disconnects everything connected by scripts that have been destroyed
+/// (like the old copy of a GUI after a respawn), and drops their waiting threads.
+fn stop_destroyed_scripts(lua: &Lua) {
+    let gone: Vec<Connection> = {
+        let host = host(lua);
+        let tree = host.tree.borrow();
+        let mut conns = host.connections.borrow_mut();
+        let (gone, kept) =
+            std::mem::take(&mut *conns).into_iter().partition(|c| !owner_alive(&tree, c.owner));
+        *conns = kept;
+        host.waiting.borrow_mut().retain(|w| owner_alive(&tree, w.owner));
+        gone
+    };
+    for conn in gone {
+        let _ = lua.remove_registry_value(conn.handler);
+    }
+}
+
 /// Advances the clock, resumes due threads, then fires the frame signal.
 pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
     let now = {
@@ -1627,12 +1678,17 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
         due
     };
     due.sort_by(|a, b| a.resume_at.total_cmp(&b.resume_at));
+    stop_destroyed_scripts(lua);
     for w in due {
+        // A destroyed script's threads stop where they are.
+        if !owner_alive(&host(lua).tree.borrow(), w.owner) {
+            continue;
+        }
         let args: MultiValue = match w.args {
             Some(args) => args.into_iter().collect(),
             None => std::iter::once(Value::Number(now - w.since)).collect(),
         };
-        if let Some(err) = resume(lua, w.thread, args, &w.script) {
+        if let Some(err) = resume(lua, w.thread, args, &w.script, w.owner) {
             host(lua).errors.borrow_mut().push(err);
         }
     }

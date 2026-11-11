@@ -543,7 +543,7 @@ fn sitting_and_driving_a_kart() {
     assert_eq!(tree.borrow().get_ref(bench, Property::Occupant), Some(character.humanoid));
     assert_eq!(tree.borrow().get_bool(character.humanoid, Property::Sit), Some(true));
     let sat = tree.borrow().get_vec3(character.root, Property::Position).unwrap();
-    assert!((sat.x - 15.0).abs() < 0.01 && (sat.y - 2.0).abs() < 0.01, "on the bench: {sat:?}");
+    assert!((sat.x - 15.0).abs() < 0.01 && (sat.y - 1.0).abs() < 0.01, "on the bench: {sat:?}");
 
     // Jumping gets up.
     session.step(DT, CharacterInput { jump: true, ..Default::default() });
@@ -595,4 +595,46 @@ fn sitting_and_driving_a_kart() {
         assert!(log.iter().any(|l| l == line), "missing {line:?} in {log:?}");
     }
     assert!(session.runtime().run("bad", "workspace.Bench.Occupant = nil").is_err());
+}
+
+#[test]
+fn a_respawned_guis_old_script_stops() {
+    let mut tree = world();
+    let starter = tree.service(ClassKind::StarterGui).unwrap();
+    let gui = tree.create(ClassKind::ScreenGui, "HUD").unwrap();
+    tree.set_parent(gui, Some(starter)).unwrap();
+    let frame = tree.create(ClassKind::Frame, "Help").unwrap();
+    tree.set_parent(frame, Some(gui)).unwrap();
+    let local = tree.create(ClassKind::LocalScript, "HudScript").unwrap();
+    tree.set_parent(local, Some(gui)).unwrap();
+    let source = r#"
+        local hud = script.Parent
+        print("hud started")
+        game:GetService("UserInputService").InputBegan:Connect(function()
+            hud.Help.Visible = not hud.Help.Visible
+        end)
+        while true do
+            task.wait(0.1)
+            local _ = hud.Help
+        end
+    "#;
+    tree.set(local, Property::Source, PropertyValue::String(source.into())).unwrap();
+    let players = tree.service(ClassKind::Players).unwrap();
+    tree.set(players, Property::RespawnTime, PropertyValue::Number(0.2)).unwrap();
+    let mut session = start_on(tree, true).unwrap();
+    for _ in 0..10 {
+        session.step(DT, CharacterInput::default());
+    }
+    session.runtime().run("kill", "workspace.Player1.Humanoid.Health = 0").unwrap();
+    for _ in 0..60 {
+        session.step(DT, CharacterInput::default());
+    }
+    session.input_began(libroxel_script::UserInput::Key(libroxel_instance::KeyCode::H), false);
+    for _ in 0..30 {
+        session.step(DT, CharacterInput::default());
+    }
+    let log = session.take_log();
+    let errors: Vec<_> = log.iter().filter(|l| l.level == LogLevel::Error).collect();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(log.iter().filter(|l| l.text == "hud started").count(), 2, "{log:?}");
 }

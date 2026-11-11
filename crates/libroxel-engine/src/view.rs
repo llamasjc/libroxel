@@ -222,7 +222,10 @@ impl Plugin for RenderPlugin {
         app.add_systems(Startup, setup_scene)
             .add_systems(Update, (camera_controls, play_input, forward_keys).chain().in_set(EngineSet::Input))
             .add_systems(PostUpdate, (attach_visuals, update_materials, update_meshes).chain())
-            .add_systems(PostUpdate, follow_camera.before(TransformSystems::Propagate))
+            // The camera moves in Update, right after the world, and its global
+            // transform is brought up to date at once, so GUIs and name tags
+            // drawn later this frame line up with where the camera is now.
+            .add_systems(Update, (follow_camera, refresh_camera_global).chain().after(EngineSet::Sync))
             .add_systems(Update, (sync_lights, draw_blasts).after(EngineSet::Sync))
             .add_systems(Update, update_lighting.after(EngineSet::Sync));
     }
@@ -741,6 +744,17 @@ fn play_input(
         throttle: axis([KeyCode::KeyW, KeyCode::ArrowUp], [KeyCode::KeyS, KeyCode::ArrowDown]),
         steer: axis([KeyCode::KeyD, KeyCode::ArrowRight], [KeyCode::KeyA, KeyCode::ArrowLeft]),
     };
+}
+
+/// Copies the camera's transform into its global transform straight away
+/// (cameras have no parent), instead of waiting for transform propagation.
+fn refresh_camera_global(mut rigs: Query<(&Transform, &mut GlobalTransform), With<CameraRig>>) {
+    for (transform, mut global) in &mut rigs {
+        let fresh = GlobalTransform::from(*transform);
+        if *global != fresh {
+            *global = fresh;
+        }
+    }
 }
 
 fn follow_camera(

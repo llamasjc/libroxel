@@ -976,8 +976,20 @@ pub fn sample_obby() -> InstanceTree {
     let zombie_body =
         block(&mut tree, zombie, "HumanoidRootPart", [-5.0, 2.1, 13.0], [2.0, 4.0, 1.5], [90, 140, 80]);
     set(&mut tree, zombie_body, Property::Anchored, PropertyValue::Bool(false));
-    let zombie_head = block(&mut tree, zombie, "Head", [-5.0, 4.7, 13.0], [1.2, 1.2, 1.2], [140, 190, 120]);
-    set(&mut tree, zombie_head, Property::CanCollide, PropertyValue::Bool(false));
+    set(&mut tree, zombie_body, Property::Transparency, PropertyValue::Number(1.0));
+    let zombie_colors = libroxel_engine::character::BodyColors {
+        skin: Color3::from_rgb8(130, 180, 105),
+        shirt: Color3::from_rgb8(120, 95, 70),
+        pants: Color3::from_rgb8(70, 66, 90),
+    };
+    let (zombie_head, zombie_limbs) = libroxel_engine::character::build_rig(&mut tree, zombie, zombie_colors);
+    libroxel_engine::character::pose_rig(
+        &mut tree,
+        zombie_body,
+        zombie_head,
+        &zombie_limbs,
+        Default::default(),
+    );
     add(&mut tree, zombie, ClassKind::Humanoid, "Humanoid");
     let zombie_tag = add(&mut tree, zombie_head, ClassKind::BillboardGui, "NameTag");
     set(&mut tree, zombie_tag, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 120.0, 0.0, 26.0)));
@@ -1362,7 +1374,7 @@ mod tests {
         let handle = tree.borrow().find_first_child(hotbar[0].0, "Handle").unwrap().unwrap();
         let hand = tree.borrow().get_vec3(handle, Property::Position).unwrap();
         let body = tree.borrow().get_vec3(character.root, Property::Position).unwrap();
-        assert!((hand - body).length() < 3.0, "the handle is in the character's hand: {hand:?} {body:?}");
+        assert!((hand - body).length() < 4.0, "the handle is in the character's hand: {hand:?} {body:?}");
 
         // Aim at the start platform and click.
         session.set_mouse(Some(MouseRay {

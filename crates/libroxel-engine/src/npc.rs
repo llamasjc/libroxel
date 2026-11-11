@@ -38,6 +38,8 @@ pub struct Pose {
 pub struct Npcs {
     walks: HashMap<InstanceId, Walk>,
     dead: HashSet<InstanceId>,
+    /// How far through a stride each walking model is, for swinging its limbs.
+    strides: HashMap<InstanceId, f32>,
 }
 
 /// The direction across the ground from `from` to `to`, and how far.
@@ -135,9 +137,28 @@ impl Npcs {
                     PropertyValue::Vec3(Vec3::new(o.x, new_yaw, o.z)),
                 );
             }
+            // A model with a body walks properly: limbs swing as it goes.
+            let rig = crate::character::find_rig(tree, pose.model);
+            if let Some((head, limbs)) = rig {
+                let moved = Vec3::new(new_pos.x - pose.pos.x, 0.0, new_pos.z - pose.pos.z).length();
+                let speed = if dt > 0.0 { moved / dt } else { 0.0 };
+                let stride = self.strides.entry(pose.humanoid).or_insert(0.0);
+                *stride = if speed > 0.5 { (*stride + moved * 0.55) % std::f32::consts::TAU } else { 0.0 };
+                let swing = crate::character::swing_for(speed, *stride);
+                crate::character::pose_rig(
+                    tree,
+                    pose.root,
+                    head,
+                    &limbs,
+                    crate::character::Pose { swing, ..Default::default() },
+                );
+            }
+            let posed: Vec<InstanceId> = rig
+                .map(|(head, limbs)| std::iter::once(head).chain(limbs.parts()).collect())
+                .unwrap_or_default();
             for part in tree.descendants_of_class(pose.model, ClassKind::Part) {
-                // Tools are placed by the tool code, not carried.
-                if part == pose.root || in_tool(tree, part, pose.model) {
+                // Tools are placed by the tool code, not carried; the body is posed above.
+                if part == pose.root || in_tool(tree, part, pose.model) || posed.contains(&part) {
                     continue;
                 }
                 let Some(p) = tree.get_vec3(part, Property::Position) else { continue };

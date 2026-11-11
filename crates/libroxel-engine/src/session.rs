@@ -80,6 +80,8 @@ pub struct PlaySession {
     death_seen: bool,
     /// The seat the player's character sits in.
     seating: crate::seat::Seating,
+    /// How far through a stride the character's walk is, in radians.
+    stride: f32,
 }
 
 /// An explosion's flash, for drawing.
@@ -94,8 +96,9 @@ pub struct Blast {
 /// How long an explosion's flash lasts, in seconds.
 pub const BLAST_TIME: f32 = 0.6;
 
-/// Where a character holds its tool's handle, relative to its body.
-const HAND_OFFSET: Vec3 = Vec3::new(1.3, -0.4, -1.0);
+use crate::character::HAND_OFFSET;
+/// Radians of stride per stud walked.
+const STRIDE_PER_STUD: f32 = 0.55;
 
 /// The number keys that pick hotbar slots 1 to 9.
 const SLOT_KEYS: [KeyCode; 9] = [
@@ -147,6 +150,7 @@ impl PlaySession {
             welds: Default::default(),
             death_seen: false,
             seating: Default::default(),
+            stride: 0.0,
         };
         // Scripts find the camera through the workspace, so it exists from the start.
         session.camera = {
@@ -218,7 +222,9 @@ impl PlaySession {
                 .get_ref(player, Property::Team)
                 .filter(|_| t.get_bool(player, Property::Neutral) == Some(false))
                 .and_then(|team| t.get_color(team, Property::TeamColor));
-            let character = Character::spawn_for_team(&mut t, &name, team);
+            let n = t.get_number(player, Property::UserId).unwrap_or(1.0).max(1.0) as usize - 1;
+            let colors = crate::character::BodyColors::for_player(n);
+            let character = Character::spawn_dressed(&mut t, &name, team, colors);
             let _ = t.set(player, Property::Character, PropertyValue::Ref(Some(character.model)));
             character
         };
@@ -373,7 +379,7 @@ impl PlaySession {
 
     /// Turns the character to face where it walks and puts its tool's
     /// handle in its hand.
-    fn pose_character(&mut self, input: CharacterInput) {
+    fn pose_character(&mut self, input: CharacterInput, dt: f32) {
         let Some(character) = self.character else { return };
         let mut tree = self.runtime.tree().borrow_mut();
         if character.is_dead(&tree) {
@@ -383,11 +389,21 @@ impl PlaySession {
         if dir.x != 0.0 || dir.z != 0.0 {
             let yaw = (-dir.x).atan2(-dir.z).to_degrees();
             let facing = PropertyValue::Vec3(Vec3::new(0.0, yaw, 0.0));
-            let _ = tree.set(character.root, Property::Orientation, facing.clone());
-            let _ = tree.set(character.head, Property::Orientation, facing);
+            let _ = tree.set(character.root, Property::Orientation, facing);
         }
-        let Some(tool) = tree.find_first_child_of_class(character.model, ClassKind::Tool).ok().flatten()
-        else {
+        // Arms and legs swing with the walking speed.
+        let v = self.physics.velocity(character.root);
+        let speed = (v.x * v.x + v.z * v.z).sqrt();
+        let sitting = self.seating.seat().is_some();
+        if speed > 0.5 && !sitting {
+            self.stride = (self.stride + speed * dt * STRIDE_PER_STUD) % std::f32::consts::TAU;
+        } else {
+            self.stride = 0.0;
+        }
+        let tool = tree.find_first_child_of_class(character.model, ClassKind::Tool).ok().flatten();
+        let swing = crate::character::swing_for(speed, self.stride);
+        character.pose(&mut tree, crate::character::Pose { swing, sitting, holding: tool.is_some() });
+        let Some(tool) = tool else {
             return;
         };
         let Some(handle) = tree.find_first_child(tool, names::TOOL_HANDLE).ok().flatten() else { return };
@@ -746,7 +762,7 @@ impl PlaySession {
             self.collect(errors);
         }
         self.runtime.set_velocities(self.physics.velocities().clone());
-        self.pose_character(input);
+        self.pose_character(input, dt);
         self.refresh_hotbar();
 
         for (a, b) in result.touches {

@@ -233,7 +233,10 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   A `leaderstats` folder of value objects inside a player shows up on the
   leaderboard.
 - **Characters:** each player's character is a `Model` named after them with a
-  `HumanoidRootPart` and a `Humanoid` (`Health`, `MaxHealth`, `WalkSpeed`,
+  blocky body (`Head`, `Torso`, `LeftArm`, `RightArm`, `LeftLeg`, `RightLeg`
+  and two eyes, in Libroxel's own colours with a different shirt per player)
+  whose arms and legs swing as it walks, sit in seats and raise a held tool.
+  Inside is an invisible `HumanoidRootPart` (the collision box) and a `Humanoid` (`Health`, `MaxHealth`, `WalkSpeed`,
   `JumpPower`, `TakeDamage(amount)` and the `Died` and `HealthChanged(health)`
   events). When health reaches 0 the character dies and respawns after
   `Players.RespawnTime` seconds (5 unless changed). Set

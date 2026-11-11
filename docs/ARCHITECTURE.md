@@ -139,6 +139,15 @@
   number); the renderer skips parts whose revision it has already shown.
   `cargo run -p libroxel-engine --example bench -- 2000` times frames in a
   world of 2000 parts.
+- **Bodies.** A character's `HumanoidRootPart` is the invisible collision
+  box; the visible body (`character::build_rig`) is anchored, non-colliding
+  parts that `pose_rig` places around the root every frame, swinging the
+  limbs with the walking speed. NPC models with the same parts are posed the
+  same way.
+- **Scripts stop when destroyed.** Every connection and waiting thread
+  remembers the script instance that made it. When that script is destroyed
+  (as a GUI's local scripts are when it is replaced on respawn), its
+  connections are dropped and its threads never resume.
 - **Seats and vehicles** live in `libroxel-engine/src/seat.rs`. A sitting
   character is carried like a welded part: physics holds it still and lets
   it pass through the seat's assembly, and after the step it is put on the

@@ -453,15 +453,16 @@ fn new_npc(tree: &mut InstanceTree, ground: libroxel_instance::Vec3) -> Option<I
     let root = tree.create(ClassKind::Part, names::character::ROOT_PART).ok()?;
     let _ = tree.set(root, Property::Size, PropertyValue::Vec3(V::new(2.0, 4.0, 1.5)));
     let _ = tree.set(root, Property::Position, PropertyValue::Vec3(ground + V::new(0.0, 2.1, 0.0)));
-    let _ = tree.set(root, Property::Color, PropertyValue::Color3(Color3::from_rgb8(120, 160, 90)));
+    let _ = tree.set(root, Property::Transparency, PropertyValue::Number(1.0));
     tree.set_parent(root, Some(model)).ok()?;
-    let head = tree.create(ClassKind::Part, "Head").ok()?;
-    let _ = tree.set(head, Property::Size, PropertyValue::Vec3(V::new(1.2, 1.2, 1.2)));
-    let _ = tree.set(head, Property::Position, PropertyValue::Vec3(ground + V::new(0.0, 4.7, 0.0)));
-    let _ = tree.set(head, Property::Color, PropertyValue::Color3(Color3::from_rgb8(245, 205, 48)));
-    let _ = tree.set(head, Property::Anchored, PropertyValue::Bool(true));
-    let _ = tree.set(head, Property::CanCollide, PropertyValue::Bool(false));
-    tree.set_parent(head, Some(model)).ok()?;
+    // A body like a player's, in its own colours.
+    let colors = libroxel_engine::character::BodyColors {
+        skin: Color3::from_rgb8(205, 170, 130),
+        shirt: Color3::from_rgb8(150, 150, 160),
+        pants: Color3::from_rgb8(90, 90, 100),
+    };
+    let (head, limbs) = libroxel_engine::character::build_rig(tree, model, colors);
+    libroxel_engine::character::pose_rig(tree, root, head, &limbs, Default::default());
     let humanoid = tree.create(ClassKind::Humanoid, names::character::HUMANOID).ok()?;
     tree.set_parent(humanoid, Some(model)).ok()?;
     let script = tree.create(ClassKind::Script, "Walk").ok()?;

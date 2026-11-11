@@ -13,7 +13,7 @@ use crate::weld;
 /// How long after getting up before a character can sit again, in seconds.
 pub const SIT_COOLDOWN: f32 = 1.0;
 /// How far the character's middle sits above the seat's top.
-const SIT_HEIGHT: f32 = BODY_SIZE.y / 2.0 - 1.0;
+const SIT_HEIGHT: f32 = BODY_SIZE.y / 2.0 - 2.0;
 
 /// Who sits where.
 #[derive(Debug, Default)]
@@ -171,8 +171,7 @@ impl Seating {
         let up = Rotation::from_orientation(o).apply(Vec3::new(0.0, size.y / 2.0 + SIT_HEIGHT, 0.0));
         let _ = tree.set(character.root, Property::Position, PropertyValue::Vec3(pos + up));
         let facing = PropertyValue::Vec3(Vec3::new(0.0, o.y, 0.0));
-        let _ = tree.set(character.root, Property::Orientation, facing.clone());
-        let _ = tree.set(character.head, Property::Orientation, facing);
+        let _ = tree.set(character.root, Property::Orientation, facing);
         character.follow(tree);
     }
 
