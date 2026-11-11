@@ -18,11 +18,18 @@ pub struct EngineState {
     pub session: Option<PlaySession>,
     /// Every log line since the app started (the UI shows these).
     pub log: Vec<LogEntry>,
+    /// Particle bursts waiting to be sent out by the renderer.
+    pub emits: Vec<(InstanceId, u32)>,
 }
 
 impl EngineState {
     pub fn new(tree: InstanceTree) -> Self {
-        Self { tree: std::rc::Rc::new(std::cell::RefCell::new(tree)), session: None, log: Vec::new() }
+        Self {
+            tree: std::rc::Rc::new(std::cell::RefCell::new(tree)),
+            session: None,
+            log: Vec::new(),
+            emits: Vec::new(),
+        }
     }
 
     pub fn is_playing(&self) -> bool {
@@ -132,6 +139,7 @@ fn step_session(mut engine: NonSendMut<EngineState>, time: Res<Time>, input: Res
     let dt = time.delta_secs().min(0.1);
     session.step(dt, input.0);
     engine.log.extend(session.take_log());
+    engine.emits.extend(session.take_emits());
 }
 
 fn to_bevy(v: libroxel_instance::Vec3) -> Vec3 {
@@ -227,21 +235,22 @@ impl Plugin for RenderPlugin {
             // drawn later this frame line up with where the camera is now.
             .add_systems(Update, (follow_camera, refresh_camera_global).chain().after(EngineSet::Sync))
             .add_systems(Update, (sync_lights, draw_blasts, sync_ropes).after(EngineSet::Sync))
-            .add_systems(Update, update_lighting.after(EngineSet::Sync));
+            .add_systems(Update, update_lighting.after(EngineSet::Sync))
+            .add_plugins(crate::effects::EffectsPlugin);
     }
 }
 
 /// One unit-sized mesh per part shape.
 #[derive(Resource)]
-struct PartMeshes {
-    block: Handle<Mesh>,
-    ball: Handle<Mesh>,
-    cylinder: Handle<Mesh>,
-    wedge: Handle<Mesh>,
+pub(crate) struct PartMeshes {
+    pub(crate) block: Handle<Mesh>,
+    pub(crate) ball: Handle<Mesh>,
+    pub(crate) cylinder: Handle<Mesh>,
+    pub(crate) wedge: Handle<Mesh>,
 }
 
 impl PartMeshes {
-    fn get(&self, shape: PartShape) -> Handle<Mesh> {
+    pub(crate) fn get(&self, shape: PartShape) -> Handle<Mesh> {
         match shape {
             PartShape::Block => self.block.clone(),
             PartShape::Ball => self.ball.clone(),

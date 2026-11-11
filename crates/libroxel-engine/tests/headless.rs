@@ -68,3 +68,37 @@ fn destroyed_parts_are_despawned() {
     }
     assert!(position_of(&mut app, "Doomed").is_none());
 }
+
+#[test]
+fn particle_emitters_send_out_particles_and_bursts() {
+    let mut app = app_with(
+        r#"
+        local p = Instance.new("Part", workspace)
+        p.Anchored = true
+        p.Position = Vector3.new(0, 5, 0)
+        local e = Instance.new("ParticleEmitter", p)
+        e.Name = "Steady"
+        e.Rate = 60
+        e.Lifetime = NumberRange.new(10)
+        local q = Instance.new("Part", workspace)
+        q.Anchored = true
+        local burst = Instance.new("ParticleEmitter", q)
+        burst.Enabled = false
+        task.wait(0.5)
+        burst:Emit(25)
+        "#,
+    );
+    app.add_plugins(bevy::asset::AssetPlugin::default());
+    app.init_asset::<Mesh>().init_asset::<StandardMaterial>();
+    app.add_plugins(libroxel_engine::effects::EffectsPlugin);
+    for _ in 0..20 {
+        app.update();
+    }
+    let steady = libroxel_engine::effects::particle_count(app.world());
+    assert!((15..=25).contains(&steady), "about 60 a second for a third of a second: {steady}");
+    for _ in 0..30 {
+        app.update();
+    }
+    let after = libroxel_engine::effects::particle_count(app.world());
+    assert!(after >= steady + 25 + 20, "the burst of 25 came out too: {steady} -> {after}");
+}

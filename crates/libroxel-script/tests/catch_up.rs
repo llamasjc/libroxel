@@ -260,3 +260,47 @@ fn lighting_has_fog_and_ambient() {
     );
     assert_eq!(printed(&rt), ["300 0 0.5, 0.5, 0.5", "-100"]);
 }
+
+#[test]
+fn particle_values_ranges_and_sequences() {
+    let rt = runtime_with_player();
+    run(
+        &rt,
+        r#"
+        local e = Instance.new("ParticleEmitter", workspace)
+        print(e.Lifetime, e.Lifetime.Min, e.Speed.Max, typeof(e.Lifetime))
+        e.Lifetime = NumberRange.new(1, 3)
+        e.Speed = 7
+        e.Color = ColorSequence.new(Color3.new(1, 0, 0), Color3.new(0, 0, 1))
+        e.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.25), NumberSequenceKeypoint.new(1, 1),
+        })
+        e.Size = NumberSequence.new(2)
+        print(e.Lifetime, e.Speed, e.Color, e.Transparency, e.Size)
+        local seq = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.new(0, 1, 0)), ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1)),
+        })
+        print(#seq.Keypoints, seq.Keypoints[2].Time, seq.Keypoints[1].Value)
+        print(pcall(NumberRange.new, 5, 1))
+        e:Emit(12)
+        e:Emit()
+        print(pcall(function() workspace:Emit(3) end))
+        local f = Instance.new("Fire", workspace)
+        print(f.Size, f.Heat, f.Color, f.SecondaryColor)
+        local h = Instance.new("Highlight", workspace)
+        h.Adornee = e
+        print(h.Adornee == e, h.FillTransparency, h.OutlineColor)
+        "#,
+    );
+    let out = printed(&rt);
+    assert_eq!(out[0], "5 10 5 5 NumberRange");
+    assert_eq!(out[1], "1 3 7 7 1, 0, 0 0.25 2");
+    assert_eq!(out[2], "2 1 0, 1, 0");
+    assert!(out[3].starts_with("false"), "{}", out[3]);
+    assert!(out[4].starts_with("false"), "{}", out[4]);
+    assert!(out[5].starts_with("5 9 0.9254"), "{}", out[5]);
+    assert_eq!(out[6], "true 0.5 1, 1, 1");
+    let emits = rt.take_emit_requests();
+    assert_eq!(emits.len(), 2);
+    assert_eq!((emits[0].1, emits[1].1), (12, 16));
+}

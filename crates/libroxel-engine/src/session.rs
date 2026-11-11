@@ -70,6 +70,8 @@ pub struct PlaySession {
     exploded: std::collections::HashSet<InstanceId>,
     /// Explosions still being drawn: where, how big, and how long ago.
     blasts: Vec<Blast>,
+    /// Particle bursts scripts asked for, for the renderer to send out.
+    emits: Vec<(InstanceId, u32)>,
     /// The workspace camera the view follows or obeys.
     camera: Option<InstanceId>,
     /// Walks that scripts started with `MoveTo`, and humanoids that died.
@@ -145,6 +147,7 @@ impl PlaySession {
             hotbar: Vec::new(),
             exploded: Default::default(),
             blasts: Vec::new(),
+            emits: Vec::new(),
             camera: None,
             npcs: Default::default(),
             welds: Default::default(),
@@ -598,6 +601,11 @@ impl PlaySession {
     }
 
     /// Explosions being drawn right now.
+    /// Particle bursts (`ParticleEmitter:Emit`) since the last call.
+    pub fn take_emits(&mut self) -> Vec<(InstanceId, u32)> {
+        std::mem::take(&mut self.emits)
+    }
+
     pub fn blasts(&self) -> &[Blast] {
         &self.blasts
     }
@@ -690,6 +698,7 @@ impl PlaySession {
                     let _ = tree.set(c.humanoid, Property::Jump, PropertyValue::Bool(false));
                 }
             }
+            self.emits.extend(self.runtime.take_emit_requests());
             for (seat, humanoid) in self.runtime.take_sit_requests() {
                 if let Some(c) = self.character.filter(|c| c.humanoid == humanoid && !c.is_dead(&tree)) {
                     if self.seating.seat().is_some_and(|s| s != seat) {

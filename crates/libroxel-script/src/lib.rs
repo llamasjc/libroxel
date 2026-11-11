@@ -21,6 +21,7 @@
 
 mod bindings;
 mod calls;
+mod effects;
 mod items;
 pub mod names;
 mod services;
@@ -144,6 +145,11 @@ impl ScriptRuntime {
     /// Takes the `Seat:Sit(humanoid)` calls since the last call, as (seat, humanoid).
     pub fn take_sit_requests(&self) -> Vec<(InstanceId, InstanceId)> {
         world::take_sit_requests(&self.lua)
+    }
+
+    /// Particle emitters scripts asked to `Emit`, with how many particles.
+    pub fn take_emit_requests(&self) -> Vec<(InstanceId, u32)> {
+        std::mem::take(&mut bindings::host(&self.lua).world.borrow_mut().emits)
     }
 
     /// Fires `humanoid.Seated(seat ~= nil, seat)`.

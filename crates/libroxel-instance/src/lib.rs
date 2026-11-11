@@ -159,6 +159,16 @@ pub enum ClassKind {
     BodyPosition,
     /// Inside a part: the older way to push it with a steady Force.
     BodyForce,
+    /// Inside a part: sends out little particles.
+    ParticleEmitter,
+    /// Inside a part: flames.
+    Fire,
+    /// Inside a part: rising smoke.
+    Smoke,
+    /// Inside a part: glittering sparkles.
+    Sparkles,
+    /// Draws an outline and a tint over its Adornee (or its parent).
+    Highlight,
 }
 
 impl ClassKind {
@@ -226,6 +236,11 @@ impl ClassKind {
         ClassKind::BodyVelocity,
         ClassKind::BodyPosition,
         ClassKind::BodyForce,
+        ClassKind::ParticleEmitter,
+        ClassKind::Fire,
+        ClassKind::Smoke,
+        ClassKind::Sparkles,
+        ClassKind::Highlight,
     ];
 
     /// The services every tree has under its root, in order. They can't be
@@ -390,6 +405,46 @@ impl ClassKind {
             Property::BodyDamping,
         ];
         const BODY_FORCE: &[Property] = &[Property::Name, Property::Force];
+        const PARTICLES: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::Rate,
+            Property::Lifetime,
+            Property::Speed,
+            Property::SpreadAngle,
+            Property::EffectSize,
+            Property::Color,
+            Property::Transparency,
+            Property::Acceleration,
+            Property::Drag,
+            Property::LightEmission,
+        ];
+        const FIRE: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::EffectSize,
+            Property::Heat,
+            Property::Color,
+            Property::SecondaryColor,
+        ];
+        const SMOKE: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::EffectSize,
+            Property::Color,
+            Property::Opacity,
+            Property::RiseVelocity,
+        ];
+        const SPARKLES: &[Property] = &[Property::Name, Property::Enabled, Property::SparkleColor];
+        const HIGHLIGHT: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::Adornee,
+            Property::FillColor,
+            Property::FillTransparency,
+            Property::OutlineColor,
+            Property::OutlineTransparency,
+        ];
         const STARTER_PLAYER: &[Property] =
             &[Property::Name, Property::CharacterWalkSpeed, Property::CharacterJumpPower];
         const PLAYERS: &[Property] = &[Property::Name, Property::RespawnTime, Property::CharacterAutoLoads];
@@ -573,6 +628,11 @@ impl ClassKind {
             ClassKind::BodyVelocity => BODY_VELOCITY,
             ClassKind::BodyPosition => BODY_POSITION,
             ClassKind::BodyForce => BODY_FORCE,
+            ClassKind::ParticleEmitter => PARTICLES,
+            ClassKind::Fire => FIRE,
+            ClassKind::Smoke => SMOKE,
+            ClassKind::Sparkles => SPARKLES,
+            ClassKind::Highlight => HIGHLIGHT,
             _ => COMMON,
         }
     }
@@ -697,11 +757,34 @@ impl ClassKind {
                 _ => 1_250.0,
             }),
             Property::BodyDamping => PropertyValue::Number(1_250.0),
+            Property::Rate => PropertyValue::Number(20.0),
+            Property::Lifetime => PropertyValue::Vec2(Vec2::new(5.0, 10.0)),
+            Property::Speed => PropertyValue::Vec2(Vec2::new(5.0, 5.0)),
+            Property::SpreadAngle => PropertyValue::Vec2(Vec2::ZERO),
+            Property::EffectSize => PropertyValue::Number(match self {
+                ClassKind::Fire => 5.0,
+                _ => 1.0,
+            }),
+            Property::Acceleration => PropertyValue::Vec3(Vec3::ZERO),
+            Property::Drag | Property::LightEmission => PropertyValue::Number(0.0),
+            Property::Heat => PropertyValue::Number(9.0),
+            Property::SecondaryColor => PropertyValue::Color3(Color3::from_rgb8(139, 80, 55)),
+            Property::Opacity => PropertyValue::Number(0.5),
+            Property::RiseVelocity => PropertyValue::Number(1.0),
+            Property::SparkleColor => PropertyValue::Color3(Color3::from_rgb8(144, 25, 255)),
+            Property::Adornee => PropertyValue::Ref(None),
+            Property::FillColor => PropertyValue::Color3(Color3::from_rgb8(255, 0, 0)),
+            Property::FillTransparency => PropertyValue::Number(0.5),
+            Property::OutlineColor => PropertyValue::Color3(Color3::WHITE),
+            Property::OutlineTransparency => PropertyValue::Number(0.0),
             Property::Size => PropertyValue::Vec3(Vec3::new(4.0, 1.0, 2.0)),
             Property::Color => PropertyValue::Color3(match self {
                 ClassKind::SpawnLocation => Color3::new(0.3, 0.55, 0.95),
                 ClassKind::PointLight | ClassKind::SpotLight => Color3::WHITE,
                 ClassKind::RopeConstraint => Color3::from_rgb8(120, 90, 60),
+                ClassKind::ParticleEmitter => Color3::WHITE,
+                ClassKind::Fire => Color3::from_rgb8(236, 139, 70),
+                ClassKind::Smoke => Color3::WHITE,
                 ClassKind::SpringConstraint => Color3::from_rgb8(200, 200, 210),
                 _ => Color3::MEDIUM_GREY,
             }),
@@ -780,6 +863,11 @@ impl ClassKind {
             ClassKind::BodyVelocity => "body_velocity",
             ClassKind::BodyPosition => "body_position",
             ClassKind::BodyForce => "body_force",
+            ClassKind::ParticleEmitter => "particle_emitter",
+            ClassKind::Fire => "fire",
+            ClassKind::Smoke => "smoke",
+            ClassKind::Sparkles => "sparkles",
+            ClassKind::Highlight => "highlight",
         }
     }
 

@@ -39,6 +39,8 @@ pub(crate) struct WorldState {
     loads: Vec<InstanceId>,
     /// Seats scripts asked to sit humanoids in, with `Seat:Sit`.
     sits: Vec<(InstanceId, InstanceId)>,
+    /// Particle emitters asked to send out particles at once, and how many.
+    pub(crate) emits: Vec<(InstanceId, u32)>,
 }
 
 fn runtime_err(message: impl Into<String>) -> mlua::Error {

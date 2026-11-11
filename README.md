@@ -56,7 +56,9 @@ The first build compiles Bevy and takes a while. After that it is quick.
   go-kart to drive (walk into its seat, WASD to drive, Space to hop out), and
   there's a bench to sit on at the start. Over the track's right wall is a
   physics playground: a tyre swing on a rope, a hovering pad held up by an
-  AlignPosition, and a weight bouncing on a spring.
+  AlignPosition, and a weight bouncing on a spring. The quarry has a smoking
+  campfire, the launch pad fizzes, the finish sparkles, and the zombie
+  glows red so you can spot it.
   Press **▶ Play** (or F5) to try it.
 - **Explorer** (left) shows the instance tree. Click to select, double-click
   a script to edit it, drag one item onto another to move it inside, and
@@ -225,6 +227,16 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   (`P`, `D`) and `BodyForce` work inside a part. Movers push whole welded
   assemblies. Hinges and motors aren't there yet, because loose parts don't
   rotate.
+- **Effects:** a `ParticleEmitter` inside a part (or an attachment) sends
+  out particles: `Rate`, `Lifetime` and `Speed` (`NumberRange.new(min,
+  max)`), `SpreadAngle`, `Size`, `Color`, `Transparency`, `Acceleration`,
+  `Drag`, `LightEmission`, and `Emit(count)` for a burst. `ColorSequence` and
+  `NumberSequence` (with keypoints) are accepted and use their first value.
+  `Fire` (`Size`, `Heat`, `Color`, `SecondaryColor`), `Smoke` (`Color`,
+  `Opacity`, `RiseVelocity`, `Size`) and `Sparkles` (`SparkleColor`) are
+  ready-made effects. A `Highlight` outlines and tints its `Adornee` (or
+  its parent) with `FillColor`, `FillTransparency`, `OutlineColor` and
+  `OutlineTransparency`. Effects are drawn while editing too.
 - **Remote and bindable functions:** like events, but the caller waits for
   an answer. A `RemoteFunction`'s `InvokeServer(...)` is answered by the
   function a game script sets as `OnServerInvoke(player, ...)`, and

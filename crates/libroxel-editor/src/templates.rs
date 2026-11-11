@@ -935,6 +935,20 @@ pub fn sample_obby() -> InstanceTree {
     let pad = block(&mut tree, start, "LaunchPad", [-5.0, 0.1, 5.0], [4.0, 0.2, 4.0], [80, 230, 90]);
     material(&mut tree, pad, Material::Neon);
     script(&mut tree, pad, "Launch", LAUNCH_SCRIPT);
+    // Glowing bits float up off the pad.
+    let fizz = add(&mut tree, pad, ClassKind::ParticleEmitter, "Fizz");
+    set(&mut tree, fizz, Property::Rate, PropertyValue::Number(15.0));
+    set(&mut tree, fizz, Property::Lifetime, PropertyValue::Vec2(libroxel_instance::Vec2::new(0.5, 1.0)));
+    set(&mut tree, fizz, Property::Speed, PropertyValue::Vec2(libroxel_instance::Vec2::new(6.0, 10.0)));
+    set(
+        &mut tree,
+        fizz,
+        Property::SpreadAngle,
+        PropertyValue::Vec2(libroxel_instance::Vec2::new(10.0, 10.0)),
+    );
+    set(&mut tree, fizz, Property::EffectSize, PropertyValue::Number(0.3));
+    set(&mut tree, fizz, Property::Color, PropertyValue::Color3(Color3::from_rgb8(140, 255, 150)));
+    set(&mut tree, fizz, Property::LightEmission, PropertyValue::Number(1.0));
 
     // Street lamps at the corners of the start, lit at night.
     for (i, (x, z)) in [(7.5, 7.5), (-7.5, 7.5), (7.5, -7.5), (-7.5, -7.5)].into_iter().enumerate() {
@@ -972,6 +986,17 @@ pub fn sample_obby() -> InstanceTree {
         set(&mut tree, c, Property::Anchored, PropertyValue::Bool(false));
     }
     let tnt = block(&mut tree, quarry, "TNT", [5.0, 1.0, 13.0], [2.0, 2.0, 2.0], [220, 40, 40]);
+    // A campfire in the corner, smoking.
+    let logs = block(&mut tree, quarry, "Campfire", [-5.0, 0.25, 17.5], [2.0, 0.5, 2.0], [110, 70, 40]);
+    material(&mut tree, logs, Material::Wood);
+    let flames = add(&mut tree, logs, ClassKind::Fire, "Fire");
+    set(&mut tree, flames, Property::EffectSize, PropertyValue::Number(3.0));
+    set(&mut tree, flames, Property::Heat, PropertyValue::Number(7.0));
+    let smoke = add(&mut tree, logs, ClassKind::Smoke, "Smoke");
+    set(&mut tree, smoke, Property::Color, PropertyValue::Color3(Color3::from_rgb8(90, 90, 95)));
+    set(&mut tree, smoke, Property::RiseVelocity, PropertyValue::Number(3.0));
+    set(&mut tree, smoke, Property::EffectSize, PropertyValue::Number(0.8));
+    set(&mut tree, smoke, Property::Opacity, PropertyValue::Number(0.35));
     add(&mut tree, tnt, ClassKind::ClickDetector, "ClickDetector");
     let tnt_sign = add(&mut tree, tnt, ClassKind::BillboardGui, "Sign");
     set(&mut tree, tnt_sign, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 90.0, 0.0, 26.0)));
@@ -1011,6 +1036,11 @@ pub fn sample_obby() -> InstanceTree {
         Default::default(),
     );
     add(&mut tree, zombie, ClassKind::Humanoid, "Humanoid");
+    // A red glow so the zombie stands out in the quarry.
+    let glow = add(&mut tree, zombie, ClassKind::Highlight, "Glow");
+    set(&mut tree, glow, Property::FillColor, PropertyValue::Color3(Color3::from_rgb8(255, 60, 40)));
+    set(&mut tree, glow, Property::FillTransparency, PropertyValue::Number(0.85));
+    set(&mut tree, glow, Property::OutlineColor, PropertyValue::Color3(Color3::from_rgb8(200, 20, 20)));
     let zombie_tag = add(&mut tree, zombie_head, ClassKind::BillboardGui, "NameTag");
     set(&mut tree, zombie_tag, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 120.0, 0.0, 26.0)));
     set(&mut tree, zombie_tag, Property::StudsOffset, PropertyValue::Vec3(Vec3::new(0.0, 1.6, 0.0)));
@@ -1214,6 +1244,8 @@ pub fn sample_obby() -> InstanceTree {
     let finish = block(&mut tree, ws, "Finish", [106.0, 14.0, 0.0], [8.0, 1.0, 8.0], [250, 200, 40]);
     material(&mut tree, finish, Material::Neon);
     script(&mut tree, finish, "Celebrate", FINISH_SCRIPT);
+    let glitter = add(&mut tree, finish, ClassKind::Sparkles, "Sparkles");
+    set(&mut tree, glitter, Property::SparkleColor, PropertyValue::Color3(Color3::from_rgb8(255, 230, 120)));
 
     tree.drain_changes();
     tree

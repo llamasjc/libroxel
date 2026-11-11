@@ -167,6 +167,14 @@
   solved implicitly, so stiff ones don't blow up; ropes cancel stretching
   and close a share of any overshoot each step. Visible ropes and springs
   are drawn by `view::sync_ropes` as thin rods.
+- **Effects** live in `libroxel-engine/src/effects.rs` and only exist on
+  screen. Each particle is a small entity; each emitter has four materials
+  from the start of a particle's life to its end, and particles switch
+  material as they age, so fades and colour changes cost nothing per
+  particle. `ParticleEmitter:Emit` requests go from the runtime to the
+  session to `EngineState::emits`. A highlight draws two copies of each part
+  it covers: a slightly bigger see-through fill, and a bigger one showing
+  only its inside faces, which looks like an outline.
 - **Events from the change journal.** `fire_changes` turns reparenting into
   `ChildAdded`/`ChildRemoved` on the parents and `DescendantAdded`/
   `DescendantRemoving` on every watched ancestor (for the moved instance

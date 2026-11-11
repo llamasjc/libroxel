@@ -177,6 +177,42 @@ pub enum Property {
     BodyPower,
     /// On a body position: how much it slows down to stop overshooting.
     BodyDamping,
+    /// On a particle emitter: particles sent out each second.
+    Rate,
+    /// On a particle emitter: how long each particle lasts, as a range of seconds.
+    Lifetime,
+    /// On a particle emitter: how fast particles leave, as a range of studs per second.
+    Speed,
+    /// On a particle emitter: how far (in degrees) particles stray from straight out.
+    SpreadAngle,
+    /// On a particle emitter, fire or smoke: how big it is, in studs.
+    EffectSize,
+    /// On a particle emitter: how particles speed up each second.
+    Acceleration,
+    /// On a particle emitter: how quickly particles slow down.
+    Drag,
+    /// On a particle emitter: how much particles glow (0 to 1).
+    LightEmission,
+    /// On fire: how fast the flames rise.
+    Heat,
+    /// On fire: the colour of the flames' tips.
+    SecondaryColor,
+    /// On smoke: how thick it is (0 to 1).
+    Opacity,
+    /// On smoke: how fast it rises.
+    RiseVelocity,
+    /// On sparkles: their colour.
+    SparkleColor,
+    /// On a highlight: what it highlights (its parent when empty).
+    Adornee,
+    /// On a highlight: the tint over the inside.
+    FillColor,
+    /// On a highlight: how see-through the tint is.
+    FillTransparency,
+    /// On a highlight: the outline's colour.
+    OutlineColor,
+    /// On a highlight: how see-through the outline is.
+    OutlineTransparency,
 }
 
 /// The value of a property.
@@ -232,6 +268,22 @@ impl Property {
                 "Vec3"
             }
             Property::RigidityEnabled => "bool",
+            Property::Lifetime | Property::Speed | Property::SpreadAngle => "Vec2",
+            Property::Acceleration => "Vec3",
+            Property::SecondaryColor
+            | Property::SparkleColor
+            | Property::FillColor
+            | Property::OutlineColor => "Color3",
+            Property::Adornee => "ref",
+            Property::Rate
+            | Property::EffectSize
+            | Property::Drag
+            | Property::LightEmission
+            | Property::Heat
+            | Property::Opacity
+            | Property::RiseVelocity
+            | Property::FillTransparency
+            | Property::OutlineTransparency => "number",
             Property::MaxForce
             | Property::MaxVelocity
             | Property::Responsiveness
@@ -422,6 +474,24 @@ impl Property {
         Property::BodyMaxForce,
         Property::BodyPower,
         Property::BodyDamping,
+        Property::Rate,
+        Property::Lifetime,
+        Property::Speed,
+        Property::SpreadAngle,
+        Property::EffectSize,
+        Property::Acceleration,
+        Property::Drag,
+        Property::LightEmission,
+        Property::Heat,
+        Property::SecondaryColor,
+        Property::Opacity,
+        Property::RiseVelocity,
+        Property::SparkleColor,
+        Property::Adornee,
+        Property::FillColor,
+        Property::FillTransparency,
+        Property::OutlineColor,
+        Property::OutlineTransparency,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -526,6 +596,24 @@ impl Property {
             Property::BodyMaxForce => "body_max_force",
             Property::BodyPower => "body_power",
             Property::BodyDamping => "body_damping",
+            Property::Rate => "rate",
+            Property::Lifetime => "lifetime",
+            Property::Speed => "speed",
+            Property::SpreadAngle => "spread_angle",
+            Property::EffectSize => "effect_size",
+            Property::Acceleration => "acceleration",
+            Property::Drag => "drag",
+            Property::LightEmission => "light_emission",
+            Property::Heat => "heat",
+            Property::SecondaryColor => "secondary_color",
+            Property::Opacity => "opacity",
+            Property::RiseVelocity => "rise_velocity",
+            Property::SparkleColor => "sparkle_color",
+            Property::Adornee => "adornee",
+            Property::FillColor => "fill_color",
+            Property::FillTransparency => "fill_transparency",
+            Property::OutlineColor => "outline_color",
+            Property::OutlineTransparency => "outline_transparency",
         }
     }
 

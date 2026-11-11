@@ -305,6 +305,22 @@ pub mod http {
     pub const URL_ENCODE: &str = "UrlEncode";
 }
 
+/// Particle effects and the value types they use.
+pub mod effects {
+    pub const NUMBER_RANGE: &str = "NumberRange";
+    pub const NUMBER_SEQUENCE: &str = "NumberSequence";
+    pub const COLOR_SEQUENCE: &str = "ColorSequence";
+    pub const NUMBER_KEYPOINT: &str = "NumberSequenceKeypoint";
+    pub const COLOR_KEYPOINT: &str = "ColorSequenceKeypoint";
+    pub const MIN: &str = "Min";
+    pub const MAX: &str = "Max";
+    pub const KEYPOINTS: &str = "Keypoints";
+    pub const TIME: &str = "Time";
+    pub const VALUE: &str = "Value";
+    /// On a particle emitter: sends out this many particles at once.
+    pub const EMIT: &str = "Emit";
+}
+
 /// Attachments: points on parts.
 pub mod attachment {
     /// Where the attachment is in the world (read-only).
@@ -718,6 +734,11 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::BodyVelocity => "BodyVelocity",
         ClassKind::BodyPosition => "BodyPosition",
         ClassKind::BodyForce => "BodyForce",
+        ClassKind::ParticleEmitter => "ParticleEmitter",
+        ClassKind::Fire => "Fire",
+        ClassKind::Smoke => "Smoke",
+        ClassKind::Sparkles => "Sparkles",
+        ClassKind::Highlight => "Highlight",
     }
 }
 
@@ -829,6 +850,24 @@ pub fn property_name(property: Property) -> &'static str {
         Property::BodyMaxForce => "MaxForce",
         Property::BodyPower => "P",
         Property::BodyDamping => "D",
+        Property::Rate => "Rate",
+        Property::Lifetime => "Lifetime",
+        Property::Speed => "Speed",
+        Property::SpreadAngle => "SpreadAngle",
+        Property::EffectSize => "Size",
+        Property::Acceleration => "Acceleration",
+        Property::Drag => "Drag",
+        Property::LightEmission => "LightEmission",
+        Property::Heat => "Heat",
+        Property::SecondaryColor => "SecondaryColor",
+        Property::Opacity => "Opacity",
+        Property::RiseVelocity => "RiseVelocity",
+        Property::SparkleColor => "SparkleColor",
+        Property::Adornee => "Adornee",
+        Property::FillColor => "FillColor",
+        Property::FillTransparency => "FillTransparency",
+        Property::OutlineColor => "OutlineColor",
+        Property::OutlineTransparency => "OutlineTransparency",
     }
 }
 

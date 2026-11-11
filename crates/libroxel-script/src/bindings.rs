@@ -516,6 +516,9 @@ pub(crate) fn property_to_lua(lua: &Lua, value: PropertyValue) -> mlua::Result<V
 
 /// Converts a script value into a value for `property`, if it fits.
 fn property_from_lua(property: Property, value: &Value) -> Option<PropertyValue> {
+    if let Some(special) = crate::effects::from_lua(property, value) {
+        return Some(special);
+    }
     if let Some(kind) = property.enum_kind() {
         return as_enum(kind, value).map(PropertyValue::Enum);
     }
@@ -816,6 +819,7 @@ impl UserData for LuaInstance {
         crate::items::add_instance_methods(methods);
         crate::world::add_instance_methods(methods);
         crate::calls::add_instance_methods(methods);
+        crate::effects::add_instance_methods(methods);
         methods.add_method(names::methods::TAKE_DAMAGE, |lua, this, amount: f64| {
             require_class(lua, this.0, ClassKind::Humanoid, names::methods::TAKE_DAMAGE)?;
             let host = host(lua);
@@ -869,7 +873,12 @@ impl UserData for LuaInstance {
             if let Some(property) = names::property_from_name(class, &key) {
                 let value = host(lua).tree.borrow().get(id, property);
                 match value {
-                    Ok(value) => return property_to_lua(lua, value),
+                    Ok(value) => {
+                        if let Some(special) = crate::effects::to_lua(lua, property, &value)? {
+                            return Ok(special);
+                        }
+                        return property_to_lua(lua, value);
+                    }
                     Err(TreeError::NoSuchProperty { .. }) => {} // fall through to children
                     Err(err) => return Err(tree_err(err)),
                 }
@@ -1614,6 +1623,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     g.set(globals::WAIT, wait)?;
     g.set(globals::TIME, lua.create_function(|lua, ()| Ok(host(lua).clock.get()))?)?;
     crate::calls::install(lua)?;
+    crate::effects::install(lua)?;
 
     g.set(
         globals::PRINT,

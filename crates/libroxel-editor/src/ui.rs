@@ -105,6 +105,11 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::BodyVelocity,
     ClassKind::BodyPosition,
     ClassKind::BodyForce,
+    ClassKind::ParticleEmitter,
+    ClassKind::Fire,
+    ClassKind::Smoke,
+    ClassKind::Sparkles,
+    ClassKind::Highlight,
 ];
 
 const SHAPES: &[(PartShape, &str)] = &[
@@ -168,6 +173,10 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::AlignPosition | ClassKind::BodyPosition => "🎯",
         ClassKind::RopeConstraint => "➰",
         ClassKind::SpringConstraint => "🌀",
+        ClassKind::ParticleEmitter | ClassKind::Sparkles => "✨",
+        ClassKind::Fire => "🔥",
+        ClassKind::Smoke => "☁",
+        ClassKind::Highlight => "🔆",
         ClassKind::Teams | ClassKind::Team => "🚩",
     }
 }
@@ -878,6 +887,7 @@ fn properties(
                         | Property::Attachment0
                         | Property::Attachment1
                         | Property::ObjectValue
+                        | Property::Adornee
                 ) {
                     if let Some(new) = part_picker(ui, tree, id, property, *target) {
                         edited = Some((property, PropertyValue::Ref(new)));
@@ -1046,6 +1056,18 @@ fn properties(
         ClassKind::BodyVelocity | ClassKind::BodyPosition | ClassKind::BodyForce => Some(
             "The older movers: put one inside a loose part. BodyVelocity pushes it at Velocity, \
              BodyPosition pulls it to Position, BodyForce pushes with Force. MaxForce limits each axis.",
+        ),
+        ClassKind::ParticleEmitter => Some(
+            "Put this inside a part: it sends particles out of the part's top. Rate is how many a second, \
+             Lifetime and Speed are ranges (min, max), SpreadAngle scatters them, Acceleration pulls them \
+             (try 0, -20, 0 to make them fall), and LightEmission makes them glow. Scripts can call `Emit(count)`.",
+        ),
+        ClassKind::Fire | ClassKind::Smoke | ClassKind::Sparkles => Some(
+            "Put this inside a part to set it alight, make it smoke or make it sparkle. Turn Enabled off to stop it.",
+        ),
+        ClassKind::Highlight => Some(
+            "Outlines and tints its Adornee (a part or model), or what it's inside if Adornee is empty. \
+             Good for showing what a player can pick up or who is selected.",
         ),
         ClassKind::WeldConstraint => Some(
             "Holds Part0 and Part1 together while playing: they move as one, keeping how they sit now. \
@@ -1894,6 +1916,11 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     | ClassKind::BodyVelocity
                     | ClassKind::BodyPosition
                     | ClassKind::BodyForce
+                    | ClassKind::ParticleEmitter
+                    | ClassKind::Fire
+                    | ClassKind::Smoke
+                    | ClassKind::Sparkles
+                    | ClassKind::Highlight
             );
             let parent = match editor.selection {
                 Some(sel)

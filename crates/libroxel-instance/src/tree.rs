@@ -395,9 +395,15 @@ impl InstanceTree {
                 return Err(wrong_type(&value));
             }
             let value = match (property, value) {
-                (Property::Transparency | Property::BackgroundTransparency, PropertyValue::Number(t)) => {
-                    PropertyValue::Number(t.clamp(0.0, 1.0))
-                }
+                (
+                    Property::Transparency
+                    | Property::BackgroundTransparency
+                    | Property::LightEmission
+                    | Property::Opacity
+                    | Property::FillTransparency
+                    | Property::OutlineTransparency,
+                    PropertyValue::Number(t),
+                ) => PropertyValue::Number(t.clamp(0.0, 1.0)),
                 (Property::NumberValue, PropertyValue::Number(n)) if class == ClassKind::IntValue => {
                     PropertyValue::Number(n.round())
                 }
@@ -427,7 +433,11 @@ impl InstanceTree {
                     | Property::Damping
                     | Property::Thickness
                     | Property::BodyPower
-                    | Property::BodyDamping,
+                    | Property::BodyDamping
+                    | Property::Rate
+                    | Property::EffectSize
+                    | Property::Drag
+                    | Property::Heat,
                     PropertyValue::Number(n),
                 ) => PropertyValue::Number(n.max(0.0)),
                 (Property::LayoutOrder, PropertyValue::Number(n)) => PropertyValue::Number(n.round()),
@@ -522,6 +532,14 @@ impl InstanceTree {
     pub fn get_vec3(&self, id: InstanceId, property: Property) -> Option<Vec3> {
         match self.get(id, property).ok()? {
             PropertyValue::Vec3(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Typed read of a 2D vector property.
+    pub fn get_vec2(&self, id: InstanceId, property: Property) -> Option<crate::Vec2> {
+        match self.get(id, property).ok()? {
+            PropertyValue::Vec2(v) => Some(v),
             _ => None,
         }
     }

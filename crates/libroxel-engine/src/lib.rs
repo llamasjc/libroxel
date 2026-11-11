@@ -6,6 +6,7 @@
 //! entities, draws them, and provides the play and fly cameras.
 
 pub mod character;
+pub mod effects;
 pub mod movers;
 pub mod npc;
 pub mod physics;
