@@ -122,6 +122,10 @@ struct Drive {
     speed: f32,
     /// How far the deepest wheel has sunk into the ground.
     sunk: f32,
+    /// For turning: each wheel's push about the base's middle, added up,
+    /// and how far out the wheels are (squared), added up.
+    twist: f32,
+    reach: f32,
 }
 
 /// Where a wheel meets the ground.
@@ -321,7 +325,16 @@ impl Hinges {
                         }
                         drive.wheels += 1.0;
                         drive.ahead = drive.ahead + ahead;
-                        drive.speed += -rim.dot(ahead);
+                        let roll = -rim.dot(ahead);
+                        drive.speed += roll;
+                        // Wheels rolling at different speeds turn the base,
+                        // like a tank's tracks.
+                        if let Some(middle) = tree.get_vec3(mover, Property::Position) {
+                            let out = Vec3::new(contact.point.x - middle.x, 0.0, contact.point.z - middle.z);
+                            let push = ahead * roll;
+                            drive.twist += out.z * push.x - out.x * push.z;
+                            drive.reach += out.dot(out);
+                        }
                         drive.sunk =
                             if drive.wheels > 1.0 { drive.sunk.max(contact.sunk) } else { contact.sunk };
                     }
@@ -350,6 +363,11 @@ impl Hinges {
             let side = side * (1.0 - grip);
             let flat = ahead * along + side;
             physics.set_velocity(mover, Vec3::new(flat.x, v.y, flat.z));
+            // Turning about the vertical, towards what the wheels ask for.
+            let spin = physics.angular_velocity(mover);
+            let turn = if drive.reach > 1e-3 { drive.twist / drive.reach } else { 0.0 };
+            let yaw = spin.y + (turn - spin.y) * grip;
+            physics.drive_spin(mover, Vec3::new(spin.x * (1.0 - grip), yaw, spin.z * (1.0 - grip)));
         }
         self.joints = joints;
         self.order = order;

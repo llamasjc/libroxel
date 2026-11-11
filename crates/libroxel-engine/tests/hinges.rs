@@ -293,3 +293,29 @@ fn motor_wheels_drive_a_car() {
     assert!((at.y - 2.0).abs() < 0.2, "the wheels hold it up: {at:?}");
     assert!(angle(&shared, hinges[0]).abs() > 0.0);
 }
+
+#[test]
+fn wheels_at_different_speeds_turn_a_car() {
+    let mut tree = world();
+    let chassis = part(&mut tree, "Chassis", Vec3::new(0.0, 2.0, 0.0), Vec3::new(6.0, 1.0, 4.0), false);
+    for (x, z) in [(3.5, 1.5), (-3.5, 1.5), (3.5, -1.5), (-3.5, -1.5)] {
+        let wheel = part(&mut tree, "Wheel", Vec3::new(x, 1.0, z), Vec3::new(1.0, 2.0, 2.0), false);
+        tree.set(
+            wheel,
+            Property::Shape,
+            PropertyValue::Enum(libroxel_instance::EnumValue::Shape(libroxel_instance::PartShape::Cylinder)),
+        )
+        .unwrap();
+        // Only the right-hand wheels drive; the left ones hold still.
+        let speed = if x > 0.0 { 5.0 } else { 0.0 };
+        let a0 = attach_facing(&mut tree, chassis, Vec3::new(x, -1.0, z), Vec3::ZERO);
+        let a1 = attach_facing(&mut tree, wheel, Vec3::ZERO, Vec3::ZERO);
+        hinge(&mut tree, a0, a1, &motor(speed));
+    }
+    let shared = run(tree, 1.5);
+    let turned = vec(&shared, chassis, Property::Orientation).y;
+    let at = vec(&shared, chassis, Property::Position);
+    // Pushed forward on the right only, it swings round to the left.
+    assert!(turned.abs() > 30.0, "it turned {turned} degrees, to {at:?}");
+    assert!((at.y - 2.0).abs() < 0.3, "still held up: {at:?}");
+}
