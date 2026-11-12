@@ -1145,6 +1145,12 @@ impl PlaySession {
             self.collect(errors);
         }
         for humanoid in died {
+            {
+                let mut t = tree.borrow_mut();
+                if let Some(model) = t.parent(humanoid).ok().flatten() {
+                    crate::character::fall_apart(&mut t, &mut self.physics, model);
+                }
+            }
             let errors = self.runtime.humanoid_died(humanoid);
             self.collect(errors);
         }
@@ -1262,6 +1268,7 @@ impl PlaySession {
             if !avatar.remote {
                 self.info("Your character died");
             }
+            crate::character::fall_apart(&mut tree.borrow_mut(), &mut self.physics, character.model);
             let errors = self.runtime.humanoid_died(character.humanoid);
             self.collect(errors);
             // Without auto-loading, a script brings the character back with LoadCharacter.

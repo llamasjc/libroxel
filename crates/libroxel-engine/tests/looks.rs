@@ -26,6 +26,18 @@ fn run_for(session: &mut PlaySession, frames: usize) -> Vec<String> {
     printed
 }
 
+/// A world with just a floor to stand on.
+fn floored() -> InstanceTree {
+    use libroxel_instance::{PropertyValue, Vec3};
+    let mut tree = InstanceTree::new();
+    let floor = tree.create(ClassKind::Part, "Floor").unwrap();
+    tree.set_parent(floor, Some(tree.workspace())).unwrap();
+    tree.set(floor, Property::Position, PropertyValue::Vec3(Vec3::new(0.0, -0.5, 0.0))).unwrap();
+    tree.set(floor, Property::Size, PropertyValue::Vec3(Vec3::new(100.0, 1.0, 100.0))).unwrap();
+    tree.set(floor, Property::Anchored, PropertyValue::Bool(true)).unwrap();
+    tree
+}
+
 #[test]
 fn scripts_recolour_a_character_through_its_body_colours() {
     let mut session = start_on(InstanceTree::new(), true).unwrap();
@@ -52,7 +64,7 @@ fn scripts_recolour_a_character_through_its_body_colours() {
 
 #[test]
 fn hats_sit_on_the_head_and_follow_it() {
-    let mut session = start_on(InstanceTree::new(), true).unwrap();
+    let mut session = start_on(floored(), true).unwrap();
     step(&mut session, 1);
     let look = Look { hat: Hat::TallHat, ..Look::for_player(0) };
     session.set_local_look(look);
@@ -158,4 +170,30 @@ fn animations_move_the_limbs_and_stop() {
         )
         .unwrap_err();
     assert!(err.message.contains("built-in ones are"), "{}", err.message);
+}
+
+#[test]
+fn a_character_that_dies_falls_apart_and_its_hat_stays_on_its_head() {
+    let mut session = start_on(floored(), true).unwrap();
+    session.set_local_look(Look { hat: Hat::Crown, ..Look::for_player(0) });
+    step(&mut session, 30);
+    session.runtime().run("kill", "workspace.Player1.Humanoid.Health = 0").unwrap();
+    // Not long enough to respawn.
+    step(&mut session, 120);
+    let tree = session.runtime().tree().borrow();
+    let model = tree.find_first_child(tree.workspace(), "Player1").unwrap().unwrap();
+    let find = |name: &str| tree.find_first_child(model, name).unwrap().unwrap();
+    let (head, torso, left_leg) = (find("Head"), find("Torso"), find("LeftLeg"));
+    for piece in [head, torso, left_leg] {
+        assert_eq!(tree.get_bool(piece, Property::Anchored), Some(false));
+        let y = tree.get_vec3(piece, Property::Position).unwrap().y;
+        // Lying on the floor, not standing up (the head was about 4.5 up).
+        assert!(y > 0.0 && y < 2.0, "{} at {y}", tree.name(piece).unwrap());
+    }
+    // The crown came down with the head and is still on it.
+    let crown = tree.find_first_child_of_class(model, ClassKind::Accessory).unwrap().unwrap();
+    let jewel = tree.descendants_of_class(crown, ClassKind::Part)[0];
+    let gap =
+        tree.get_vec3(jewel, Property::Position).unwrap() - tree.get_vec3(head, Property::Position).unwrap();
+    assert!(gap.length() < 2.5, "{gap:?}");
 }

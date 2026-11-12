@@ -747,6 +747,61 @@ pub fn drive(
     }
 }
 
+/// Breaks a dead character (or any rigged model) apart, the classic way:
+/// its head, body and limbs become loose pieces that tumble to the ground,
+/// with a little push outwards from the middle. Eyes and hats stay stuck
+/// to the head. The root part is held still and stops colliding, so the
+/// pieces fall freely. Returns the pieces.
+pub fn fall_apart(
+    tree: &mut InstanceTree,
+    physics: &mut crate::physics::Physics,
+    model: InstanceId,
+) -> Vec<InstanceId> {
+    let Some((head, limbs)) = find_rig(tree, model) else { return Vec::new() };
+    let root = tree.find_first_child(model, names::ROOT_PART).ok().flatten();
+    let carried = root.map(|r| physics.velocity(r)).unwrap_or_default();
+    if let Some(root) = root {
+        set(tree, root, Property::Anchored, PropertyValue::Bool(true));
+        set(tree, root, Property::CanCollide, PropertyValue::Bool(false));
+    }
+    let middle = tree.get_vec3(limbs.torso, Property::Position).unwrap_or_default();
+    // What stays on the head: the eyes, and every accessory's parts.
+    let mut stuck = vec![limbs.left_eye, limbs.right_eye];
+    for accessory in tree.children(model).map(|c| c.to_vec()).unwrap_or_default() {
+        if tree.class(accessory) == Ok(ClassKind::Accessory) {
+            stuck.extend(tree.descendants_of_class(accessory, ClassKind::Part));
+        }
+    }
+    let pieces = [head, limbs.torso, limbs.left_arm, limbs.right_arm, limbs.left_leg, limbs.right_leg];
+    // It topples backwards: the higher a piece, the harder it goes back,
+    // and everything spreads out a little and tumbles.
+    let facing = tree.get_vec3(limbs.torso, Property::Orientation).unwrap_or_default();
+    let turn = Rotation::from_orientation(facing);
+    let (back, side) = (turn.apply(Vec3::new(0.0, 0.0, 1.0)), turn.apply(Vec3::new(1.0, 0.0, 0.0)));
+    let floor = middle.y - 3.0;
+    for (i, &piece) in pieces.iter().enumerate() {
+        set(tree, piece, Property::Anchored, PropertyValue::Bool(false));
+        set(tree, piece, Property::CanCollide, PropertyValue::Bool(true));
+        let at = tree.get_vec3(piece, Property::Position).unwrap_or(middle);
+        let out = Vec3::new(at.x - middle.x, 0.0, at.z - middle.z).normalize_or_zero();
+        let height = (at.y - floor).max(0.0);
+        let push = out * 5.0 + back * (2.0 * height) + Vec3::new(0.0, 3.0, 0.0);
+        physics.set_velocity(piece, carried + push);
+        let wobble = if i % 2 == 0 { 1.0 } else { -1.0 };
+        physics.set_angular_velocity(piece, side * 4.0 + back * (2.0 * wobble));
+    }
+    for &part in &stuck {
+        set(tree, part, Property::Anchored, PropertyValue::Bool(false));
+        set(tree, part, Property::CanCollide, PropertyValue::Bool(false));
+        if let Ok(weld) = tree.create(ClassKind::WeldConstraint, "Stuck") {
+            set(tree, weld, Property::Part0, PropertyValue::Ref(Some(head)));
+            set(tree, weld, Property::Part1, PropertyValue::Ref(Some(part)));
+            let _ = tree.set_parent(weld, Some(head));
+        }
+    }
+    pieces.to_vec()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

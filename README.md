@@ -288,7 +288,9 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   parts rub on what they rest on (plastic slides down steep slopes). A
   model welded together is one solid body, so it falls over as one piece.
   Characters still move the snappy way players expect, and shove the
-  loose parts they walk into.
+  loose parts they walk into. When a character dies it falls apart: its
+  head, body and limbs topple to the ground as loose pieces, hat and eyes
+  still on its head, until it respawns.
 - **Hinge arms and wheels:** a turning hinge arm shoves loose things it
   runs into. Balls, and cylinders lying along their hinge, are wheels on a
   loose base: on the ground they hold it up, and a Motor drives it along
