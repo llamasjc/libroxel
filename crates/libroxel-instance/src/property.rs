@@ -213,6 +213,8 @@ pub enum Property {
     Face,
     /// On a decal or texture: a tint multiplied with the picture.
     DecalColor,
+    /// On an animation: which one (a built-in libroxel:// animation).
+    AnimationId,
     /// On body colours: the colour of each body part.
     HeadColor,
     TorsoColor,
@@ -418,7 +420,7 @@ impl Property {
             | Property::MaxTorque
             | Property::StudsPerTileU
             | Property::StudsPerTileV => "number",
-            Property::Texture | Property::SoundId => "string",
+            Property::Texture | Property::SoundId | Property::AnimationId => "string",
             Property::Volume | Property::PlaybackSpeed => "number",
             Property::Looped | Property::Playing => "bool",
             Property::DecalColor
@@ -634,6 +636,7 @@ impl Property {
         Property::Texture,
         Property::Face,
         Property::DecalColor,
+        Property::AnimationId,
         Property::HeadColor,
         Property::TorsoColor,
         Property::LeftArmColor,
@@ -806,6 +809,7 @@ impl Property {
             Property::Texture => "texture",
             Property::Face => "face",
             Property::DecalColor => "decal_color",
+            Property::AnimationId => "animation_id",
             Property::HeadColor => "head_color",
             Property::TorsoColor => "torso_color",
             Property::LeftArmColor => "left_arm_color",

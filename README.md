@@ -392,6 +392,15 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `Material`, or nil. `RaycastParams` has `FilterDescendantsInstances` and
   `FilterType` (`Enum.RaycastFilterType.Exclude` or `Include`). Every part
   shape is hit exactly.
+- **Animations:** every character's humanoid has an `Animator`.
+  `animator:LoadAnimation(animation)` (or `humanoid:LoadAnimation`) loads an
+  `Animation` whose `AnimationId` is a built-in one: `libroxel://wave`,
+  `cheer`, `point`, `nod`, `shake`, `jacks` or `dance`. The track it gives
+  has `Play(fadeTime?, weight?, speed?)`, `Stop(fadeTime?)`, `AdjustSpeed`,
+  `AdjustWeight`, `IsPlaying`, `Length`, `Looped`, `Speed`, `TimePosition`
+  and a `Stopped` event; `animator:GetPlayingAnimationTracks()` lists what's
+  playing. Animations that don't move the legs let them walk as usual. In
+  the sample obby, type `/e dance` (or another one) in the chat.
 - **Pathfinding:** `game:GetService("PathfindingService"):CreatePath({
   AgentRadius = 1, AgentHeight = 5, AgentCanJump = true })` makes a path;
   `path:ComputeAsync(from, to)` searches the ground for a way round walls,

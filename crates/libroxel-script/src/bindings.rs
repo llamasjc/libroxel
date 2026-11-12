@@ -77,6 +77,8 @@ pub(crate) enum SignalKind {
     MouseEnter(InstanceId),
     MouseLeave(InstanceId),
     SoundEnded(InstanceId),
+    /// An animation track (by its number) stopped.
+    AnimationStopped(u64),
 }
 
 impl SignalKind {
@@ -151,6 +153,8 @@ pub(crate) struct Host {
     pub(crate) world: RefCell<crate::world::WorldState>,
     /// Which side of a networked game this is, and what it is sending.
     pub(crate) net: RefCell<crate::net::NetState>,
+    /// Animations loaded on humanoids.
+    pub(crate) animations: RefCell<crate::animation::Tracks>,
 }
 
 /// The number for `name`, giving it one if it has none yet.
@@ -870,6 +874,9 @@ impl UserData for LuaInstance {
             if let Some(value) = crate::sound::index(lua, class, &key)? {
                 return Ok(value);
             }
+            if let Some(value) = crate::animation::index(lua, class, &key)? {
+                return Ok(value);
+            }
             if key == names::methods::LOCAL_PLAYER && class == ClassKind::Players {
                 return match crate::services::local_player(lua) {
                     Some(p) => Ok(Value::UserData(push_instance(lua, p)?)),
@@ -1491,6 +1498,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         next_tween: Cell::new(1),
         inputs_down: RefCell::new(Default::default()),
         data: RefCell::new(Default::default()),
+        animations: RefCell::new(Default::default()),
         data_changed: Cell::new(false),
         debris: RefCell::new(Vec::new()),
         interned: RefCell::new(Vec::new()),
@@ -1635,6 +1643,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     g.set(globals::TIME, lua.create_function(|lua, ()| Ok(host(lua).clock.get()))?)?;
     crate::calls::install(lua)?;
     crate::sound::install(lua)?;
+    crate::animation::install(lua)?;
     crate::effects::install(lua)?;
 
     g.set(
@@ -1784,6 +1793,7 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
         }
     }
     step_tweens(lua, dt);
+    crate::animation::step(lua);
     crate::services::step_debris(lua, now);
     fire(lua, SignalKind::Stepped, || Ok([Value::Number(now), Value::Number(dt)].into_iter().collect()));
     fire(lua, SignalKind::Heartbeat, || Ok(std::iter::once(Value::Number(dt)).collect()));

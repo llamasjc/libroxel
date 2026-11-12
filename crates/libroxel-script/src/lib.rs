@@ -19,6 +19,7 @@
 //! runtime.step(0.5);
 //! ```
 
+mod animation;
 mod bindings;
 mod calls;
 mod effects;
@@ -141,6 +142,12 @@ impl ScriptRuntime {
     /// since the last call; one failing script never stops the others.
     pub fn step(&self, dt: f64) -> Vec<ScriptError> {
         bindings::step(&self.lua, dt)
+    }
+
+    /// How the animations playing on `humanoid` turn its character's limbs
+    /// now, and whether they move its legs. `None` while none are playing.
+    pub fn animation_pose(&self, humanoid: InstanceId) -> Option<(libroxel_instance::animation::Pose, bool)> {
+        animation::pose_for(&self.lua, humanoid)
     }
 
     /// Fires `part`'s touch event with `other` as the argument.

@@ -14,6 +14,7 @@
 //! instance is destroyed its id never resolves again, even if the slot is
 //! reused.
 
+pub mod animation;
 mod enums;
 pub mod geometry;
 mod math;
@@ -212,6 +213,10 @@ pub enum ClassKind {
     /// head; each part's `HeadOffset` attribute says where, in studs from
     /// the middle of the head.
     Accessory,
+    /// Points at a character animation (AnimationId), for an animator to load.
+    Animation,
+    /// Inside a humanoid: plays animations on its character.
+    Animator,
 }
 
 impl ClassKind {
@@ -301,6 +306,8 @@ impl ClassKind {
         ClassKind::UIScale,
         ClassKind::BodyColors,
         ClassKind::Accessory,
+        ClassKind::Animation,
+        ClassKind::Animator,
     ];
 
     /// The services every tree has under its root, in order. They can't be
@@ -496,6 +503,7 @@ impl ClassKind {
             Property::MaxTorque,
         ];
         const TERRAIN: &[Property] = &[Property::Name];
+        const ANIMATION: &[Property] = &[Property::Name, Property::AnimationId];
         const BODY_COLORS: &[Property] = &[
             Property::Name,
             Property::HeadColor,
@@ -849,6 +857,7 @@ impl ClassKind {
             ClassKind::UIAspectRatioConstraint => ASPECT,
             ClassKind::UIScale => SCALE,
             ClassKind::BodyColors => BODY_COLORS,
+            ClassKind::Animation => ANIMATION,
             _ => COMMON,
         }
     }
@@ -1015,7 +1024,7 @@ impl ClassKind {
             }
             Property::AngularSpeed => PropertyValue::Number(1.0),
             Property::Texture => PropertyValue::String(String::new()),
-            Property::SoundId => PropertyValue::String(String::new()),
+            Property::SoundId | Property::AnimationId => PropertyValue::String(String::new()),
             Property::Volume => PropertyValue::Number(0.5),
             Property::PlaybackSpeed => PropertyValue::Number(1.0),
             Property::Looped | Property::Playing => PropertyValue::Bool(false),
@@ -1160,6 +1169,8 @@ impl ClassKind {
             ClassKind::UIScale => "ui_scale",
             ClassKind::BodyColors => "body_colors",
             ClassKind::Accessory => "accessory",
+            ClassKind::Animation => "animation",
+            ClassKind::Animator => "animator",
         }
     }
 

@@ -301,10 +301,16 @@ pad.Touched:Connect(function(hit)
 	pad.Cheer:Play()
 	print(hit.Parent.Name .. " finished the obby!")
 	notify:FireAllClients(hit.Parent.Name .. " finished the obby!")
-	-- Finishers move to the Winners team on the leaderboard.
+	-- Finishers move to the Winners team on the leaderboard, and cheer.
 	local player = game:GetService("Players"):GetPlayerFromCharacter(hit.Parent)
 	if player then
 		player.Team = game:GetService("Teams").Winners
+	end
+	local animator = humanoid:FindFirstChild("Animator")
+	if animator then
+		local cheer = Instance.new("Animation")
+		cheer.AnimationId = "libroxel://cheer"
+		animator:LoadAnimation(cheer):Play()
 	end
 
 	-- Rain down some confetti blocks.
@@ -505,14 +511,39 @@ end)
 
 const CHAT_SCRIPT: &str = r#"
 -- What players type in the chat box floats over their head for a few seconds.
+-- "/e wave" (or cheer, point, nod, shake, jacks, dance) plays an emote instead.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
+local EMOTES = { wave = true, cheer = true, point = true, nod = true, shake = true, jacks = true, dance = true }
+local dancing = {}
+
+local function emote(player, name)
+	local humanoid = player.Character and player.Character:FindFirstChild("Humanoid")
+	local animator = humanoid and humanoid:FindFirstChild("Animator")
+	if not animator then
+		return
+	end
+	-- A new emote stops the one before (dances go on until then).
+	if dancing[player.UserId] then
+		dancing[player.UserId]:Stop()
+	end
+	local animation = Instance.new("Animation")
+	animation.AnimationId = "libroxel://" .. name
+	local track = animator:LoadAnimation(animation)
+	track:Play()
+	dancing[player.UserId] = track
+end
 
 ReplicatedStorage:WaitForChild("Say").OnServerEvent:Connect(function(player, text)
 	if typeof(text) ~= "string" then
 		return
 	end
 	text = string.sub(text, 1, 80)
+	local name = string.match(text, "^/e%s+(%a+)")
+	if name and EMOTES[name] then
+		emote(player, name)
+		return
+	end
 	local head = player.Character and player.Character:FindFirstChild("Head")
 	if text == "" or not head then
 		return
@@ -975,7 +1006,7 @@ pub fn sample_obby() -> InstanceTree {
         "H: show or hide this help",
         "E: use a prompt (hold it)",
         "1: builder tool, click to build",
-        "/: chat    C: overhead camera",
+        "/: chat (/e dance)  C: camera",
         "Green pad: jump!    Click the TNT",
         "Look out for the quarry zombie",
         "Click the mine cart to push it",
@@ -1475,6 +1506,32 @@ mod tests {
         let errors: Vec<_> = log.iter().filter(|l| l.level == LogLevel::Error).collect();
         assert!(errors.is_empty(), "{errors:?}");
         assert!(log.iter().any(|l| l.text.contains("Welcome")));
+    }
+
+    #[test]
+    fn chat_emotes_play_animations() {
+        let mut session = start_on(sample_obby(), true).unwrap();
+        session.step(1.0 / 60.0, CharacterInput::default());
+        session.runtime().run("say", r#"game.ReplicatedStorage.Say:FireServer("/e dance")"#).unwrap();
+        for _ in 0..30 {
+            session.step(1.0 / 60.0, CharacterInput::default());
+        }
+        session
+            .runtime()
+            .run(
+                "check",
+                r#"
+                local tracks = workspace.Player1.Humanoid.Animator:GetPlayingAnimationTracks()
+                print("playing", #tracks, tracks[1] and tracks[1].Name)
+            "#,
+            )
+            .unwrap();
+        for _ in 0..2 {
+            session.step(1.0 / 60.0, CharacterInput::default());
+        }
+        let log = session.take_log();
+        assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
+        assert!(log.iter().any(|l| l.text == "playing 1 dance"), "{log:?}");
     }
 
     #[test]

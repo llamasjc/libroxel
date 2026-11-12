@@ -410,6 +410,28 @@ pub mod pathfinding {
     pub const LABEL: &str = "Label";
 }
 
+/// Members of animators and animation tracks.
+pub mod animation {
+    pub const LOAD_ANIMATION: &str = "LoadAnimation";
+    pub const GET_PLAYING_ANIMATION_TRACKS: &str = "GetPlayingAnimationTracks";
+    pub const TRACK_TYPE_NAME: &str = "AnimationTrack";
+    pub const PLAY: &str = "Play";
+    pub const STOP: &str = "Stop";
+    pub const ADJUST_SPEED: &str = "AdjustSpeed";
+    pub const ADJUST_WEIGHT: &str = "AdjustWeight";
+    pub const IS_PLAYING: &str = "IsPlaying";
+    pub const LENGTH: &str = "Length";
+    pub const LOOPED: &str = "Looped";
+    pub const SPEED: &str = "Speed";
+    pub const WEIGHT: &str = "WeightCurrent";
+    pub const TIME_POSITION: &str = "TimePosition";
+    pub const NAME: &str = "Name";
+    pub const ANIMATION: &str = "Animation";
+    pub const STOPPED: &str = "Stopped";
+    /// The animator every character's humanoid has.
+    pub const ANIMATOR: &str = "Animator";
+}
+
 /// Members of overlap parameters (the filter members are as on raycast ones).
 pub mod overlap {
     pub const PARAMS_TYPE_NAME: &str = "OverlapParams";
@@ -872,6 +894,8 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::UIGridLayout => "UIGridLayout",
         ClassKind::BodyColors => "BodyColors",
         ClassKind::Accessory => "Accessory",
+        ClassKind::Animation => "Animation",
+        ClassKind::Animator => "Animator",
         ClassKind::UIAspectRatioConstraint => "UIAspectRatioConstraint",
         ClassKind::UIScale => "UIScale",
     }
@@ -997,6 +1021,7 @@ pub fn property_name(property: Property) -> &'static str {
         Property::MaxTorque => "MaxTorque",
         Property::BodyMaxTorque => "MaxTorque",
         Property::SoundId => "SoundId",
+        Property::AnimationId => "AnimationId",
         Property::HeadColor => "HeadColor3",
         Property::TorsoColor => "TorsoColor3",
         Property::LeftArmColor => "LeftArmColor3",

@@ -623,7 +623,8 @@ impl PlaySession {
         }
         let slash = if avatar.slash > 0.0 { crate::character::slash_angle(avatar.slash) } else { 0.0 };
         avatar.slash = (avatar.slash - dt).max(0.0);
-        let pose = crate::character::Pose { swing, sitting, holding: tool.is_some(), slash };
+        let anim = self.runtime.animation_pose(character.humanoid);
+        let pose = crate::character::Pose { swing, sitting, holding: tool.is_some(), slash, anim };
         character.pose(&mut tree, pose);
         let Some(tool) = tool else {
             return;
@@ -1108,7 +1109,9 @@ impl PlaySession {
                     c.follow(&mut tree);
                 }
             }
-            let (ended, died) = self.npcs.after_physics(&mut tree, &poses, dt);
+            let runtime = &self.runtime;
+            let anim = |humanoid| runtime.animation_pose(humanoid);
+            let (ended, died) = self.npcs.after_physics(&mut tree, &poses, dt, &anim);
             self.welds.after_physics(&mut tree);
             self.hinges.after_physics(&mut tree);
             for avatar in &mut self.avatars {

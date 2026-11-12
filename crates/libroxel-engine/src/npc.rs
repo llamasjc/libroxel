@@ -42,6 +42,9 @@ pub struct Npcs {
     strides: HashMap<InstanceId, f32>,
 }
 
+/// How the animations playing on a humanoid turn its limbs, if any play.
+pub type AnimationPose<'a> = dyn Fn(InstanceId) -> Option<(libroxel_instance::animation::Pose, bool)> + 'a;
+
 /// The direction across the ground from `from` to `to`, and how far.
 fn toward(from: Vec3, to: Vec3) -> (Vec3, f32) {
     let flat = Vec3::new(to.x - from.x, 0.0, to.z - from.z);
@@ -120,6 +123,7 @@ impl Npcs {
         tree: &mut InstanceTree,
         poses: &[Pose],
         dt: f32,
+        anim: &AnimationPose<'_>,
     ) -> (Vec<(InstanceId, bool)>, Vec<InstanceId>) {
         for pose in poses {
             let Some(new_pos) = tree.get_vec3(pose.root, Property::Position) else { continue };
@@ -150,7 +154,7 @@ impl Npcs {
                     pose.root,
                     head,
                     &limbs,
-                    crate::character::Pose { swing, ..Default::default() },
+                    crate::character::Pose { swing, anim: anim(pose.humanoid), ..Default::default() },
                 );
             }
             let posed: Vec<InstanceId> = rig

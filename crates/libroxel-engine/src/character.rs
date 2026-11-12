@@ -257,8 +257,8 @@ fn add_body_colors(tree: &mut InstanceTree, model: InstanceId, colors: BodyColor
 }
 
 /// Colours the head and limbs from the model's body colours, and puts
-/// its accessories' parts on the head, turned `yaw` degrees.
-fn dress(tree: &mut InstanceTree, model: InstanceId, head: InstanceId, limbs: &Limbs, yaw: f32) {
+/// its accessories' parts on the head, turned the way it is.
+fn dress(tree: &mut InstanceTree, model: InstanceId, head: InstanceId, limbs: &Limbs) {
     let Ok(children) = tree.children(model).map(<[InstanceId]>::to_vec) else { return };
     for child in children {
         match tree.class(child) {
@@ -280,7 +280,9 @@ fn dress(tree: &mut InstanceTree, model: InstanceId, head: InstanceId, limbs: &L
             }
             Ok(ClassKind::Accessory) => {
                 let Some(at) = tree.get_vec3(head, Property::Position) else { continue };
-                let turn = Rotation::about_y(yaw.to_radians());
+                let turn = Rotation::from_orientation(
+                    tree.get_vec3(head, Property::Orientation).unwrap_or_default(),
+                );
                 let parts = tree.children(child).map(<[InstanceId]>::to_vec).unwrap_or_default();
                 for part in parts {
                     let attribute = |name| match tree.get_attribute(part, name) {
@@ -290,7 +292,7 @@ fn dress(tree: &mut InstanceTree, model: InstanceId, head: InstanceId, limbs: &L
                     let Some(offset) = attribute(names::HEAD_OFFSET) else { continue };
                     let tilt = attribute(names::HEAD_ORIENTATION).unwrap_or_default();
                     let pos = at + turn.apply(offset);
-                    let orientation = Vec3::new(tilt.x, yaw + tilt.y, tilt.z);
+                    let orientation = (turn * Rotation::from_orientation(tilt)).to_orientation();
                     if tree.get_vec3(part, Property::Position) != Some(pos) {
                         let _ = tree.set(part, Property::Position, PropertyValue::Vec3(pos));
                     }
@@ -313,6 +315,8 @@ const SHOULDER: Vec3 = Vec3::new(1.5, 1.7, 0.0);
 const HIP: Vec3 = Vec3::new(0.5, 0.0, 0.0);
 const TORSO_AT: Vec3 = Vec3::new(0.0, 0.9, 0.0);
 const HEAD_AT: Vec3 = Vec3::new(0.0, 2.55, 0.0);
+/// Where the head turns and nods about: the top of the torso.
+const NECK: Vec3 = Vec3::new(0.0, 1.8, 0.0);
 const EYE_AT: Vec3 = Vec3::new(0.35, 2.65, -0.71);
 /// Where a held tool's handle goes, relative to the shoulder, with the arm
 /// hanging straight down (it is turned with the arm).
@@ -358,6 +362,9 @@ pub struct Pose {
     /// While holding a tool: how much further up the arm is, in radians
     /// (see [`slash_angle`]).
     pub slash: f32,
+    /// What the animations playing on it say, and whether they move the
+    /// legs too (if not, the legs walk as usual).
+    pub anim: Option<(libroxel_instance::animation::Pose, bool)>,
 }
 
 /// Adds a head and limbs to `model`, coloured `colors`. Returns the head
@@ -425,10 +432,15 @@ pub fn pose_rig(tree: &mut InstanceTree, root: InstanceId, head: InstanceId, lim
     let Some(at) = tree.get_vec3(root, Property::Position) else { return };
     let yaw = tree.get_vec3(root, Property::Orientation).unwrap_or_default().y;
     let turn = Rotation::about_y(yaw.to_radians());
-    let mut place = |id: InstanceId, pivot: Vec3, hang: Vec3, tilt: f32| {
-        let offset = pivot + Rotation::about_x(tilt).apply(hang);
-        let pos = at + turn.apply(offset);
-        let orientation = Vec3::new(tilt.to_degrees(), yaw, 0.0);
+    let (anim, anim_legs) = match pose.anim {
+        Some((a, legs)) => (Some(a), legs),
+        None => (None, false),
+    };
+    let at = at + Vec3::new(0.0, anim.map_or(0.0, |a| a.bob), 0.0);
+    // Puts a part `hang` from `pivot`, turned by `r` about the pivot.
+    let mut place = |id: InstanceId, pivot: Vec3, hang: Vec3, r: Rotation| {
+        let pos = at + turn.apply(pivot + r.apply(hang));
+        let orientation = (turn * r).to_orientation();
         if tree.get_vec3(id, Property::Position) != Some(pos) {
             let _ = tree.set(id, Property::Position, PropertyValue::Vec3(pos));
         }
@@ -436,25 +448,43 @@ pub fn pose_rig(tree: &mut InstanceTree, root: InstanceId, head: InstanceId, lim
             let _ = tree.set(id, Property::Orientation, PropertyValue::Vec3(orientation));
         }
     };
+    // A limb swung forward by `tilt` and out to the side by `roll` (radians).
+    let limb = |tilt: f32, roll: f32| Rotation::about_x(tilt) * Rotation::about_z(roll);
     let (legs, arms) =
         if pose.sitting { (90f32.to_radians(), 20f32.to_radians()) } else { (pose.swing, pose.swing) };
     let (left_leg, right_leg) = if pose.sitting { (legs, legs) } else { (legs, -legs) };
-    let (left_arm, mut right_arm) = if pose.sitting { (arms, arms) } else { (-arms, arms) };
+    let (left_arm, right_arm) = if pose.sitting { (arms, arms) } else { (-arms, arms) };
+    let mut left_arm = limb(left_arm, 0.0);
+    let mut right_arm = limb(right_arm, 0.0);
+    let mut left_leg = limb(left_leg, 0.0);
+    let mut right_leg = limb(right_leg, 0.0);
+    let mut neck = Rotation::IDENTITY;
+    if let Some(a) = anim {
+        let deg = f32::to_radians;
+        // Out to the side is +Z turn for the right side, -Z for the left.
+        left_arm = limb(deg(a.left_arm.swing), -deg(a.left_arm.out));
+        right_arm = limb(deg(a.right_arm.swing), deg(a.right_arm.out));
+        if anim_legs && !pose.sitting {
+            left_leg = limb(deg(a.left_leg.swing), -deg(a.left_leg.out));
+            right_leg = limb(deg(a.right_leg.swing), deg(a.right_leg.out));
+        }
+        // A nod tips the head forward, which is back about X for a part above its pivot.
+        neck = Rotation::about_y(deg(a.turn)) * Rotation::about_x(-deg(a.nod));
+    }
     if pose.holding {
-        right_arm = 90f32.to_radians() + pose.slash;
+        right_arm = limb(90f32.to_radians() + pose.slash, 0.0);
     }
     let flip = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
-    let still = Vec3::ZERO;
-    place(head, HEAD_AT, still, 0.0);
-    place(limbs.left_eye, flip(EYE_AT), still, 0.0);
-    place(limbs.right_eye, EYE_AT, still, 0.0);
-    place(limbs.torso, TORSO_AT, still, 0.0);
+    place(head, NECK, HEAD_AT - NECK, neck);
+    place(limbs.left_eye, NECK, flip(EYE_AT) - NECK, neck);
+    place(limbs.right_eye, NECK, EYE_AT - NECK, neck);
+    place(limbs.torso, TORSO_AT, Vec3::ZERO, Rotation::IDENTITY);
     place(limbs.left_arm, flip(SHOULDER), Vec3::new(0.0, -0.85, 0.0), left_arm);
     place(limbs.right_arm, SHOULDER, Vec3::new(0.0, -0.85, 0.0), right_arm);
     place(limbs.left_leg, flip(HIP), Vec3::new(0.0, -1.0, 0.0), left_leg);
     place(limbs.right_leg, HIP, Vec3::new(0.0, -1.0, 0.0), right_leg);
     if let Ok(Some(model)) = tree.parent(root) {
-        dress(tree, model, head, limbs, yaw);
+        dress(tree, model, head, limbs);
     }
 }
 
@@ -552,6 +582,7 @@ impl Character {
             set(tree, id, Property::Volume, PropertyValue::Number(*volume));
         }
         let humanoid = make(tree, ClassKind::Humanoid, names::HUMANOID, model);
+        make(tree, ClassKind::Animator, libroxel_script::names::animation::ANIMATOR, humanoid);
         // New characters start with the starter player's walk speed and jump power.
         if let Some(starter) = tree.service(ClassKind::StarterPlayer) {
             for (from, to) in [
