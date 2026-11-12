@@ -142,6 +142,15 @@ impl Welds {
             }
         }
         self.carried = carried;
+        let welded = self
+            .carried
+            .iter()
+            .map(|(&part, c)| {
+                let q = crate::physics::orientation_quat(c.offset.rot.to_orientation());
+                (part, (c.root, (c.offset.pos, q)))
+            })
+            .collect();
+        physics.set_welds(welded);
         physics.set_assemblies(self.carried.keys().copied().collect::<HashSet<_>>(), together);
     }
 

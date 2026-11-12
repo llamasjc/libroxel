@@ -222,9 +222,9 @@ fn spinners_and_scripts_turn_loose_parts() {
     let yaw = vec(&t, top, Property::Orientation).y;
     assert!((yaw - 86.0).abs() < 6.0, "{yaw}");
     assert!((vec(&t, crate_, Property::Orientation).y + 86.0).abs() < 10.0);
-    // The ball rubs on the floor, so it slows down.
+    // The ball rubs on the floor, so it soon stops.
     let ball_yaw = vec(&t, ball, Property::Orientation).y;
-    assert!(ball_yaw > 20.0 && ball_yaw < 57.0, "{ball_yaw}");
+    assert!((0.0..20.0).contains(&ball_yaw), "{ball_yaw}");
     // Spinning parts stay on the floor.
     assert!((vec(&t, top, Property::Position).y - 1.0).abs() < 0.5);
 }

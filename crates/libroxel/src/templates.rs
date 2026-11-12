@@ -1804,20 +1804,18 @@ mod tests {
         frame(&mut session, 60);
 
         // Clicking the TNT throws the crates.
-        let (tnt, crate1) = {
+        let (tnt, crates) = {
             let t = tree.borrow();
             let quarry = t.find_first_child(t.workspace(), "Quarry").unwrap().unwrap();
             let crates = t.find_first_child(quarry, "Crates").unwrap().unwrap();
-            (
-                t.find_first_child(quarry, "TNT").unwrap().unwrap(),
-                t.find_first_child(crates, "Crate1").unwrap().unwrap(),
-            )
+            (t.find_first_child(quarry, "TNT").unwrap().unwrap(), t.children(crates).unwrap().to_vec())
         };
-        let before = tree.borrow().get_vec3(crate1, Property::Position).unwrap();
+        let at = |c: InstanceId| tree.borrow().get_vec3(c, Property::Position).unwrap();
+        let before: Vec<Vec3> = crates.iter().map(|c| at(*c)).collect();
         assert!(session.click_part(tnt));
         frame(&mut session, 30);
-        let after = tree.borrow().get_vec3(crate1, Property::Position).unwrap();
-        assert!((after - before).length() > 2.0, "the crate flew: {before:?} -> {after:?}");
+        let flew = crates.iter().zip(&before).map(|(c, b)| (at(*c) - *b).length()).fold(0.0, f32::max);
+        assert!(flew > 2.0, "the crates flew: {flew}");
 
         // Chat floats a bubble over the head.
         session.runtime().run("say", "game.ReplicatedStorage.Say:FireServer('hello there')").unwrap();

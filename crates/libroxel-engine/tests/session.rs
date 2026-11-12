@@ -406,7 +406,8 @@ fn welds_events_gravity_and_loading_characters() {
     }
     let base_pos = tree.borrow().get_vec3(base, Property::Position).unwrap();
     let seat_pos = tree.borrow().get_vec3(seat, Property::Position).unwrap();
-    assert!(base_pos.x > 20.5, "pushed: {base_pos:?}");
+    // It slides a little way before rubbing on the floor stops it.
+    assert!(base_pos.x > 20.3, "pushed: {base_pos:?}");
     assert!((seat_pos.x - base_pos.x).abs() < 0.01, "together: {seat_pos:?}");
 
     // Low gravity: a jump goes much higher.
@@ -574,7 +575,11 @@ fn sitting_and_driving_a_kart() {
     assert_eq!(tree.borrow().get_number(seat, Property::Throttle), Some(1.0));
     let rider = tree.borrow().get_vec3(character.root, Property::Position).unwrap();
     let seat_pos = tree.borrow().get_vec3(seat, Property::Position).unwrap();
-    assert!((rider.x - seat_pos.x).abs() < 0.01 && (rider.z - seat_pos.z).abs() < 0.01, "rode along");
+    assert!(
+        (rider.x - seat_pos.x).abs() < 0.01 && (rider.z - seat_pos.z).abs() < 0.01,
+        "rode along: {rider:?} {seat_pos:?} {:?}",
+        tree.borrow().get_vec3(seat, Property::Orientation)
+    );
 
     // Steering right turns it clockwise (its yaw goes down).
     let turn = CharacterInput { throttle: 1.0, steer: 1.0, ..Default::default() };

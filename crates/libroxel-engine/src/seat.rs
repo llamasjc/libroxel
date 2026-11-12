@@ -193,6 +193,7 @@ pub fn drive_vehicles(tree: &mut InstanceTree, physics: &mut Physics, dt: f32) {
         if tree.get_bool(root, Property::Anchored) != Some(false) || !physics.is_grounded(root) {
             continue;
         }
+        physics.glide(root);
         let max_speed = tree.get_number(seat, Property::MaxSpeed).unwrap_or(25.0) as f32;
         let torque = tree.get_number(seat, Property::Torque).unwrap_or(10.0) as f32;
         let turn_speed = tree.get_number(seat, Property::TurnSpeed).unwrap_or(1.0) as f32;
@@ -202,12 +203,12 @@ pub fn drive_vehicles(tree: &mut InstanceTree, physics: &mut Physics, dt: f32) {
         let side = Vec3::new(v.x, 0.0, v.z) - f * along;
         let target = throttle * max_speed;
         let step = torque * 5.0 * dt;
+        // It glides over the ground (see `Physics::glide`): the seat does
+        // the speeding up, and slowing down when the throttle is let go.
         let along = if throttle != 0.0 {
-            // Ground friction takes a little each step; make up for it.
-            let wanted = along + (target - along).clamp(-step, step);
-            wanted * (1.0 + 8.0 * dt)
+            along + (target - along).clamp(-step, step)
         } else {
-            along
+            along * (1.0 - 2.0 * dt).max(0.0)
         };
         let grip = (1.0 - 10.0 * dt).max(0.0);
         let new_v = f * along + side * grip + Vec3::new(0.0, v.y, 0.0);

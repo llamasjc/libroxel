@@ -12,6 +12,7 @@ authors.workspace = true
 libroxel-instance.workspace = true
 libroxel-script.workspace = true
 bevy.workspace = true
+rapier3d.workspace = true
 
 [lints]
 workspace = true

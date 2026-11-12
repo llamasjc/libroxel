@@ -175,7 +175,7 @@ The first build compiles Bevy and takes a while. After that it is quick.
 | [`libroxel-hub`](crates/libroxel-hub) | The Hub: a small self-hostable server (axum and SQLite) that lists live games, and the client and background announcer the app uses. |
 | [`libroxel-net`](crates/libroxel-net) | Player identity (a keypair) and join codes. Carries a hosted game between computers over iroh, peer to peer with a relay fallback. |
 | [`libroxel-script`](crates/libroxel-script) | The sandboxed Luau runtime (via `mlua`) with a thread scheduler. Every name scripts can see lives in [`names.rs`](crates/libroxel-script/src/names.rs). |
-| [`libroxel-engine`](crates/libroxel-engine) | Play sessions: box physics, the player character, touch events, respawning, and the Bevy integration (rendering and cameras). |
+| [`libroxel-engine`](crates/libroxel-engine) | Play sessions: physics, the player character, touch events, respawning, and the Bevy integration (rendering and cameras). |
 | [`libroxel`](crates/libroxel) | The Libroxel app: the home screen (Play, Online, Create, Host), the editor, plus `libroxel server` and `libroxel hub`. |
 | [`libroxel-proto`](crates/libroxel-proto) | A minimal player that runs a saved game or a single script. |
 
@@ -281,9 +281,14 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   camera. Characters carry `Jumping` and `Splash` sounds in their root part,
   played when they jump and fall into water. In the sample, coins ding, the
   TNT booms and the finish chimes.
-- **Tipping over:** a loose part resting on something tips over when its
-  middle hangs past the edge of what holds it up, turning about that edge,
-  and settles flat on whichever side it lands on.
+- **Real physics for loose parts:** unanchored parts are rigid bodies
+  (using the [Rapier](https://rapier.rs) engine). Turned parts collide as
+  their true shape, whichever way they face: crates stack, tumble off
+  edges and land on a face, balls roll, wedges slide down slopes, and
+  parts rub on what they rest on (plastic slides down steep slopes). A
+  model welded together is one solid body, so it falls over as one piece.
+  Characters still move the snappy way players expect, and shove the
+  loose parts they walk into.
 - **Hinge arms and wheels:** a turning hinge arm shoves loose things it
   runs into. Balls, and cylinders lying along their hinge, are wheels on a
   loose base: on the ground they hold it up, and a Motor drives it along
@@ -544,11 +549,11 @@ end)
 and one game's scripts can use at most 512 MB of memory between them, so a
 broken script can't freeze or fill up the computer running it.
 
-**Not yet:** Terrain is blocky, not smooth, and water doesn't flow. Physics is simple: anchored parts can be rotated and shaped
-(ramps and balls work), but loose parts collide as the upright box around
-them. They tip over edges, tall ones fall when shoved hard, and they settle
-flat, but a turned part sits a little high on its box. Hinged wheels drive and steer, but the car
-has no suspension: its wheels are rigid. Characters climb steps up to 0.6 studs.
+**Not yet:** Terrain is blocky, not smooth, and water doesn't flow. Hinges, ropes and springs are
+still worked out by Libroxel rather than as joints in the physics engine,
+so hinged wheels drive and steer but a car has no suspension: its wheels are rigid.
+Cylinders that aren't wheels collide as their shape, but characters
+treat them as boxes. Characters climb steps up to 0.6 studs.
 
 ## Contributing
 
