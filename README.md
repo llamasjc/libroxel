@@ -40,7 +40,7 @@ The first build compiles Bevy and takes a while. After that it is quick.
 
 ## The editor
 
-- **File → Open sample obby** loads a small obstacle course with a wooden
+- **File → Open a starter game → Sample obby** loads a small obstacle course with a wooden
   ramp, spinning coins, lava, fading platforms, a lift and a finish pad, plus
   a leaderboard that counts coins and deaths, an on-screen coin counter, a
   day/night button, a vault whose door opens when you click it, and a stand
@@ -135,7 +135,7 @@ The first build compiles Bevy and takes a while. After that it is quick.
   Hub from the start.
 - **One app, one home screen:** the build is a single `libroxel` program
   (`cargo run` starts it) and it opens on a home screen with four tabs.
-  **▶ Play** shows your games as tiles (the sample and every saved game):
+  **▶ Play** shows your games as tiles (the starter games and every saved game):
   pick one and press Play, or double-click it, or **Play with friends** to
   host it. **🌍 Online** lists the games being hosted, with a Join button
   each, and joins a friend's game from a pasted join code or address.
@@ -147,6 +147,13 @@ The first build compiles Bevy and takes a while. After that it is quick.
   goes back, and **File → Main menu** does from the editor. (For scripts
   and servers without a screen, `libroxel server <game.lrx>`,
   `libroxel hub` and `libroxel help` still work.)
+- **Starter games:** three small finished games to play or build on. The
+  **Sample obby** has coins, lava, TNT and a rover. **Kart race** is three
+  laps round a track in karts, through blue gates in order, with laps and
+  best lap times on the leaderboard. **Coin rush** is one-minute rounds in
+  an arena where coins keep appearing and a lava bar sweeps the middle; the
+  most coins wins the round. Open them from the home screen or **File →
+  Open a starter game**.
 - **Undo/redo** with Ctrl+Z and Ctrl+Y. **Save** with Ctrl+S. Games are
   saved as `.lrx` files in `~/Projects/libroxel-games/` by default.
 
@@ -494,6 +501,10 @@ door.ClickDetector.MouseClick:Connect(function(player)
 	TweenService:Create(door, TweenInfo.new(0.6), goal):Play()
 end)
 ```
+
+**Limits:** a script that runs for 5 seconds without waiting is stopped,
+and one game's scripts can use at most 512 MB of memory between them, so a
+broken script can't freeze or fill up the computer running it.
 
 **Not yet:** Terrain is blocky, not smooth, and water doesn't flow. Physics is simple: anchored parts can be rotated and shaped
 (ramps and balls work), but loose parts collide as the upright box around

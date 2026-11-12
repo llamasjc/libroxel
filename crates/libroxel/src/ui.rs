@@ -20,7 +20,8 @@ use crate::{Dialog, Editor, Tool, Tunnel, games_dir, gui, templates, viewport};
 /// Things the UI asks for; applied after drawing so nothing is borrowed twice.
 enum Action {
     New,
-    OpenSample,
+    /// One of the starter games, by name.
+    OpenStarter(&'static str),
     Open(PathBuf),
     Save,
     SaveTo(PathBuf),
@@ -752,9 +753,14 @@ fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
             if ui.button("New").clicked() {
                 actions.push(Action::New);
             }
-            if ui.button("Open sample obby").clicked() {
-                actions.push(Action::OpenSample);
-            }
+            ui.menu_button("Open a starter game", |ui| {
+                for game in crate::starter_games::STARTER_GAMES {
+                    if ui.button(format!("{} {}", game.symbol, game.name)).on_hover_text(game.about).clicked()
+                    {
+                        actions.push(Action::OpenStarter(game.name));
+                    }
+                }
+            });
             if ui
                 .add_enabled(!playing, egui::Button::new("Clear saved data"))
                 .on_hover_text("Forget what this game's data stores saved in earlier play tests")
@@ -2113,7 +2119,7 @@ fn menu_pick(pick: crate::menu::Pick, engine: &mut EngineState, editor: &mut Edi
     use crate::menu::{Game, Pick};
     let open = |game: &Game, engine: &mut EngineState, editor: &mut Editor| -> bool {
         match game {
-            Game::Sample => apply(Action::OpenSample, engine, editor, now),
+            Game::Starter(name) => apply(Action::OpenStarter(name), engine, editor, now),
             Game::Blank => apply(Action::New, engine, editor, now),
             Game::File(path) => {
                 apply(Action::Open(path.clone()), engine, editor, now);
@@ -2166,9 +2172,11 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
     let playing = engine.is_playing();
     match action {
         Action::New => replace_world(engine, editor, templates::blank(), None),
-        Action::OpenSample => {
-            replace_world(engine, editor, templates::sample_obby(), None);
-            log(engine, LogLevel::Info, "Opened the sample obby. Press Play to try it.");
+        Action::OpenStarter(name) => {
+            if let Some(game) = crate::starter_games::starter(name) {
+                replace_world(engine, editor, (game.build)(), None);
+                log(engine, LogLevel::Info, format!("Opened {}. Press Play to try it.", game.name));
+            }
         }
         Action::Open(path) => {
             match std::fs::read_to_string(&path)

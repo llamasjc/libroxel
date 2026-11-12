@@ -11,12 +11,14 @@ use libroxel_instance::place;
 
 use crate::browse::Platform;
 use crate::server::{BackgroundServer, HubUse, ServerSettings, data_dir};
+use crate::starter_games::{self, STARTER_GAMES};
 use crate::{games_dir, templates};
 
 /// Which game the menu's buttons use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Game {
-    Sample,
+    /// One of the starter games, by name.
+    Starter(&'static str),
     Blank,
     File(PathBuf),
 }
@@ -24,7 +26,7 @@ pub enum Game {
 impl Game {
     pub fn label(&self) -> String {
         match self {
-            Game::Sample => "Sample obby".into(),
+            Game::Starter(name) => (*name).into(),
             Game::Blank => "New empty world".into(),
             Game::File(path) => path
                 .file_stem()
@@ -35,7 +37,11 @@ impl Game {
     /// The game as a saved place, for a server.
     fn text(&self) -> Result<String, String> {
         match self {
-            Game::Sample => place::save(&templates::sample_obby()).map_err(|e| e.to_string()),
+            Game::Starter(name) => {
+                let game =
+                    starter_games::starter(name).ok_or_else(|| format!("there is no starter game {name}"))?;
+                place::save(&(game.build)()).map_err(|e| e.to_string())
+            }
             Game::Blank => place::save(&templates::blank()).map_err(|e| e.to_string()),
             Game::File(path) => {
                 std::fs::read_to_string(path).map_err(|e| format!("could not read {}: {e}", path.display()))
@@ -90,7 +96,7 @@ impl Default for Menu {
         Self {
             open: false,
             tab: Tab::Play,
-            game: Game::Sample,
+            game: Game::Starter(STARTER_GAMES[0].name),
             games: Vec::new(),
             scanned: false,
             path: String::new(),
@@ -264,7 +270,8 @@ impl Menu {
     /// The games on this computer, as tiles to pick from.
     fn game_tiles(&mut self, ui: &mut egui::Ui, with_blank: bool) -> Option<Game> {
         let mut chosen = None;
-        let mut tiles = vec![(Game::Sample, "🏁", "An obby with coins, TNT and a rover".to_owned())];
+        let mut tiles: Vec<_> =
+            STARTER_GAMES.iter().map(|g| (Game::Starter(g.name), g.symbol, g.about.to_owned())).collect();
         if with_blank {
             tiles.insert(0, (Game::Blank, "➕", "Start from an empty baseplate".to_owned()));
         }
@@ -388,7 +395,9 @@ impl Menu {
         ui.horizontal(|ui| {
             ui.label("Game");
             egui::ComboBox::from_id_salt("host-game").selected_text(self.game.label()).show_ui(ui, |ui| {
-                ui.selectable_value(&mut self.game, Game::Sample, Game::Sample.label());
+                for game in STARTER_GAMES {
+                    ui.selectable_value(&mut self.game, Game::Starter(game.name), game.name);
+                }
                 for path in self.games.clone() {
                     let game = Game::File(path);
                     let label = game.label();

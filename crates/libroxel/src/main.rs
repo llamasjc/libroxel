@@ -19,6 +19,7 @@ mod history;
 mod images;
 mod menu;
 mod server;
+mod starter_games;
 mod templates;
 mod terrain_tools;
 mod ui;

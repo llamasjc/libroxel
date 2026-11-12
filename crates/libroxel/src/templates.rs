@@ -1,4 +1,5 @@
-//! Starter worlds: the blank template and a sample obby.
+//! Starter worlds: the blank template and a sample obby. More starter
+//! games are in `starter_games`.
 
 use libroxel_instance::{
     ActuatorType, ClassKind, Color3, EnumValue, InstanceId, InstanceTree, Material, NormalId, PartShape,
@@ -44,13 +45,13 @@ pub fn kart(tree: &mut InstanceTree, parent: InstanceId, at: Vec3, yaw: f32, rgb
     model
 }
 
-fn add(tree: &mut InstanceTree, parent: InstanceId, class: ClassKind, name: &str) -> InstanceId {
+pub(crate) fn add(tree: &mut InstanceTree, parent: InstanceId, class: ClassKind, name: &str) -> InstanceId {
     let id = tree.create(class, name).expect("template classes are creatable");
     tree.set_parent(id, Some(parent)).expect("template parents are valid");
     id
 }
 
-fn block(
+pub(crate) fn block(
     tree: &mut InstanceTree,
     parent: InstanceId,
     name: &str,
@@ -67,24 +68,24 @@ fn block(
     id
 }
 
-fn set(tree: &mut InstanceTree, id: InstanceId, property: Property, value: PropertyValue) {
+pub(crate) fn set(tree: &mut InstanceTree, id: InstanceId, property: Property, value: PropertyValue) {
     tree.set(id, property, value).expect("template properties are valid");
 }
 
-fn material(tree: &mut InstanceTree, id: InstanceId, material: Material) {
+pub(crate) fn material(tree: &mut InstanceTree, id: InstanceId, material: Material) {
     set(tree, id, Property::Material, PropertyValue::Enum(EnumValue::Material(material)));
 }
 
-fn shape(tree: &mut InstanceTree, id: InstanceId, shape: PartShape) {
+pub(crate) fn shape(tree: &mut InstanceTree, id: InstanceId, shape: PartShape) {
     set(tree, id, Property::Shape, PropertyValue::Enum(EnumValue::Shape(shape)));
 }
 
-fn orient(tree: &mut InstanceTree, id: InstanceId, degrees: [f32; 3]) {
+pub(crate) fn orient(tree: &mut InstanceTree, id: InstanceId, degrees: [f32; 3]) {
     set(tree, id, Property::Orientation, PropertyValue::Vec3(Vec3::new(degrees[0], degrees[1], degrees[2])));
 }
 
 /// Puts a picture on one side of `part`: a decal, or a texture tiled every `tile` studs.
-fn picture(
+pub(crate) fn picture(
     tree: &mut InstanceTree,
     part: InstanceId,
     name: &str,
@@ -106,11 +107,11 @@ fn class_name_of(class: ClassKind) -> &'static str {
     libroxel_script::names::class_name(class)
 }
 
-fn script(tree: &mut InstanceTree, parent: InstanceId, name: &str, source: &str) -> InstanceId {
+pub(crate) fn script(tree: &mut InstanceTree, parent: InstanceId, name: &str, source: &str) -> InstanceId {
     code(tree, parent, ClassKind::Script, name, source)
 }
 
-fn code(
+pub(crate) fn code(
     tree: &mut InstanceTree,
     parent: InstanceId,
     class: ClassKind,

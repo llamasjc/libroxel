@@ -88,6 +88,11 @@ pub struct MouseRay {
     pub y: f32,
 }
 
+/// How much memory one game's scripts may use together. A script that
+/// tries to use more gets a "not enough memory" error instead of taking
+/// the whole computer (or server) down with it.
+pub const MEMORY_LIMIT: usize = 512 * 1024 * 1024;
+
 /// A sandboxed Luau VM bound to an instance tree.
 pub struct ScriptRuntime {
     lua: Lua,
@@ -102,6 +107,7 @@ impl ScriptRuntime {
         // Freeze the standard library and our globals; each script gets its
         // own global environment on top.
         lua.sandbox(true)?;
+        lua.set_memory_limit(MEMORY_LIMIT)?;
         Ok(Self { lua, tree })
     }
 

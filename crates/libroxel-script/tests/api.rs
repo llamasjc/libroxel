@@ -1023,3 +1023,24 @@ fn random_run_service_and_teams() {
         vec!["true true Random", "true true", "2 false 1 0 1", "true", "true", "stepped heartbeat render"]
     );
 }
+
+#[test]
+fn scripts_cannot_use_all_the_memory() {
+    let rt = runtime();
+    let err = rt
+        .run(
+            "hog",
+            r#"
+            local hoard = {}
+            local chunk = string.rep("x", 1000000)
+            for i = 1, 100000 do
+                hoard[i] = chunk .. i
+            end
+        "#,
+        )
+        .unwrap_err();
+    assert!(err.message.contains("memory"), "{}", err.message);
+    // The memory comes back and the runtime still works.
+    run(&rt, "print('alive')");
+    assert_eq!(printed(&rt), vec!["alive"]);
+}
