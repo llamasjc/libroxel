@@ -1,0 +1,132 @@
+name: Release
+
+# Push a tag like `v0.1.0` to build Libroxel for Linux, Windows and macOS and
+# publish the builds as a GitHub Release. "Run workflow" on the Actions tab
+# builds the same files without publishing, to try a build first.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: macos-universal
+            os: macos-latest
+            target: aarch64-apple-darwin
+            extra_target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick the version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=dev-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libwayland-dev libxkbcommon-dev libudev-dev libasound2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.extra_target && format('{0},{1}', matrix.target, matrix.extra_target) || matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: dist-${{ matrix.name }}
+
+      - name: Build
+        shell: bash
+        run: |
+          cargo build --locked --profile dist -p libroxel --target ${{ matrix.target }}
+          if [[ -n "${{ matrix.extra_target }}" ]]; then
+            cargo build --locked --profile dist -p libroxel --target ${{ matrix.extra_target }}
+          fi
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          dir="libroxel-$VERSION-${{ matrix.name }}"
+          mkdir "$dir"
+          cp target/${{ matrix.target }}/dist/libroxel "$dir/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$dir/"
+          tar -czf "$dir.tar.gz" "$dir"
+          echo "ASSET=$dir.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          dir="libroxel-$VERSION-${{ matrix.name }}"
+          mkdir "$dir"
+          cp target/${{ matrix.target }}/dist/libroxel.exe "$dir/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$dir/"
+          7z a -tzip "$dir.zip" "$dir" > /dev/null
+          echo "ASSET=$dir.zip" >> "$GITHUB_ENV"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          dir="libroxel-$VERSION-${{ matrix.name }}"
+          app="$dir/Libroxel.app"
+          mkdir -p "$app/Contents/MacOS"
+          # One app that runs natively on both Apple silicon and Intel Macs.
+          lipo -create -output "$app/Contents/MacOS/libroxel" \
+            target/${{ matrix.target }}/dist/libroxel \
+            target/${{ matrix.extra_target }}/dist/libroxel
+          sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          # Ad-hoc signature: an unsigned arm64 binary won't launch at all.
+          codesign --force --deep --sign - "$app"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$dir/"
+          ditto -c -k --keepParent "$dir" "$dir.zip"
+          echo "ASSET=$dir.zip" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          # Tags like v0.2.0-beta.1 become pre-releases.
+          prerelease: ${{ contains(github.ref_name, '-') }}

@@ -158,7 +158,9 @@ impl Default for Editor {
 
 /// Where the Open and Save dialogs start.
 pub fn games_dir() -> PathBuf {
+    // Windows has no HOME; use the user's profile folder there.
     std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Projects/libroxel-games")

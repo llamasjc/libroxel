@@ -37,3 +37,10 @@ opt-level = 1
 opt-level = 3
 # Debug info for Bevy and friends is huge and rarely needed; keep it for our crates only.
 debug = false
+
+# The builds attached to GitHub Releases: `cargo build --profile dist`.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+strip = true
