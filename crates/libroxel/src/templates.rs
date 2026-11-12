@@ -1573,7 +1573,7 @@ mod tests {
         let pos = session.runtime().tree().borrow().get_vec3(character.root, Property::Position).unwrap();
         assert!(pos.y > 5.0, "climbed onto the ledge: {pos:?}");
         let log: Vec<_> = session.take_log();
-        assert_eq!(leaderstat(&session, "Coins"), 2.0, "{log:?}");
+        assert_eq!(leaderstat(&session, "Coins"), 2.0, "{pos:?} {log:?}");
         let errors: Vec<_> = session.take_log().into_iter().filter(|l| l.level == LogLevel::Error).collect();
         assert!(errors.is_empty(), "{errors:?}");
     }

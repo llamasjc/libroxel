@@ -235,7 +235,12 @@ impl Plugin for RenderPlugin {
             // The camera moves in Update, right after the world, and its global
             // transform is brought up to date at once, so GUIs and name tags
             // drawn later this frame line up with where the camera is now.
-            .add_systems(Update, (follow_camera, refresh_camera_global).chain().after(EngineSet::Sync))
+            .add_systems(
+                Update,
+                (follow_camera, refresh_camera_global, hide_self_in_first_person)
+                    .chain()
+                    .after(EngineSet::Sync),
+            )
             .add_systems(Update, (sync_lights, draw_blasts, sync_ropes, sync_decals).after(EngineSet::Sync))
             .add_systems(Update, crate::terrain_view::sync_terrain.after(EngineSet::Sync))
             .add_systems(Update, update_lighting.after(EngineSet::Sync))
@@ -411,15 +416,31 @@ pub struct CameraRig {
     pub mode: CameraMode,
     pub yaw: f32,
     pub pitch: f32,
-    /// Follow mode: distance behind the character.
+    /// Follow mode: distance behind the character (eased towards `zoom`).
     pub distance: f32,
+    /// Follow mode: the distance the mouse wheel asked for.
+    pub zoom: f32,
+    /// Follow mode: how far away the camera is drawn, which walls can cut short.
+    pub shown: f32,
+    /// Follow mode: the character it last followed, to swing round behind a new one.
+    pub following: Option<InstanceId>,
     /// Fly mode: studs per second.
     pub fly_speed: f32,
 }
 
 impl Default for CameraRig {
     fn default() -> Self {
-        Self { mode: CameraMode::Fly, yaw: -0.6, pitch: -0.45, distance: 16.0, fly_speed: 30.0 }
+        let d = crate::camera::START_DISTANCE;
+        Self {
+            mode: CameraMode::Fly,
+            yaw: -0.6,
+            pitch: -0.45,
+            distance: d,
+            zoom: d,
+            shown: d,
+            following: None,
+            fly_speed: 30.0,
+        }
     }
 }
 
@@ -675,7 +696,24 @@ fn camera_controls(
     for (mut rig, mut transform) in &mut rigs {
         if looking {
             rig.yaw -= motion.delta.x * 0.005;
-            rig.pitch = (rig.pitch - motion.delta.y * 0.005).clamp(-1.5, 1.5);
+            rig.pitch = (rig.pitch - motion.delta.y * 0.005).clamp(-1.4, 1.4);
+        }
+        // Following, the comma and full stop keys swing the camera round
+        // in steps, and I and O zoom, as well as the mouse.
+        let mut zoom_lines = scroll_lines;
+        if rig.mode == CameraMode::Follow && !capture.keyboard {
+            if keys.just_pressed(KeyCode::Comma) {
+                rig.yaw += std::f32::consts::FRAC_PI_4;
+            }
+            if keys.just_pressed(KeyCode::Period) {
+                rig.yaw -= std::f32::consts::FRAC_PI_4;
+            }
+            if keys.just_pressed(KeyCode::KeyI) {
+                zoom_lines += 1.0;
+            }
+            if keys.just_pressed(KeyCode::KeyO) {
+                zoom_lines -= 1.0;
+            }
         }
         transform.rotation = rig.rotation();
         match rig.mode {
@@ -711,7 +749,7 @@ fn camera_controls(
                 }
             }
             CameraMode::Follow => {
-                rig.distance = (rig.distance - scroll_lines * 2.0).clamp(4.0, 80.0);
+                rig.zoom = crate::camera::zoom(rig.zoom, zoom_lines);
             }
         }
     }
@@ -849,17 +887,72 @@ fn refresh_camera_global(mut rigs: Query<(&Transform, &mut GlobalTransform), Wit
     }
 }
 
+/// What the follow camera follows: the part, its model, where it is, and
+/// which way it faces (degrees).
+struct Followed {
+    root: InstanceId,
+    model: Option<InstanceId>,
+    position: libroxel_instance::Vec3,
+    yaw: f32,
+}
+
+/// Places a follow camera round `followed`: swung behind a newly followed
+/// character, zoom eased, and pulled in front of any wall in the way.
+fn place_follow(
+    rig: &mut CameraRig,
+    transform: &mut Transform,
+    tree: &InstanceTree,
+    followed: &Followed,
+    dt: f32,
+) {
+    use crate::camera;
+    if rig.following != Some(followed.root) {
+        if rig.following.is_none() {
+            // Just started playing: start behind, at the usual distance.
+            (rig.zoom, rig.distance) = (camera::START_DISTANCE, camera::START_DISTANCE);
+            rig.pitch = camera::START_PITCH;
+        }
+        rig.yaw = camera::behind(followed.yaw);
+        rig.following = Some(followed.root);
+        rig.shown = rig.distance;
+    }
+    rig.distance = camera::ease(rig.distance, rig.zoom, dt);
+    let focus = to_bevy(followed.position) + Vec3::Y * camera::FOCUS_HEIGHT;
+    transform.rotation = rig.rotation();
+    let back = -transform.forward().as_vec3();
+    let free = camera::unblocked(
+        tree,
+        libroxel_instance::Vec3::new(focus.x, focus.y, focus.z),
+        libroxel_instance::Vec3::new(back.x, back.y, back.z),
+        rig.distance,
+        followed.model,
+    );
+    // Walls cut in at once; when the way clears the camera eases back out.
+    rig.shown = if free < rig.shown { free } else { camera::ease(rig.shown, free, dt) };
+    transform.translation = focus + back * rig.shown;
+}
+
+/// Whether the follow camera is in the character's head.
+pub fn first_person(rig: &CameraRig) -> bool {
+    rig.mode == CameraMode::Follow && rig.following.is_some() && rig.shown <= crate::camera::FIRST_PERSON
+}
+
 fn follow_camera(
     engine: NonSend<EngineState>,
+    time: Res<Time>,
     mut rigs: Query<(&mut CameraRig, &mut Transform, &mut Projection)>,
 ) {
+    let dt = time.delta_secs().min(0.1);
     let session = engine.session.as_ref();
-    let focus = session.and_then(|s| s.focus()).and_then(|id| {
+    let followed = session.and_then(|s| s.focus()).and_then(|root| {
         let tree = engine.tree.borrow();
-        if tree.is_destroyed(id).unwrap_or(true) {
+        if tree.is_destroyed(root).unwrap_or(true) {
             return None;
         }
-        tree.get_vec3(id, Property::Position)
+        let position = tree.get_vec3(root, Property::Position)?;
+        let yaw = tree.get_vec3(root, Property::Orientation).unwrap_or_default().y;
+        let model = session.and_then(|s| s.character()).map(|c| c.model);
+        Some(Followed { root, model, position, yaw })
     });
     // The workspace camera: scripts can take it over, or read where it is.
     let camera = session.and_then(|s| s.camera());
@@ -882,13 +975,12 @@ fn follow_camera(
             rig.mode = CameraMode::Fly;
         }
         if rig.mode != CameraMode::Follow {
+            rig.following = None;
             continue;
         }
         let Some(cam) = camera else {
-            if let Some(target) = focus {
-                let target = to_bevy(target) + Vec3::Y * 2.0;
-                transform.rotation = rig.rotation();
-                transform.translation = target - transform.forward().as_vec3() * rig.distance;
+            if let Some(f) = &followed {
+                place_follow(&mut rig, &mut transform, &engine.tree.borrow(), f, dt);
             }
             continue;
         };
@@ -900,10 +992,8 @@ fn follow_camera(
             transform.rotation = crate::physics::orientation_quat(orientation);
             continue;
         }
-        if let Some(target) = focus {
-            let target = to_bevy(target) + Vec3::Y * 2.0;
-            transform.rotation = rig.rotation();
-            transform.translation = target - transform.forward().as_vec3() * rig.distance;
+        if let Some(f) = &followed {
+            place_follow(&mut rig, &mut transform, &tree, f, dt);
         }
         // Tell scripts where the camera is.
         let (y, x, z) = transform.rotation.to_euler(EulerRot::YXZ);
@@ -924,6 +1014,36 @@ fn follow_camera(
             )),
         );
     }
+}
+
+/// In first person, hides the player's own body so it doesn't fill the
+/// view; shows it again when the camera pulls back out.
+fn hide_self_in_first_person(
+    engine: NonSend<EngineState>,
+    entities: Res<PartEntities>,
+    rigs: Query<&CameraRig>,
+    mut hidden: Local<Vec<InstanceId>>,
+    mut parts: Query<(&PartAppearance, &mut Visibility), With<PartLink>>,
+) {
+    let inside = rigs.iter().any(first_person);
+    let wanted: Vec<InstanceId> = match engine.session.as_ref().and_then(|s| s.character()) {
+        Some(c) if inside => engine.tree.borrow().descendants_of_class(c.model, ClassKind::Part),
+        _ => Vec::new(),
+    };
+    if wanted == *hidden {
+        return;
+    }
+    for id in hidden.iter().filter(|id| !wanted.contains(id)) {
+        if let Some((appearance, mut visibility)) = entities.0.get(id).and_then(|e| parts.get_mut(*e).ok()) {
+            visibility.set_if_neq(visibility_for(appearance));
+        }
+    }
+    for id in &wanted {
+        if let Some((_, mut visibility)) = entities.0.get(id).and_then(|e| parts.get_mut(*e).ok()) {
+            visibility.set_if_neq(Visibility::Hidden);
+        }
+    }
+    *hidden = wanted;
 }
 
 /// Links a light entity to the light instance it shows.

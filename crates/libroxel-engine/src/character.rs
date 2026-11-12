@@ -642,8 +642,8 @@ impl Character {
     }
 
     /// Turns input into velocity. Call before [`Physics::step`].
-    pub fn drive(&self, tree: &InstanceTree, physics: &mut Physics, input: CharacterInput) {
-        drive(tree, physics, self.root, self.humanoid, input);
+    pub fn drive(&self, tree: &InstanceTree, physics: &mut Physics, input: CharacterInput, dt: f32) {
+        drive(tree, physics, self.root, self.humanoid, input, dt);
     }
 
     /// Keeps the body on the root, standing straight. Call after
@@ -657,6 +657,35 @@ impl Character {
 const SWIM_UP: f32 = 10.0;
 const FLOAT_UP: f32 = 2.0;
 
+/// How quickly a walker speeds up, slows down or changes direction, on the
+/// ground and in the air (studs a second, each second): from standing to
+/// full walking speed in a few hundredths of a second, so it feels snappy
+/// without starting and stopping with a jolt.
+const GROUND_GRIP: f32 = 320.0;
+const AIR_GRIP: f32 = 160.0;
+
+/// How quickly characters turn to face where they walk (per second).
+pub const TURN_RATE: f32 = 14.0;
+
+/// A yaw (in degrees) turned part of the way from `from` towards `to`,
+/// the short way round: most of a half turn takes about a fifth of a
+/// second, like turning on the spot.
+pub fn turn_toward(from: f32, to: f32, dt: f32) -> f32 {
+    let diff = (to - from + 180.0).rem_euclid(360.0) - 180.0;
+    if diff.abs() < 0.5 {
+        return to;
+    }
+    let step = diff * (1.0 - (-TURN_RATE * dt).exp());
+    let turned = from + step;
+    // Keep it in -180..180 so it never grows without end.
+    (turned + 180.0).rem_euclid(360.0) - 180.0
+}
+
+/// The yaw (in degrees) that faces along `dir`.
+pub fn yaw_of(dir: Vec3) -> f32 {
+    (-dir.x).atan2(-dir.z).to_degrees()
+}
+
 /// Moves any humanoid's root part: walking at its walk speed in the input's
 /// direction, and jumping when on the ground.
 pub fn drive(
@@ -665,6 +694,7 @@ pub fn drive(
     root: InstanceId,
     humanoid: InstanceId,
     input: CharacterInput,
+    dt: f32,
 ) {
     {
         let walk = tree.get_number(humanoid, Property::WalkSpeed).unwrap_or(16.0) as f32;
@@ -702,12 +732,40 @@ pub fn drive(
             v.x += (want_x - v.x) * 0.03;
             v.z += (want_z - v.z) * 0.03;
         } else {
-            v.x = want_x;
-            v.z = want_z;
+            let grip = if physics.is_grounded(root) { GROUND_GRIP } else { AIR_GRIP };
+            let (dx, dz) = (want_x - v.x, want_z - v.z);
+            let gap = (dx * dx + dz * dz).sqrt();
+            let most = if dt > 0.0 { grip * dt } else { f32::INFINITY };
+            let k = if gap > most { most / gap } else { 1.0 };
+            v.x += dx * k;
+            v.z += dz * k;
         }
         if input.jump && physics.is_grounded(root) {
             v.y = jump;
         }
         physics.set_velocity(root, v);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turning_goes_the_short_way_and_takes_a_moment() {
+        // From facing 170 degrees to -170: twenty degrees, through 180, not 340 back.
+        let one = turn_toward(170.0, -170.0, 1.0 / 60.0);
+        assert!(one > 170.0 || one < -170.0, "{one}");
+        // A half turn is mostly done in a fifth of a second, and done in half a second.
+        let mut yaw = 0.0;
+        for _ in 0..12 {
+            yaw = turn_toward(yaw, 179.0, 1.0 / 60.0);
+        }
+        assert!(yaw > 120.0 && yaw < 179.0, "{yaw}");
+        for _ in 0..30 {
+            yaw = turn_toward(yaw, 179.0, 1.0 / 60.0);
+        }
+        assert_eq!(yaw, 179.0);
+        assert_eq!(yaw_of(Vec3::new(0.0, 0.0, -1.0)), 0.0);
     }
 }

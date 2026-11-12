@@ -603,7 +603,9 @@ impl PlaySession {
         }
         let dir = input.move_dir;
         if dir.x != 0.0 || dir.z != 0.0 {
-            let yaw = (-dir.x).atan2(-dir.z).to_degrees();
+            // Turn smoothly, the short way round, rather than snapping.
+            let now = tree.get_vec3(character.root, Property::Orientation).unwrap_or_default().y;
+            let yaw = crate::character::turn_toward(now, crate::character::yaw_of(dir), dt);
             let facing = PropertyValue::Vec3(Vec3::new(0.0, yaw, 0.0));
             let _ = tree.set(character.root, Property::Orientation, facing);
         }
@@ -1090,12 +1092,12 @@ impl PlaySession {
                         self.physics.hold(c.root);
                     }
                 } else if let Some(c) = avatar.character.filter(|c| !c.is_dead(&tree)) {
-                    c.drive(&tree, &mut self.physics, *input);
+                    c.drive(&tree, &mut self.physics, *input, dt);
                 }
             }
             let player_models: Vec<InstanceId> =
                 self.avatars.iter().filter_map(|a| a.character.map(|c| c.model)).collect();
-            let poses = self.npcs.before_physics(&mut tree, &mut self.physics, &player_models);
+            let poses = self.npcs.before_physics(&mut tree, &mut self.physics, &player_models, dt);
             crate::seat::drive_vehicles(&mut tree, &mut self.physics, dt);
             self.welds.before_physics(&tree, &mut self.physics);
             self.hinges.before_physics(&tree, &mut self.physics, dt);

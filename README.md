@@ -86,6 +86,12 @@ The first build compiles Bevy and takes a while. After that it is quick.
   your character spawns at the first SpawnLocation. If scripts give you a
   `leaderstats` folder, the leaderboard shows it in the top-right corner. Walk with WASD, jump with Space, turn the camera with
   the right mouse button. Stop (or Esc) puts the world back as it was.
+- **Moving and the camera:** your character speeds up and stops quickly
+  but smoothly, and turns to face where it walks the short way round
+  instead of snapping. The camera starts behind you; the mouse wheel (or
+  I and O) zooms from far out right into first person, where your own
+  body is hidden, and `,` and `.` swing it round in steps. Walls between
+  the camera and you pull it in so you never lose sight of your character.
 - **Screen GUIs:** put a `ScreenGui` in StarterGui and fill it with frames,
   text labels and text buttons (Insert menu). They are drawn over the view
   while you edit, so you can click one to select it and lay it out with

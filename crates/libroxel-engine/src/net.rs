@@ -1005,7 +1005,7 @@ impl PlaySession {
                     .filter(|p| *p != c.root && t.get_bool(*p, Property::Anchored) == Some(false))
                     .collect();
                 self.physics.set_assemblies(others, std::iter::empty());
-                c.drive(&t, &mut self.physics, input);
+                c.drive(&t, &mut self.physics, input, dt);
                 self.physics.step(&mut t, dt);
                 c.follow(&mut t);
             }

@@ -189,7 +189,7 @@ fn a_joined_player_sees_the_world_and_plays_in_it() {
     let walk = CharacterInput { move_dir: Vec3::new(1.0, 0.0, 0.0), ..Default::default() };
     guest.step(DT, walk);
     guest.step(DT, walk);
-    assert!(root_at(&guest, mine).x > start.x + 0.4, "moved before hearing from the host");
+    assert!(root_at(&guest, mine).x > start.x + 0.2, "moved before hearing from the host");
     // The host follows where the guest says it is.
     until(&mut host, &mut guest, walk, |h, g| {
         let theirs = h.runtime().tree().borrow().get_ref(h.players()[1], Property::Character).unwrap();

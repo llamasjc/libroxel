@@ -5,6 +5,7 @@
 //! a window. The [`view`] module plugs them into Bevy: it mirrors parts onto
 //! entities, draws them, and provides the play and fly cameras.
 
+pub mod camera;
 pub mod character;
 pub mod effects;
 pub mod hinge;

@@ -85,6 +85,7 @@ impl Npcs {
         tree: &mut InstanceTree,
         physics: &mut Physics,
         players: &[InstanceId],
+        dt: f32,
     ) -> Vec<Pose> {
         let mut poses = Vec::new();
         for humanoid in tree.descendants_of_class(tree.workspace(), ClassKind::Humanoid) {
@@ -108,7 +109,7 @@ impl Npcs {
                 input.jump = true;
                 let _ = tree.set(humanoid, Property::Jump, PropertyValue::Bool(false));
             }
-            drive(tree, physics, root, humanoid, input);
+            drive(tree, physics, root, humanoid, input, dt);
             poses.push(Pose { humanoid, model, root, pos, yaw, dir: input.move_dir });
         }
         poses
@@ -128,7 +129,7 @@ impl Npcs {
         for pose in poses {
             let Some(new_pos) = tree.get_vec3(pose.root, Property::Position) else { continue };
             let new_yaw = if pose.dir.x != 0.0 || pose.dir.z != 0.0 {
-                (-pose.dir.x).atan2(-pose.dir.z).to_degrees()
+                crate::character::turn_toward(pose.yaw, crate::character::yaw_of(pose.dir), dt)
             } else {
                 pose.yaw
             };
