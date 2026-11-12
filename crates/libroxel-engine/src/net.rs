@@ -567,6 +567,13 @@ impl PlaySession {
         Ok(session)
     }
 
+    /// Tells the host how this computer's player looks, when joined.
+    pub(crate) fn send_look(&mut self, look: crate::character::Look) {
+        if let Link::Client(joined) = &mut self.link {
+            joined.conn.send(&json!({ "t": "look", "look": look.to_json() }));
+        }
+    }
+
     /// Where a hosted game listens.
     pub fn host_address(&self) -> Option<SocketAddr> {
         match &self.link {
@@ -662,6 +669,13 @@ impl PlaySession {
                 let Some(index) = self.avatar_of(player) else { continue };
                 match kind {
                     "input" => self.avatars[index].input = input_from(&message),
+                    "look" => {
+                        let usual = crate::character::Look::for_player(index);
+                        let look = message
+                            .get("look")
+                            .map_or(usual, |l| crate::character::Look::from_json(l, usual));
+                        self.set_look(player, look);
+                    }
                     "move" => self.remote_move(index, &message),
                     "fire" => {
                         if let Some(remote) = id_in(&message, "r") {

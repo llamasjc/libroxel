@@ -142,7 +142,10 @@ The first build compiles Bevy and takes a while. After that it is quick.
   **✏ Create** opens the editor on a new world, the sample or a saved game.
   **🌐 Host** hosts a game and plays it, starts a server in the background
   with no player of your own (showing its join code), and turns this
-  computer's Hub on or off. Your player name sits in the top bar. Games
+  computer's Hub on or off. **👤 Avatar** picks your skin, shirt and
+  trouser colours and a hat (a cap, a tall hat, a crown, a halo or an
+  antenna); you look like that in every game you play, host or join, and
+  other players see it. Your player name sits in the top bar. Games
   played from the home screen show only the game: **⏹ Leave game** (or Esc)
   goes back, and **File → Main menu** does from the editor. (For scripts
   and servers without a screen, `libroxel server <game.lrx>`,
@@ -388,6 +391,17 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `Material`, or nil. `RaycastParams` has `FilterDescendantsInstances` and
   `FilterType` (`Enum.RaycastFilterType.Exclude` or `Include`). Every part
   shape is hit exactly.
+- **Finding parts in a space:** `workspace:GetPartBoundsInBox(cframe, size,
+  params?)`, `GetPartBoundsInRadius(position, radius, params?)` and
+  `GetPartsInPart(part, params?)` list the parts there (judged by their
+  boxes, and balls as balls), and `part:GetTouchingParts()` lists the parts
+  touching a part. `OverlapParams` has the same filter as `RaycastParams`,
+  plus `MaxParts`.
+- **How characters look:** every character has a `BodyColors` with
+  `HeadColor3`, `TorsoColor3`, `LeftArmColor3`, `RightArmColor3`,
+  `LeftLegColor3` and `RightLegColor3`; change them to recolour it. Hats are
+  `Accessory` objects: their parts follow the head, placed by each part's
+  `HeadOffset` attribute.
 - **Remote and bindable events:** a `RemoteEvent`'s `FireServer(...)` reaches
   `OnServerEvent(player, ...)`; `FireClient(player, ...)` and
   `FireAllClients(...)` reach `OnClientEvent(...)`. A `BindableEvent`'s

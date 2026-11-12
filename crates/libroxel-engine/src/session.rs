@@ -115,6 +115,8 @@ pub(crate) struct Avatar {
     /// How many times the host has put that character somewhere itself
     /// (a teleport); moves sent before the latest one are ignored.
     pub(crate) teleports: u64,
+    /// How they chose to look; without one they get the usual look.
+    pub(crate) look: Option<crate::character::Look>,
 }
 
 impl Avatar {
@@ -137,6 +139,7 @@ impl Avatar {
             input: CharacterInput::default(),
             moved_to: None,
             teleports: 0,
+            look: None,
         }
     }
 
@@ -346,8 +349,8 @@ impl PlaySession {
                 .filter(|_| t.get_bool(player, Property::Neutral) == Some(false))
                 .and_then(|team| t.get_color(team, Property::TeamColor));
             let n = t.get_number(player, Property::UserId).unwrap_or(1.0).max(1.0) as usize - 1;
-            let colors = crate::character::BodyColors::for_player(n);
-            let character = Character::spawn_dressed(&mut t, &name, team, colors);
+            let look = self.avatars[index].look.unwrap_or_else(|| crate::character::Look::for_player(n));
+            let character = Character::spawn_wearing(&mut t, &name, team, look);
             let _ = t.set(player, Property::Character, PropertyValue::Ref(Some(character.model)));
             character
         };
@@ -359,6 +362,26 @@ impl PlaySession {
         avatar.respawn_in = None;
         let errors = self.runtime.character_added(player, character.model);
         self.collect(errors);
+    }
+
+    /// Makes `player` look like `look`, now and every time they respawn.
+    pub fn set_look(&mut self, player: InstanceId, look: crate::character::Look) {
+        let Some(index) = self.avatar_of(player) else { return };
+        self.avatars[index].look = Some(look);
+        if let Some(character) = self.avatars[index].character {
+            character.restyle(&mut self.runtime.tree().borrow_mut(), look);
+        }
+    }
+
+    /// Makes the player on this computer look like `look`. In a joined
+    /// game the host is told, and everyone sees it.
+    pub fn set_local_look(&mut self, look: crate::character::Look) {
+        if self.is_joined() {
+            // The host dresses the character; the change comes back from there.
+            self.send_look(look);
+        } else if let Some(player) = self.player() {
+            self.set_look(player, look);
+        }
     }
 
     /// The local player's object, while a character is being played.

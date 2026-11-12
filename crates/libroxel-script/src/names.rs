@@ -45,6 +45,7 @@ pub mod globals {
     pub const RANDOM: &str = "Random";
     pub const TWEEN_INFO: &str = "TweenInfo";
     pub const RAYCAST_PARAMS: &str = "RaycastParams";
+    pub const OVERLAP_PARAMS: &str = "OverlapParams";
     /// Seconds since 1970, as a fractional number.
     pub const TICK: &str = "tick";
     /// Seconds since the game started (the same as `time()`).
@@ -178,6 +179,12 @@ pub mod methods {
     pub const FIRE: &str = "Fire";
     /// Workspace: the first part a ray hits.
     pub const RAYCAST: &str = "Raycast";
+    /// Workspace: the parts in a box, a ball, or another part's space.
+    pub const GET_PART_BOUNDS_IN_BOX: &str = "GetPartBoundsInBox";
+    pub const GET_PART_BOUNDS_IN_RADIUS: &str = "GetPartBoundsInRadius";
+    pub const GET_PARTS_IN_PART: &str = "GetPartsInPart";
+    /// Part: the parts touching it.
+    pub const GET_TOUCHING_PARTS: &str = "GetTouchingParts";
     /// Any instance: attach, read and list named values.
     pub const SET_ATTRIBUTE: &str = "SetAttribute";
     pub const GET_ATTRIBUTE: &str = "GetAttribute";
@@ -385,6 +392,12 @@ pub mod raycast {
     pub const NORMAL: &str = "Normal";
     pub const DISTANCE: &str = "Distance";
     pub const MATERIAL: &str = "Material";
+}
+
+/// Members of overlap parameters (the filter members are as on raycast ones).
+pub mod overlap {
+    pub const PARAMS_TYPE_NAME: &str = "OverlapParams";
+    pub const MAX_PARTS: &str = "MaxParts";
 }
 
 /// Members of tweens.
@@ -635,6 +648,12 @@ pub mod character {
     pub const MODEL: &str = "Player";
     pub const ROOT_PART: &str = "HumanoidRootPart";
     pub const HUMANOID: &str = "Humanoid";
+    /// The body colours object every character has.
+    pub const BODY_COLORS: &str = "BodyColors";
+    /// The attribute on an accessory's part saying where it sits on the head.
+    pub const HEAD_OFFSET: &str = "HeadOffset";
+    /// The attribute on an accessory's part saying how it's turned on the head.
+    pub const HEAD_ORIENTATION: &str = "HeadOrientation";
 }
 
 /// Constructors and constants on the global library tables.
@@ -824,6 +843,8 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::UIStroke => "UIStroke",
         ClassKind::UIPadding => "UIPadding",
         ClassKind::UIGridLayout => "UIGridLayout",
+        ClassKind::BodyColors => "BodyColors",
+        ClassKind::Accessory => "Accessory",
         ClassKind::UIAspectRatioConstraint => "UIAspectRatioConstraint",
         ClassKind::UIScale => "UIScale",
     }
@@ -949,6 +970,12 @@ pub fn property_name(property: Property) -> &'static str {
         Property::MaxTorque => "MaxTorque",
         Property::BodyMaxTorque => "MaxTorque",
         Property::SoundId => "SoundId",
+        Property::HeadColor => "HeadColor3",
+        Property::TorsoColor => "TorsoColor3",
+        Property::LeftArmColor => "LeftArmColor3",
+        Property::RightArmColor => "RightArmColor3",
+        Property::LeftLegColor => "LeftLegColor3",
+        Property::RightLegColor => "RightLegColor3",
         Property::Volume => "Volume",
         Property::PlaybackSpeed => "PlaybackSpeed",
         Property::Looped => "Looped",

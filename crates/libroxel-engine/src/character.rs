@@ -2,7 +2,8 @@
 //! moved by input instead of by physics forces.
 
 use libroxel_instance::{
-    ClassKind, Color3, InstanceId, InstanceTree, Property, PropertyValue, Rotation, Vec3,
+    ClassKind, Color3, EnumValue, InstanceId, InstanceTree, Material, PartShape, Property, PropertyValue,
+    Rotation, Vec3,
 };
 use libroxel_script::names::character as names;
 
@@ -84,6 +85,221 @@ impl BodyColors {
             skin: Color3::from_rgb8(238, 196, 160),
             shirt: Color3::from_rgb8(r, g, b),
             pants: Color3::from_rgb8(50, 56, 84),
+        }
+    }
+}
+
+/// Something to wear on the head. Every one is made of plain parts in an
+/// accessory, so scripts and the editor can change it like anything else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Hat {
+    #[default]
+    None,
+    Cap,
+    TallHat,
+    Crown,
+    Halo,
+    Antenna,
+}
+
+impl Hat {
+    pub const ALL: [Hat; 6] = [Hat::None, Hat::Cap, Hat::TallHat, Hat::Crown, Hat::Halo, Hat::Antenna];
+
+    /// What it's called, on screen and as the accessory's name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Hat::None => "No hat",
+            Hat::Cap => "Cap",
+            Hat::TallHat => "Tall hat",
+            Hat::Crown => "Crown",
+            Hat::Halo => "Halo",
+            Hat::Antenna => "Antenna",
+        }
+    }
+
+    /// The hat called `name`, as [`name`](Self::name) gives it.
+    pub fn named(name: &str) -> Hat {
+        Hat::ALL.into_iter().find(|h| h.name() == name).unwrap_or_default()
+    }
+
+    /// The parts it's made of: name, size, offset from the middle of the
+    /// head, turn (degrees), shape, whether it glows, and whether it's in
+    /// the hat's colour (or a fixed dark one).
+    #[allow(clippy::type_complexity)]
+    pub fn parts(self) -> &'static [(&'static str, [f32; 3], [f32; 3], f32, PartShape, bool, bool)] {
+        use PartShape::*;
+        match self {
+            Hat::None => &[],
+            Hat::Cap => &[
+                ("Top", [1.7, 0.4, 1.5], [0.0, 0.85, 0.0], 0.0, Block, false, true),
+                ("Brim", [1.7, 0.12, 0.7], [0.0, 0.7, -0.95], 0.0, Block, false, true),
+            ],
+            Hat::TallHat => &[
+                ("Brim", [2.2, 0.12, 2.0], [0.0, 0.76, 0.0], 0.0, Block, false, false),
+                ("Tower", [1.4, 1.4, 1.3], [0.0, 1.5, 0.0], 0.0, Block, false, false),
+                ("Band", [1.45, 0.25, 1.35], [0.0, 0.95, 0.0], 0.0, Block, false, true),
+            ],
+            Hat::Crown => &[
+                ("Base", [1.7, 0.4, 1.5], [0.0, 0.9, 0.0], 0.0, Block, false, true),
+                ("Point1", [0.35, 0.45, 0.35], [-0.65, 1.3, -0.55], 0.0, Block, false, true),
+                ("Point2", [0.35, 0.45, 0.35], [0.65, 1.3, -0.55], 0.0, Block, false, true),
+                ("Point3", [0.35, 0.45, 0.35], [-0.65, 1.3, 0.55], 0.0, Block, false, true),
+                ("Point4", [0.35, 0.45, 0.35], [0.65, 1.3, 0.55], 0.0, Block, false, true),
+            ],
+            Hat::Halo => &[("Ring", [0.12, 1.8, 1.8], [0.0, 1.3, 0.0], 90.0, Cylinder, true, true)],
+            Hat::Antenna => &[
+                ("Stick", [0.12, 1.0, 0.12], [0.0, 1.2, 0.0], 0.0, Block, false, false),
+                ("Tip", [0.45, 0.45, 0.45], [0.0, 1.85, 0.0], 0.0, Ball, true, true),
+            ],
+        }
+    }
+}
+
+/// How a player looks: their body colours and what they wear.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Look {
+    pub colors: BodyColors,
+    pub hat: Hat,
+    pub hat_color: Color3,
+}
+
+impl Look {
+    /// The usual look for player number `n`: no hat.
+    pub fn for_player(n: usize) -> Look {
+        Look { colors: BodyColors::for_player(n), hat: Hat::None, hat_color: Color3::from_rgb8(240, 200, 60) }
+    }
+
+    /// As a small JSON object, to save or send to a host.
+    pub fn to_json(&self) -> libroxel_instance::serde_json::Value {
+        let rgb = |c: Color3| {
+            let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            libroxel_instance::serde_json::json!([byte(c.r), byte(c.g), byte(c.b)])
+        };
+        libroxel_instance::serde_json::json!({
+            "skin": rgb(self.colors.skin),
+            "shirt": rgb(self.colors.shirt),
+            "pants": rgb(self.colors.pants),
+            "hat": self.hat.name(),
+            "hat_color": rgb(self.hat_color),
+        })
+    }
+
+    /// Reads [`to_json`](Self::to_json)'s object; anything missing or wrong
+    /// comes from `fallback`.
+    pub fn from_json(value: &libroxel_instance::serde_json::Value, fallback: Look) -> Look {
+        let rgb = |key: &str, or: Color3| {
+            value
+                .get(key)
+                .and_then(|v| v.as_array())
+                .filter(|a| a.len() == 3)
+                .and_then(|a| {
+                    let n = |i: usize| a[i].as_u64().filter(|n| *n <= 255).map(|n| n as u8);
+                    Some(Color3::from_rgb8(n(0)?, n(1)?, n(2)?))
+                })
+                .unwrap_or(or)
+        };
+        Look {
+            colors: BodyColors {
+                skin: rgb("skin", fallback.colors.skin),
+                shirt: rgb("shirt", fallback.colors.shirt),
+                pants: rgb("pants", fallback.colors.pants),
+            },
+            hat: value.get("hat").and_then(|h| h.as_str()).map_or(fallback.hat, Hat::named),
+            hat_color: rgb("hat_color", fallback.hat_color),
+        }
+    }
+}
+
+/// Puts `hat` on the character `model` as an accessory, coloured `color`.
+pub fn wear_hat(tree: &mut InstanceTree, model: InstanceId, hat: Hat, color: Color3) -> Option<InstanceId> {
+    if hat == Hat::None {
+        return None;
+    }
+    let accessory = tree.create(ClassKind::Accessory, hat.name()).ok()?;
+    tree.set_parent(accessory, Some(model)).ok()?;
+    for (name, size, offset, turn, shape, glow, tinted) in hat.parts() {
+        let id = tree.create(ClassKind::Part, *name).expect("parts can be created");
+        tree.set_parent(id, Some(accessory)).expect("fresh parts can be parented");
+        let size = Vec3::new(size[0], size[1], size[2]);
+        set(tree, id, Property::Size, PropertyValue::Vec3(size));
+        let color = if *tinted { color } else { Color3::from_rgb8(35, 35, 42) };
+        set(tree, id, Property::Color, PropertyValue::Color3(color));
+        set(tree, id, Property::Anchored, PropertyValue::Bool(true));
+        set(tree, id, Property::CanCollide, PropertyValue::Bool(false));
+        set(tree, id, Property::Shape, PropertyValue::Enum(EnumValue::Shape(*shape)));
+        if *glow {
+            set(tree, id, Property::Material, PropertyValue::Enum(EnumValue::Material(Material::Neon)));
+        }
+        let offset = Vec3::new(offset[0], offset[1], offset[2]);
+        let _ = tree.set_attribute(id, names::HEAD_OFFSET, Some(PropertyValue::Vec3(offset)));
+        if *turn != 0.0 {
+            let turn = Vec3::new(0.0, 0.0, *turn);
+            let _ = tree.set_attribute(id, names::HEAD_ORIENTATION, Some(PropertyValue::Vec3(turn)));
+        }
+    }
+    Some(accessory)
+}
+
+/// Gives `model` a body colours object holding `colors`.
+fn add_body_colors(tree: &mut InstanceTree, model: InstanceId, colors: BodyColors) {
+    let Ok(id) = tree.create(ClassKind::BodyColors, names::BODY_COLORS) else { return };
+    let _ = tree.set_parent(id, Some(model));
+    for (property, color) in [
+        (Property::HeadColor, colors.skin),
+        (Property::LeftArmColor, colors.skin),
+        (Property::RightArmColor, colors.skin),
+        (Property::TorsoColor, colors.shirt),
+        (Property::LeftLegColor, colors.pants),
+        (Property::RightLegColor, colors.pants),
+    ] {
+        set(tree, id, property, PropertyValue::Color3(color));
+    }
+}
+
+/// Colours the head and limbs from the model's body colours, and puts
+/// its accessories' parts on the head, turned `yaw` degrees.
+fn dress(tree: &mut InstanceTree, model: InstanceId, head: InstanceId, limbs: &Limbs, yaw: f32) {
+    let Ok(children) = tree.children(model).map(<[InstanceId]>::to_vec) else { return };
+    for child in children {
+        match tree.class(child) {
+            Ok(ClassKind::BodyColors) => {
+                for (property, part) in [
+                    (Property::HeadColor, head),
+                    (Property::TorsoColor, limbs.torso),
+                    (Property::LeftArmColor, limbs.left_arm),
+                    (Property::RightArmColor, limbs.right_arm),
+                    (Property::LeftLegColor, limbs.left_leg),
+                    (Property::RightLegColor, limbs.right_leg),
+                ] {
+                    if let Some(color) = tree.get_color(child, property)
+                        && tree.get_color(part, Property::Color) != Some(color)
+                    {
+                        let _ = tree.set(part, Property::Color, PropertyValue::Color3(color));
+                    }
+                }
+            }
+            Ok(ClassKind::Accessory) => {
+                let Some(at) = tree.get_vec3(head, Property::Position) else { continue };
+                let turn = Rotation::about_y(yaw.to_radians());
+                let parts = tree.children(child).map(<[InstanceId]>::to_vec).unwrap_or_default();
+                for part in parts {
+                    let attribute = |name| match tree.get_attribute(part, name) {
+                        Ok(Some(PropertyValue::Vec3(v))) => Some(v),
+                        _ => None,
+                    };
+                    let Some(offset) = attribute(names::HEAD_OFFSET) else { continue };
+                    let tilt = attribute(names::HEAD_ORIENTATION).unwrap_or_default();
+                    let pos = at + turn.apply(offset);
+                    let orientation = Vec3::new(tilt.x, yaw + tilt.y, tilt.z);
+                    if tree.get_vec3(part, Property::Position) != Some(pos) {
+                        let _ = tree.set(part, Property::Position, PropertyValue::Vec3(pos));
+                    }
+                    if tree.get_vec3(part, Property::Orientation) != Some(orientation) {
+                        let _ = tree.set(part, Property::Orientation, PropertyValue::Vec3(orientation));
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -237,6 +453,9 @@ pub fn pose_rig(tree: &mut InstanceTree, root: InstanceId, head: InstanceId, lim
     place(limbs.right_arm, SHOULDER, Vec3::new(0.0, -0.85, 0.0), right_arm);
     place(limbs.left_leg, flip(HIP), Vec3::new(0.0, -1.0, 0.0), left_leg);
     place(limbs.right_leg, HIP, Vec3::new(0.0, -1.0, 0.0), right_leg);
+    if let Ok(Some(model)) = tree.parent(root) {
+        dress(tree, model, head, limbs, yaw);
+    }
 }
 
 /// How far limbs swing at `speed` studs per second, `phase` radians into a stride.
@@ -304,6 +523,14 @@ impl Character {
         team: Option<Color3>,
         colors: BodyColors,
     ) -> Character {
+        let look = Look { colors, ..Look::for_player(0) };
+        Self::spawn_wearing(tree, name, team, look)
+    }
+
+    /// Like [`spawn_dressed`](Self::spawn_dressed), looking like `look`:
+    /// coloured by a body colours object, wearing its hat.
+    pub fn spawn_wearing(tree: &mut InstanceTree, name: &str, team: Option<Color3>, look: Look) -> Character {
+        let colors = look.colors;
         let at = spawn_point_for(tree, team);
         let ws = tree.workspace();
         let make = |tree: &mut InstanceTree, class, name: &str, parent| {
@@ -336,9 +563,24 @@ impl Character {
                 }
             }
         }
+        add_body_colors(tree, model, colors);
+        wear_hat(tree, model, look.hat, look.hat_color);
         let character = Character { model, root, head, humanoid, limbs };
         character.pose(tree, Pose::default());
         character
+    }
+
+    /// Changes how the character looks: its body colours and its hat.
+    pub fn restyle(&self, tree: &mut InstanceTree, look: Look) {
+        let children = tree.children(self.model).map(<[InstanceId]>::to_vec).unwrap_or_default();
+        for child in children {
+            if matches!(tree.class(child), Ok(ClassKind::BodyColors | ClassKind::Accessory)) {
+                let _ = tree.destroy(child);
+            }
+        }
+        add_body_colors(tree, self.model, look.colors);
+        wear_hat(tree, self.model, look.hat, look.hat_color);
+        self.pose(tree, Pose::default());
     }
 
     /// The character a model made by [`spawn_dressed`](Self::spawn_dressed)

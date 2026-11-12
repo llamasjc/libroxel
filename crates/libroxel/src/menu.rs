@@ -13,6 +13,8 @@ use crate::browse::Platform;
 use crate::server::{BackgroundServer, HubUse, ServerSettings, data_dir};
 use crate::starter_games::{self, STARTER_GAMES};
 use crate::{games_dir, templates};
+use libroxel_engine::character::{BodyColors, Hat, Look};
+use libroxel_instance::Color3;
 
 /// Which game the menu's buttons use.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +73,7 @@ pub enum Tab {
     Online,
     Create,
     Host,
+    Avatar,
 }
 
 /// What the home screen remembers.
@@ -89,6 +92,8 @@ pub struct Menu {
     pub server_port: String,
     pub servers: Vec<BackgroundServer>,
     pub error: Option<String>,
+    /// How the player looks, read from the avatar file the first time it's needed.
+    look: Option<Look>,
 }
 
 impl Default for Menu {
@@ -105,6 +110,7 @@ impl Default for Menu {
             server_port: (libroxel_engine::net::DEFAULT_PORT + 1).to_string(),
             servers: Vec::new(),
             error: None,
+            look: None,
         }
     }
 }
@@ -229,6 +235,7 @@ impl Menu {
                     (Tab::Online, "🌍 Online"),
                     (Tab::Create, "✏ Create"),
                     (Tab::Host, "🌐 Host"),
+                    (Tab::Avatar, "👤 Avatar"),
                 ] {
                     let on = self.tab == tab;
                     let text =
@@ -253,6 +260,10 @@ impl Menu {
                     Tab::Online => self.online_tab(ui, platform),
                     Tab::Create => self.create_tab(ui),
                     Tab::Host => self.host_tab(ui, platform),
+                    Tab::Avatar => {
+                        self.avatar_tab(ui);
+                        None
+                    }
                 };
                 if let Some(error) = &self.error {
                     ui.add_space(8.0);
@@ -265,6 +276,66 @@ impl Menu {
             self.error = None;
         }
         pick
+    }
+
+    /// How the player looks, as saved on the Avatar tab.
+    pub fn look(&mut self) -> Look {
+        *self.look.get_or_insert_with(|| {
+            let usual = Look::for_player(0);
+            std::fs::read_to_string(avatar_file())
+                .ok()
+                .and_then(|text| libroxel_instance::serde_json::from_str(&text).ok())
+                .map_or(usual, |json| Look::from_json(&json, usual))
+        })
+    }
+
+    fn avatar_tab(&mut self, ui: &mut egui::Ui) {
+        let mut look = self.look();
+        ui.label(RichText::new("Your avatar").size(22.0).strong());
+        ui.label(
+            RichText::new("How you look in every game you play or join. Other players see it too.")
+                .color(SOFT),
+        );
+        ui.add_space(12.0);
+        ui.horizontal_top(|ui| {
+            egui::Frame::new().fill(PANEL).corner_radius(10.0).inner_margin(12.0).show(ui, |ui| {
+                draw_avatar(ui, &look);
+            });
+            ui.add_space(20.0);
+            ui.vertical(|ui| {
+                for (label, color) in [
+                    ("Skin", &mut look.colors.skin),
+                    ("Shirt", &mut look.colors.shirt),
+                    ("Trousers", &mut look.colors.pants),
+                ] {
+                    ui.label(RichText::new(label).strong());
+                    swatches(ui, color, label);
+                    ui.add_space(8.0);
+                }
+                ui.label(RichText::new("Hat").strong());
+                ui.horizontal_wrapped(|ui| {
+                    for hat in Hat::ALL {
+                        ui.selectable_value(&mut look.hat, hat, hat.name());
+                    }
+                });
+                if look.hat != Hat::None {
+                    ui.add_space(4.0);
+                    swatches(ui, &mut look.hat_color, "Hat");
+                }
+                ui.add_space(12.0);
+                if ui.button("Back to the usual look").clicked() {
+                    look = Look::for_player(0);
+                }
+            });
+        });
+        if Some(look) != self.look {
+            self.look = Some(look);
+            let saved = std::fs::create_dir_all(data_dir())
+                .and_then(|_| std::fs::write(avatar_file(), look.to_json().to_string()));
+            if let Err(e) = saved {
+                self.error = Some(format!("Could not save your avatar: {e}"));
+            }
+        }
     }
 
     /// The games on this computer, as tiles to pick from.
@@ -535,4 +606,121 @@ fn hub_section(ui: &mut egui::Ui, platform: &mut Platform) {
             });
         }
     }
+}
+
+/// Where the avatar is saved.
+fn avatar_file() -> PathBuf {
+    data_dir().join("avatar.json")
+}
+
+/// Colours to pick from on the Avatar tab, for skin and for clothes.
+const SKINS: [[u8; 3]; 8] = [
+    [255, 224, 196],
+    [238, 196, 160],
+    [222, 172, 128],
+    [196, 140, 96],
+    [160, 108, 72],
+    [118, 78, 52],
+    [86, 56, 38],
+    [120, 200, 120],
+];
+const CLOTHES: [[u8; 3]; 16] = [
+    [236, 98, 74],
+    [242, 170, 40],
+    [250, 220, 70],
+    [120, 200, 80],
+    [32, 168, 150],
+    [70, 150, 230],
+    [50, 56, 84],
+    [124, 92, 214],
+    [226, 86, 150],
+    [240, 240, 240],
+    [150, 150, 160],
+    [40, 40, 46],
+    [120, 80, 50],
+    [180, 40, 50],
+    [20, 90, 60],
+    [250, 200, 60],
+];
+
+/// A row of colour squares; the chosen one is outlined. The last square
+/// opens a picker for any colour.
+fn swatches(ui: &mut egui::Ui, color: &mut Color3, label: &str) {
+    let choices: &[[u8; 3]] = if label == "Skin" { &SKINS } else { &CLOTHES };
+    let rgb = |c: Color3| {
+        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        [byte(c.r), byte(c.g), byte(c.b)]
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+        for [r, g, b] in choices.iter().copied() {
+            let (rect, response) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+            ui.painter().rect_filled(rect, 5.0, Color32::from_rgb(r, g, b));
+            if rgb(*color) == [r, g, b] {
+                ui.painter().rect_stroke(
+                    rect,
+                    5.0,
+                    egui::Stroke::new(2.5, ACCENT),
+                    egui::StrokeKind::Outside,
+                );
+            }
+            if response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                *color = Color3::from_rgb8(r, g, b);
+            }
+        }
+        let [r, g, b] = rgb(*color);
+        let mut picked = [r, g, b];
+        if ui.color_edit_button_srgb(&mut picked).changed() {
+            *color = Color3::from_rgb8(picked[0], picked[1], picked[2]);
+        }
+    });
+}
+
+/// Draws the avatar from the front, the way the character is built.
+fn draw_avatar(ui: &mut egui::Ui, look: &Look) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(220.0, 300.0), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    let scale = 42.0;
+    // The hips are the middle of the character; up is up the screen.
+    let hips = egui::pos2(rect.center().x, rect.min.y + 175.0);
+    let at = |x: f32, y: f32| egui::pos2(hips.x + x * scale, hips.y - y * scale);
+    let colour = |c: Color3| {
+        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        Color32::from_rgb(byte(c.r), byte(c.g), byte(c.b))
+    };
+    let shade = |c: Color32| c.gamma_multiply(0.82);
+    let block = |x: f32, y: f32, w: f32, h: f32, c: Color32| {
+        let r = egui::Rect::from_center_size(at(x, y), egui::vec2(w * scale, h * scale));
+        painter.rect_filled(r, 3.0, c);
+        painter.rect_stroke(r, 3.0, egui::Stroke::new(1.0, shade(c)), egui::StrokeKind::Inside);
+    };
+    let BodyColors { skin, shirt, pants } = look.colors;
+    let (skin, shirt, pants) = (colour(skin), colour(shirt), colour(pants));
+    block(-0.5, -1.0, 0.95, 2.0, pants);
+    block(0.5, -1.0, 0.95, 2.0, pants);
+    block(-1.5, 0.85, 0.8, 1.9, skin);
+    block(1.5, 0.85, 0.8, 1.9, skin);
+    block(0.0, 0.9, 2.2, 1.8, shirt);
+    block(0.0, 2.55, 1.6, 1.4, skin);
+    let eye = Color32::from_rgb(30, 30, 40);
+    block(-0.35, 2.65, 0.25, 0.35, eye);
+    block(0.35, 2.65, 0.25, 0.35, eye);
+    for (_, size, offset, turn, shape, _, tinted) in look.hat.parts() {
+        let c = if *tinted { colour(look.hat_color) } else { Color32::from_rgb(35, 35, 42) };
+        // A part turned on its side shows its other face.
+        let (w, h) = if *turn != 0.0 { (size[1], size[0]) } else { (size[0], size[1]) };
+        let (x, y) = (offset[0], 2.55 + offset[1]);
+        if *shape == libroxel_instance::PartShape::Ball {
+            painter.circle_filled(at(x, y), w * scale / 2.0, c);
+        } else {
+            block(x, y, w, h, c);
+        }
+    }
+    painter.text(
+        egui::pos2(rect.center().x, rect.max.y - 14.0),
+        egui::Align2::CENTER_CENTER,
+        look.hat.name(),
+        egui::FontId::proportional(13.0),
+        SOFT,
+    );
 }

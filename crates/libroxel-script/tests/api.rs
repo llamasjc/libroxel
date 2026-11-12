@@ -1044,3 +1044,52 @@ fn scripts_cannot_use_all_the_memory() {
     run(&rt, "print('alive')");
     assert_eq!(printed(&rt), vec!["alive"]);
 }
+
+#[test]
+fn finds_parts_in_boxes_balls_and_other_parts() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local function part(name, position, size, shape)
+            local p = Instance.new("Part")
+            p.Name = name
+            p.Position = position
+            p.Size = size
+            if shape then p.Shape = shape end
+            p.Parent = workspace
+            return p
+        end
+        local floor = part("Floor", Vector3.new(0, -0.5, 0), Vector3.new(50, 1, 50))
+        local crate = part("Crate", Vector3.new(0, 1, 0), Vector3.new(2, 2, 2))
+        local far = part("Far", Vector3.new(20, 1, 20), Vector3.new(2, 2, 2))
+        local ball = part("Ball", Vector3.new(4, 1, 0), Vector3.new(2, 2, 2), Enum.PartType.Ball)
+
+        local function names(parts)
+            local list = {}
+            for _, p in parts do table.insert(list, p.Name) end
+            table.sort(list)
+            return table.concat(list, ",")
+        end
+
+        print(names(workspace:GetPartBoundsInBox(CFrame.new(0, 1, 0), Vector3.new(1, 1, 1))))
+        print(names(workspace:GetPartBoundsInRadius(Vector3.new(4, 2, 0), 1.5)))
+        print(names(workspace:GetPartsInPart(crate)))
+        print(names(crate:GetTouchingParts()))
+        local params = OverlapParams.new()
+        params.FilterDescendantsInstances = { floor }
+        print(names(workspace:GetPartBoundsInRadius(Vector3.new(0, 0, 0), 40, params)))
+        params.FilterType = Enum.RaycastFilterType.Include
+        params.MaxParts = 1
+        print(names(workspace:GetPartBoundsInRadius(Vector3.new(0, 0, 0), 40, params)), typeof(params))
+        -- Only one part, and only the included one.
+        local long = CFrame.new(0, 0, 0) * CFrame.Angles(0, math.rad(45), 0)
+        print(#workspace:GetPartBoundsInBox(long, Vector3.new(29, 1, 1), params) )
+        print(names(workspace:GetPartBoundsInBox(CFrame.new(10, 1, 10) * CFrame.Angles(0, math.rad(45), 0), Vector3.new(0.5, 0.5, 30))))
+    "#,
+    );
+    assert_eq!(
+        printed(&rt),
+        vec!["Crate", "Ball", "Floor", "Floor", "Ball,Crate,Far", "Floor OverlapParams", "1", "Crate,Far"]
+    );
+}

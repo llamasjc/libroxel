@@ -242,3 +242,34 @@ fn a_joined_player_sees_the_world_and_plays_in_it() {
     };
     assert_eq!(names, ["Player1", "Bea"]);
 }
+
+#[test]
+fn everyone_sees_how_a_joined_player_chose_to_look() {
+    use libroxel_engine::character::{BodyColors, Hat, Look};
+    use libroxel_instance::Color3;
+    let tree = Rc::new(RefCell::new(game()));
+    let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    let green = Color3::from_rgb8(40, 200, 90);
+    let look = Look {
+        colors: BodyColors { shirt: green, ..BodyColors::for_player(0) },
+        hat: Hat::Crown,
+        hat_color: Color3::from_rgb8(250, 210, 60),
+    };
+    guest.set_local_look(look);
+    let dressed = |session: &PlaySession| {
+        let tree = session.runtime().tree().borrow();
+        let ws = tree.workspace();
+        let Some(bea) = tree.find_first_child(ws, "Bea").ok().flatten() else { return false };
+        let crown = tree.find_first_child(bea, "Crown").ok().flatten();
+        let torso = tree.find_first_child(bea, "Torso").ok().flatten();
+        crown.is_some_and(|c| tree.class(c).unwrap() == ClassKind::Accessory)
+            && torso
+                .and_then(|t| tree.get_color(t, Property::Color))
+                .is_some_and(|c| (c.g - green.g).abs() < 0.01)
+    };
+    until(&mut host, &mut guest, CharacterInput::default(), |h, g| dressed(h) && dressed(g));
+}

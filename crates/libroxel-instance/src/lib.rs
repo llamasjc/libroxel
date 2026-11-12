@@ -205,6 +205,12 @@ pub enum ClassKind {
     UIAspectRatioConstraint,
     /// Inside a GUI object: makes it bigger or smaller by Scale.
     UIScale,
+    /// Inside a character: the colour of each body part.
+    BodyColors,
+    /// Inside a character: something worn, like a hat. Its parts follow the
+    /// head; each part's `HeadOffset` attribute says where, in studs from
+    /// the middle of the head.
+    Accessory,
 }
 
 impl ClassKind {
@@ -292,6 +298,8 @@ impl ClassKind {
         ClassKind::UIGridLayout,
         ClassKind::UIAspectRatioConstraint,
         ClassKind::UIScale,
+        ClassKind::BodyColors,
+        ClassKind::Accessory,
     ];
 
     /// The services every tree has under its root, in order. They can't be
@@ -487,6 +495,15 @@ impl ClassKind {
             Property::MaxTorque,
         ];
         const TERRAIN: &[Property] = &[Property::Name];
+        const BODY_COLORS: &[Property] = &[
+            Property::Name,
+            Property::HeadColor,
+            Property::TorsoColor,
+            Property::LeftArmColor,
+            Property::RightArmColor,
+            Property::LeftLegColor,
+            Property::RightLegColor,
+        ];
         const SOUND: &[Property] = &[
             Property::Name,
             Property::SoundId,
@@ -830,6 +847,7 @@ impl ClassKind {
             ClassKind::UIGridLayout => GRID,
             ClassKind::UIAspectRatioConstraint => ASPECT,
             ClassKind::UIScale => SCALE,
+            ClassKind::BodyColors => BODY_COLORS,
             _ => COMMON,
         }
     }
@@ -1002,6 +1020,13 @@ impl ClassKind {
             Property::Looped | Property::Playing => PropertyValue::Bool(false),
             Property::Face => PropertyValue::Enum(EnumValue::NormalId(NormalId::Front)),
             Property::DecalColor => PropertyValue::Color3(Color3::WHITE),
+            Property::HeadColor | Property::LeftArmColor | Property::RightArmColor => {
+                PropertyValue::Color3(Color3::from_rgb8(238, 196, 160))
+            }
+            Property::TorsoColor => PropertyValue::Color3(Color3::from_rgb8(236, 98, 74)),
+            Property::LeftLegColor | Property::RightLegColor => {
+                PropertyValue::Color3(Color3::from_rgb8(50, 56, 84))
+            }
             Property::StudsPerTileU | Property::StudsPerTileV => PropertyValue::Number(2.0),
             Property::AngularVelocity => PropertyValue::Vec3(Vec3::ZERO),
             Property::BodyMaxTorque => PropertyValue::Vec3(Vec3::new(4000.0, 4000.0, 4000.0)),
@@ -1132,6 +1157,8 @@ impl ClassKind {
             ClassKind::UIGridLayout => "ui_grid_layout",
             ClassKind::UIAspectRatioConstraint => "ui_aspect_ratio_constraint",
             ClassKind::UIScale => "ui_scale",
+            ClassKind::BodyColors => "body_colors",
+            ClassKind::Accessory => "accessory",
         }
     }
 

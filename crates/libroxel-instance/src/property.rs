@@ -213,6 +213,13 @@ pub enum Property {
     Face,
     /// On a decal or texture: a tint multiplied with the picture.
     DecalColor,
+    /// On body colours: the colour of each body part.
+    HeadColor,
+    TorsoColor,
+    LeftArmColor,
+    RightArmColor,
+    LeftLegColor,
+    RightLegColor,
     /// On a texture: how wide each tile is, in studs.
     StudsPerTileU,
     /// On a texture: how tall each tile is, in studs.
@@ -414,7 +421,13 @@ impl Property {
             Property::Texture | Property::SoundId => "string",
             Property::Volume | Property::PlaybackSpeed => "number",
             Property::Looped | Property::Playing => "bool",
-            Property::DecalColor => "Color3",
+            Property::DecalColor
+            | Property::HeadColor
+            | Property::TorsoColor
+            | Property::LeftArmColor
+            | Property::RightArmColor
+            | Property::LeftLegColor
+            | Property::RightLegColor => "Color3",
             Property::Face => EnumKind::NormalId.kind_name(),
             Property::AngularVelocity | Property::BodyMaxTorque => "Vec3",
             Property::ActuatorType => EnumKind::ActuatorType.kind_name(),
@@ -621,6 +634,12 @@ impl Property {
         Property::Texture,
         Property::Face,
         Property::DecalColor,
+        Property::HeadColor,
+        Property::TorsoColor,
+        Property::LeftArmColor,
+        Property::RightArmColor,
+        Property::LeftLegColor,
+        Property::RightLegColor,
         Property::StudsPerTileU,
         Property::StudsPerTileV,
         Property::Rate,
@@ -787,6 +806,12 @@ impl Property {
             Property::Texture => "texture",
             Property::Face => "face",
             Property::DecalColor => "decal_color",
+            Property::HeadColor => "head_color",
+            Property::TorsoColor => "torso_color",
+            Property::LeftArmColor => "left_arm_color",
+            Property::RightArmColor => "right_arm_color",
+            Property::LeftLegColor => "left_leg_color",
+            Property::RightLegColor => "right_leg_color",
             Property::StudsPerTileU => "studs_per_tile_u",
             Property::StudsPerTileV => "studs_per_tile_v",
             Property::Rate => "rate",

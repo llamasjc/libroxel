@@ -1,5 +1,6 @@
 //! Ray tests against the parts and terrain in a tree, for picking and
-//! script raycasts.
+//! script raycasts, and overlap tests for finding the parts in a box, a
+//! ball or another part.
 
 use crate::{ClassKind, EnumValue, InstanceId, InstanceTree, PartShape, Property, Rotation, Vec3};
 
@@ -60,6 +61,109 @@ pub fn raycast(
         best = Some(RayHit { part: terrain, position: origin + dir * t, normal, distance: t });
     }
     best
+}
+
+/// A region to look for parts in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Region {
+    /// A box: its middle, how it's turned, and half its size.
+    Box { center: Vec3, rot: Rotation, half: Vec3 },
+    /// A ball: its middle and radius.
+    Ball { center: Vec3, radius: f32 },
+}
+
+impl Region {
+    /// The space `part` takes up: a ball for a ball part, else its box.
+    pub fn of_part(tree: &InstanceTree, part: InstanceId) -> Option<Region> {
+        let center = tree.get_vec3(part, Property::Position)?;
+        let size = tree.get_vec3(part, Property::Size)?;
+        if matches!(tree.get_enum(part, Property::Shape), Some(EnumValue::Shape(PartShape::Ball))) {
+            return Some(Region::Ball { center, radius: size.x.min(size.y).min(size.z) / 2.0 });
+        }
+        let rot = Rotation::from_orientation(tree.get_vec3(part, Property::Orientation).unwrap_or_default());
+        Some(Region::Box { center, rot, half: size / 2.0 })
+    }
+
+    /// The same region grown by `margin` on every side.
+    pub fn grown(self, margin: f32) -> Region {
+        match self {
+            Region::Box { center, rot, half } => {
+                Region::Box { center, rot, half: half + Vec3::new(margin, margin, margin) }
+            }
+            Region::Ball { center, radius } => Region::Ball { center, radius: radius + margin },
+        }
+    }
+
+    /// Whether the two regions overlap (touching counts).
+    pub fn overlaps(self, other: Region) -> bool {
+        match (self, other) {
+            (Region::Ball { center: a, radius: ra }, Region::Ball { center: b, radius: rb }) => {
+                (a - b).length() <= ra + rb
+            }
+            (Region::Box { center, rot, half }, Region::Ball { center: c, radius })
+            | (Region::Ball { center: c, radius }, Region::Box { center, rot, half }) => {
+                // The nearest point of the box to the ball's middle.
+                let local = rot.transpose().apply(c - center);
+                let nearest = Vec3::new(
+                    local.x.clamp(-half.x, half.x),
+                    local.y.clamp(-half.y, half.y),
+                    local.z.clamp(-half.z, half.z),
+                );
+                (local - nearest).length() <= radius
+            }
+            (
+                Region::Box { center: ca, rot: ra, half: ha },
+                Region::Box { center: cb, rot: rb, half: hb },
+            ) => boxes_overlap(ca, ra, ha, cb, rb, hb),
+        }
+    }
+}
+
+/// Two turned boxes overlap unless some axis separates them: one of either
+/// box's three axes, or a cross product of one axis from each.
+fn boxes_overlap(ca: Vec3, ra: Rotation, ha: Vec3, cb: Vec3, rb: Rotation, hb: Vec3) -> bool {
+    let a = [ra.x, ra.y, ra.z];
+    let b = [rb.x, rb.y, rb.z];
+    let (ea, eb) = ([ha.x, ha.y, ha.z], [hb.x, hb.y, hb.z]);
+    let gap = cb - ca;
+    let separates = |axis: Vec3| {
+        let length = axis.length();
+        if length < 1e-6 {
+            return false;
+        }
+        let axis = axis / length;
+        let reach =
+            |axes: &[Vec3; 3], e: &[f32; 3]| (0..3).map(|i| e[i] * axes[i].dot(axis).abs()).sum::<f32>();
+        gap.dot(axis).abs() > reach(&a, &ea) + reach(&b, &eb) + 1e-4
+    };
+    let mut axes = a.to_vec();
+    axes.extend(b);
+    for i in a {
+        for j in b {
+            axes.push(i.cross(j));
+        }
+    }
+    !axes.into_iter().any(separates)
+}
+
+/// Every part in the workspace that `keep` accepts and that overlaps
+/// `region`, judged by its box (or ball), at most `limit` of them.
+pub fn parts_in(
+    tree: &InstanceTree,
+    region: Region,
+    limit: usize,
+    keep: impl Fn(InstanceId) -> bool,
+) -> Vec<InstanceId> {
+    let mut found = Vec::new();
+    for part in tree.descendants_of_class(tree.workspace(), ClassKind::Part) {
+        if found.len() >= limit {
+            break;
+        }
+        if keep(part) && Region::of_part(tree, part).is_some_and(|r| r.overlaps(region)) {
+            found.push(part);
+        }
+    }
+    found
 }
 
 /// A ray against a shape centred on the origin: the distance and the normal.

@@ -6,7 +6,10 @@ use std::collections::BTreeMap;
 use libroxel_instance::{
     ClassKind, EnumKind, EnumValue, InstanceId, KeyCode, Property, RaycastFilterType, UserInputType, geometry,
 };
-use mlua::{Lua, MetaMethod, MultiValue, Table, UserData, UserDataFields, UserDataMethods, Value, Variadic};
+use mlua::{
+    AnyUserData, Lua, MetaMethod, MultiValue, Table, UserData, UserDataFields, UserDataMethods, Value,
+    Variadic,
+};
 
 use crate::bindings::{
     LuaEnumItem, LuaInstance, LuaVector3, Signal, SignalKind, as_enum, as_instance, as_vector3, fire, host,
@@ -42,7 +45,11 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     lib.set_readonly(true);
-    lua.globals().set(names::globals::RAYCAST_PARAMS, lib)
+    lua.globals().set(names::globals::RAYCAST_PARAMS, lib)?;
+    let lib = lua.create_table()?;
+    lib.set(names::constructors::NEW, lua.create_function(|_, ()| Ok(OverlapParams::default()))?)?;
+    lib.set_readonly(true);
+    lua.globals().set(names::globals::OVERLAP_PARAMS, lib)
 }
 
 // ---------------------------------------------------------------------------
@@ -387,6 +394,109 @@ impl UserData for RaycastParams {
     }
 }
 
+/// What to look for in an overlap query: like raycast parameters, plus
+/// the most parts to return (0 for no limit).
+#[derive(Clone)]
+struct OverlapParams {
+    filter: Vec<InstanceId>,
+    filter_type: RaycastFilterType,
+    max_parts: usize,
+}
+
+impl Default for OverlapParams {
+    fn default() -> Self {
+        Self { filter: Vec::new(), filter_type: RaycastFilterType::Exclude, max_parts: 0 }
+    }
+}
+
+impl UserData for OverlapParams {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        fields.add_field_method_get(raycast::FILTER_DESCENDANTS_INSTANCES, |lua, this| {
+            this.filter.iter().map(|id| push_instance(lua, *id)).collect::<mlua::Result<Vec<_>>>()
+        });
+        fields.add_field_method_set(raycast::FILTER_DESCENDANTS_INSTANCES, |_, this, list: Table| {
+            this.filter = instance_list(list)?;
+            Ok(())
+        });
+        fields.add_field_method_get(raycast::FILTER_TYPE, |_, this| {
+            Ok(LuaEnumItem(EnumValue::RaycastFilterType(this.filter_type)))
+        });
+        fields.add_field_method_set(raycast::FILTER_TYPE, |_, this, value: Value| {
+            match as_enum(EnumKind::RaycastFilterType, &value) {
+                Some(EnumValue::RaycastFilterType(t)) => {
+                    this.filter_type = t;
+                    Ok(())
+                }
+                _ => Err(runtime_err("FilterType expects a RaycastFilterType")),
+            }
+        });
+        fields.add_field_method_get(names::overlap::MAX_PARTS, |_, this| Ok(this.max_parts));
+        fields.add_field_method_set(names::overlap::MAX_PARTS, |_, this, n: f64| {
+            this.max_parts = n.max(0.0) as usize;
+            Ok(())
+        });
+        fields.add_meta_field(MetaMethod::Type, names::overlap::PARAMS_TYPE_NAME);
+    }
+}
+
+fn instance_list(list: Table) -> mlua::Result<Vec<InstanceId>> {
+    list.sequence_values::<Value>()
+        .map(|v| v.map(|v| as_instance(&v)))
+        .collect::<mlua::Result<Vec<_>>>()?
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| runtime_err("FilterDescendantsInstances must be a list of Instances"))
+}
+
+/// Reads overlap parameters (raycast ones work too).
+fn overlap_params(params: Option<Value>, member: &str) -> mlua::Result<OverlapParams> {
+    match &params {
+        None | Some(Value::Nil) => Ok(OverlapParams::default()),
+        Some(Value::UserData(ud)) => {
+            if let Ok(p) = ud.borrow::<OverlapParams>() {
+                return Ok(p.clone());
+            }
+            if let Ok(p) = ud.borrow::<RaycastParams>() {
+                return Ok(OverlapParams {
+                    filter: p.filter.clone(),
+                    filter_type: p.filter_type,
+                    max_parts: 0,
+                });
+            }
+            Err(runtime_err(format!("{member} expects OverlapParams")))
+        }
+        Some(_) => Err(runtime_err(format!("{member} expects OverlapParams"))),
+    }
+}
+
+/// The parts overlapping `region` that `params` lets through, leaving out `skip`.
+fn query(
+    lua: &Lua,
+    region: geometry::Region,
+    params: &OverlapParams,
+    skip: Option<InstanceId>,
+) -> mlua::Result<Vec<AnyUserData>> {
+    let found = {
+        let host = host(lua);
+        let tree = host.tree.borrow();
+        let listed = |part: InstanceId| {
+            params.filter.iter().any(|f| *f == part || tree.is_descendant_of(part, *f).unwrap_or(false))
+        };
+        let limit = if params.max_parts == 0 { usize::MAX } else { params.max_parts };
+        geometry::parts_in(&tree, region, limit, |part| {
+            Some(part) != skip
+                && match params.filter_type {
+                    RaycastFilterType::Exclude => !listed(part),
+                    RaycastFilterType::Include => listed(part),
+                }
+        })
+    };
+    found.into_iter().map(|id| push_instance(lua, id)).collect()
+}
+
+/// How far apart two parts can be and still count as touching.
+const TOUCH_MARGIN: f32 = 0.05;
+
 struct RaycastResult {
     hit: geometry::RayHit,
     material: Option<EnumValue>,
@@ -488,6 +598,44 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
             workspace_raycast(lua, origin, direction, params)
         },
     );
+    m.add_method(
+        methods::GET_PART_BOUNDS_IN_BOX,
+        |lua, this, (cframe, size, params): (Value, Value, Option<Value>)| {
+            let member = methods::GET_PART_BOUNDS_IN_BOX;
+            require_class(lua, this.0, ClassKind::Workspace, member)?;
+            let cframe = crate::types::as_cframe(&cframe)
+                .ok_or_else(|| runtime_err(format!("{member} expects a CFrame")))?;
+            let size =
+                as_vector3(&size).ok_or_else(|| runtime_err(format!("{member} expects a Vector3 size")))?;
+            let region = geometry::Region::Box { center: cframe.pos, rot: cframe.rot, half: size / 2.0 };
+            query(lua, region, &overlap_params(params, member)?, None)
+        },
+    );
+    m.add_method(
+        methods::GET_PART_BOUNDS_IN_RADIUS,
+        |lua, this, (center, radius, params): (Value, f32, Option<Value>)| {
+            let member = methods::GET_PART_BOUNDS_IN_RADIUS;
+            require_class(lua, this.0, ClassKind::Workspace, member)?;
+            let center = as_vector3(&center)
+                .ok_or_else(|| runtime_err(format!("{member} expects a Vector3 position")))?;
+            let region = geometry::Region::Ball { center, radius: radius.max(0.0) };
+            query(lua, region, &overlap_params(params, member)?, None)
+        },
+    );
+    m.add_method(methods::GET_PARTS_IN_PART, |lua, this, (part, params): (Value, Option<Value>)| {
+        let member = methods::GET_PARTS_IN_PART;
+        require_class(lua, this.0, ClassKind::Workspace, member)?;
+        let part = as_instance(&part).ok_or_else(|| runtime_err(format!("{member} expects a part")))?;
+        let region = geometry::Region::of_part(&host(lua).tree.borrow(), part)
+            .ok_or_else(|| runtime_err(format!("{member} expects a part")))?;
+        query(lua, region, &overlap_params(params, member)?, Some(part))
+    });
+    m.add_method(methods::GET_TOUCHING_PARTS, |lua, this, ()| {
+        require_class(lua, this.0, ClassKind::Part, methods::GET_TOUCHING_PARTS)?;
+        let region = geometry::Region::of_part(&host(lua).tree.borrow(), this.0)
+            .ok_or_else(|| runtime_err("GetTouchingParts needs a part with a size"))?;
+        query(lua, region.grown(TOUCH_MARGIN), &OverlapParams::default(), Some(this.0))
+    });
     m.add_method(methods::FIRE_SERVER, |lua, this, args: MultiValue| {
         require_class(lua, this.0, ClassKind::RemoteEvent, methods::FIRE_SERVER)?;
         if crate::net::role(lua) == crate::net::NetRole::Client {

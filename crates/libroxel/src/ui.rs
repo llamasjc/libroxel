@@ -110,6 +110,8 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::UIStroke,
     ClassKind::UIPadding,
     ClassKind::UIGridLayout,
+    ClassKind::BodyColors,
+    ClassKind::Accessory,
     ClassKind::UIAspectRatioConstraint,
     ClassKind::UIScale,
     ClassKind::Team,
@@ -220,6 +222,8 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::UIStroke => "▢",
         ClassKind::UIPadding => "⬚",
         ClassKind::UIGridLayout => "▦",
+        ClassKind::BodyColors => "🎨",
+        ClassKind::Accessory => "🎩",
         ClassKind::UIAspectRatioConstraint => "⬌",
         ClassKind::UIScale => "🔍",
         ClassKind::Teams | ClassKind::Team => "🚩",
@@ -1312,6 +1316,16 @@ fn properties(
              studs. Texture is a file name, found like an ImageLabel's; libroxel://smile, star, arrow, \
              checker and coin are built in. Color3 tints it.",
         ),
+        ClassKind::BodyColors => Some(
+            "Put one in a character (StarterCharacter, or from a script on CharacterAdded) to colour \
+             its head, torso, arms and legs. Players pick their own colours on the Avatar tab; this \
+             overrides them.",
+        ),
+        ClassKind::Accessory => Some(
+            "Something a character wears, like a hat. Put parts inside it and give each a HeadOffset \
+             attribute (a Vector3, in studs from the middle of the head) to say where it sits; they \
+             follow the head as the character moves.",
+        ),
         ClassKind::Sound => Some(
             "Plays a WAV or OGG file while the game runs: tick Playing, or call Play, Stop, Pause and \
              Resume from a script (Ended fires when it finishes). SoundId is found like a picture; \
@@ -2250,6 +2264,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             };
             match started {
                 Ok(mut session) => {
+                    session.set_local_look(editor.menu.look());
                     let lines = session.take_log();
                     if let Some(address) = session.host_address() {
                         log(engine, LogLevel::Info, format!("{what} on port {}", address.port()));
