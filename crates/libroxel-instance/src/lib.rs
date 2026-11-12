@@ -17,6 +17,7 @@
 mod enums;
 pub mod geometry;
 mod math;
+pub mod pathfind;
 pub mod place;
 mod property;
 mod tree;
@@ -24,8 +25,8 @@ pub mod voxels;
 
 pub use enums::{
     ActuatorType, CameraType, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection, KeyCode,
-    Material, NormalId, PartShape, RaycastFilterType, ScaleType, TextXAlignment, TextYAlignment,
-    UserInputType,
+    Material, NormalId, PartShape, PathStatus, PathWaypointAction, RaycastFilterType, ScaleType,
+    TextXAlignment, TextYAlignment, UserInputType,
 };
 pub use math::{CFrame, Color3, Rotation, UDim, UDim2, Vec2, Vec3};
 pub use property::{Property, PropertyValue};

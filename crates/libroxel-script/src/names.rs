@@ -12,8 +12,8 @@
 
 use libroxel_instance::{
     ActuatorType, CameraType, ClassKind, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection,
-    KeyCode, Material, NormalId, PartShape, Property, RaycastFilterType, ScaleType, TextXAlignment,
-    TextYAlignment, UserInputType,
+    KeyCode, Material, NormalId, PartShape, PathStatus, PathWaypointAction, Property, RaycastFilterType,
+    ScaleType, TextXAlignment, TextYAlignment, UserInputType,
 };
 
 /// Global variables installed into every script.
@@ -394,6 +394,22 @@ pub mod raycast {
     pub const MATERIAL: &str = "Material";
 }
 
+/// Members of the pathfinding service, its paths and their waypoints.
+pub mod pathfinding {
+    pub const CREATE_PATH: &str = "CreatePath";
+    pub const AGENT_RADIUS: &str = "AgentRadius";
+    pub const AGENT_HEIGHT: &str = "AgentHeight";
+    pub const AGENT_CAN_JUMP: &str = "AgentCanJump";
+    pub const PATH_TYPE_NAME: &str = "Path";
+    pub const STATUS: &str = "Status";
+    pub const COMPUTE_ASYNC: &str = "ComputeAsync";
+    pub const GET_WAYPOINTS: &str = "GetWaypoints";
+    pub const WAYPOINT_TYPE_NAME: &str = "PathWaypoint";
+    pub const POSITION: &str = "Position";
+    pub const ACTION: &str = "Action";
+    pub const LABEL: &str = "Label";
+}
+
 /// Members of overlap parameters (the filter members are as on raycast ones).
 pub mod overlap {
     pub const PARAMS_TYPE_NAME: &str = "OverlapParams";
@@ -485,6 +501,8 @@ pub fn enum_name(kind: EnumKind) -> &'static str {
         EnumKind::ScaleType => "ScaleType",
         EnumKind::ActuatorType => "ActuatorType",
         EnumKind::NormalId => "NormalId",
+        EnumKind::PathStatus => "PathStatus",
+        EnumKind::PathWaypointAction => "PathWaypointAction",
     }
 }
 
@@ -594,6 +612,14 @@ pub fn enum_item_name(value: EnumValue) -> &'static str {
             UserInputType::Keyboard => "Keyboard",
             UserInputType::MouseButton1 => "MouseButton1",
             UserInputType::MouseButton2 => "MouseButton2",
+        },
+        EnumValue::PathStatus(s) => match s {
+            PathStatus::Success => "Success",
+            PathStatus::NoPath => "NoPath",
+        },
+        EnumValue::PathWaypointAction(a) => match a {
+            PathWaypointAction::Walk => "Walk",
+            PathWaypointAction::Jump => "Jump",
         },
         EnumValue::RaycastFilterType(t) => match t {
             RaycastFilterType::Exclude => "Exclude",
@@ -733,6 +759,7 @@ pub mod services {
     pub const DEBRIS: &str = "Debris";
     pub const COLLECTION_SERVICE: &str = "CollectionService";
     pub const HTTP_SERVICE: &str = "HttpService";
+    pub const PATHFINDING_SERVICE: &str = "PathfindingService";
     /// Fires once per frame with the frame's delta time in seconds.
     pub const HEARTBEAT: &str = "Heartbeat";
     /// Fires each frame before physics, with the game time and the frame time.

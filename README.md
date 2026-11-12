@@ -154,7 +154,8 @@ The first build compiles Bevy and takes a while. After that it is quick.
   **Sample obby** has coins, lava, TNT and a rover. **Kart race** is three
   laps round a track in karts, through blue gates in order, with laps and
   best lap times on the leaderboard. **Coin rush** is one-minute rounds in
-  an arena where coins keep appearing and a lava bar sweeps the middle; the
+  an arena where coins keep appearing, a lava bar sweeps the middle and a
+  robot that finds its own way to the coins tries to get there first; the
   most coins wins the round. Open them from the home screen or **File →
   Open a starter game**.
 - **Undo/redo** with Ctrl+Z and Ctrl+Y. **Save** with Ctrl+S. Games are
@@ -391,6 +392,14 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `Material`, or nil. `RaycastParams` has `FilterDescendantsInstances` and
   `FilterType` (`Enum.RaycastFilterType.Exclude` or `Include`). Every part
   shape is hit exactly.
+- **Pathfinding:** `game:GetService("PathfindingService"):CreatePath({
+  AgentRadius = 1, AgentHeight = 5, AgentCanJump = true })` makes a path;
+  `path:ComputeAsync(from, to)` searches the ground for a way round walls,
+  up stairs and ramps, and up ledges it can jump, and `path.Status` says
+  `Enum.PathStatus.Success` or `NoPath`. `path:GetWaypoints()` lists points
+  with a `Position` and an `Action` (`Enum.PathWaypointAction.Walk` or
+  `Jump`); walk a character through them with `Humanoid:MoveTo`. Other
+  characters aren't avoided. AgentRadius is half the agent's width.
 - **Finding parts in a space:** `workspace:GetPartBoundsInBox(cframe, size,
   params?)`, `GetPartBoundsInRadius(position, radius, params?)` and
   `GetPartsInPart(part, params?)` list the parts there (judged by their

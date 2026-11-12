@@ -25,6 +25,7 @@ mod effects;
 mod items;
 pub mod names;
 mod net;
+mod pathfinding;
 mod services;
 mod sound;
 mod terrain;

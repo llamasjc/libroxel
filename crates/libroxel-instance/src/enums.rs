@@ -136,6 +136,22 @@ pub enum UserInputType {
     MouseButton2,
 }
 
+/// Whether a path search found a way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum PathStatus {
+    Success,
+    #[default]
+    NoPath,
+}
+
+/// What to do on reaching a path's waypoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum PathWaypointAction {
+    #[default]
+    Walk,
+    Jump,
+}
+
 /// Whether a raycast's filter list is skipped or is the only thing hit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum RaycastFilterType {
@@ -364,6 +380,8 @@ pub enum EnumKind {
     ScaleType,
     ActuatorType,
     NormalId,
+    PathStatus,
+    PathWaypointAction,
 }
 
 /// A value from one of the enumerations.
@@ -383,6 +401,8 @@ pub enum EnumValue {
     ScaleType(ScaleType),
     ActuatorType(ActuatorType),
     NormalId(NormalId),
+    PathStatus(PathStatus),
+    PathWaypointAction(PathWaypointAction),
 }
 
 const KEY_CODES: &[EnumValue] = &[
@@ -457,6 +477,8 @@ impl EnumKind {
         EnumKind::ScaleType,
         EnumKind::ActuatorType,
         EnumKind::NormalId,
+        EnumKind::PathStatus,
+        EnumKind::PathWaypointAction,
     ];
 
     /// Every value of this enumeration, in a stable order.
@@ -507,6 +529,11 @@ impl EnumKind {
                 E::UserInputType(UserInputType::Keyboard),
                 E::UserInputType(UserInputType::MouseButton1),
                 E::UserInputType(UserInputType::MouseButton2),
+            ],
+            EnumKind::PathStatus => &[E::PathStatus(PathStatus::Success), E::PathStatus(PathStatus::NoPath)],
+            EnumKind::PathWaypointAction => &[
+                E::PathWaypointAction(PathWaypointAction::Walk),
+                E::PathWaypointAction(PathWaypointAction::Jump),
             ],
             EnumKind::RaycastFilterType => &[
                 E::RaycastFilterType(RaycastFilterType::Exclude),
@@ -566,6 +593,8 @@ impl EnumKind {
             EnumKind::ScaleType => "enum:scale_type",
             EnumKind::ActuatorType => "enum:actuator_type",
             EnumKind::NormalId => "enum:normal_id",
+            EnumKind::PathStatus => "enum:path_status",
+            EnumKind::PathWaypointAction => "enum:path_waypoint_action",
         }
     }
 
@@ -592,6 +621,8 @@ impl EnumValue {
             EnumValue::ScaleType(_) => EnumKind::ScaleType,
             EnumValue::ActuatorType(_) => EnumKind::ActuatorType,
             EnumValue::NormalId(_) => EnumKind::NormalId,
+            EnumValue::PathStatus(_) => EnumKind::PathStatus,
+            EnumValue::PathWaypointAction(_) => EnumKind::PathWaypointAction,
         }
     }
 
@@ -701,6 +732,14 @@ impl EnumValue {
                 UserInputType::Keyboard => "keyboard",
                 UserInputType::MouseButton1 => "mouse_button1",
                 UserInputType::MouseButton2 => "mouse_button2",
+            },
+            EnumValue::PathStatus(s) => match s {
+                PathStatus::Success => "success",
+                PathStatus::NoPath => "no_path",
+            },
+            EnumValue::PathWaypointAction(a) => match a {
+                PathWaypointAction::Walk => "walk",
+                PathWaypointAction::Jump => "jump",
             },
             EnumValue::RaycastFilterType(t) => match t {
                 RaycastFilterType::Exclude => "exclude",

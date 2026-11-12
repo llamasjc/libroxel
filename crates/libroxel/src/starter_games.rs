@@ -34,7 +34,7 @@ pub const STARTER_GAMES: &[StarterGame] = &[
     StarterGame {
         name: "Coin rush",
         symbol: "💰",
-        about: "Grab the most coins before time runs out",
+        about: "Beat a robot to the coins before time runs out",
         build: coin_rush,
     },
 ];
@@ -337,12 +337,15 @@ local function dropCoin()
 	local taken = false
 	coin.Touched:Connect(function(hit)
 		local player = Players:GetPlayerFromCharacter(hit.Parent)
-		if taken or not player then
+		local robot = hit.Parent and hit.Parent.Name == "Robot"
+		if taken or not (player or robot) then
 			return
 		end
 		taken = true
-		ding:Play()
-		player.leaderstats.Coins.Value += 1
+		if player then
+			ding:Play()
+			player.leaderstats.Coins.Value += 1
+		end
 		coin.Transparency = 1
 		task.wait(0.5)
 		coin:Destroy()
@@ -372,7 +375,8 @@ game:GetService("RunService").Heartbeat:Connect(function(dt)
 end)
 bar.Touched:Connect(function(hit)
 	local humanoid = hit.Parent and hit.Parent:FindFirstChild("Humanoid")
-	if humanoid then
+	-- The robot is fireproof.
+	if humanoid and hit.Parent.Name ~= "Robot" then
 		humanoid.Health = 0
 	end
 end)
@@ -413,6 +417,75 @@ while true do
 	end
 end
 "#;
+
+const ROBOT_SCRIPT: &str = r#"
+-- The robot hunts for coins too. It finds a way to the nearest one with
+-- the pathfinding service, round the pillar and up the ramps, and any coin
+-- it reaches is gone. Beat it there!
+local PathfindingService = game:GetService("PathfindingService")
+local robot = script.Parent
+local humanoid = robot.Humanoid
+local root = robot.HumanoidRootPart
+humanoid.WalkSpeed = 9
+local path = PathfindingService:CreatePath({ AgentRadius = 1, AgentHeight = 5 })
+
+local function nearestCoin()
+	local best, bestDistance = nil, math.huge
+	for _, thing in workspace:GetChildren() do
+		if thing.Name == "Coin" and thing.Transparency < 1 then
+			local distance = (thing.Position - root.Position).Magnitude
+			if distance < bestDistance then
+				best, bestDistance = thing, distance
+			end
+		end
+	end
+	return best
+end
+
+while true do
+	local coin = nearestCoin()
+	if coin then
+		path:ComputeAsync(root.Position, coin.Position)
+		if path.Status == Enum.PathStatus.Success then
+			for _, waypoint in path:GetWaypoints() do
+				if not coin.Parent or coin.Transparency >= 1 then
+					break
+				end
+				if waypoint.Action == Enum.PathWaypointAction.Jump then
+					humanoid.Jump = true
+				end
+				humanoid:MoveTo(waypoint.Position)
+				humanoid.MoveToFinished:Wait()
+			end
+		end
+	end
+	task.wait(0.3)
+end
+"#;
+
+/// A robot that walks itself (with a script), made like a character.
+fn robot(tree: &mut InstanceTree, at: [f32; 3]) -> InstanceId {
+    use libroxel_engine::character::{BodyColors, Hat, build_rig, pose_rig, wear_hat};
+    let ws = tree.workspace();
+    let model = add(tree, ws, ClassKind::Model, "Robot");
+    let root = block(tree, model, "HumanoidRootPart", at, [2.0, 4.0, 1.5], [150, 150, 160]);
+    set(tree, root, Property::Anchored, PropertyValue::Bool(false));
+    set(tree, root, Property::Transparency, PropertyValue::Number(1.0));
+    let colors = BodyColors {
+        skin: Color3::from_rgb8(170, 175, 185),
+        shirt: Color3::from_rgb8(90, 110, 140),
+        pants: Color3::from_rgb8(70, 75, 90),
+    };
+    let (head, limbs) = build_rig(tree, model, colors);
+    for part in limbs.parts().into_iter().chain([head]) {
+        material(tree, part, Material::Metal);
+    }
+    pose_rig(tree, root, head, &limbs, Default::default());
+    wear_hat(tree, model, Hat::Antenna, Color3::from_rgb8(255, 70, 60));
+    add(tree, model, ClassKind::Humanoid, "Humanoid");
+    script(tree, model, "Hunt", ROBOT_SCRIPT);
+    model
+}
 
 /// A walled arena with platforms and ramps, where coins keep appearing for
 /// a minute at a time. The most coins wins the round.
@@ -467,6 +540,7 @@ pub fn coin_rush() -> InstanceTree {
     status_hud(&mut tree, "Coin rush is starting!");
     let server = tree.service(ClassKind::ServerScriptService).expect("every tree has ServerScriptService");
     script(&mut tree, server, "Rounds", ROUNDS_SCRIPT);
+    robot(&mut tree, [-20.0, 2.0, 20.0]);
     tree.drain_changes();
     tree
 }
@@ -551,5 +625,20 @@ mod tests {
         let coins: i32 = value(&session, "game.Players.Player1.leaderstats.Coins.Value").parse().unwrap();
         assert!(coins >= 1, "{coins}");
         assert!(errors(&mut session).is_empty());
+    }
+
+    #[test]
+    fn the_coin_rush_robot_goes_after_coins() {
+        let mut session = start_on(coin_rush(), true).unwrap();
+        for _ in 0..60 * 8 {
+            session.step(1.0 / 60.0, CharacterInput::default());
+        }
+        assert!(errors(&mut session).is_empty());
+        let moved = value(
+            &session,
+            "(workspace.Robot.HumanoidRootPart.Position - Vector3.new(-20, 2, 20)).Magnitude",
+        );
+        assert!(moved.parse::<f32>().unwrap() > 5.0, "{moved}");
+        assert_eq!(value(&session, "workspace.Robot.Humanoid.Health > 0"), "true");
     }
 }

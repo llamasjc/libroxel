@@ -722,6 +722,9 @@ impl UserData for LuaInstance {
             if let Some(service) = crate::calls::get_service(lua, &name)? {
                 return Ok(service);
             }
+            if let Some(service) = crate::pathfinding::get_service(lua, &name)? {
+                return Ok(service);
+            }
             let service = names::class_from_name(&name).and_then(|c| host(lua).tree.borrow().service(c));
             match service {
                 Some(id) => Ok(Value::UserData(push_instance(lua, id)?)),

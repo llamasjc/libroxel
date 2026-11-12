@@ -34,25 +34,11 @@ pub fn raycast(
         if !keep(part) {
             continue;
         }
-        let (Some(pos), Some(size)) =
-            (tree.get_vec3(part, Property::Position), tree.get_vec3(part, Property::Size))
-        else {
-            continue;
-        };
-        let shape = match tree.get_enum(part, Property::Shape) {
-            Some(EnumValue::Shape(s)) => s,
-            _ => PartShape::Block,
-        };
-        let rot = Rotation::from_orientation(tree.get_vec3(part, Property::Orientation).unwrap_or_default());
-        let inv = rot.transpose();
-        let local_origin = inv.apply(origin - pos);
-        let local_dir = inv.apply(dir);
-        let Some((t, local_normal)) = ray_shape(shape, size / 2.0, local_origin, local_dir) else { continue };
+        let Some((t, normal)) = ray_part(tree, part, origin, dir) else { continue };
         if t > reach || best.is_some_and(|b| b.distance <= t) {
             continue;
         }
-        best =
-            Some(RayHit { part, position: origin + dir * t, normal: rot.apply(local_normal), distance: t });
+        best = Some(RayHit { part, position: origin + dir * t, normal, distance: t });
     }
     if let Some(terrain) = tree.terrain().filter(|t| keep(*t))
         && let Ok(voxels) = tree.voxels(terrain)
@@ -61,6 +47,21 @@ pub fn raycast(
         best = Some(RayHit { part: terrain, position: origin + dir * t, normal, distance: t });
     }
     best
+}
+
+/// A ray from `origin` along the unit vector `dir` against one part: how
+/// far along it hits, and the outward normal there.
+pub fn ray_part(tree: &InstanceTree, part: InstanceId, origin: Vec3, dir: Vec3) -> Option<(f32, Vec3)> {
+    let pos = tree.get_vec3(part, Property::Position)?;
+    let size = tree.get_vec3(part, Property::Size)?;
+    let shape = match tree.get_enum(part, Property::Shape) {
+        Some(EnumValue::Shape(s)) => s,
+        _ => PartShape::Block,
+    };
+    let rot = Rotation::from_orientation(tree.get_vec3(part, Property::Orientation).unwrap_or_default());
+    let inv = rot.transpose();
+    let (t, local_normal) = ray_shape(shape, size / 2.0, inv.apply(origin - pos), inv.apply(dir))?;
+    Some((t, rot.apply(local_normal)))
 }
 
 /// A region to look for parts in.
@@ -73,6 +74,21 @@ pub enum Region {
 }
 
 impl Region {
+    /// The smallest upright box around it: its lowest and highest corners.
+    pub fn bounds(self) -> (Vec3, Vec3) {
+        let reach = match self {
+            Region::Box { rot, half, .. } => {
+                let abs = |v: Vec3| Vec3::new(v.x.abs(), v.y.abs(), v.z.abs());
+                abs(rot.x) * half.x + abs(rot.y) * half.y + abs(rot.z) * half.z
+            }
+            Region::Ball { radius, .. } => Vec3::new(radius, radius, radius),
+        };
+        let center = match self {
+            Region::Box { center, .. } | Region::Ball { center, .. } => center,
+        };
+        (center - reach, center + reach)
+    }
+
     /// The space `part` takes up: a ball for a ball part, else its box.
     pub fn of_part(tree: &InstanceTree, part: InstanceId) -> Option<Region> {
         let center = tree.get_vec3(part, Property::Position)?;
