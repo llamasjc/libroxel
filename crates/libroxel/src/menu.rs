@@ -399,7 +399,26 @@ impl Menu {
     }
 
     fn online_tab(&mut self, ui: &mut egui::Ui, platform: &mut Platform) -> Option<Pick> {
+        egui::ScrollArea::vertical().id_salt("online").show(ui, |ui| self.online_inner(ui, platform)).inner
+    }
+
+    fn online_inner(&mut self, ui: &mut egui::Ui, platform: &mut Platform) -> Option<Pick> {
         let mut pick = None;
+        if let Some(done) = platform.take_download() {
+            let game = Game::File(done.path);
+            pick = Some(if done.host { Pick::Host(game) } else { Pick::Play(game) });
+        }
+        ui.label(RichText::new("Published games").size(22.0).strong());
+        ui.label(
+            RichText::new("Games people have published. They play without anyone hosting; press With friends to host one yourself.")
+                .color(SOFT),
+        );
+        ui.add_space(10.0);
+        egui::Frame::new().fill(PANEL).corner_radius(10.0).inner_margin(14.0).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            platform.published_list(ui);
+        });
+        ui.add_space(20.0);
         ui.label(RichText::new("Games being played right now").size(22.0).strong());
         ui.label(RichText::new("Hosted games appear here. Press Join to play in one.").color(SOFT));
         ui.add_space(10.0);

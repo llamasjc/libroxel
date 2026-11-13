@@ -6,11 +6,20 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bevy_egui::egui::{self, Color32, RichText};
-use libroxel_hub::{Announcer, HostKind, HubClient, Listing, RunningHub, ServerInfo};
+use libroxel_hub::{Announcer, GameInfo, HostKind, HubClient, Listing, Publish, RunningHub, ServerInfo};
+use libroxel_instance::serde_json::{self, Value as Json, json};
 
 use crate::server::data_dir;
 
 type Fetched = Arc<Mutex<Option<Result<Vec<ServerInfo>, String>>>>;
+type Slot<T> = Arc<Mutex<Option<Result<T, String>>>>;
+
+/// A published game fetched to play: where it was saved, and whether to
+/// host it for friends.
+pub struct Downloaded {
+    pub path: std::path::PathBuf,
+    pub host: bool,
+}
 
 /// Everything about the Hub the editor keeps between frames.
 pub struct Platform {
@@ -30,6 +39,18 @@ pub struct Platform {
     last_fetch: Option<Instant>,
     /// Keeps a hosted game on the list.
     pub announcer: Option<Announcer>,
+    /// Published games on the Hub.
+    games: Vec<GameInfo>,
+    games_error: Option<String>,
+    fetched_games: Slot<Vec<GameInfo>>,
+    /// A published game being fetched to play, and its title.
+    downloading: Option<String>,
+    downloaded: Slot<Downloaded>,
+    download_error: Option<String>,
+    /// Publishing this editor's game: what the Hub said, once it has.
+    publishing: bool,
+    published: Slot<String>,
+    pub publish_status: Option<Result<String, String>>,
 }
 
 impl Default for Platform {
@@ -47,6 +68,15 @@ impl Default for Platform {
             fetching: false,
             last_fetch: None,
             announcer: None,
+            games: Vec::new(),
+            games_error: None,
+            fetched_games: Arc::default(),
+            downloading: None,
+            downloaded: Arc::default(),
+            download_error: None,
+            publishing: false,
+            published: Arc::default(),
+            publish_status: None,
         }
     }
 }
@@ -116,6 +146,19 @@ impl Platform {
             (None, Some(_)) => self.announcer = None,
             _ => {}
         }
+        if let Some(result) = self.fetched_games.lock().unwrap().take() {
+            match result {
+                Ok(games) => {
+                    self.games = games;
+                    self.games_error = None;
+                }
+                Err(e) => self.games_error = Some(e),
+            }
+        }
+        if let Some(result) = self.published.lock().unwrap().take() {
+            self.publishing = false;
+            self.publish_status = Some(result);
+        }
         if let Some(result) = self.fetched.lock().unwrap().take() {
             self.fetching = false;
             match result {
@@ -137,9 +180,163 @@ impl Platform {
         let client = self.client();
         let search = self.search.clone();
         let out = self.fetched.clone();
+        let games = self.fetched_games.clone();
         std::thread::spawn(move || {
             *out.lock().unwrap() = Some(client.servers(&search));
+            *games.lock().unwrap() = Some(client.games(&search));
         });
+    }
+
+    /// Publishes `place` (a saved game) to the Hub as `title`, or puts out
+    /// a new version if this computer published it before under `key`.
+    pub fn publish(&mut self, key: String, title: String, description: String, place: String) {
+        if self.publishing {
+            return;
+        }
+        self.publishing = true;
+        self.publish_status = None;
+        let client = self.client();
+        let author = self.name.trim().to_owned();
+        let out = self.published.clone();
+        std::thread::spawn(move || {
+            let hub = client.url().to_owned();
+            let mut known = read_published();
+            let mine = known.get(&key).filter(|m| m["hub"] == hub.as_str());
+            let mut game = Publish {
+                game_id: mine.and_then(|m| m["game_id"].as_str()).map(str::to_owned),
+                secret: mine
+                    .and_then(|m| m["secret"].as_str())
+                    .map_or_else(libroxel_hub::new_secret, str::to_owned),
+                title,
+                author,
+                description,
+                place,
+            };
+            let mut result = client.publish(&game);
+            if result.as_ref().is_err_and(|e| e.contains("no published game")) {
+                // Taken down on the Hub since: publish it afresh.
+                game.game_id = None;
+                game.secret = libroxel_hub::new_secret();
+                result = client.publish(&game);
+            }
+            let said = result.map(|done| {
+                known.insert(key, json!({ "hub": hub, "game_id": done.game_id, "secret": game.secret }));
+                let _ = std::fs::create_dir_all(data_dir())
+                    .and_then(|_| std::fs::write(published_file(), Json::Object(known).to_string()));
+                if done.version == 1 {
+                    format!("Published on {hub}. Anyone using that Hub can find it Online.")
+                } else {
+                    format!("Version {} is out on {hub}.", done.version)
+                }
+            });
+            *out.lock().unwrap() = Some(said);
+        });
+    }
+
+    /// Whether a publish is on its way.
+    pub fn is_publishing(&self) -> bool {
+        self.publishing
+    }
+
+    /// A published game that has finished downloading, to play.
+    pub fn take_download(&mut self) -> Option<Downloaded> {
+        let result = self.downloaded.lock().unwrap().take()?;
+        self.downloading = None;
+        match result {
+            Ok(done) => Some(done),
+            Err(e) => {
+                self.download_error = Some(e);
+                None
+            }
+        }
+    }
+
+    fn download(&mut self, game: &GameInfo, host: bool) {
+        if self.downloading.is_some() {
+            return;
+        }
+        self.downloading = Some(game.title.clone());
+        self.download_error = None;
+        let client = self.client();
+        let (id, title) = (game.game_id.clone(), game.title.clone());
+        let out = self.downloaded.clone();
+        std::thread::spawn(move || {
+            let result = client.download(&id).and_then(|text| {
+                let dir = data_dir().join("downloads");
+                let safe: String =
+                    title.chars().map(|c| if c.is_alphanumeric() || c == ' ' { c } else { '_' }).collect();
+                let path = dir.join(format!("{} ({id}).lrx", safe.trim()));
+                std::fs::create_dir_all(&dir)
+                    .and_then(|_| std::fs::write(&path, text))
+                    .map_err(|e| format!("could not keep the game: {e}"))?;
+                Ok(Downloaded { path, host })
+            });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    /// The published games, as rows with Play and Play with friends.
+    pub fn published_list(&mut self, ui: &mut egui::Ui) {
+        if self.last_fetch.is_none_or(|t| t.elapsed() > Duration::from_secs(5)) {
+            self.refresh();
+        }
+        if let Some(error) = &self.games_error {
+            ui.colored_label(Color32::from_rgb(255, 120, 110), error);
+        } else if self.games.is_empty() {
+            ui.label(if self.fetching {
+                "Looking…"
+            } else {
+                "No games are published on this Hub yet. Publish one from the editor's File menu."
+            });
+        }
+        if let Some(error) = &self.download_error {
+            ui.colored_label(Color32::from_rgb(255, 120, 110), error);
+        }
+        if let Some(title) = &self.downloading {
+            ui.label(format!("⏳ Getting {title}…"));
+        }
+        let mut chosen = None;
+        egui::ScrollArea::vertical().id_salt("published").max_height(300.0).show(ui, |ui| {
+            egui::Grid::new("published-games").num_columns(4).striped(true).spacing([16.0, 6.0]).show(
+                ui,
+                |ui| {
+                    if !self.games.is_empty() {
+                        ui.strong("Game");
+                        ui.strong("By");
+                        ui.strong("Plays");
+                        ui.label("");
+                        ui.end_row();
+                    }
+                    for game in &self.games {
+                        let about = if game.description.is_empty() {
+                            format!("Version {}", game.version)
+                        } else {
+                            format!("{}\n\nVersion {}", game.description, game.version)
+                        };
+                        ui.label(&game.title).on_hover_text(about);
+                        ui.label(&game.author);
+                        ui.label(game.plays.to_string());
+                        ui.horizontal(|ui| {
+                            let free = self.downloading.is_none();
+                            if ui.add_enabled(free, egui::Button::new("▶ Play")).clicked() {
+                                chosen = Some((game.clone(), false));
+                            }
+                            if ui
+                                .add_enabled(free, egui::Button::new("🌐 With friends"))
+                                .on_hover_text("Host it, so friends can join you")
+                                .clicked()
+                            {
+                                chosen = Some((game.clone(), true));
+                            }
+                        });
+                        ui.end_row();
+                    }
+                },
+            );
+        });
+        if let Some((game, host)) = chosen {
+            self.download(&game, host);
+        }
     }
 
     /// The hosted games, as rows with a Join button each. Returns the join
@@ -248,4 +445,18 @@ impl Platform {
         self.open = open && join.is_none();
         join
     }
+}
+
+/// Where this computer remembers the games it published (and the secrets
+/// that let it put out new versions).
+fn published_file() -> std::path::PathBuf {
+    data_dir().join("published.json")
+}
+
+fn read_published() -> serde_json::Map<String, Json> {
+    std::fs::read_to_string(published_file())
+        .ok()
+        .and_then(|t| serde_json::from_str::<Json>(&t).ok())
+        .and_then(|j| j.as_object().cloned())
+        .unwrap_or_default()
 }

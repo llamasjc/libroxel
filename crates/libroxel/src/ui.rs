@@ -83,6 +83,11 @@ enum Action {
         name: String,
     },
     StopEdits,
+    /// Put the open game on the Hub for anyone to play.
+    Publish {
+        title: String,
+        description: String,
+    },
 }
 
 const INSERTABLE: &[ClassKind] = &[
@@ -805,6 +810,20 @@ fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
                     .display()
                     .to_string();
                 editor.dialog = Some(Dialog::SaveAs { path });
+            }
+            ui.separator();
+            if ui
+                .add_enabled(!playing, egui::Button::new("🌍 Publish…"))
+                .on_hover_text("Put this game on the Hub, so anyone can find it Online and play it")
+                .clicked()
+            {
+                let title = editor
+                    .file
+                    .as_ref()
+                    .and_then(|f| f.file_stem())
+                    .map_or_else(|| "My game".to_owned(), |s| s.to_string_lossy().into_owned());
+                editor.platform.publish_status = None;
+                editor.dialog = Some(Dialog::Publish { title, description: String::new() });
             }
         });
         ui.menu_button("Edit", |ui| {
@@ -1901,6 +1920,61 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
         }
         return;
     }
+    if let Dialog::Publish { title, description } = dialog {
+        let mut close = false;
+        let busy = editor.platform.is_publishing();
+        egui::Window::new("Publish").collapsible(false).resizable(false).default_width(400.0).show(
+            ctx,
+            |ui| {
+                ui.label(format!(
+                    "Puts this game on the Hub at {}, so anyone using that Hub finds it Online and can play \
+                 it, even when you're away. Publishing again puts out a new version.",
+                    editor.platform.hub_address
+                ));
+                egui::Grid::new("publish").num_columns(2).show(ui, |ui| {
+                    ui.label("Title");
+                    ui.add(egui::TextEdit::singleline(title).char_limit(60));
+                    ui.end_row();
+                    ui.label("About it");
+                    ui.add(egui::TextEdit::multiline(description).desired_rows(3).char_limit(2000));
+                    ui.end_row();
+                    ui.label("By");
+                    ui.label(editor.platform.name.trim());
+                    ui.end_row();
+                });
+                match &editor.platform.publish_status {
+                    _ if busy => {
+                        ui.label("⏳ Publishing…");
+                    }
+                    Some(Ok(said)) => {
+                        ui.colored_label(Color32::from_rgb(120, 220, 120), said);
+                    }
+                    Some(Err(why)) => {
+                        ui.colored_label(Color32::from_rgb(255, 120, 110), why);
+                    }
+                    None => {}
+                }
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(!busy && !title.trim().is_empty(), egui::Button::new("🌍 Publish"))
+                        .clicked()
+                    {
+                        actions.push(Action::Publish {
+                            title: title.trim().to_owned(),
+                            description: description.trim().to_owned(),
+                        });
+                    }
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                });
+            },
+        );
+        if close {
+            editor.dialog = None;
+        }
+        return;
+    }
     if let Dialog::EditTogether { address, name } = dialog {
         let mut close = false;
         egui::Window::new("Edit together").collapsible(false).resizable(false).default_width(380.0).show(
@@ -1944,14 +2018,14 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
     let (title, button) = match dialog {
         Dialog::Open { .. } => ("Open place", "Open"),
         Dialog::SaveAs { .. } => ("Save place as", "Save"),
-        Dialog::Join { .. } | Dialog::EditTogether { .. } => return,
+        Dialog::Join { .. } | Dialog::EditTogether { .. } | Dialog::Publish { .. } => return,
     };
     let opening = matches!(dialog, Dialog::Open { .. });
     let mut close = false;
     egui::Window::new(title).collapsible(false).resizable(false).default_width(480.0).show(ctx, |ui| {
         let path = match dialog {
             Dialog::Open { path } | Dialog::SaveAs { path } => path,
-            Dialog::Join { .. } | Dialog::EditTogether { .. } => return,
+            Dialog::Join { .. } | Dialog::EditTogether { .. } | Dialog::Publish { .. } => return,
         };
         ui.label("File path (places use the .lrx extension):");
         ui.add(egui::TextEdit::singleline(path).desired_width(f32::INFINITY));
@@ -2514,6 +2588,22 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     editor.edit_tunnel = tunnel;
                 }
                 Err(e) => log(engine, LogLevel::Error, e),
+            }
+        }
+        Action::Publish { title, description } => {
+            if playing {
+                return;
+            }
+            match place::save(&engine.tree.borrow()) {
+                Ok(text) => {
+                    // Publishing the same file again puts out a new version of it.
+                    let key = editor
+                        .file
+                        .as_ref()
+                        .map_or_else(|| format!("untitled:{title}"), |f| f.display().to_string());
+                    editor.platform.publish(key, title, description, text);
+                }
+                Err(e) => editor.platform.publish_status = Some(Err(format!("Could not save the game: {e}"))),
             }
         }
         Action::StopEdits => {

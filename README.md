@@ -132,6 +132,15 @@ The first build compiles Bevy and takes a while. After that it is quick.
   host without a window, run `libroxel server mygame.lrx`, which prints a
   join code. Your player identity (a key made on first use) lives in
   `~/.config/libroxel/identity.key`.
+- **Publishing:** **File → Publish…** puts the open game on the Hub with a
+  title and a few words about it. It then shows on the home screen's
+  **🌍 Online** tab under **Published games** for everyone using that Hub,
+  with **▶ Play** (play it on your own, no host needed) and **🌐 With
+  friends** (host it so friends can join). Publishing the same file again
+  puts out a new version; this computer keeps the secret that allows that
+  in `~/.config/libroxel/published.json`. Games stay published for as long
+  as the Hub keeps running, so publish to a Hub on a computer that stays on
+  (`libroxel hub`) if you want games to be there when you're not.
 - **Editing together:** **Together → Edit together… → Share this game**
   lets others edit the game you have open, live, while you work on it. Send
   them the code from **📋 Copy edit code** (or, on your own network, your

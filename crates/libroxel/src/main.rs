@@ -62,6 +62,11 @@ pub enum Dialog {
         address: String,
         name: String,
     },
+    /// Publishing the open game to the Hub.
+    Publish {
+        title: String,
+        description: String,
+    },
     /// Editing a game together: share this one, or join someone's.
     EditTogether {
         address: String,

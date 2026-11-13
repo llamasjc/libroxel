@@ -6,6 +6,11 @@
 //! announcing drops off the list. Anyone can run a Hub (`libroxel hub`);
 //! it keeps its data in one SQLite file.
 //!
+//! A Hub also keeps **published** games: whole saved places that anyone
+//! who reaches the Hub can download and play, or host for friends, with no
+//! one needing to be online. Whoever publishes a game gets a secret back;
+//! publishing again with the same id and secret puts out a new version.
+//!
 //! [`HubClient`] is the blocking client the editor and servers use.
 
 use std::net::SocketAddr;
@@ -31,6 +36,12 @@ const EXPIRES_AFTER_SECS: i64 = 45;
 
 /// The longest name, game title or code the Hub keeps.
 const MAX_TEXT: usize = 600;
+
+/// The longest description of a published game.
+const MAX_DESCRIPTION: usize = 2000;
+
+/// The biggest saved place the Hub takes, in bytes.
+pub const MAX_PLACE: usize = 16 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // What goes over the wire
@@ -116,6 +127,48 @@ pub struct HubStatus {
     pub version: String,
     pub servers: u32,
     pub players: u32,
+    /// Published games (older Hubs don't say).
+    #[serde(default)]
+    pub games: u32,
+}
+
+/// Publishing a game, or a new version of one.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Publish {
+    /// `None` for a new game; the game's id to put out a new version.
+    pub game_id: Option<String>,
+    /// Proves a new version comes from whoever published the game.
+    pub secret: String,
+    pub title: String,
+    /// Who made it, as the list shows.
+    pub author: String,
+    pub description: String,
+    /// The saved place (`.lrx` text).
+    pub place: String,
+}
+
+/// What publishing answers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Published {
+    pub game_id: String,
+    /// 1 for the first version.
+    pub version: u32,
+}
+
+/// A published game as the list shows it (without the place itself).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GameInfo {
+    pub game_id: String,
+    pub title: String,
+    pub author: String,
+    pub description: String,
+    pub version: u32,
+    /// How many times it has been downloaded.
+    pub plays: u32,
+    /// The place's size in bytes.
+    pub size: u64,
+    /// Seconds since the latest version came out.
+    pub updated_secs_ago: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -167,7 +220,19 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
             first_seen  INTEGER NOT NULL,
             last_seen   INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS servers_last_seen ON servers(last_seen);",
+        CREATE INDEX IF NOT EXISTS servers_last_seen ON servers(last_seen);
+        CREATE TABLE IF NOT EXISTS games (
+            game_id     TEXT PRIMARY KEY,
+            secret      TEXT NOT NULL,
+            title       TEXT NOT NULL,
+            author      TEXT NOT NULL,
+            description TEXT NOT NULL,
+            place       TEXT NOT NULL,
+            version     INTEGER NOT NULL,
+            plays       INTEGER NOT NULL,
+            created     INTEGER NOT NULL,
+            updated     INTEGER NOT NULL
+        );",
     )
     .map_err(|e| format!("could not set up the Hub database: {e}"))?;
     Ok(db)
@@ -181,6 +246,11 @@ pub fn router(db: Connection) -> Router {
         .route("/servers", get(list_servers))
         .route("/servers/heartbeat", post(heartbeat))
         .route("/servers/{id}", delete(remove_server))
+        .route("/games", get(list_games).post(publish))
+        .route("/games/{id}", get(game_info).delete(unpublish))
+        .route("/games/{id}/place", get(download))
+        // Room for a big place, written out as JSON inside a JSON request.
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_PLACE * 2 + 64 * 1024))
         .with_state(db)
 }
 
@@ -193,12 +263,153 @@ async fn status(State(db): State<Db>) -> Json<HubStatus> {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap_or((0, 0));
+    let games: i64 = db.query_row("SELECT COUNT(*) FROM games", [], |r| r.get(0)).unwrap_or(0);
     Json(HubStatus {
         hub: "libroxel".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         servers: servers as u32,
         players: players as u32,
+        games: games as u32,
     })
+}
+
+fn clip_to(text: &str, most: usize) -> String {
+    text.trim().chars().take(most).collect()
+}
+
+/// A short random id for a newly published game.
+fn new_game_id() -> String {
+    let mut bytes = [0u8; 8];
+    getrandom::fill(&mut bytes).expect("the system has a random number source");
+    data_encoding::BASE32_NOPAD.encode(&bytes).to_ascii_lowercase()
+}
+
+const GAME_COLUMNS: &str = "game_id, title, author, description, version, plays, LENGTH(place), updated";
+
+fn game_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<GameInfo> {
+    Ok(GameInfo {
+        game_id: r.get(0)?,
+        title: r.get(1)?,
+        author: r.get(2)?,
+        description: r.get(3)?,
+        version: r.get::<_, i64>(4)? as u32,
+        plays: r.get::<_, i64>(5)? as u32,
+        size: r.get::<_, i64>(6)? as u64,
+        updated_secs_ago: now - r.get::<_, i64>(7)?,
+    })
+}
+
+async fn list_games(State(db): State<Db>, Query(query): Query<ListQuery>) -> Json<Vec<GameInfo>> {
+    let db = db.lock().unwrap();
+    let pattern = format!("%{}%", query.q.unwrap_or_default().trim().replace(['%', '_'], ""));
+    let now = now();
+    let mut statement = db
+        .prepare(&format!(
+            "SELECT {GAME_COLUMNS} FROM games
+             WHERE title LIKE ?1 OR author LIKE ?1 OR description LIKE ?1
+             ORDER BY plays DESC, updated DESC LIMIT 200"
+        ))
+        .expect("the games query is valid");
+    let rows = statement
+        .query_map(params![pattern], |r| game_row(r, now))
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default();
+    Json(rows)
+}
+
+async fn game_info(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<Json<GameInfo>, StatusCode> {
+    let db = db.lock().unwrap();
+    let now = now();
+    db.query_row(&format!("SELECT {GAME_COLUMNS} FROM games WHERE game_id = ?1"), params![id], |r| {
+        game_row(r, now)
+    })
+    .optional()
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map(Json)
+    .ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn download(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<String, StatusCode> {
+    let db = db.lock().unwrap();
+    let place: Option<String> = db
+        .query_row("SELECT place FROM games WHERE game_id = ?1", params![id], |r| r.get(0))
+        .optional()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let place = place.ok_or(StatusCode::NOT_FOUND)?;
+    let _ = db.execute("UPDATE games SET plays = plays + 1 WHERE game_id = ?1", params![id]);
+    Ok(place)
+}
+
+async fn publish(
+    State(db): State<Db>,
+    Json(game): Json<Publish>,
+) -> Result<Json<Published>, (StatusCode, String)> {
+    let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
+    if game.secret.len() < 16 {
+        return bad("publishing needs a secret of 16 or more characters");
+    }
+    if game.title.trim().is_empty() {
+        return bad("a published game needs a title");
+    }
+    if game.place.len() > MAX_PLACE {
+        return bad("that game is too big to publish here");
+    }
+    // Only saved places: a JSON object, as `.lrx` files are.
+    if !serde_json::from_str::<serde_json::Value>(&game.place).is_ok_and(|v| v.is_object()) {
+        return bad("that is not a saved game");
+    }
+    let db = db.lock().unwrap();
+    let now = now();
+    let title = clip(&game.title);
+    let author = if game.author.trim().is_empty() { "Someone".to_owned() } else { clip(&game.author) };
+    let description = clip_to(&game.description, MAX_DESCRIPTION);
+    let internal = |e: rusqlite::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    match game.game_id.as_deref().map(str::trim).filter(|id| !id.is_empty()) {
+        Some(id) => {
+            let owner: Option<(String, i64)> = db
+                .query_row("SELECT secret, version FROM games WHERE game_id = ?1", params![id], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .optional()
+                .map_err(internal)?;
+            let Some((secret, version)) = owner else {
+                return Err((StatusCode::NOT_FOUND, "there is no published game with that id".into()));
+            };
+            if secret != game.secret {
+                return Err((StatusCode::FORBIDDEN, "someone else published that game".into()));
+            }
+            db.execute(
+                "UPDATE games SET title = ?2, author = ?3, description = ?4, place = ?5, version = ?6,
+                     updated = ?7 WHERE game_id = ?1",
+                params![id, title, author, description, game.place, version + 1, now],
+            )
+            .map_err(internal)?;
+            Ok(Json(Published { game_id: id.to_owned(), version: version as u32 + 1 }))
+        }
+        None => {
+            let id = new_game_id();
+            db.execute(
+                "INSERT INTO games (game_id, secret, title, author, description, place, version, plays, created, updated)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, 0, ?7, ?7)",
+                params![id, game.secret, title, author, description, game.place, now],
+            )
+            .map_err(internal)?;
+            Ok(Json(Published { game_id: id, version: 1 }))
+        }
+    }
+}
+
+async fn unpublish(
+    State(db): State<Db>,
+    UrlPath(id): UrlPath<String>,
+    Json(secret): Json<Secret>,
+) -> StatusCode {
+    let db = db.lock().unwrap();
+    match db.execute("DELETE FROM games WHERE game_id = ?1 AND secret = ?2", params![id, secret.secret]) {
+        Ok(0) => StatusCode::NOT_FOUND,
+        Ok(_) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 async fn list_servers(State(db): State<Db>, Query(query): Query<ListQuery>) -> Json<Vec<ServerInfo>> {
@@ -370,6 +581,8 @@ pub fn run(addr: SocketAddr, db_path: &Path) -> Result<(), String> {
 pub struct HubClient {
     base: String,
     agent: ureq::Agent,
+    /// For calls that carry a whole game and may take a while.
+    slow: ureq::Agent,
 }
 
 impl HubClient {
@@ -383,14 +596,17 @@ impl HubClient {
         });
         let base = if has_port { url } else { format!("{url}:{DEFAULT_PORT}") };
         let local = base.contains("://127.") || base.contains("://localhost") || base.contains("://[::1]");
-        let mut config = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(5)))
-            .http_status_as_error(true);
-        if local {
-            // A Hub on this computer is never behind a proxy.
-            config = config.proxy(None);
-        }
-        Self { base, agent: config.build().into() }
+        let agent = |timeout: u64| {
+            let mut config = ureq::Agent::config_builder()
+                .timeout_global(Some(Duration::from_secs(timeout)))
+                .http_status_as_error(true);
+            if local {
+                // A Hub on this computer is never behind a proxy.
+                config = config.proxy(None);
+            }
+            ureq::Agent::from(config.build())
+        };
+        Self { base, agent: agent(5), slow: agent(120) }
     }
 
     /// The Hub's address.
@@ -430,6 +646,56 @@ impl HubClient {
     pub fn remove(&self, server_id: &str, secret: &str) -> Result<(), String> {
         self.agent
             .delete(format!("{}/servers/{server_id}", self.base))
+            .force_send_body()
+            .send_json(serde_json::json!({ "secret": secret }))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
+impl HubClient {
+    /// Published games, most played first, matching `search` if given.
+    pub fn games(&self, search: &str) -> Result<Vec<GameInfo>, String> {
+        self.agent
+            .get(format!("{}/games", self.base))
+            .query("q", search)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+    }
+
+    /// Publishes a game, or a new version of one.
+    pub fn publish(&self, game: &Publish) -> Result<Published, String> {
+        self.slow
+            .post(format!("{}/games", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(game)
+            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .and_then(|mut r| {
+                if r.status().is_success() {
+                    r.body_mut().read_json().map_err(|e| e.to_string())
+                } else {
+                    let why = r.body_mut().read_to_string().unwrap_or_default();
+                    Err(format!("the Hub did not take it: {why}"))
+                }
+            })
+    }
+
+    /// A published game's saved place.
+    pub fn download(&self, game_id: &str) -> Result<String, String> {
+        self.slow
+            .get(format!("{}/games/{game_id}/place", self.base))
+            .call()
+            .and_then(|mut r| r.body_mut().with_config().limit(MAX_PLACE as u64 + 1).read_to_string())
+            .map_err(|e| format!("could not download the game: {e}"))
+    }
+
+    /// Takes a published game down.
+    pub fn unpublish(&self, game_id: &str, secret: &str) -> Result<(), String> {
+        self.agent
+            .delete(format!("{}/games/{game_id}", self.base))
             .force_send_body()
             .send_json(serde_json::json!({ "secret": secret }))
             .map(|_| ())
