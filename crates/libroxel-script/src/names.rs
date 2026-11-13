@@ -207,6 +207,8 @@ pub mod methods {
     pub const GET_MOUSE: &str = "GetMouse";
     /// Player: removes their character (if any) and spawns a fresh one now.
     pub const LOAD_CHARACTER: &str = "LoadCharacter";
+    /// Player: removes them from the game, telling them why.
+    pub const KICK: &str = "Kick";
     /// Seat: sits a humanoid in it.
     pub const SIT: &str = "Sit";
     /// Text box: start or stop typing into it, and whether the player is.
@@ -1361,6 +1363,10 @@ pub mod compat {
     pub const IS_TEN_FOOT_INTERFACE: &str = "IsTenFootInterface";
     pub const GET_GUI_INSET: &str = "GetGuiInset";
     pub const GET_TEXT_SIZE: &str = "GetTextSize";
+    pub const FILTER_STRING_ASYNC: &str = "FilterStringAsync";
+    pub const GET_NON_CHAT_STRING_FOR_BROADCAST_ASYNC: &str = "GetNonChatStringForBroadcastAsync";
+    pub const GET_NON_CHAT_STRING_FOR_USER_ASYNC: &str = "GetNonChatStringForUserAsync";
+    pub const GET_CHAT_FOR_USER_ASYNC: &str = "GetChatForUserAsync";
     pub const PRELOAD_ASYNC: &str = "PreloadAsync";
     pub const VR_ENABLED: &str = "VREnabled";
     pub const IS_VIBRATION_SUPPORTED: &str = "IsVibrationSupported";

@@ -83,6 +83,8 @@ enum Action {
         name: String,
     },
     StopEdits,
+    /// While hosting: remove a joined player from the game.
+    Kick(InstanceId),
     /// Share a model (or part) as a hat in the catalog.
     ShareHat(InstanceId),
     /// Put the open game on the Hub for anyone to play.
@@ -954,6 +956,24 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
                 let who = if joined == 1 { "1 joined".to_owned() } else { format!("{joined} joined") };
                 ui.label(format!("🌐 Hosting on port {} · {who}", address.port()))
                     .on_hover_text("Others on your network join with this computer's address and this port");
+                let players = session.joined_players();
+                if !players.is_empty() {
+                    ui.menu_button("👥 Players", |ui| {
+                        for (player, name) in players {
+                            ui.horizontal(|ui| {
+                                ui.label(name);
+                                if ui
+                                    .small_button("Remove")
+                                    .on_hover_text("Take them out of this game; they can't join it again")
+                                    .clicked()
+                                {
+                                    actions.push(Action::Kick(player));
+                                    ui.close();
+                                }
+                            });
+                        }
+                    });
+                }
                 if let Some(Tunnel::Host(tunnel)) = &editor.tunnel {
                     if let Some(code) = tunnel.code() {
                         let copy = ui
@@ -2607,6 +2627,11 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     editor.edit_tunnel = tunnel;
                 }
                 Err(e) => log(engine, LogLevel::Error, e),
+            }
+        }
+        Action::Kick(player) => {
+            if let Some(session) = engine.session.as_mut() {
+                session.kick(player, "The host removed you from the game");
             }
         }
         Action::ShareHat(id) => {

@@ -41,6 +41,8 @@ pub(crate) struct WorldState {
     moves: Vec<(InstanceId, Option<Vec3>)>,
     /// Players whose character scripts asked to (re)spawn.
     loads: Vec<InstanceId>,
+    /// Players `Kick` removed, and why.
+    kicks: Vec<(InstanceId, String)>,
     /// Seats scripts asked to sit humanoids in, with `Seat:Sit`.
     sits: Vec<(InstanceId, InstanceId)>,
     /// Particle emitters asked to send out particles at once, and how many.
@@ -251,6 +253,13 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
         }
         Ok(())
     });
+    m.add_method(methods::KICK, |lua, this, why: Option<String>| {
+        require_class(lua, this.0, ClassKind::Player, methods::KICK)?;
+        let why =
+            why.filter(|w| !w.trim().is_empty()).unwrap_or_else(|| "You were removed from the game".into());
+        host(lua).world.borrow_mut().kicks.push((this.0, why.chars().take(300).collect()));
+        Ok(())
+    });
     m.add_method(methods::GET_TEAMS, |lua, this, ()| {
         require_class(lua, this.0, ClassKind::Teams, methods::GET_TEAMS)?;
         let teams: Vec<InstanceId> = {
@@ -421,6 +430,10 @@ pub(crate) fn seated(lua: &Lua, humanoid: InstanceId, seat: Option<InstanceId>) 
         Ok(args)
     });
     take_errors(lua)
+}
+
+pub(crate) fn take_kicks(lua: &Lua) -> Vec<(InstanceId, String)> {
+    std::mem::take(&mut host(lua).world.borrow_mut().kicks)
 }
 
 pub(crate) fn take_load_requests(lua: &Lua) -> Vec<InstanceId> {

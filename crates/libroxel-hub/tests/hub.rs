@@ -225,3 +225,63 @@ fn creators_share_hats_and_others_find_and_wear_them() {
     client.unlist(&shared.item_id, &sign(&key, &unlist_message(&shared.item_id))).unwrap();
     assert!(client.catalog("").unwrap().is_empty());
 }
+
+#[test]
+fn reported_games_drop_off_until_whoever_runs_the_hub_clears_them() {
+    use libroxel_hub::{HIDE_AFTER_REPORTS, Publish, Report, open_db, player_id_of, report_message, sign};
+    let dir = std::env::temp_dir().join(format!("libroxel-hub-reports-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let db_path = dir.join("hub.sqlite");
+    let hub = start("127.0.0.1:0".parse().unwrap(), Some(&db_path)).unwrap();
+    let client = HubClient::new(&hub.url());
+    let game = Publish {
+        game_id: None,
+        secret: new_secret(),
+        title: "Rude game".into(),
+        author: "x".into(),
+        description: String::new(),
+        place: "{}".into(),
+        author_id: None,
+        author_signature: None,
+    };
+    let id = client.publish(&game).unwrap().game_id;
+    let report = |key: u8, reason: &str| {
+        let secret = [key; 32];
+        let me = player_id_of(&secret);
+        Report {
+            signature: sign(&secret, &report_message(&me, "game", &id, reason, 1)),
+            reporter_id: me,
+            kind: "game".into(),
+            target: id.clone(),
+            reason: reason.into(),
+            time: 1,
+        }
+    };
+    // The same player reporting twice counts once.
+    client.report(&report(1, "rude")).unwrap();
+    client.report(&report(1, "very rude")).unwrap();
+    assert_eq!(client.games("").unwrap().len(), 1);
+    // A forged report doesn't count.
+    let mut forged = report(2, "rude");
+    forged.reporter_id = player_id_of(&[9; 32]);
+    assert!(client.report(&forged).is_err());
+    for key in 2..=HIDE_AFTER_REPORTS as u8 {
+        client.report(&report(key, "rude")).unwrap();
+    }
+    assert!(client.games("").unwrap().is_empty(), "hidden once enough players report it");
+    assert!(client.download(&id).is_err());
+
+    // Whoever runs the Hub sees why, and can put it back.
+    let db = open_db(Some(&db_path)).unwrap();
+    let reported = libroxel_hub::reports(&db);
+    assert_eq!(reported.len(), 1);
+    assert!(reported[0].hidden);
+    assert_eq!(reported[0].name.as_deref(), Some("Rude game"));
+    assert!(reported[0].reasons.contains(&"very rude".to_owned()));
+    libroxel_hub::clear_reports(&db, "game", &id).unwrap();
+    assert_eq!(client.games("").unwrap().len(), 1);
+    libroxel_hub::take_down(&db, "game", &id).unwrap();
+    assert!(client.games("").unwrap().is_empty());
+    drop(hub);
+    let _ = std::fs::remove_dir_all(&dir);
+}

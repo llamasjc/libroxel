@@ -155,6 +155,16 @@ The first build compiles Bevy and takes a while. After that it is quick.
   **👤 Avatar** tab under **Catalog** with a **Wear** button. A worn catalog
   hat goes with you into every game, including ones you join. Everything
   in the catalog is free.
+- **Safety:** bad words in chat come out as `#`s (the starter games'
+  chat, and `TextService:FilterStringAsync` for any game's scripts), and
+  player names with bad words become `Player`. A host can remove a joined
+  player from **👥 Players** on the toolbar, and scripts can call
+  `player:Kick(reason)`; a removed player can't rejoin that game. Every
+  published game and catalog hat has a **⚑** to report it. Once three
+  different players report something, the Hub stops listing it until
+  whoever runs the Hub looks: `libroxel hub reports` lists reports,
+  `libroxel hub clear game <id>` lists one again, and
+  `libroxel hub remove game <id>` takes it down (`item` for hats).
 - **Editing together:** **Together → Edit together… → Share this game**
   lets others edit the game you have open, live, while you work on it. Send
   them the code from **📋 Copy edit code** (or, on your own network, your

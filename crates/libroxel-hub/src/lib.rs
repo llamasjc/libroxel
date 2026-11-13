@@ -245,6 +245,42 @@ pub struct Item {
     pub wears: u32,
 }
 
+/// Reporting a published game or a catalog item as not OK.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Report {
+    pub reporter_id: String,
+    /// "game" or "item".
+    pub kind: String,
+    /// The game's or item's id.
+    pub target: String,
+    pub reason: String,
+    pub time: i64,
+    /// [`report_message`] signed with the reporter's identity key.
+    pub signature: String,
+}
+
+/// What a reporter signs.
+pub fn report_message(reporter_id: &str, kind: &str, target: &str, reason: &str, time: i64) -> Vec<u8> {
+    format!("libroxel report\n{reporter_id}\n{kind}\n{target}\n{reason}\n{time}").into_bytes()
+}
+
+/// How many different players must report a game or item before the Hub
+/// stops listing it (until whoever runs the Hub looks at it).
+pub const HIDE_AFTER_REPORTS: i64 = 3;
+
+/// Something reported, as whoever runs the Hub sees it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Reported {
+    pub kind: String,
+    pub target: String,
+    /// The game's title or the item's name, if it's still there.
+    pub name: Option<String>,
+    pub reasons: Vec<String>,
+    pub hidden: bool,
+    /// Whether whoever runs the Hub has said it's fine.
+    pub cleared: bool,
+}
+
 /// A player's public page.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Profile {
@@ -384,6 +420,19 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
             wears       INTEGER NOT NULL,
             created     INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS reports (
+            kind        TEXT NOT NULL,
+            target      TEXT NOT NULL,
+            reporter_id TEXT NOT NULL,
+            reason      TEXT NOT NULL,
+            time        INTEGER NOT NULL,
+            PRIMARY KEY (kind, target, reporter_id)
+        );
+        CREATE TABLE IF NOT EXISTS cleared (
+            kind        TEXT NOT NULL,
+            target      TEXT NOT NULL,
+            PRIMARY KEY (kind, target)
+        );
         CREATE TABLE IF NOT EXISTS accounts (
             player_id   TEXT PRIMARY KEY,
             name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -415,6 +464,7 @@ pub fn router(db: Connection) -> Router {
         .route("/catalog", get(list_items).post(share_item))
         .route("/catalog/{id}", delete(unlist_item))
         .route("/catalog/{id}/wear", post(wear_item))
+        .route("/reports", post(report))
         // Room for a big place, written out as JSON inside a JSON request.
         .layer(axum::extract::DefaultBodyLimit::max(MAX_PLACE * 2 + 64 * 1024))
         .with_state(db)
@@ -455,6 +505,15 @@ const GAME_COLUMNS: &str =
     LENGTH(g.place), g.updated, g.author_id";
 const GAMES: &str = "games g LEFT JOIN accounts a ON a.player_id = g.author_id";
 
+/// SQL that holds for a `kind` of thing whose id is `column` when enough
+/// players reported it and whoever runs the Hub hasn't cleared it.
+fn hidden_sql(kind: &str, column: &str) -> String {
+    format!(
+        "((SELECT COUNT(*) FROM reports r WHERE r.kind = '{kind}' AND r.target = {column}) >= {HIDE_AFTER_REPORTS}
+          AND NOT EXISTS (SELECT 1 FROM cleared c WHERE c.kind = '{kind}' AND c.target = {column}))"
+    )
+}
+
 fn game_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<GameInfo> {
     Ok(GameInfo {
         game_id: r.get(0)?,
@@ -476,8 +535,10 @@ async fn list_games(State(db): State<Db>, Query(query): Query<ListQuery>) -> Jso
     let mut statement = db
         .prepare(&format!(
             "SELECT {GAME_COLUMNS} FROM {GAMES}
-             WHERE g.title LIKE ?1 OR COALESCE(a.name, g.author) LIKE ?1 OR g.description LIKE ?1
-             ORDER BY g.plays DESC, g.updated DESC LIMIT 200"
+             WHERE (g.title LIKE ?1 OR COALESCE(a.name, g.author) LIKE ?1 OR g.description LIKE ?1)
+                AND NOT {hidden}
+             ORDER BY g.plays DESC, g.updated DESC LIMIT 200",
+            hidden = hidden_sql("game", "g.game_id")
         ))
         .expect("the games query is valid");
     let rows = statement
@@ -502,7 +563,11 @@ async fn game_info(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result
 async fn download(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<String, StatusCode> {
     let db = db.lock().unwrap();
     let place: Option<String> = db
-        .query_row("SELECT place FROM games WHERE game_id = ?1", params![id], |r| r.get(0))
+        .query_row(
+            &format!("SELECT place FROM games WHERE game_id = ?1 AND NOT {}", hidden_sql("game", "game_id")),
+            params![id],
+            |r| r.get(0),
+        )
         .optional()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let place = place.ok_or(StatusCode::NOT_FOUND)?;
@@ -681,12 +746,13 @@ async fn list_items(State(db): State<Db>, Query(query): Query<ListQuery>) -> Jso
     let db = db.lock().unwrap();
     let pattern = format!("%{}%", query.q.unwrap_or_default().trim().replace(['%', '_'], ""));
     let mut statement = db
-        .prepare(
+        .prepare(&format!(
             "SELECT i.item_id, i.name, i.kind, COALESCE(a.name, 'Someone'), i.creator_id, i.data, i.wears
              FROM items i LEFT JOIN accounts a ON a.player_id = i.creator_id
-             WHERE i.name LIKE ?1 OR COALESCE(a.name, '') LIKE ?1
+             WHERE (i.name LIKE ?1 OR COALESCE(a.name, '') LIKE ?1) AND NOT {}
              ORDER BY i.wears DESC, i.created DESC LIMIT 200",
-        )
+            hidden_sql("item", "i.item_id")
+        ))
         .expect("the catalog query is valid");
     let rows = statement
         .query_map(params![pattern], |r| {
@@ -734,6 +800,92 @@ async fn unlist_item(
         Ok(_) => StatusCode::NO_CONTENT,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
+}
+
+async fn report(
+    State(db): State<Db>,
+    Json(report): Json<Report>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
+    if report.kind != "game" && report.kind != "item" {
+        return bad("only games and items can be reported");
+    }
+    if report.reason.trim().is_empty() || report.reason.chars().count() > 300 {
+        return bad("a report needs a short reason");
+    }
+    let message =
+        report_message(&report.reporter_id, &report.kind, &report.target, &report.reason, report.time);
+    if !verify(&report.reporter_id, &message, &report.signature) {
+        return Err((StatusCode::FORBIDDEN, "the signature does not match that player".into()));
+    }
+    let db = db.lock().unwrap();
+    let table = if report.kind == "game" { "games WHERE game_id" } else { "items WHERE item_id" };
+    let exists: Option<i64> = db
+        .query_row(&format!("SELECT 1 FROM {table} = ?1"), params![report.target], |r| r.get(0))
+        .optional()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if exists.is_none() {
+        return Err((StatusCode::NOT_FOUND, "there is nothing with that id".into()));
+    }
+    // One report per player per thing; reporting again changes the reason.
+    db.execute(
+        "INSERT INTO reports (kind, target, reporter_id, reason, time) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(kind, target, reporter_id) DO UPDATE SET reason = ?4, time = ?5",
+        params![report.kind, report.target, report.reporter_id, report.reason.trim(), now()],
+    )
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Everything reported, most reported first, for whoever runs the Hub.
+pub fn reports(db: &Connection) -> Vec<Reported> {
+    let mut statement = db
+        .prepare(
+            "SELECT r.kind, r.target, GROUP_CONCAT(r.reason, '\n'), COUNT(*),
+                 EXISTS (SELECT 1 FROM cleared c WHERE c.kind = r.kind AND c.target = r.target),
+                 CASE r.kind WHEN 'game' THEN (SELECT title FROM games WHERE game_id = r.target)
+                             ELSE (SELECT name FROM items WHERE item_id = r.target) END
+             FROM reports r GROUP BY r.kind, r.target ORDER BY COUNT(*) DESC",
+        )
+        .expect("the reports query is valid");
+    statement
+        .query_map([], |r| {
+            let reasons: String = r.get(2)?;
+            let count: i64 = r.get(3)?;
+            let cleared: bool = r.get(4)?;
+            Ok(Reported {
+                kind: r.get(0)?,
+                target: r.get(1)?,
+                name: r.get(5)?,
+                reasons: reasons.lines().map(str::to_owned).collect(),
+                hidden: count >= HIDE_AFTER_REPORTS && !cleared,
+                cleared,
+            })
+        })
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
+}
+
+/// Whoever runs the Hub says a reported game or item is fine: it's listed
+/// again, whatever reports come.
+pub fn clear_reports(db: &Connection, kind: &str, target: &str) -> Result<(), String> {
+    db.execute("INSERT OR IGNORE INTO cleared (kind, target) VALUES (?1, ?2)", params![kind, target])
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Whoever runs the Hub takes a game or item down for good.
+pub fn take_down(db: &Connection, kind: &str, target: &str) -> Result<(), String> {
+    let sql = match kind {
+        "game" => "DELETE FROM games WHERE game_id = ?1",
+        "item" => "DELETE FROM items WHERE item_id = ?1",
+        _ => return Err(format!("there are no {kind}s on a Hub")),
+    };
+    let gone = db.execute(sql, params![target]).map_err(|e| e.to_string())?;
+    if gone == 0 {
+        return Err(format!("there is no {kind} {target}"));
+    }
+    Ok(())
 }
 
 async fn find_people(State(db): State<Db>, Query(query): Query<ListQuery>) -> Json<Vec<Person>> {
@@ -1158,6 +1310,15 @@ impl HubClient {
             .send_json(serde_json::json!({ "secret": signature }))
             .map(|_| ())
             .map_err(|e| e.to_string())
+    }
+
+    /// Reports a game or item as not OK.
+    pub fn report(&self, report: &Report) -> Result<(), String> {
+        self.agent
+            .post(format!("{}/reports", self.base))
+            .send_json(report)
+            .map(|_| ())
+            .map_err(|e| format!("the Hub did not take the report: {e}"))
     }
 
     /// Players whose names match `search`.

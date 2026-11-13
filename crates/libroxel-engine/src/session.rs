@@ -1016,6 +1016,9 @@ impl PlaySession {
             b.age += dt;
             b.age < BLAST_TIME
         });
+        for (player, why) in self.runtime.take_kicks() {
+            self.kick(player, &why);
+        }
         for player in self.runtime.take_load_requests() {
             if let Some(index) = self.avatar_of(player) {
                 self.respawn(index);

@@ -140,6 +140,8 @@ pub(crate) struct Hosting {
     replicator: Replicator,
     /// Teleports found but not sent yet: player, number, where, facing.
     teleports: Vec<(InstanceId, u64, Vec3, f32)>,
+    /// The names of players removed from this game, who can't join again.
+    banned: Vec<String>,
 }
 
 struct Peer {
@@ -148,6 +150,8 @@ struct Peer {
     player: Option<InstanceId>,
     /// Whether they still need the whole world.
     fresh: bool,
+    /// The name they asked to play as.
+    asked: String,
 }
 
 /// A joined game: the connection and how the host's ids map to ours.
@@ -557,6 +561,7 @@ impl PlaySession {
             peers: Vec::new(),
             replicator: Default::default(),
             teleports: Vec::new(),
+            banned: Vec::new(),
         }));
         Ok(session)
     }
@@ -599,6 +604,38 @@ impl PlaySession {
         if let Link::Client(joined) = &mut self.link {
             joined.conn.send(&json!({ "t": "look", "look": look.to_json() }));
         }
+    }
+
+    /// Removes `player` from the game, telling them `why`: a joined
+    /// computer is sent the reason and let go (and can't come back this
+    /// game); the player on this computer just leaves.
+    pub fn kick(&mut self, player: InstanceId, why: &str) {
+        let shown = self.runtime.tree().borrow().name(player).unwrap_or("A player").to_owned();
+        if let Link::Host(host) = &mut self.link
+            && let Some(peer) = host.peers.iter_mut().find(|p| p.player == Some(player))
+        {
+            peer.conn.send(&json!({ "t": "kicked", "why": why }));
+            peer.conn.flush();
+            peer.conn.closed = true;
+            host.banned.push(peer.asked.clone());
+            self.info(format!("{shown} was removed: {why}"));
+            return;
+        }
+        if self.avatar_of(player).is_some() {
+            self.warn(format!("{shown} was removed from the game: {why}"));
+            self.leave(player);
+        }
+    }
+
+    /// The players who joined from other computers, for the host to see.
+    pub fn joined_players(&self) -> Vec<(InstanceId, String)> {
+        let Link::Host(host) = &self.link else { return Vec::new() };
+        let tree = self.runtime.tree().borrow();
+        host.peers
+            .iter()
+            .filter_map(|p| p.player)
+            .map(|p| (p, tree.name(p).unwrap_or("Player").to_owned()))
+            .collect()
     }
 
     /// Where a hosted game listens.
@@ -655,7 +692,7 @@ impl PlaySession {
         host.teleports.extend(self.find_teleports());
         while let Ok((stream, _)) = host.listener.accept() {
             if let Ok(conn) = Conn::new(stream) {
-                host.peers.push(Peer { conn, player: None, fresh: true });
+                host.peers.push(Peer { conn, player: None, fresh: true, asked: String::new() });
             }
         }
         let tree = self.runtime.tree().clone();
@@ -685,7 +722,21 @@ impl PlaySession {
                             .filter(|c| c.is_alphanumeric() || *c == '_')
                             .take(20)
                             .collect();
-                        let name = if name.is_empty() { "Player".to_owned() } else { name };
+                        // No bad words in names.
+                        let name = if name.is_empty() || libroxel_script::filter::filter(&name) != name {
+                            "Player".to_owned()
+                        } else {
+                            name
+                        };
+                        if host.banned.contains(&name) {
+                            peer.conn.send(
+                                &json!({ "t": "refused", "why": "the host removed you from this game" }),
+                            );
+                            peer.conn.flush();
+                            peer.conn.closed = true;
+                            break;
+                        }
+                        peer.asked = name.clone();
                         let player = self.add_player(&name, true);
                         peer.player = Some(player);
                         let shown = tree.borrow().name(player).unwrap_or("A player").to_owned();
@@ -857,6 +908,13 @@ impl PlaySession {
                     joined.apply(&mut tree.borrow_mut(), &ops);
                 }
                 "you" => joined.me = message.get("player").and_then(Json::as_u64),
+                "kicked" => {
+                    let why =
+                        message.get("why").and_then(Json::as_str).unwrap_or("You were removed from the game");
+                    self.warn(format!("The host removed you: {why}"));
+                    joined.reported = true;
+                    joined.conn.closed = true;
+                }
                 "teleport" => {
                     let seq = message.get("seq").and_then(Json::as_u64).unwrap_or(0);
                     let pos = vec3_from(message.get("pos"));

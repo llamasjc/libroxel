@@ -776,6 +776,20 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
                 let widest = text.lines().map(|l| l.chars().count()).max().unwrap_or(0) as f32;
                 Ok(LuaVector2(Vec2::new(widest * size * 0.5, lines * size)))
             })?;
+            // The text, filtered once; every way of asking for it gives the same.
+            method(lua, &t, FILTER_STRING_ASYNC, |lua, (text, _from): (String, MultiValue)| {
+                let result = lua.create_table()?;
+                let clean = crate::filter::filter(&text);
+                for name in [
+                    GET_NON_CHAT_STRING_FOR_BROADCAST_ASYNC,
+                    GET_NON_CHAT_STRING_FOR_USER_ASYNC,
+                    GET_CHAT_FOR_USER_ASYNC,
+                ] {
+                    let clean = clean.clone();
+                    result.set(name, lua.create_function(move |_, _: MultiValue| Ok(clean.clone()))?)?;
+                }
+                Ok(result)
+            })?;
         }
         CONTENT_PROVIDER => {
             method(lua, &t, PRELOAD_ASYNC, |_, _: MultiValue| Ok(()))?;

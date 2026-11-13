@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use bevy_egui::egui::{self, Color32, RichText};
 use libroxel_hub::{
     AccountUpdate, Announcer, GameInfo, HostKind, HubClient, Item, Listing, NewItem, Profile, Publish,
-    RunningHub, ServerInfo,
+    Report, RunningHub, ServerInfo,
 };
 use libroxel_instance::serde_json::{self, Value as Json, json};
 
@@ -69,6 +69,11 @@ pub struct Platform {
     pub items: Vec<Item>,
     fetched_items: Slot<Vec<Item>>,
     item_shared: Slot<String>,
+    /// What the Hub said about the last report.
+    reported: Slot<String>,
+    pub report_status: Option<Result<String, String>>,
+    /// The game or item whose ⚑ was pressed: its kind, id and name.
+    reporting: Option<(&'static str, String, String)>,
     /// What the Hub said about the last item shared, for the editor's output.
     pub item_status: Option<Result<String, String>>,
 }
@@ -108,6 +113,9 @@ impl Default for Platform {
             items: Vec::new(),
             fetched_items: Arc::default(),
             item_shared: Arc::default(),
+            reported: Arc::default(),
+            report_status: None,
+            reporting: None,
             item_status: None,
         }
     }
@@ -189,6 +197,9 @@ impl Platform {
         }
         if let Some(Ok(items)) = self.fetched_items.lock().unwrap().take() {
             self.items = items;
+        }
+        if let Some(result) = self.reported.lock().unwrap().take() {
+            self.report_status = Some(result);
         }
         if let Some(result) = self.item_shared.lock().unwrap().take() {
             self.item_status = Some(result);
@@ -306,6 +317,32 @@ impl Platform {
         });
     }
 
+    /// Reports a game or item (`kind`) to the Hub, signed as this player.
+    fn report(&mut self, kind: &'static str, target: String, reason: &'static str) {
+        let client = self.client();
+        let out = self.reported.clone();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| {
+                let reporter_id = me.player_id();
+                let time = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs() as i64);
+                let message = libroxel_hub::report_message(&reporter_id, kind, &target, reason, time);
+                let report = Report {
+                    signature: me.sign(&message),
+                    reporter_id,
+                    kind: kind.into(),
+                    target,
+                    reason: reason.into(),
+                    time,
+                };
+                client.report(&report)?;
+                Ok("Thanks, the Hub has your report. Enough reports hide it until someone looks.".to_owned())
+            });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
     /// Shares a hat made in the editor in the catalog, signed as this player.
     pub fn share_hat(&mut self, hat: &libroxel_engine::character::CustomHat) {
         let client = self.client();
@@ -362,6 +399,7 @@ impl Platform {
             ui.label("Nothing in the catalog on this Hub yet.");
         }
         let mut worn = None;
+        let mut reporting = None;
         ui.horizontal_wrapped(|ui| {
             for item in &self.items {
                 let Some(hat) = libroxel_engine::character::CustomHat::from_json(&item.data) else {
@@ -378,17 +416,27 @@ impl Platform {
                                 RichText::new(format!("by {} · worn {}", item.creator, item.wears)).small(),
                             );
                             let on = wearing.is_some_and(|w| *w == hat);
-                            if ui
-                                .add_enabled(!on, egui::Button::new(if on { "Wearing" } else { "Wear" }))
-                                .clicked()
-                            {
-                                worn = Some(item.item_id.clone());
-                                picked = Some(Some(hat));
-                            }
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add_enabled(!on, egui::Button::new(if on { "Wearing" } else { "Wear" }))
+                                    .clicked()
+                                {
+                                    worn = Some(item.item_id.clone());
+                                    picked = Some(Some(hat));
+                                }
+                                if report_button(ui, "hat") {
+                                    reporting = Some(("item", item.item_id.clone(), item.name.clone()));
+                                }
+                            });
                         });
                     });
             }
         });
+        if reporting.is_some() {
+            self.reporting = reporting;
+            self.report_status = None;
+        }
+        self.report_row(ui);
         if let Some(id) = worn {
             let client = self.client();
             std::thread::spawn(move || {
@@ -396,6 +444,42 @@ impl Platform {
             });
         }
         picked
+    }
+
+    /// Asks why, when the ⚑ beside a game or hat was pressed, and shows
+    /// what the Hub said about the report.
+    fn report_row(&mut self, ui: &mut egui::Ui) {
+        if let Some((kind, target, name)) = self.reporting.clone() {
+            let mut done = false;
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(format!("⚑ Report {name} for:")).strong());
+                for reason in REPORT_REASONS {
+                    if ui.button(reason).clicked() {
+                        self.report(kind, target.clone(), reason);
+                        done = true;
+                    }
+                }
+                if ui.button("Cancel").clicked() {
+                    done = true;
+                }
+            });
+            if done {
+                self.reporting = None;
+            }
+        }
+        self.show_report_status(ui);
+    }
+
+    fn show_report_status(&self, ui: &mut egui::Ui) {
+        match &self.report_status {
+            Some(Ok(said)) => {
+                ui.colored_label(Color32::from_rgb(120, 220, 120), said);
+            }
+            Some(Err(why)) => {
+                ui.colored_label(Color32::from_rgb(255, 120, 110), why);
+            }
+            None => {}
+        }
     }
 
     /// Looks up this player's account on the Hub, once for each Hub.
@@ -576,6 +660,7 @@ impl Platform {
         }
         let mut chosen = None;
         let mut search = None;
+        let mut reporting = None;
         egui::ScrollArea::vertical().id_salt("published").max_height(300.0).show(ui, |ui| {
             egui::Grid::new("published-games").num_columns(4).striped(true).spacing([16.0, 6.0]).show(
                 ui,
@@ -614,6 +699,9 @@ impl Platform {
                             {
                                 chosen = Some((game.clone(), true));
                             }
+                            if report_button(ui, "game") {
+                                reporting = Some(("game", game.game_id.clone(), game.title.clone()));
+                            }
                         });
                         ui.end_row();
                     }
@@ -623,6 +711,11 @@ impl Platform {
         if let Some((game, host)) = chosen {
             self.download(&game, host);
         }
+        if reporting.is_some() {
+            self.reporting = reporting;
+            self.report_status = None;
+        }
+        self.report_row(ui);
         if let Some(author) = search {
             self.search = author;
             self.refresh();
@@ -758,4 +851,17 @@ fn read_published() -> serde_json::Map<String, Json> {
         .and_then(|t| serde_json::from_str::<Json>(&t).ok())
         .and_then(|j| j.as_object().cloned())
         .unwrap_or_default()
+}
+
+/// The reasons a game or hat can be reported for.
+const REPORT_REASONS: [&str; 4] = [
+    "Rude, hateful or bullying",
+    "Sexual or not OK for kids",
+    "A scam or a cheat",
+    "Something else that's wrong",
+];
+
+/// A small ⚑ button to report a `what` ("game" or "hat").
+fn report_button(ui: &mut egui::Ui, what: &str) -> bool {
+    ui.small_button("⚑").on_hover_text(format!("Report this {what}")).clicked()
 }

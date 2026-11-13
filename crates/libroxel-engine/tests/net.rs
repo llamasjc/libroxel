@@ -274,3 +274,44 @@ fn everyone_sees_how_a_joined_player_chose_to_look() {
     };
     until(&mut host, &mut guest, CharacterInput::default(), |h, g| dressed(h) && dressed(g));
 }
+
+#[test]
+fn the_host_removes_a_player_who_then_cannot_come_back() {
+    let tree = Rc::new(RefCell::new(game()));
+    let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let join = || {
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Griefer")
+            .unwrap()
+    };
+    let mut guest = join();
+    until(&mut host, &mut guest, CharacterInput::default(), |h, _| h.joined_players().len() == 1);
+    let (player, name) = host.joined_players()[0].clone();
+    assert_eq!(name, "Griefer");
+    host.kick(player, "no griefing");
+    until(&mut host, &mut guest, CharacterInput::default(), |h, g| {
+        g.disconnected() && h.joined_players().is_empty()
+    });
+    let said = printed(&mut guest);
+    assert!(said.iter().any(|l| l.contains("The host removed you: no griefing")), "{said:?}");
+
+    // Joining again under the same name is refused.
+    let mut again = join();
+    until(&mut host, &mut again, CharacterInput::default(), |_, g| g.disconnected());
+    assert!(host.joined_players().is_empty());
+}
+
+#[test]
+fn bad_words_are_not_allowed_in_names() {
+    let tree = Rc::new(RefCell::new(game()));
+    let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest = PlaySession::join(
+        Rc::new(RefCell::new(InstanceTree::new())),
+        &format!("127.0.0.1:{port}"),
+        "shithead",
+    )
+    .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |h, _| h.joined_players().len() == 1);
+    assert!(host.joined_players()[0].1.starts_with("Player"), "{:?}", host.joined_players());
+}

@@ -24,6 +24,7 @@ mod bindings;
 mod calls;
 mod compat;
 mod effects;
+pub mod filter;
 mod items;
 pub mod names;
 mod net;
@@ -190,6 +191,11 @@ impl ScriptRuntime {
     /// Fires `humanoid.Seated(seat ~= nil, seat)`.
     pub fn seated(&self, humanoid: InstanceId, seat: Option<InstanceId>) -> Vec<ScriptError> {
         world::seated(&self.lua, humanoid, seat)
+    }
+
+    /// Takes the players `Kick` removed, with why.
+    pub fn take_kicks(&self) -> Vec<(InstanceId, String)> {
+        world::take_kicks(&self.lua)
     }
 
     /// Takes the players whose characters `LoadCharacter` asked to respawn.

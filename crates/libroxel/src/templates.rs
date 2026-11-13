@@ -548,6 +548,8 @@ ReplicatedStorage:WaitForChild("Say").OnServerEvent:Connect(function(player, tex
 	if text == "" or not head then
 		return
 	end
+	-- Bad words come out as #s.
+	text = game:GetService("TextService"):FilterStringAsync(text, player.UserId):GetNonChatStringForBroadcastAsync()
 	local old = head:FindFirstChild("Bubble")
 	if old then
 		old:Destroy()
@@ -1532,6 +1534,34 @@ mod tests {
         let log = session.take_log();
         assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
         assert!(log.iter().any(|l| l.text == "playing 1 dance"), "{log:?}");
+    }
+
+    #[test]
+    fn chat_hides_bad_words() {
+        let mut session = start_on(sample_obby(), true).unwrap();
+        session.step(1.0 / 60.0, CharacterInput::default());
+        session.runtime().run("say", r#"game.ReplicatedStorage.Say:FireServer("this is SHIT lol")"#).unwrap();
+        for _ in 0..10 {
+            session.step(1.0 / 60.0, CharacterInput::default());
+        }
+        session.runtime().run("check", r#"print(workspace.Player1.Head.Bubble.TextLabel.Text)"#).unwrap();
+        session.step(1.0 / 60.0, CharacterInput::default());
+        let log = session.take_log();
+        assert!(log.iter().any(|l| l.text == "this is #### lol"), "{log:?}");
+    }
+
+    #[test]
+    fn a_kicked_player_leaves() {
+        let mut session = start_on(sample_obby(), true).unwrap();
+        session.step(1.0 / 60.0, CharacterInput::default());
+        session.runtime().run("kick", r#"game.Players.Player1:Kick("no griefing")"#).unwrap();
+        session.step(1.0 / 60.0, CharacterInput::default());
+        let log = session.take_log();
+        assert!(log.iter().any(|l| l.text.contains("removed from the game: no griefing")), "{log:?}");
+        session.runtime().run("count", "print(#game.Players:GetPlayers())").unwrap();
+        session.step(1.0 / 60.0, CharacterInput::default());
+        let log = session.take_log();
+        assert!(log.iter().any(|l| l.text == "0"), "{log:?}");
     }
 
     #[test]

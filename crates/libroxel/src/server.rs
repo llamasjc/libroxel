@@ -30,6 +30,9 @@ usage:
   libroxel hub                 run only a Hub
       --port <n>               Hub port (default 7430)
       --data <file>            where the Hub keeps its list
+  libroxel hub reports         list reported games and hats (and which are hidden)
+  libroxel hub clear <game|item> <id>    say a reported one is fine: list it again
+  libroxel hub remove <game|item> <id>   take one down for good
   libroxel help                show this
 ";
 
@@ -107,7 +110,43 @@ fn hub(args: &[String]) -> Result<(), String> {
     let flags = Flags::parse(args, &["--port", "--data"])?;
     let port = flags.number("--port", libroxel_hub::DEFAULT_PORT)?;
     let data = flags.get("--data").map_or_else(|| data_dir().join("hub.sqlite"), PathBuf::from);
-    libroxel_hub::run(SocketAddr::from(([0, 0, 0, 0], port)), &data)
+    let words: Vec<&str> = flags.rest.iter().map(String::as_str).collect();
+    match words.as_slice() {
+        [] => libroxel_hub::run(SocketAddr::from(([0, 0, 0, 0], port)), &data),
+        ["reports"] => {
+            let db = libroxel_hub::open_db(Some(&data))?;
+            let reported = libroxel_hub::reports(&db);
+            if reported.is_empty() {
+                println!("Nothing has been reported.");
+            }
+            for r in reported {
+                let state = if r.hidden {
+                    "HIDDEN"
+                } else if r.cleared {
+                    "cleared"
+                } else {
+                    "listed"
+                };
+                let name = r.name.as_deref().unwrap_or("(gone)");
+                println!("{} {} \"{name}\" [{state}], {} report(s):", r.kind, r.target, r.reasons.len());
+                for reason in r.reasons {
+                    println!("    - {reason}");
+                }
+            }
+            Ok(())
+        }
+        ["clear", kind, id] => {
+            libroxel_hub::clear_reports(&libroxel_hub::open_db(Some(&data))?, kind, id)?;
+            println!("{kind} {id} is listed again.");
+            Ok(())
+        }
+        ["remove", kind, id] => {
+            libroxel_hub::take_down(&libroxel_hub::open_db(Some(&data))?, kind, id)?;
+            println!("{kind} {id} is gone.");
+            Ok(())
+        }
+        _ => Err("usage: libroxel hub [reports | clear <game|item> <id> | remove <game|item> <id>]".into()),
+    }
 }
 
 fn server(args: &[String]) -> Result<(), String> {
