@@ -46,6 +46,8 @@ enum Action {
     InsertInto(ClassKind, InstanceId),
     /// Turn the selection a quarter turn around the vertical axis.
     Rotate90(InstanceId),
+    /// Add a 3D model file (dropped on the window) as a part.
+    ImportMesh(PathBuf),
     Delete(InstanceId),
     Duplicate(InstanceId),
     Select(Option<InstanceId>),
@@ -338,6 +340,13 @@ pub fn editor_ui(
     let tree_rc = engine.tree.clone();
     let playing = engine.is_playing();
     let mut actions: Vec<Action> = Vec::new();
+    // Model files dropped on the window come in as parts.
+    for file in ctx.input(|i| i.raw.dropped_files.clone()) {
+        let path = file.path();
+        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("obj")) {
+            actions.push(Action::ImportMesh(path.to_path_buf()));
+        }
+    }
     // A game that has ended no longer needs its internet connection.
     if engine.session.is_none() {
         editor.tunnel = None;
@@ -443,8 +452,10 @@ pub fn editor_ui(
     if let Some(dir) = editor.file.as_ref().and_then(|f| f.parent()) {
         folders.push(dir.to_path_buf());
         folders.push(dir.join("images"));
+        folders.push(dir.join("meshes"));
     }
     folders.push(games_dir().join("images"));
+    folders.push(crate::mesh_import::meshes_dir());
     crate::images::set_folders(folders);
     let central = egui::CentralPanel::no_frame()
         .show(&mut root, |ui| {
@@ -3050,6 +3061,33 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     let _ = tree.set_name(id, name);
                 }
                 editor.selection = Some(id);
+            }
+        }
+        Action::ImportMesh(path) => {
+            if playing {
+                log(engine, LogLevel::Warn, "Stop the game to add a model".to_string());
+                return;
+            }
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            editor.history.begin_edit(&tree, now);
+            let at = editor
+                .selection
+                .and_then(|s| {
+                    Some((tree.get_vec3(s, Property::Position)?, tree.get_vec3(s, Property::Size)?))
+                })
+                .map(|(p, s)| p + libroxel_instance::Vec3::new(0.0, s.y / 2.0, 0.0))
+                .unwrap_or_default();
+            let done = crate::mesh_import::import(&mut tree, &path, &crate::mesh_import::meshes_dir(), at);
+            drop(tree);
+            match done {
+                Ok(id) => {
+                    editor.dirty = true;
+                    editor.selection = Some(id);
+                    editor.focus_selection = true;
+                    log(engine, LogLevel::Info, format!("Added the model {}", path.display()));
+                }
+                Err(e) => log(engine, LogLevel::Error, e),
             }
         }
         Action::Rotate90(id) => {

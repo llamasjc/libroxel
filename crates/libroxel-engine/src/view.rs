@@ -77,6 +77,10 @@ pub struct PartAppearance {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PartGeometry(pub PartShape);
 
+/// The model file a part is drawn with instead of its shape (empty for none).
+#[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
+pub struct PartMeshFile(pub String);
+
 /// The transform that draws a part of `shape` and `size` at `pos` with `orientation`.
 ///
 /// Meshes are unit-sized; balls use their smallest side and cylinders (which
@@ -160,7 +164,10 @@ fn sync_parts(
     engine: NonSend<EngineState>,
     mut entities: ResMut<PartEntities>,
     mut commands: Commands,
-    mut parts: Query<(&mut Transform, &mut PartAppearance, &mut PartName, &mut PartGeometry), With<PartLink>>,
+    mut parts: Query<
+        (&mut Transform, &mut PartAppearance, &mut PartName, &mut PartGeometry, &mut PartMeshFile),
+        With<PartLink>,
+    >,
 ) {
     let mut tree = engine.tree.borrow_mut();
     // While playing, the session reads the change journal (for Changed events).
@@ -199,7 +206,10 @@ fn sync_parts(
             Some(EnumValue::Material(m)) => m,
             _ => Material::Plastic,
         };
-        let shape = part_shape(&tree, id);
+        let mesh_file =
+            PartMeshFile(tree.get_string(id, Property::MeshId).unwrap_or_default().trim().to_owned());
+        // A model is stretched over the part's whole box.
+        let shape = if mesh_file.0.is_empty() { part_shape(&tree, id) } else { PartShape::Block };
         let orientation = tree.get_vec3(id, Property::Orientation).unwrap_or_default();
         let transform = part_transform(pos, size, orientation, shape);
         let texture_repeat = (size.x.max(size.y).max(size.z) / 8.0).max(0.25);
@@ -211,7 +221,8 @@ fn sync_parts(
         let geometry = PartGeometry(shape);
 
         match spawned.get(&id).and_then(|e| parts.get_mut(*e).ok()) {
-            Some((mut t, mut a, mut n, mut g)) => {
+            Some((mut t, mut a, mut n, mut g, mut m)) => {
+                m.set_if_neq(mesh_file);
                 t.set_if_neq(transform);
                 a.set_if_neq(appearance);
                 n.set_if_neq(name);
@@ -219,7 +230,8 @@ fn sync_parts(
                 seen.insert(id, revision);
             }
             None if !spawned.contains_key(&id) => {
-                let entity = commands.spawn((PartLink(id), name, transform, appearance, geometry)).id();
+                let entity =
+                    commands.spawn((PartLink(id), name, transform, appearance, geometry, mesh_file)).id();
                 spawned.insert(id, entity);
             }
             None => {} // spawned this frame; commands not applied yet
@@ -239,7 +251,11 @@ impl Plugin for RenderPlugin {
         app.add_systems(Startup, setup_scene)
             .init_resource::<crate::devices::VirtualInput>()
             .add_systems(Update, (camera_controls, play_input, forward_keys).chain().in_set(EngineSet::Input))
-            .add_systems(PostUpdate, (attach_visuals, update_materials, update_meshes).chain())
+            .init_resource::<crate::mesh_files::MeshFiles>()
+            .add_systems(
+                PostUpdate,
+                (attach_visuals, update_materials, update_meshes, use_mesh_files).chain(),
+            )
             // The camera moves in Update, right after the world, and its global
             // transform is brought up to date at once, so GUIs and name tags
             // drawn later this frame line up with where the camera is now.
@@ -730,6 +746,29 @@ fn update_meshes(
 ) {
     for (geometry, mut mesh) in &mut changed {
         let wanted = meshes.get(geometry.0);
+        if mesh.0 != wanted {
+            mesh.0 = wanted;
+        }
+    }
+}
+
+/// Draws parts that have a model file with that model (once it's read),
+/// and puts their own shape back when the file is taken away.
+fn use_mesh_files(
+    part_meshes: Res<PartMeshes>,
+    mut files: ResMut<crate::mesh_files::MeshFiles>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut parts: Query<(Ref<PartMeshFile>, &PartGeometry, &mut Mesh3d)>,
+) {
+    for (file, geometry, mut mesh) in &mut parts {
+        let wanted = if file.0.is_empty() {
+            if !file.is_changed() {
+                continue;
+            }
+            part_meshes.get(geometry.0)
+        } else {
+            files.get(&file.0, &mut meshes).unwrap_or_else(|| part_meshes.get(geometry.0))
+        };
         if mesh.0 != wanted {
             mesh.0 = wanted;
         }

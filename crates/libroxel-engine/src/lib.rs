@@ -11,6 +11,7 @@ pub mod coedit;
 pub mod devices;
 pub mod effects;
 pub mod hinge;
+pub mod mesh_files;
 pub mod movers;
 pub mod net;
 pub mod npc;

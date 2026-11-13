@@ -1306,6 +1306,7 @@ pub fn property_name(property: Property) -> &'static str {
         Property::GradientTransparency1 => "Transparency1",
         Property::GradientRotation => "Rotation",
         Property::GradientOffset => "Offset",
+        Property::MeshId => "MeshId",
     }
 }
 

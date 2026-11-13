@@ -110,6 +110,13 @@ The first build compiles Bevy and takes a while. After that it is quick.
   Adornee (or its parent) in Color3, and a `Beam` draws a strip between
   its two attachments. `UISizeConstraint` and `UITextSizeConstraint` keep
   GUI objects and text within a minimum and maximum size.
+- **Your own 3D models:** drop an `.obj` file on the window while editing
+  and it's copied into the games folder's `meshes` folder and added as a
+  part drawing that model, at the model's own size. Any part's `MeshId`
+  can name an .obj file (looked for beside the game, in a `meshes` folder
+  beside it, or in the games folder's `meshes` folder); the model is
+  stretched to fit the part's Size, and it still bumps into things as
+  that box. Players who join need the same file to see it.
 - **Gradients:** a `UIGradient` inside a GUI object shades its background
   from one colour (and transparency) to another, turned `Rotation`
   degrees and shifted by `Offset`. Scripts set `Color` to a ColorSequence

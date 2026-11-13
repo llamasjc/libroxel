@@ -513,6 +513,7 @@ impl ClassKind {
             Property::Massless,
             Property::Locked,
             Property::CollisionGroup,
+            Property::MeshId,
         ];
         const SCRIPT: &[Property] = &[Property::Name, Property::Disabled, Property::Source];
         const MODULE: &[Property] = &[Property::Name, Property::Source];
@@ -1272,6 +1273,7 @@ impl ClassKind {
             | Property::GradientTransparency1
             | Property::GradientRotation => PropertyValue::Number(0.0),
             Property::GradientOffset => PropertyValue::Vec2(Vec2::ZERO),
+            Property::MeshId => PropertyValue::String(String::new()),
             Property::Padding => PropertyValue::UDim(UDim::default()),
             Property::BlastRadius => PropertyValue::Number(4.0),
             Property::BlastPressure => PropertyValue::Number(500_000.0),

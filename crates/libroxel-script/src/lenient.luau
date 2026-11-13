@@ -524,7 +524,6 @@ add(props, "BasePart", {
 	Friction = 0.3,
 	ReceiveAge = 0,
 	ResizeIncrement = 1,
-	MeshId = "",
 	TextureID = "",
 	DoubleSided = false,
 	EnableFluidForces = true,

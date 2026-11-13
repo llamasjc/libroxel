@@ -405,6 +405,8 @@ pub enum Property {
     GradientRotation,
     /// On a gradient: how far it is shifted, as a fraction of the object's size.
     GradientOffset,
+    /// On a part: a 3D model (an .obj file) drawn in place of its shape, stretched to fit its Size.
+    MeshId,
 }
 
 /// The value of a property.
@@ -474,7 +476,7 @@ impl Property {
             Property::TextYAlignment => EnumKind::TextYAlignment.kind_name(),
             Property::CanvasSize | Property::CellSize | Property::CellPadding => "UDim2",
             Property::CanvasPosition => "Vec2",
-            Property::Image => "string",
+            Property::Image | Property::MeshId => "string",
             Property::ImageColor => "Color3",
             Property::ImageTransparency => "number",
             Property::ScaleType => EnumKind::ScaleType.kind_name(),
@@ -871,6 +873,7 @@ impl Property {
         Property::GradientTransparency1,
         Property::GradientRotation,
         Property::GradientOffset,
+        Property::MeshId,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -1091,6 +1094,7 @@ impl Property {
             Property::GradientTransparency1 => "gradient_transparency1",
             Property::GradientRotation => "gradient_rotation",
             Property::GradientOffset => "gradient_offset",
+            Property::MeshId => "mesh_id",
         }
     }
 

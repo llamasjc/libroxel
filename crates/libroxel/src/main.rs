@@ -18,6 +18,7 @@ mod gui;
 mod history;
 mod images;
 mod menu;
+mod mesh_import;
 mod server;
 mod starter_games;
 mod templates;
