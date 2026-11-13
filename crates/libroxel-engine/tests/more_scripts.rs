@@ -376,3 +376,19 @@ fn a_rod_keeps_its_length_and_no_collision_lets_parts_through() {
     );
     assert_eq!(printed, vec!["4.0 true", "true"]);
 }
+
+#[test]
+fn gradients_keep_both_ends_of_their_sequences() {
+    let printed = run(r#"
+        local frame = Instance.new("Frame")
+        local g = Instance.new("UIGradient", frame)
+        g.Color = ColorSequence.new(Color3.new(1, 0, 0), Color3.new(0, 0, 1))
+        g.Transparency = NumberSequence.new(0, 0.5)
+        g.Rotation = 90
+        local k = g.Color.Keypoints
+        print(#k, k[1].Value.R, k[2].Value.B, g.Transparency.Keypoints[2].Value, g.Rotation)
+        g.Color = Color3.new(0, 1, 0)
+        print(g.Color.Keypoints[2].Value.G, typeof(g.Offset))
+    "#);
+    assert_eq!(printed, vec!["2 1 1 0.5 90", "1 Vector2"]);
+}

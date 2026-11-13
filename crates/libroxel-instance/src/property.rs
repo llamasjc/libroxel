@@ -393,6 +393,18 @@ pub enum Property {
     TorqueVector,
     /// On an align orientation or body gyro: the turn to hold (scripts set it as a CFrame).
     TargetOrientation,
+    /// On a gradient: the colour at its start (scripts set both ends with Color, a ColorSequence).
+    GradientColor0,
+    /// On a gradient: the colour at its end.
+    GradientColor1,
+    /// On a gradient: how see-through it is at its start (scripts set both with Transparency, a NumberSequence).
+    GradientTransparency0,
+    /// On a gradient: how see-through it is at its end.
+    GradientTransparency1,
+    /// On a gradient: which way it runs, in degrees clockwise from left-to-right.
+    GradientRotation,
+    /// On a gradient: how far it is shifted, as a fraction of the object's size.
+    GradientOffset,
 }
 
 /// The value of a property.
@@ -493,10 +505,16 @@ impl Property {
             | Property::SunAngularSize
             | Property::MoonAngularSize
             | Property::TrailLifetime
-            | Property::PixelsPerStud => "number",
+            | Property::PixelsPerStud
+            | Property::GradientTransparency0
+            | Property::GradientTransparency1
+            | Property::GradientRotation => "number",
             Property::CelestialBodiesShown => "bool",
-            Property::TintColor | Property::SelectionColor => "Color3",
-            Property::MinSize | Property::MaxSize => "Vec2",
+            Property::TintColor
+            | Property::SelectionColor
+            | Property::GradientColor0
+            | Property::GradientColor1 => "Color3",
+            Property::MinSize | Property::MaxSize | Property::GradientOffset => "Vec2",
             Property::C0Position
             | Property::C0Orientation
             | Property::C1Position
@@ -847,6 +865,12 @@ impl Property {
         Property::PixelsPerStud,
         Property::TorqueVector,
         Property::TargetOrientation,
+        Property::GradientColor0,
+        Property::GradientColor1,
+        Property::GradientTransparency0,
+        Property::GradientTransparency1,
+        Property::GradientRotation,
+        Property::GradientOffset,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -1061,6 +1085,12 @@ impl Property {
             Property::PixelsPerStud => "pixels_per_stud",
             Property::TorqueVector => "torque_vector",
             Property::TargetOrientation => "target_orientation",
+            Property::GradientColor0 => "gradient_color0",
+            Property::GradientColor1 => "gradient_color1",
+            Property::GradientTransparency0 => "gradient_transparency0",
+            Property::GradientTransparency1 => "gradient_transparency1",
+            Property::GradientRotation => "gradient_rotation",
+            Property::GradientOffset => "gradient_offset",
         }
     }
 

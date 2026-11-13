@@ -1300,6 +1300,12 @@ pub fn property_name(property: Property) -> &'static str {
         Property::PixelsPerStud => "PixelsPerStud",
         Property::TorqueVector => "Torque",
         Property::TargetOrientation => "TargetOrientation",
+        Property::GradientColor0 => "Color0",
+        Property::GradientColor1 => "Color1",
+        Property::GradientTransparency0 => "Transparency0",
+        Property::GradientTransparency1 => "Transparency1",
+        Property::GradientRotation => "Rotation",
+        Property::GradientOffset => "Offset",
     }
 }
 

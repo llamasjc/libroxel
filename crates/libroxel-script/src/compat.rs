@@ -524,6 +524,9 @@ fn is_target_turn(class: ClassKind, key: &str) -> bool {
 }
 
 pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> mlua::Result<Option<Value>> {
+    if let Some(v) = crate::effects::gradient_index(lua, id, class, key)? {
+        return Ok(Some(v));
+    }
     if is_target_turn(class, key) {
         let turn = host(lua).tree.borrow().get_vec3(id, Property::TargetOrientation).unwrap_or_default();
         let cf = CFrame::new(Vec3::ZERO, Rotation::from_orientation(turn));
@@ -584,6 +587,9 @@ pub(crate) fn new_index(
     key: &str,
     value: &Value,
 ) -> mlua::Result<bool> {
+    if crate::effects::gradient_new_index(lua, id, class, key, value)? {
+        return Ok(true);
+    }
     if is_target_turn(class, key) {
         let cf = as_cframe(value).ok_or_else(|| runtime_err(format!("{key} expects a CFrame")))?;
         let turn = PropertyValue::Vec3(cf.rot.to_orientation());

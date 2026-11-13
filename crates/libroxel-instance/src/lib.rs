@@ -886,6 +886,16 @@ impl ClassKind {
             &[Property::Name, Property::Enabled, Property::Attachment0, Property::TorqueVector];
         const NO_COLLISION: &[Property] =
             &[Property::Name, Property::Enabled, Property::Part0, Property::Part1];
+        const GRADIENT: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::GradientColor0,
+            Property::GradientColor1,
+            Property::GradientTransparency0,
+            Property::GradientTransparency1,
+            Property::GradientRotation,
+            Property::GradientOffset,
+        ];
         const SURFACE_GUI: &[Property] = &[
             Property::Name,
             Property::Enabled,
@@ -1116,6 +1126,7 @@ impl ClassKind {
             ClassKind::Beam => BEAM,
             ClassKind::Sky => SKY,
             ClassKind::SurfaceGui => SURFACE_GUI,
+            ClassKind::UIGradient => GRADIENT,
             ClassKind::AlignOrientation => ALIGN_ORIENTATION,
             ClassKind::BodyGyro => BODY_GYRO,
             ClassKind::Torque => TORQUE,
@@ -1256,6 +1267,11 @@ impl ClassKind {
             Property::TrailLifetime => PropertyValue::Number(2.0),
             Property::PixelsPerStud => PropertyValue::Number(50.0),
             Property::TorqueVector | Property::TargetOrientation => PropertyValue::Vec3(Vec3::ZERO),
+            Property::GradientColor0 | Property::GradientColor1 => PropertyValue::Color3(Color3::WHITE),
+            Property::GradientTransparency0
+            | Property::GradientTransparency1
+            | Property::GradientRotation => PropertyValue::Number(0.0),
+            Property::GradientOffset => PropertyValue::Vec2(Vec2::ZERO),
             Property::Padding => PropertyValue::UDim(UDim::default()),
             Property::BlastRadius => PropertyValue::Number(4.0),
             Property::BlastPressure => PropertyValue::Number(500_000.0),

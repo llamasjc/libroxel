@@ -133,6 +133,7 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::Animation,
     ClassKind::UIAspectRatioConstraint,
     ClassKind::UIScale,
+    ClassKind::UIGradient,
     ClassKind::Team,
     ClassKind::WeldConstraint,
     ClassKind::Weld,
@@ -272,6 +273,7 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::Animation | ClassKind::Animator => "💃",
         ClassKind::UIAspectRatioConstraint => "⬌",
         ClassKind::UIScale => "🔍",
+        ClassKind::UIGradient => "🌈",
         ClassKind::Teams | ClassKind::Team => "🚩",
         ClassKind::Weld | ClassKind::Motor6D => "🔗",
         ClassKind::Beam => "〰",
@@ -288,7 +290,6 @@ fn icon(class: ClassKind) -> &'static str {
         | ClassKind::SunRaysEffect
         | ClassKind::DepthOfFieldEffect
         | ClassKind::SurfaceLight
-        | ClassKind::UIGradient
         | ClassKind::CylindricalConstraint
         | ClassKind::SpecialMesh
         | ClassKind::Shirt
@@ -1553,6 +1554,10 @@ fn properties(
             "Keeps this GUI object's width divided by its height at AspectRatio, shrinking the longer side.",
         ),
         ClassKind::UIScale => Some("Draws this GUI object Scale times bigger (or smaller, below 1)."),
+        ClassKind::UIGradient => Some(
+            "Shades this GUI object's background from Color0 to Color1 (and Transparency0 to Transparency1), \
+             turned Rotation degrees. Scripts set Color to a ColorSequence and Transparency to a NumberSequence.",
+        ),
         ClassKind::ParticleEmitter => Some(
             "Put this inside a part: it sends particles out of the part's top. Rate is how many a second, \
              Lifetime and Speed are ranges (min, max), SpreadAngle scatters them, Acceleration pulls them \
@@ -2851,7 +2856,8 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                 | ClassKind::UIPadding
                 | ClassKind::UIGridLayout
                 | ClassKind::UIAspectRatioConstraint
-                | ClassKind::UIScale => editor
+                | ClassKind::UIScale
+                | ClassKind::UIGradient => editor
                     .selection
                     .filter(|s| tree.class(*s).is_ok_and(|c| c.is_gui_object() || c == ClassKind::ScreenGui))
                     .or_else(|| gui_parent(&mut tree, editor.selection))

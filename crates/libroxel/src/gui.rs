@@ -377,7 +377,12 @@ fn draw_children(
             background = background.lerp(Color3::new(0.0, 0.0, 0.0), 0.15);
         }
         if alpha > 0.0 {
-            painter.rect_filled(r, round, color(background, alpha));
+            match gradient_of(tree, child) {
+                Some(g) => fill_gradient(painter, r, round, background, alpha, &g),
+                None => {
+                    painter.rect_filled(r, round, color(background, alpha));
+                }
+            }
         }
         let border = tree.get_number(child, Property::BorderSizePixel).unwrap_or(0.0) as f32;
         if border > 0.0 && alpha > 0.0 {
@@ -453,6 +458,74 @@ fn draw_children(
         } else {
             draw_children(painter, tree, child, r, pointer, selected, hit, boxes);
         }
+    }
+}
+
+/// A gradient over a GUI object's background: its two end colours and
+/// transparencies, which way it runs (degrees clockwise) and its shift.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Gradient {
+    pub colours: (Color3, Color3),
+    pub transparency: (f32, f32),
+    pub rotation: f32,
+    pub offset: Vec2,
+}
+
+/// The enabled UIGradient inside `id`, if there is one.
+pub fn gradient_of(tree: &InstanceTree, id: InstanceId) -> Option<Gradient> {
+    let g = child_of_class(tree, id, ClassKind::UIGradient)?;
+    if tree.get_bool(g, Property::Enabled) == Some(false) {
+        return None;
+    }
+    let c = |p| tree.get_color(g, p).unwrap_or(Color3::WHITE);
+    let n = |p| tree.get_number(g, p).unwrap_or(0.0) as f32;
+    Some(Gradient {
+        colours: (c(Property::GradientColor0), c(Property::GradientColor1)),
+        transparency: (n(Property::GradientTransparency0), n(Property::GradientTransparency1)),
+        rotation: n(Property::GradientRotation),
+        offset: vec2(tree, g, Property::GradientOffset),
+    })
+}
+
+impl Gradient {
+    /// How far along the gradient (0 at its start, 1 at its end) a point
+    /// in `rect` is. Turned, it still runs corner to corner.
+    pub fn along(&self, rect: Rect, at: Pos2) -> f32 {
+        let (s, c) = self.rotation.to_radians().sin_cos();
+        let dir = egui::vec2(c, s);
+        let centre = rect.center() + egui::vec2(self.offset.x * rect.width(), self.offset.y * rect.height());
+        let half = (rect.width() * c.abs() + rect.height() * s.abs()) / 2.0;
+        if half <= 0.0 {
+            return 0.0;
+        }
+        (((at - centre).dot(dir) / half + 1.0) / 2.0).clamp(0.0, 1.0)
+    }
+
+    /// The colour multiplier and opacity at `t` along it.
+    pub fn at(&self, t: f32) -> (Color3, f32) {
+        let colour = self.colours.0.lerp(self.colours.1, t);
+        let transparency = self.transparency.0 + (self.transparency.1 - self.transparency.0) * t;
+        (colour, (1.0 - transparency).clamp(0.0, 1.0))
+    }
+}
+
+/// Fills `rect` (with rounded corners) in `base` tinted by a gradient.
+fn fill_gradient(painter: &egui::Painter, rect: Rect, round: f32, base: Color3, alpha: f32, g: &Gradient) {
+    let ctx = painter.ctx();
+    let shape = egui::epaint::ClippedShape {
+        clip_rect: painter.clip_rect(),
+        shape: egui::Shape::rect_filled(rect, round, Color32::WHITE),
+    };
+    for primitive in ctx.tessellate(vec![shape], ctx.pixels_per_point()) {
+        let egui::epaint::Primitive::Mesh(mut mesh) = primitive.primitive else { continue };
+        for v in &mut mesh.vertices {
+            let (tint, opacity) = g.at(g.along(rect, v.pos));
+            // The edge's softening comes through as the vertex's own alpha.
+            let edge = v.color.a() as f32 / 255.0;
+            let c = Color3::new(base.r * tint.r, base.g * tint.g, base.b * tint.b);
+            v.color = color(c, alpha * opacity * edge);
+        }
+        painter.add(egui::Shape::mesh(mesh));
     }
 }
 
@@ -800,6 +873,24 @@ mod tests {
         let rect = |name: &str| placed.iter().find(|(c, _, _)| tree.name(*c) == Ok(name)).unwrap().2;
         assert_eq!(rect("Square").size(), egui::vec2(100.0, 100.0));
         assert_eq!(rect("Big").size(), egui::vec2(200.0, 200.0));
+    }
+
+    #[test]
+    fn a_gradient_runs_from_its_start_colour_to_its_end_colour() {
+        let g = Gradient {
+            colours: (Color3::new(1.0, 0.0, 0.0), Color3::new(0.0, 0.0, 1.0)),
+            transparency: (0.0, 1.0),
+            rotation: 0.0,
+            offset: Vec2::ZERO,
+        };
+        let r = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0));
+        assert_eq!(g.along(r, Pos2::new(0.0, 50.0)), 0.0);
+        assert_eq!(g.along(r, Pos2::new(200.0, 0.0)), 1.0);
+        assert_eq!(g.at(0.5), (Color3::new(0.5, 0.0, 0.5), 0.5));
+        // Turned a quarter, it runs top to bottom.
+        let down = Gradient { rotation: 90.0, ..g };
+        assert!((down.along(r, Pos2::new(0.0, 100.0)) - 1.0).abs() < 1e-5);
+        assert!(down.along(r, Pos2::new(200.0, 0.0)).abs() < 1e-5);
     }
 
     #[test]

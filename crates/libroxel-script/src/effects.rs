@@ -125,6 +125,77 @@ pub(crate) fn from_lua(property: Property, value: &Value) -> Option<PropertyValu
     }
 }
 
+/// A gradient's `Color` (a ColorSequence) or `Transparency` (a
+/// NumberSequence): they are kept as their two ends.
+fn gradient_ends(class: ClassKind, key: &str) -> Option<(Property, Property)> {
+    if class != ClassKind::UIGradient {
+        return None;
+    }
+    match key {
+        "Color" => Some((Property::GradientColor0, Property::GradientColor1)),
+        "Transparency" => Some((Property::GradientTransparency0, Property::GradientTransparency1)),
+        _ => None,
+    }
+}
+
+/// Reads a gradient's sequence member, if `key` is one.
+pub(crate) fn gradient_index(
+    lua: &Lua,
+    id: InstanceId,
+    class: ClassKind,
+    key: &str,
+) -> mlua::Result<Option<Value>> {
+    let Some((a, b)) = gradient_ends(class, key) else { return Ok(None) };
+    let host = host(lua);
+    let tree = host.tree.borrow();
+    let value = if a == Property::GradientColor0 {
+        let c = |p| tree.get_color(id, p).unwrap_or(Color3::WHITE);
+        Value::UserData(lua.create_userdata(LuaColorSequence(vec![(0.0, c(a)), (1.0, c(b))]))?)
+    } else {
+        let n = |p| tree.get_number(id, p).unwrap_or(0.0) as f32;
+        Value::UserData(lua.create_userdata(LuaNumberSequence(vec![(0.0, n(a)), (1.0, n(b))]))?)
+    };
+    Ok(Some(value))
+}
+
+/// Sets a gradient's sequence member from a sequence (its first and last
+/// keypoints) or a single value; false if `key` isn't one.
+pub(crate) fn gradient_new_index(
+    lua: &Lua,
+    id: InstanceId,
+    class: ClassKind,
+    key: &str,
+    value: &Value,
+) -> mlua::Result<bool> {
+    let Some((a, b)) = gradient_ends(class, key) else { return Ok(false) };
+    let (first, last) = if a == Property::GradientColor0 {
+        let ends = match value {
+            Value::UserData(ud) if ud.is::<LuaColorSequence>() => {
+                let s = ud.borrow::<LuaColorSequence>()?;
+                s.0.first().zip(s.0.last()).map(|(f, l)| (f.1, l.1))
+            }
+            other => as_color(other).map(|c| (c, c)),
+        };
+        let (f, l) = ends.ok_or_else(|| err(format!("{key} expects a ColorSequence")))?;
+        (PropertyValue::Color3(f), PropertyValue::Color3(l))
+    } else {
+        let ends = match value {
+            Value::UserData(ud) if ud.is::<LuaNumberSequence>() => {
+                let s = ud.borrow::<LuaNumberSequence>()?;
+                s.0.first().zip(s.0.last()).map(|(f, l)| (f.1, l.1))
+            }
+            other => as_number(other).map(|n| (n, n)),
+        };
+        let (f, l) = ends.ok_or_else(|| err(format!("{key} expects a NumberSequence")))?;
+        (PropertyValue::Number(f as f64), PropertyValue::Number(l as f64))
+    };
+    let host = host(lua);
+    let mut tree = host.tree.borrow_mut();
+    tree.set(id, a, first).map_err(|e| err(e.to_string()))?;
+    tree.set(id, b, last).map_err(|e| err(e.to_string()))?;
+    Ok(true)
+}
+
 /// Reads `new(a)`, `new(a, b)` or `new({keypoints})` for a sequence.
 fn sequence<T: Copy>(
     args: (Value, Option<Value>),

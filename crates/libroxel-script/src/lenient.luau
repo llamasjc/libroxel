@@ -1294,9 +1294,6 @@ add(props, "Trail", strip)
 add(methods, "Trail", { Clear = function() end })
 add(methods, "Beam", { SetTextureOffset = function() end })
 add(props, "SelectionBox", { SurfaceColor3 = Color3.fromRGB(13, 105, 172), SurfaceTransparency = 1, Transparency = 0 })
-add(props, "UIGradient", {
-	Color = NIL, Enabled = true, Offset = Vector2.zero, Rotation = 0, Transparency = NIL,
-})
 add(props, "Constraint", {
 	Attachment0 = NIL, Attachment1 = NIL, Enabled = true, Visible = false, Color = NIL,
 })

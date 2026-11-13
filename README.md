@@ -110,6 +110,11 @@ The first build compiles Bevy and takes a while. After that it is quick.
   Adornee (or its parent) in Color3, and a `Beam` draws a strip between
   its two attachments. `UISizeConstraint` and `UITextSizeConstraint` keep
   GUI objects and text within a minimum and maximum size.
+- **Gradients:** a `UIGradient` inside a GUI object shades its background
+  from one colour (and transparency) to another, turned `Rotation`
+  degrees and shifted by `Offset`. Scripts set `Color` to a ColorSequence
+  and `Transparency` to a NumberSequence; their first and last keypoints
+  are used.
 - **GUI on parts:** a `SurfaceGui` inside a part draws its frames, labels
   and buttons on one Face of the part (PixelsPerStud pixels to a stud),
   like a sign or a screen in the world, and its buttons can be clicked.
