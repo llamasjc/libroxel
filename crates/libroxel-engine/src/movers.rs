@@ -12,12 +12,17 @@
 //! - `AngularVelocity` and `BodyAngularVelocity` spin towards an angular
 //!   velocity. An assembly spins about its root part's middle.
 //!
-//! Springs are solved implicitly, so even very stiff ones stay steady.
+//! Ropes and springs between loose and anchored parts are real joints in
+//! the physics engine (returned by [`apply`]), so they pull at their
+//! attachments and swing what hangs from them. Ones tied to a character
+//! push its assembly instead, solved implicitly so even very stiff springs
+//! stay steady.
 
 use libroxel_instance::{CFrame, ClassKind, InstanceId, InstanceTree, Property, Rotation, Vec3};
 use libroxel_script::names;
 
-use crate::physics::{GRAVITY, Physics};
+use crate::hinge::{attachment_local, frame};
+use crate::physics::{GRAVITY, JointKind, JointSpec, Physics};
 use crate::weld::Welds;
 
 /// Where an attachment is in the world, and the part it's on.
@@ -118,11 +123,34 @@ fn spring_dv(pos: Vec3, vel: Vec3, target: Vec3, k: f32, c: f32, dt: f32) -> Vec
     new_v - vel
 }
 
-/// Applies every enabled mover and constraint in the workspace. Call after
+/// A rope or spring as a joint, when both ends are parts the physics
+/// engine moves itself (not a character).
+fn as_joint(tree: &InstanceTree, welds: &Welds, id: InstanceId, class: ClassKind) -> Option<JointSpec> {
+    let (l0, p0) = attachment_local(tree, tree.get_ref(id, Property::Attachment0)?)?;
+    let (l1, p1) = attachment_local(tree, tree.get_ref(id, Property::Attachment1)?)?;
+    let character = |p: InstanceId| tree.name(welds.root_for(p)) == Ok(names::character::ROOT_PART);
+    if character(p0) || character(p1) || welds.root_for(p0) == welds.root_for(p1) {
+        return None;
+    }
+    let kind = if class == ClassKind::RopeConstraint {
+        JointKind::Rope { length: number(tree, id, Property::Length).max(0.0) }
+    } else {
+        JointKind::Spring {
+            length: number(tree, id, Property::FreeLength).max(0.0),
+            stiffness: number(tree, id, Property::Stiffness).max(0.0),
+            damping: number(tree, id, Property::Damping).max(0.0),
+        }
+    };
+    Some(JointSpec { id, part0: p0, part1: p1, frame0: frame(l0), frame1: frame(l1), kind })
+}
+
+/// Applies every enabled mover and constraint in the workspace, and
+/// returns the ropes and springs to hand physics as joints. Call after
 /// [`Welds::before_physics`] and before [`Physics::step`].
-pub fn apply(tree: &InstanceTree, welds: &Welds, physics: &mut Physics, dt: f32) {
+pub fn apply(tree: &InstanceTree, welds: &Welds, physics: &mut Physics, dt: f32) -> Vec<JointSpec> {
+    let mut joints = Vec::new();
     if dt <= 0.0 {
-        return;
+        return joints;
     }
     let ws = tree.workspace();
     let gravity = tree.get_number(ws, Property::Gravity).map_or(GRAVITY, |g| g as f32);
@@ -221,6 +249,10 @@ pub fn apply(tree: &InstanceTree, welds: &Welds, physics: &mut Physics, dt: f32)
                 push(physics, &e, clamp_length(accel, max) * dt);
             }
             ClassKind::RopeConstraint | ClassKind::SpringConstraint => {
+                if let Some(joint) = as_joint(tree, welds, id, class) {
+                    joints.push(joint);
+                    continue;
+                }
                 let (Some(e0), Some(e1)) = (end(tree, welds, a0), end(tree, welds, a1)) else { continue };
                 let w = e0.inv_mass + e1.inv_mass;
                 if w <= 0.0 || e0.root == e1.root {
@@ -276,4 +308,5 @@ pub fn apply(tree: &InstanceTree, welds: &Welds, physics: &mut Physics, dt: f32)
             _ => {}
         }
     }
+    joints
 }

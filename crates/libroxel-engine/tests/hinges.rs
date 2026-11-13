@@ -363,7 +363,11 @@ fn front_wheels_on_steering_hinges_turn_a_car() {
     let at = vec(&shared, chassis, Property::Position);
     let turned = vec(&shared, chassis, Property::Orientation).y;
     assert!(at.z < -4.0, "it drove forwards: {at:?}");
-    assert!(turned.abs() > 15.0, "and turned {turned} degrees");
+    assert!(
+        turned.abs() > 15.0,
+        "and turned {turned} degrees, steering {} at {at:?}",
+        angle(&shared, steering[0])
+    );
     assert!((at.y - 2.0).abs() < 0.3, "{at:?}");
-    assert!((angle(&shared, steering[0]) - 25.0).abs() < 1.0);
+    assert!((angle(&shared, steering[0]) - 25.0).abs() < 1.0, "{}", angle(&shared, steering[0]));
 }

@@ -2125,7 +2125,8 @@ mod tests {
         // About 69 degrees in a second, the sails turning together about their hub.
         let turn = get(sail_a, Property::Orientation).z;
         assert!((turn.abs() - 69.0).abs() < 5.0, "{turn}");
-        assert_eq!(get(sail_a, Property::Orientation), get(sail_b, Property::Orientation));
+        let (a, b) = (get(sail_a, Property::Orientation), get(sail_b, Property::Orientation));
+        assert!((a - b).length() < 1e-3, "{a:?} {b:?}");
         assert!((get(sail_a, Property::Position) - Vec3::new(40.0, 10.0, 23.0)).length() < 1e-3);
         assert!((get(gate, Property::Position) - Vec3::new(44.0, 3.0, 43.5)).length() < 1e-3, "shut");
         // Walk up to it (well, appear next to it) and click it.

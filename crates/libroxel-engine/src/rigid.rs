@@ -32,6 +32,31 @@ pub(crate) enum Role {
     Member { root: InstanceId, offset: (Vec3, Quat) },
 }
 
+/// How a joint holds its two parts together.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum JointKind {
+    /// Part 1 turns only about frame 0's X axis, through frame 0. With a
+    /// motor, it is driven at a speed (radians a second) with up to a torque.
+    /// A servo's motor also holds its part up against gravity.
+    Hinge { motor: Option<(f32, f32)>, servo: bool },
+    /// The two frames' origins stay at most `length` apart.
+    Rope { length: f32 },
+    /// The two frames' origins pulled towards `length` apart, like a spring.
+    Spring { length: f32, stiffness: f32, damping: f32 },
+}
+
+/// A joint between two parts. Each frame is in its part's own space (an
+/// attachment's position and rotation).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct JointSpec {
+    pub id: InstanceId,
+    pub part0: InstanceId,
+    pub part1: InstanceId,
+    pub frame0: (Vec3, Quat),
+    pub frame1: (Vec3, Quat),
+    pub kind: JointKind,
+}
+
 /// One part, as the step sees it.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Spec {
@@ -105,6 +130,10 @@ pub(crate) struct Rigid {
     terrain: Option<(u64, RigidBodyHandle)>,
     grounded: HashSet<InstanceId>,
     ready: bool,
+    /// Each joint, the spec it was made from, and the bodies it joins.
+    joints: HashMap<InstanceId, (ImpulseJointHandle, JointSpec, RigidBodyHandle, RigidBodyHandle)>,
+    /// Bodies given extra turning weight for being in a joint.
+    steadied: HashSet<RigidBodyHandle>,
 }
 
 impl std::fmt::Debug for Rigid {
@@ -128,6 +157,9 @@ fn rq(q: Quat) -> RQuat {
 fn lq(q: RQuat) -> Quat {
     Quat::from_xyzw(q.x, q.y, q.z, q.w)
 }
+
+/// Turning weight added to every jointed part (studs squared times mass).
+const JOINT_INERTIA: f32 = 0.3;
 
 fn pose_of(pos: Vec3, rot: Quat) -> Pose {
     Pose::from_parts(rv(pos), rq(rot))
@@ -283,6 +315,7 @@ impl Rigid {
         velocities: &mut HashMap<InstanceId, Vec3>,
         spins: &mut HashMap<InstanceId, Vec3>,
         voxels: Option<&Voxels>,
+        joints: &[JointSpec],
         gravity: f32,
         dt: f32,
     ) -> Vec<Moved> {
@@ -441,6 +474,9 @@ impl Rigid {
             }
         }
 
+        self.sync_joints(joints);
+        self.drive_servos(gravity, dt);
+
         // Run it, in slices of at most a sixtieth of a second, sliding
         // kinematic parts along to where they are going.
         self.world.gravity = RVec::new(0.0, -gravity, 0.0);
@@ -492,6 +528,178 @@ impl Rigid {
             moved.push(Moved { id: spec.id, pos, orientation });
         }
         moved
+    }
+
+    /// The body a part moves with, and where the part sits on it.
+    fn body_of(&self, part: InstanceId) -> Option<(RigidBodyHandle, Pose)> {
+        let entry = self.parts.get(&part)?;
+        match entry.body {
+            Some(body) => Some((body, Pose::IDENTITY)),
+            None => Some((entry.parent, pose_of(entry.offset.0, entry.offset.1))),
+        }
+    }
+
+    /// Makes, changes and removes joints to match `specs`.
+    fn sync_joints(&mut self, specs: &[JointSpec]) {
+        let live: HashSet<InstanceId> = specs.iter().map(|s| s.id).collect();
+        let gone: Vec<InstanceId> = self.joints.keys().filter(|id| !live.contains(id)).copied().collect();
+        for id in gone {
+            if let Some((handle, ..)) = self.joints.remove(&id) {
+                self.world.remove_impulse_joint(handle);
+            }
+        }
+        for spec in specs {
+            let (Some((b0, at0)), Some((b1, at1))) = (self.body_of(spec.part0), self.body_of(spec.part1))
+            else {
+                continue;
+            };
+            if b0 == b1 {
+                continue;
+            }
+            // Joints go when their bodies do; and a joint whose ends changed is made again.
+            let stale = match self.joints.get(&spec.id) {
+                Some((handle, old, o0, o1)) => {
+                    self.world.impulse_joints.get(*handle).is_none()
+                        || (*o0, *o1) != (b0, b1)
+                        || old.frame0 != spec.frame0
+                        || old.frame1 != spec.frame1
+                        || std::mem::discriminant(&old.kind) != std::mem::discriminant(&spec.kind)
+                }
+                None => true,
+            };
+            if stale {
+                if let Some((handle, ..)) = self.joints.remove(&spec.id) {
+                    self.world.remove_impulse_joint(handle);
+                }
+                let f0 = at0 * pose_of(spec.frame0.0, spec.frame0.1);
+                let f1 = at1 * pose_of(spec.frame1.0, spec.frame1.1);
+                let mut joint = match spec.kind {
+                    JointKind::Hinge { .. } => GenericJoint::new(JointAxesMask::LOCKED_REVOLUTE_AXES),
+                    JointKind::Rope { length } => RopeJoint::new(length.max(0.01)).data,
+                    JointKind::Spring { length, stiffness, damping } => {
+                        SpringJoint::new(length, stiffness, damping).data
+                    }
+                };
+                joint.set_local_frame1(f0).set_local_frame2(f1).set_contacts_enabled(false);
+                // Tiny parts in a chain of joints (a steering knuckle
+                // between car and wheel) are too easily twisted for the
+                // solver to keep the joints together: give them some heft.
+                for b in [b0, b1] {
+                    if let Some(body) = self.world.bodies.get_mut(b)
+                        && body.is_dynamic()
+                        && self.steadied.insert(b)
+                    {
+                        body.set_additional_mass_properties(
+                            MassProperties::new(RVec::ZERO, 0.0, RVec::splat(JOINT_INERTIA)),
+                            true,
+                        );
+                    }
+                }
+                let handle = self.world.insert_impulse_joint(b0, b1, joint);
+                self.joints.insert(spec.id, (handle, *spec, b0, b1));
+            }
+            let Some((handle, old, ..)) = self.joints.get_mut(&spec.id) else { continue };
+            let changed = stale || old.kind != spec.kind;
+            *old = *spec;
+            if !changed {
+                continue;
+            }
+            let Some(joint) = self.world.impulse_joints.get_mut(*handle, true) else { continue };
+            match spec.kind {
+                JointKind::Hinge { motor, .. } => {
+                    // Servos are also pushed round by `drive_servos`.
+                    let (speed, torque) = motor.unwrap_or((0.0, 0.0));
+                    joint.data.set_motor_model(JointAxis::AngX, MotorModel::ForceBased);
+                    joint.data.set_motor_velocity(
+                        JointAxis::AngX,
+                        speed,
+                        if motor.is_some() { 1e6 } else { 0.0 },
+                    );
+                    joint.data.set_motor_max_force(JointAxis::AngX, torque);
+                }
+                JointKind::Rope { length } => {
+                    joint.data.set_limits(JointAxis::LinX, [0.0, length.max(0.0)]);
+                }
+                JointKind::Spring { length, stiffness, damping } => {
+                    joint.data.set_motor_position(JointAxis::LinX, length, stiffness, damping);
+                }
+            }
+        }
+    }
+
+    /// Turns each servo's part with a torque about the hinge: enough to
+    /// reach its wanted speed over `dt` and to hold the part up against
+    /// gravity, but no more than the servo's torque. (The solver's own
+    /// motor, which servos keep too, only sees a part's turning weight
+    /// about its middle, so alone it is far too weak for an arm held out
+    /// from its hinge; it does hold the hinge firm against knocks.)
+    fn drive_servos(&mut self, gravity: f32, dt: f32) {
+        if dt <= 0.0 {
+            return;
+        }
+        let links: Vec<(RigidBodyHandle, RigidBodyHandle)> =
+            self.joints.values().map(|j| (j.2, j.3)).collect();
+        for (_, spec, b0, b1) in self.joints.values() {
+            let JointKind::Hinge { motor: Some((speed, most)), servo: true } = spec.kind else { continue };
+            let (Some(body0), Some(body1)) = (self.world.bodies.get(*b0), self.world.bodies.get(*b1)) else {
+                continue;
+            };
+            let frame = *body0.position() * pose_of(spec.frame0.0, spec.frame0.1);
+            let axis = frame.rotation * RVec::X;
+            let pivot = frame.translation;
+            let spin = (body1.angvel() - body0.angvel()).dot(axis);
+            // Everything it turns: its part, and what hangs from that on
+            // other joints (a wheel on a steering knuckle).
+            let mut carried = vec![*b1];
+            let mut i = 0;
+            while i < carried.len() && carried.len() < 16 {
+                let from = carried[i];
+                for &(a, b) in &links {
+                    if a == from && b != *b0 && !carried.contains(&b) {
+                        carried.push(b);
+                    }
+                }
+                i += 1;
+            }
+            // How hard each one is to turn about the hinge: by spinning
+            // it about its own middle, and by swinging its middle round.
+            let (mut shares, mut inertia, mut sag) = (Vec::new(), 0.0, 0.0);
+            for handle in &carried {
+                let Some(body) = self.world.bodies.get(*handle).filter(|b| b.is_dynamic()) else { continue };
+                let turn = (body.mass_properties().effective_world_inv_inertia * axis).dot(axis);
+                let own = if turn > 0.0 { 1.0 / turn } else { 0.0 };
+                let mass = body.mass();
+                let arm = body.center_of_mass() - pivot;
+                let lever = axis.cross(arm);
+                let swing = mass * lever.length_squared();
+                inertia += own + swing;
+                let weight = RVec::new(0.0, -gravity * mass * body.gravity_scale(), 0.0);
+                sag += arm.cross(weight).dot(axis);
+                shares.push((*handle, own, swing, lever, body.center_of_mass()));
+            }
+            if inertia <= 0.0 {
+                continue;
+            }
+            let torque = (inertia * (speed - spin) / dt - sag).clamp(-most, most);
+            // Share the torque out by how much each takes to turn. A part
+            // held out from the hinge has its middle pushed round (as
+            // gravity does): twisting it there instead, the solver turns
+            // that into swinging about the hinge only slowly.
+            let dynamic0 = body0.is_dynamic();
+            for (handle, own, swing, lever, at) in shares {
+                let twist = axis * (torque * own / inertia);
+                let reach = lever.length_squared();
+                let push = if reach > 1e-6 { lever * (torque * swing / inertia / reach) } else { RVec::ZERO };
+                let body = &mut self.world.bodies[handle];
+                body.add_torque(twist, true);
+                body.add_force(push, true);
+                if dynamic0 {
+                    let base = &mut self.world.bodies[*b0];
+                    base.add_torque(-twist, true);
+                    base.add_force_at_point(-push, at, true);
+                }
+            }
+        }
     }
 
     /// Whether a dynamic part ended the last step resting on something.

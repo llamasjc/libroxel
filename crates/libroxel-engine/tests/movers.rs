@@ -275,3 +275,28 @@ fn scripts_can_build_movers_and_read_world_positions() {
     let rocket = t.borrow().find_first_child(t.borrow().workspace(), "Rocket").unwrap().unwrap();
     assert!((pos(&t, rocket).y - 22.0).abs() < 1.0, "{:?}", pos(&t, rocket));
 }
+
+#[test]
+fn a_plank_hung_by_one_end_tips_down_to_hang_below_its_rope() {
+    let mut tree = world();
+    let hook = part(&mut tree, "Hook", Vec3::new(2.0, 30.0, 0.0), Vec3::ONE, true);
+    let plank = part(&mut tree, "Plank", Vec3::new(0.0, 27.0, 0.0), Vec3::new(4.0, 0.5, 1.0), false);
+    let a = attach(&mut tree, hook, Vec3::ZERO);
+    let b = attach(&mut tree, plank, Vec3::new(2.0, 0.0, 0.0));
+    add(
+        &mut tree,
+        ClassKind::RopeConstraint,
+        hook,
+        &[
+            (Property::Attachment0, PropertyValue::Ref(Some(a))),
+            (Property::Attachment1, PropertyValue::Ref(Some(b))),
+            (Property::Length, PropertyValue::Number(3.0)),
+        ],
+    );
+    let t = run(tree, 6.0);
+    // Pulled by its end, it turns until it hangs straight down from the rope.
+    let at = pos(&t, plank);
+    let turned = t.borrow().get_vec3(plank, Property::Orientation).unwrap();
+    assert!((turned.z.abs() - 90.0).abs() < 15.0, "{turned:?} at {at:?}");
+    assert!(at.y < 26.0 && (at.x - 2.0).abs() < 0.5, "{at:?}");
+}

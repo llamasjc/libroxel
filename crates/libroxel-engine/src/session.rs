@@ -1100,8 +1100,8 @@ impl PlaySession {
             let poses = self.npcs.before_physics(&mut tree, &mut self.physics, &player_models, dt);
             crate::seat::drive_vehicles(&mut tree, &mut self.physics, dt);
             self.welds.before_physics(&tree, &mut self.physics);
-            self.hinges.before_physics(&tree, &mut self.physics, dt);
-            crate::movers::apply(&tree, &self.welds, &mut self.physics, dt);
+            let ties = crate::movers::apply(&tree, &self.welds, &mut self.physics, dt);
+            self.hinges.before_physics(&tree, &mut self.physics, dt, ties);
             for avatar in &self.avatars {
                 avatar.seating.hold(&tree, &mut self.physics, avatar.character);
             }

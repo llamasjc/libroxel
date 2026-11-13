@@ -22,6 +22,7 @@ use libroxel_instance::{
 use libroxel_script::names;
 
 use crate::rigid;
+pub use crate::rigid::{JointKind, JointSpec};
 
 /// Downward acceleration, in studs per second squared.
 pub const GRAVITY: f32 = 196.2;
@@ -333,6 +334,8 @@ pub struct Physics {
     welded: HashMap<InstanceId, (InstanceId, (Vec3, Quat))>,
     /// Loose parts as rigid bodies.
     rigid: rigid::Rigid,
+    /// Hinges, ropes and springs joining parts.
+    joints: Vec<JointSpec>,
 }
 
 fn ordered(a: InstanceId, b: InstanceId) -> (InstanceId, InstanceId) {
@@ -348,7 +351,7 @@ impl Physics {
         self.velocities.insert(id, velocity);
     }
 
-    /// How fast uid=0(root) gid=0(root) groups=0(root) spins, in radians per second about each world axis.
+    /// How fast `id` spins, in radians per second about each world axis.
     pub fn angular_velocity(&self, id: InstanceId) -> Vec3 {
         self.spins.get(&id).copied().unwrap_or_default()
     }
@@ -403,6 +406,11 @@ impl Physics {
     /// each sits, so a loose welded model moves as one solid body.
     pub fn set_welds(&mut self, welded: HashMap<InstanceId, (InstanceId, (Vec3, Quat))>) {
         self.welded = welded;
+    }
+
+    /// Sets the joints (hinges, ropes, springs) between parts.
+    pub fn set_joints(&mut self, joints: Vec<JointSpec>) {
+        self.joints = joints;
     }
 
     /// Also holds `id` still for the next step, passing through `together`.
@@ -623,6 +631,7 @@ impl Physics {
             &mut self.velocities,
             &mut self.spins,
             voxels,
+            &self.joints,
             gravity,
             dt,
         );

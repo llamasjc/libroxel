@@ -291,10 +291,12 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   loose parts they walk into. When a character dies it falls apart: its
   head, body and limbs topple to the ground as loose pieces, hat and eyes
   still on its head, until it respawns.
-- **Hinge arms and wheels:** a turning hinge arm shoves loose things it
-  runs into. Balls, and cylinders lying along their hinge, are wheels on a
-  loose base: on the ground they hold it up, and a Motor drives it along
-  without sliding sideways. Wheels turning at different speeds turn it like
+- **Hinges, ropes and springs** are real joints in the physics engine.
+  A hinge arm swings, and shoves loose things it runs into; a Servo
+  holds its arm out against gravity at its `TargetAngle`. A rope or spring
+  pulls at its attachments, so a plank hung by one end tips down to hang
+  below it. Wheels on hinges really roll: on the ground they hold up a
+  loose base, and a Motor drives it along without sliding sideways. Wheels turning at different speeds turn it like
   a tank, and a wheel can hang from a knuckle on a Servo hinge about the
   vertical, so setting the servo's `TargetAngle` steers. The sample's rover
   drives back and forth on the playground lawn.
