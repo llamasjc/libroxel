@@ -62,6 +62,11 @@ pub enum Dialog {
         address: String,
         name: String,
     },
+    /// Editing a game together: share this one, or join someone's.
+    EditTogether {
+        address: String,
+        name: String,
+    },
 }
 
 /// Everything the editor remembers between frames.
@@ -104,6 +109,10 @@ pub struct Editor {
     pub focus_typing: bool,
     /// While hosting or joining by code: the connection over the internet.
     pub tunnel: Option<Tunnel>,
+    /// Editing this game together with other computers.
+    pub coedit: Option<libroxel_engine::coedit::CoEdit>,
+    /// While sharing or joining an edit by code: its internet connection.
+    pub edit_tunnel: Option<Tunnel>,
     /// The Hub: Browse, the built-in Hub, and listing a hosted game.
     pub platform: browse::Platform,
     /// The main menu, shown when the app starts.
@@ -149,6 +158,8 @@ impl Default for Editor {
             typing: None,
             focus_typing: false,
             tunnel: None,
+            coedit: None,
+            edit_tunnel: None,
             platform: browse::Platform::default(),
             menu: menu::Menu::default(),
             player_mode: false,

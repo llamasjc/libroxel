@@ -63,17 +63,17 @@ pub(crate) struct Conn {
     stream: TcpStream,
     received: Vec<u8>,
     unsent: Vec<u8>,
-    closed: bool,
+    pub(crate) closed: bool,
 }
 
 impl Conn {
-    fn new(stream: TcpStream) -> std::io::Result<Self> {
+    pub(crate) fn new(stream: TcpStream) -> std::io::Result<Self> {
         stream.set_nonblocking(true)?;
         stream.set_nodelay(true)?;
         Ok(Self { stream, received: Vec::new(), unsent: Vec::new(), closed: false })
     }
 
-    fn send(&mut self, message: &Json) {
+    pub(crate) fn send(&mut self, message: &Json) {
         if self.closed {
             return;
         }
@@ -86,7 +86,7 @@ impl Conn {
         }
     }
 
-    fn flush(&mut self) {
+    pub(crate) fn flush(&mut self) {
         while !self.closed && !self.unsent.is_empty() {
             match self.stream.write(&self.unsent) {
                 Ok(0) => self.closed = true,
@@ -101,7 +101,7 @@ impl Conn {
     }
 
     /// Every whole message that has arrived.
-    fn receive(&mut self) -> Vec<Json> {
+    pub(crate) fn receive(&mut self) -> Vec<Json> {
         let mut buf = [0u8; 64 * 1024];
         while !self.closed {
             match self.stream.read(&mut buf) {
@@ -222,16 +222,18 @@ fn snapshot(tree: &InstanceTree, id: InstanceId) -> Option<Sent> {
     })
 }
 
-fn bits(id: InstanceId) -> Json {
+pub(crate) fn bits(id: InstanceId) -> Json {
     json!(id.to_bits())
 }
 
-fn wire_value(class: ClassKind, property: Property, value: &PropertyValue) -> Json {
+fn wire_value(class: ClassKind, property: Property, value: &PropertyValue, edits: bool) -> Json {
     match value {
         PropertyValue::Ref(Some(target)) => json!({ "$i": target.to_bits() }),
         PropertyValue::Ref(None) => Json::Null,
-        // Server scripts' code stays on the host.
-        PropertyValue::String(_) if class == ClassKind::Script && property == Property::Source => json!(""),
+        // Server scripts' code stays on the host, except for people editing it.
+        PropertyValue::String(_) if class == ClassKind::Script && property == Property::Source && !edits => {
+            json!("")
+        }
         other => place::value_to_json(other),
     }
 }
@@ -240,14 +242,23 @@ fn wire_value(class: ClassKind, property: Property, value: &PropertyValue) -> Js
 #[derive(Default)]
 pub(crate) struct Replicator {
     sent: HashMap<InstanceId, Sent>,
+    /// Whether this shares a game being edited: every service, and the
+    /// code of server scripts too.
+    edits: bool,
 }
 
 impl Replicator {
+    /// A replicator for a game being edited together.
+    pub(crate) fn edits() -> Self {
+        Self { sent: HashMap::new(), edits: true }
+    }
+
     /// What changed since the last call, as operations; updates the record.
-    fn delta(&mut self, tree: &InstanceTree) -> Vec<Json> {
+    pub(crate) fn delta(&mut self, tree: &InstanceTree) -> Vec<Json> {
         let mut ops = Vec::new();
         let mut seen = HashSet::new();
-        for class in SHARED {
+        let services: &[ClassKind] = if self.edits { ClassKind::SERVICES } else { &SHARED };
+        for &class in services {
             if let Some(service) = tree.service(class) {
                 self.visit(tree, service, true, &mut ops, &mut seen);
             }
@@ -286,7 +297,7 @@ impl Replicator {
         {
             let voxels = (class == ClassKind::Terrain)
                 .then(|| tree.voxels(id).map(|v| v.encode()).unwrap_or_default());
-            if let Some(op) = Self::op(class, id, old, &now, service, voxels) {
+            if let Some(op) = Self::op(class, id, old, &now, service, voxels, self.edits) {
                 ops.push(op);
             }
             self.sent.insert(id, now);
@@ -304,13 +315,14 @@ impl Replicator {
         now: &Sent,
         service: bool,
         voxels: Option<String>,
+        edits: bool,
     ) -> Option<Json> {
         let mut op = Map::new();
         let mut props = Map::new();
         for (property, value) in &now.props {
             let before = old.and_then(|o| o.props.iter().find(|(p, _)| p == property)).map(|(_, v)| v);
             if before != Some(value) {
-                props.insert(property.file_name().to_owned(), wire_value(class, *property, value));
+                props.insert(property.file_name().to_owned(), wire_value(class, *property, value, edits));
             }
         }
         let mut attributes = Map::new();
@@ -426,34 +438,9 @@ impl Joined {
         op: &Json,
         links: &mut Vec<(InstanceId, Property, Option<u64>)>,
     ) {
-        if let Some(props) = op.get("v").and_then(Json::as_object) {
-            for (file_name, value) in props {
-                let Some(property) = Property::from_file_name(file_name) else { continue };
-                if property.expected_kind() == "ref" {
-                    links.push((id, property, value.get("$i").and_then(Json::as_u64)));
-                } else if let Some(value) = place::value_from_json(property, value) {
-                    let _ = tree.set(id, property, value);
-                }
-            }
-        }
-        if let Some(attributes) = op.get("a").and_then(Json::as_object) {
-            for (name, value) in attributes {
-                let _ = tree.set_attribute(id, name, place::attribute_from_json(value));
-            }
-        }
-        if let Some(text) = op.get("x").and_then(Json::as_str) {
-            let _ = tree.edit_voxels(id, |v| *v = libroxel_instance::voxels::Voxels::decode(text));
-        }
-        if let Some(tags) = op.get("g").and_then(Json::as_array) {
-            let want: Vec<&str> = tags.iter().filter_map(Json::as_str).collect();
-            let have: Vec<String> = tree.tags(id).map(|t| t.to_vec()).unwrap_or_default();
-            for tag in have.iter().filter(|t| !want.contains(&t.as_str())) {
-                let _ = tree.remove_tag(id, tag);
-            }
-            for tag in want {
-                let _ = tree.add_tag(id, tag);
-            }
-        }
+        let mut found = Vec::new();
+        set_fields(tree, id, op, &mut found);
+        links.extend(found.into_iter().map(|(id, property, to)| (id, property, to.as_u64())));
     }
 
     /// Rewrites instances in script values from the host's ids to ours.
@@ -464,6 +451,46 @@ impl Joined {
     /// Rewrites instances in script values from our ids to the host's.
     fn to_host(&self, json: &mut Json) {
         map_instances(json, &mut |id| self.back.get(&id).map(|b| InstanceId::from_bits(*b)));
+    }
+}
+
+/// Sets the name-less fields of an operation (properties, attributes, cells
+/// and tags) on `id`. Links to other instances are left in `links`, each
+/// with the target as sent (`null` for none), to be set once every instance
+/// in the batch exists.
+pub(crate) fn set_fields(
+    tree: &mut InstanceTree,
+    id: InstanceId,
+    op: &Json,
+    links: &mut Vec<(InstanceId, Property, Json)>,
+) {
+    if let Some(props) = op.get("v").and_then(Json::as_object) {
+        for (file_name, value) in props {
+            let Some(property) = Property::from_file_name(file_name) else { continue };
+            if property.expected_kind() == "ref" {
+                links.push((id, property, value.get("$i").cloned().unwrap_or(Json::Null)));
+            } else if let Some(value) = place::value_from_json(property, value) {
+                let _ = tree.set(id, property, value);
+            }
+        }
+    }
+    if let Some(attributes) = op.get("a").and_then(Json::as_object) {
+        for (name, value) in attributes {
+            let _ = tree.set_attribute(id, name, place::attribute_from_json(value));
+        }
+    }
+    if let Some(text) = op.get("x").and_then(Json::as_str) {
+        let _ = tree.edit_voxels(id, |v| *v = libroxel_instance::voxels::Voxels::decode(text));
+    }
+    if let Some(tags) = op.get("g").and_then(Json::as_array) {
+        let want: Vec<&str> = tags.iter().filter_map(Json::as_str).collect();
+        let have: Vec<String> = tree.tags(id).map(|t| t.to_vec()).unwrap_or_default();
+        for tag in have.iter().filter(|t| !want.contains(&t.as_str())) {
+            let _ = tree.remove_tag(id, tag);
+        }
+        for tag in want {
+            let _ = tree.add_tag(id, tag);
+        }
     }
 }
 
@@ -500,7 +527,7 @@ fn input_from(message: &Json) -> CharacterInput {
 }
 
 /// `host:port`, with the default port when none is given.
-fn with_port(address: &str) -> String {
+pub(crate) fn with_port(address: &str) -> String {
     let address = address.trim();
     let has_port =
         address.rsplit_once(':').is_some_and(|(_, p)| p.parse::<u16>().is_ok()) && !address.ends_with(']');

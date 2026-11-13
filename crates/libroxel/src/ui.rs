@@ -75,6 +75,14 @@ enum Action {
     Rename(InstanceId, String),
     RunCommand(String),
     ClearOutput,
+    /// Let other computers edit this game too.
+    ShareEdits,
+    /// Edit the game another computer shares (a join code or an address).
+    JoinEdits {
+        address: String,
+        name: String,
+    },
+    StopEdits,
 }
 
 const INSERTABLE: &[ClassKind] = &[
@@ -288,6 +296,9 @@ pub fn editor_ui(
         (code, s.joined_count())
     });
     editor.platform.tick(hosting);
+    if !playing {
+        edit_together(engine, editor);
+    }
 
     // A game played from the main menu ended: back to the menu.
     if editor.player_mode && engine.session.is_none() {
@@ -850,6 +861,20 @@ fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
         ui.menu_button("View", |ui| {
             ui.checkbox(&mut editor.show_grid, "Show grid");
         });
+        ui.menu_button("Together", |ui| {
+            if editor.coedit.is_none() {
+                if ui
+                    .add_enabled(!playing, egui::Button::new("👥 Edit together…"))
+                    .on_hover_text("Share this game so others can edit it with you, or join someone's")
+                    .clicked()
+                {
+                    let name = editor.menu.name.trim().to_owned();
+                    editor.dialog = Some(Dialog::EditTogether { address: String::new(), name });
+                }
+            } else if ui.button("Stop editing together").clicked() {
+                actions.push(Action::StopEdits);
+            }
+        });
         ui.menu_button("Help", |ui| {
             ui.label("Right mouse + WASD/QE: fly the camera (Shift = faster)");
             ui.label("Scroll: move forward/back");
@@ -923,6 +948,10 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
         }
         if editor.player_mode {
             return;
+        }
+        if let Some(coedit) = &editor.coedit {
+            ui.separator();
+            together_status(ui, coedit, editor.edit_tunnel.as_ref());
         }
         ui.separator();
         ui.selectable_value(&mut editor.tool, Tool::Select, "🖱 Select");
@@ -1872,17 +1901,57 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
         }
         return;
     }
+    if let Dialog::EditTogether { address, name } = dialog {
+        let mut close = false;
+        egui::Window::new("Edit together").collapsible(false).resizable(false).default_width(380.0).show(
+            ctx,
+            |ui| {
+                ui.label("Share the game you have open, and others can change it with you as you work.");
+                if ui.button("👥 Share this game").clicked() {
+                    actions.push(Action::ShareEdits);
+                    close = true;
+                }
+                ui.separator();
+                ui.label("Or edit a game someone else shares. Its game replaces the one open here.");
+                egui::Grid::new("edit-together").num_columns(2).show(ui, |ui| {
+                    ui.label("Join code or address");
+                    ui.add(egui::TextEdit::singleline(address).hint_text("lrx1… or 192.168.1.20"));
+                    ui.end_row();
+                    ui.label("Your name");
+                    ui.add(egui::TextEdit::singleline(name).char_limit(20));
+                    ui.end_row();
+                });
+                ui.label(format!("Without a port, {} is used.", libroxel_engine::coedit::EDIT_PORT));
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!address.trim().is_empty(), egui::Button::new("Join")).clicked() {
+                        actions.push(Action::JoinEdits {
+                            address: address.trim().to_owned(),
+                            name: name.trim().to_owned(),
+                        });
+                        close = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                });
+            },
+        );
+        if close {
+            editor.dialog = None;
+        }
+        return;
+    }
     let (title, button) = match dialog {
         Dialog::Open { .. } => ("Open place", "Open"),
         Dialog::SaveAs { .. } => ("Save place as", "Save"),
-        Dialog::Join { .. } => return,
+        Dialog::Join { .. } | Dialog::EditTogether { .. } => return,
     };
     let opening = matches!(dialog, Dialog::Open { .. });
     let mut close = false;
     egui::Window::new(title).collapsible(false).resizable(false).default_width(480.0).show(ctx, |ui| {
         let path = match dialog {
             Dialog::Open { path } | Dialog::SaveAs { path } => path,
-            Dialog::Join { .. } => return,
+            Dialog::Join { .. } | Dialog::EditTogether { .. } => return,
         };
         ui.label("File path (places use the .lrx extension):");
         ui.add(egui::TextEdit::singleline(path).desired_width(f32::INFINITY));
@@ -1950,9 +2019,80 @@ fn end_session(engine: &mut EngineState, editor: &Editor) -> bool {
     true
 }
 
+/// Sends this frame's edits to the people editing with us and takes in theirs.
+fn edit_together(engine: &mut EngineState, editor: &mut Editor) {
+    let Some(coedit) = editor.coedit.as_mut() else { return };
+    let was_ready = coedit.ready();
+    let theirs = coedit.step(&mut engine.tree.borrow_mut());
+    let lines = coedit.take_log();
+    if !was_ready && coedit.ready() {
+        // The shared game arrived in place of ours.
+        editor.history.clear();
+        editor.selection = None;
+        editor.open_script = None;
+        editor.file = None;
+        editor.dirty = false;
+    } else if theirs && !coedit.is_guest() {
+        // Someone else changed the game: it needs saving.
+        editor.dirty = true;
+    }
+    if editor.selection.is_some_and(|id| engine.tree.borrow().is_destroyed(id).unwrap_or(true)) {
+        editor.selection = None;
+    }
+    if editor.open_script.is_some_and(|id| engine.tree.borrow().is_destroyed(id).unwrap_or(true)) {
+        editor.open_script = None;
+    }
+    for line in lines {
+        log(engine, LogLevel::Info, line);
+    }
+}
+
+/// The toolbar's word on editing together.
+fn together_status(ui: &mut egui::Ui, coedit: &libroxel_engine::coedit::CoEdit, tunnel: Option<&Tunnel>) {
+    let red = Color32::from_rgb(255, 120, 110);
+    if let Some(address) = coedit.local_addr() {
+        let people = coedit.people();
+        let who = if people.is_empty() { "no one yet".to_owned() } else { people.join(", ") };
+        ui.label(format!("👥 Sharing on port {} · {who}", address.port()))
+            .on_hover_text("Others on your network join with this computer's address and this port");
+        if let Some(Tunnel::Host(tunnel)) = tunnel {
+            if let Some(code) = tunnel.code() {
+                let copy = ui
+                    .button("📋 Copy edit code")
+                    .on_hover_text(format!("Friends anywhere paste this into Edit together:\n{code}"));
+                if copy.clicked() {
+                    ui.ctx().copy_text(code);
+                }
+            } else if let Some(error) = tunnel.error() {
+                ui.colored_label(red, "No edit code").on_hover_text(error);
+            } else {
+                ui.label("⏳ Getting an edit code…");
+            }
+        }
+    } else if let Some(error) = match tunnel {
+        Some(Tunnel::Join(tunnel)) => tunnel.error(),
+        _ => None,
+    } {
+        ui.colored_label(red, "👥 Could not reach the shared game").on_hover_text(error);
+    } else if coedit.disconnected() {
+        ui.colored_label(red, "👥 Disconnected");
+    } else if !coedit.ready() {
+        ui.label("⏳ Getting the shared game…");
+    } else {
+        ui.label("👥 Editing together");
+    }
+}
+
 fn replace_world(engine: &mut EngineState, editor: &mut Editor, tree: InstanceTree, file: Option<PathBuf>) {
     if end_session(engine, editor) {
         editor.edit_snapshot = None;
+    }
+    // A guest opening another game leaves the shared one; the sharing
+    // computer opening one shares that instead.
+    if editor.coedit.as_ref().is_some_and(|c| c.is_guest()) {
+        editor.coedit = None;
+        editor.edit_tunnel = None;
+        log(engine, LogLevel::Info, "Stopped editing together");
     }
     *engine.tree.borrow_mut() = tree;
     editor.history.clear();
@@ -2332,6 +2472,54 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     editor.selection = None;
                 }
                 log(engine, LogLevel::Info, "⏹ Stopped");
+            }
+        }
+        Action::ShareEdits => {
+            match libroxel_engine::coedit::CoEdit::host(libroxel_engine::coedit::EDIT_PORT) {
+                Ok(coedit) => {
+                    let port = coedit.local_addr().map_or(0, |a| a.port());
+                    log(engine, LogLevel::Info, format!("👥 Sharing this game for editing on port {port}"));
+                    match crate::identity().and_then(|me| {
+                        libroxel_net::HostTunnel::start(&me, libroxel_net::Network::Internet, port)
+                    }) {
+                        Ok(tunnel) => editor.edit_tunnel = Some(Tunnel::Host(tunnel)),
+                        Err(e) => log(engine, LogLevel::Warn, format!("Only your network can join: {e}")),
+                    }
+                    editor.coedit = Some(coedit);
+                }
+                Err(e) => log(engine, LogLevel::Error, e),
+            }
+        }
+        Action::JoinEdits { address, name } => {
+            let name = if name.is_empty() { "Someone" } else { name.as_str() };
+            let joined = if libroxel_net::is_join_code(&address) {
+                crate::identity()
+                    .and_then(|me| {
+                        libroxel_net::JoinTunnel::start(&me, libroxel_net::Network::Internet, &address)
+                    })
+                    .and_then(|tunnel| {
+                        let local = tunnel.local_addr().to_string();
+                        let coedit = libroxel_engine::coedit::CoEdit::join(&local, name)?;
+                        Ok((coedit, Some(Tunnel::Join(tunnel))))
+                    })
+            } else {
+                libroxel_engine::coedit::CoEdit::join(&address, name).map(|c| (c, None))
+            };
+            match joined {
+                Ok((mut coedit, tunnel)) => {
+                    for line in coedit.take_log() {
+                        log(engine, LogLevel::Info, line);
+                    }
+                    editor.coedit = Some(coedit);
+                    editor.edit_tunnel = tunnel;
+                }
+                Err(e) => log(engine, LogLevel::Error, e),
+            }
+        }
+        Action::StopEdits => {
+            if editor.coedit.take().is_some() {
+                editor.edit_tunnel = None;
+                log(engine, LogLevel::Info, "Stopped editing together");
             }
         }
         Action::Undo | Action::Redo if playing => {}

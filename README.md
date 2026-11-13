@@ -132,6 +132,16 @@ The first build compiles Bevy and takes a while. After that it is quick.
   host without a window, run `libroxel server mygame.lrx`, which prints a
   join code. Your player identity (a key made on first use) lives in
   `~/.config/libroxel/identity.key`.
+- **Editing together:** **Together → Edit together… → Share this game**
+  lets others edit the game you have open, live, while you work on it. Send
+  them the code from **📋 Copy edit code** (or, on your own network, your
+  address; the port is 7421): they paste it into **Edit together…** under
+  Join, and your game, scripts and all, replaces the one they had open.
+  Everything anyone changes (parts, scripts, terrain, properties, adding and
+  removing) shows up for everyone a moment later. When two people change
+  the same thing at once, the last change to reach the sharing computer
+  wins. Only the sharing computer saves the game. Playing a game is still
+  done on your own; editing together carries on when you stop.
 - **Finding games:** **🌍 Browse** lists the games being hosted right now on
   a Hub, community servers first, and joins one with a click. Every copy of
   Libroxel runs a small Hub on port 7430, so friends on your network can put
