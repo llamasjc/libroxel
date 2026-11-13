@@ -67,6 +67,10 @@ pub struct PartAppearance {
     pub material: Material,
     /// How many times surface textures repeat across the part.
     pub texture_repeat: f32,
+    /// How mirror-like it is, from 0 to 1.
+    pub reflectance: f32,
+    /// Whether it casts a shadow.
+    pub shadow: bool,
 }
 
 /// Which mesh the part is drawn with.
@@ -199,7 +203,10 @@ fn sync_parts(
         let orientation = tree.get_vec3(id, Property::Orientation).unwrap_or_default();
         let transform = part_transform(pos, size, orientation, shape);
         let texture_repeat = (size.x.max(size.y).max(size.z) / 8.0).max(0.25);
-        let appearance = PartAppearance { color, transparency, material, texture_repeat };
+        let reflectance = tree.get_number(id, Property::Reflectance).unwrap_or(0.0) as f32;
+        let shadow = tree.get_bool(id, Property::CastShadow) != Some(false);
+        let appearance =
+            PartAppearance { color, transparency, material, texture_repeat, reflectance, shadow };
         let name = PartName(tree.name(id).unwrap_or_default().to_owned());
         let geometry = PartGeometry(shape);
 
@@ -624,6 +631,12 @@ pub(crate) fn material_for(appearance: &PartAppearance, textures: &MaterialTextu
         }
         Material::Air => {}
     }
+    let shine = appearance.reflectance.clamp(0.0, 1.0);
+    if shine > 0.0 {
+        material.metallic = material.metallic.max(shine);
+        material.reflectance = material.reflectance.max(0.5 + 0.5 * shine);
+        material.perceptual_roughness = material.perceptual_roughness.min(1.0 - 0.9 * shine);
+    }
     material
 }
 
@@ -639,27 +652,46 @@ fn attach_visuals(
     new_parts: Query<(Entity, &PartAppearance, &PartGeometry), Added<PartLink>>,
 ) {
     for (entity, appearance, geometry) in &new_parts {
-        commands.entity(entity).insert((
+        let mut e = commands.entity(entity);
+        e.insert((
             Mesh3d(meshes.get(geometry.0)),
             MeshMaterial3d(materials.add(material_for(appearance, &textures))),
             visibility_for(appearance),
         ));
+        if !appearance.shadow {
+            e.insert(bevy::light::NotShadowCaster);
+        }
     }
 }
 
+/// A part whose look changed: its material, visibility and whether it
+/// casts no shadow now.
+type ChangedLook<'a> = (
+    Entity,
+    &'a PartAppearance,
+    &'a MeshMaterial3d<StandardMaterial>,
+    &'a mut Visibility,
+    Has<bevy::light::NotShadowCaster>,
+);
+
 fn update_materials(
+    mut commands: Commands,
     textures: Res<MaterialTextures>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut changed: Query<
-        (&PartAppearance, &MeshMaterial3d<StandardMaterial>, &mut Visibility),
-        Changed<PartAppearance>,
-    >,
+    mut changed: Query<ChangedLook, Changed<PartAppearance>>,
 ) {
-    for (appearance, handle, mut visibility) in &mut changed {
+    for (entity, appearance, handle, mut visibility, shadowless) in &mut changed {
         if let Some(mut material) = materials.get_mut(&handle.0) {
             *material = material_for(appearance, &textures);
         }
         visibility.set_if_neq(visibility_for(appearance));
+        if appearance.shadow == shadowless {
+            if appearance.shadow {
+                commands.entity(entity).remove::<bevy::light::NotShadowCaster>();
+            } else {
+                commands.entity(entity).insert(bevy::light::NotShadowCaster);
+            }
+        }
     }
 }
 

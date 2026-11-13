@@ -430,6 +430,7 @@ impl InstanceTree {
             let value = match (property, value) {
                 (
                     Property::Transparency
+                    | Property::Reflectance
                     | Property::BackgroundTransparency
                     | Property::LightEmission
                     | Property::Opacity

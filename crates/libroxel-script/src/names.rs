@@ -937,6 +937,13 @@ pub fn property_name(property: Property) -> &'static str {
         Property::Transparency => "Transparency",
         Property::Source => "Source",
         Property::CanCollide => "CanCollide",
+        Property::Reflectance => "Reflectance",
+        Property::CastShadow => "CastShadow",
+        Property::CanTouch => "CanTouch",
+        Property::CanQuery => "CanQuery",
+        Property::Massless => "Massless",
+        Property::Locked => "Locked",
+        Property::CollisionGroup => "CollisionGroup",
         Property::Disabled => "Disabled",
         Property::Health => "Health",
         Property::MaxHealth => "MaxHealth",
@@ -1344,6 +1351,13 @@ pub mod compat {
     pub const PLAY_LOCAL_SOUND: &str = "PlayLocalSound";
     pub const REGISTER_COLLISION_GROUP: &str = "RegisterCollisionGroup";
     pub const COLLISION_GROUP_SET_COLLIDABLE: &str = "CollisionGroupSetCollidable";
+    pub const COLLISION_GROUPS_ARE_COLLIDABLE: &str = "CollisionGroupsAreCollidable";
+    pub const IS_COLLISION_GROUP_REGISTERED: &str = "IsCollisionGroupRegistered";
+    pub const UNREGISTER_COLLISION_GROUP: &str = "UnregisterCollisionGroup";
+    pub const GET_REGISTERED_COLLISION_GROUPS: &str = "GetRegisteredCollisionGroups";
+    pub const CREATE_COLLISION_GROUP: &str = "CreateCollisionGroup";
+    pub const SET_PART_COLLISION_GROUP: &str = "SetPartCollisionGroup";
+    pub const MASK: &str = "mask";
     pub const IS_TEN_FOOT_INTERFACE: &str = "IsTenFootInterface";
     pub const GET_GUI_INSET: &str = "GetGuiInset";
     pub const GET_TEXT_SIZE: &str = "GetTextSize";

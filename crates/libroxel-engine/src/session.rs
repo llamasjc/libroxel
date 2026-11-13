@@ -1076,6 +1076,7 @@ impl PlaySession {
                     *input = CharacterInput::default();
                 }
             }
+            self.physics.set_collision_rules(self.runtime.collision_rules());
             for (id, request) in self.runtime.take_velocity_requests() {
                 if tree.get_bool(id, Property::Anchored) != Some(false) {
                     continue;
@@ -1167,7 +1168,14 @@ impl PlaySession {
             self.refresh_hotbar(index);
         }
 
+        let touchable = |a: InstanceId, b: InstanceId| {
+            let t = tree.borrow();
+            [a, b].iter().all(|p| t.get_bool(*p, Property::CanTouch) != Some(false))
+        };
         for (a, b) in result.touches {
+            if !touchable(a, b) {
+                continue;
+            }
             let mut errors = self.runtime.fire_touched(a, b);
             errors.extend(self.runtime.fire_touched(b, a));
             self.collect(errors);

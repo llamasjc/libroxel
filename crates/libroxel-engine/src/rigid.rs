@@ -224,6 +224,7 @@ fn collider_for(spec: &Spec, offset: Pose) -> Collider {
 /// pass through each other.
 struct Filter<'a> {
     ignored: &'a HashSet<(InstanceId, InstanceId)>,
+    groups: &'a crate::physics::Groups,
 }
 
 impl PhysicsHooks for Filter<'_> {
@@ -232,13 +233,16 @@ impl PhysicsHooks for Filter<'_> {
         if !dynamic(context.rigid_body1) && !dynamic(context.rigid_body2) {
             return None;
         }
+        let a = InstanceId::from_bits(context.colliders[context.collider1].user_data as u64);
+        let b = InstanceId::from_bits(context.colliders[context.collider2].user_data as u64);
         if !self.ignored.is_empty() {
-            let a = InstanceId::from_bits(context.colliders[context.collider1].user_data as u64);
-            let b = InstanceId::from_bits(context.colliders[context.collider2].user_data as u64);
             let pair = if a <= b { (a, b) } else { (b, a) };
             if self.ignored.contains(&pair) {
                 return None;
             }
+        }
+        if self.groups.apart(a, b) {
+            return None;
         }
         Some(SolverFlags::COMPUTE_RIGID_IMPULSES)
     }
@@ -317,6 +321,7 @@ impl Rigid {
         &mut self,
         specs: &[Spec],
         ignored: &HashSet<(InstanceId, InstanceId)>,
+        groups: &crate::physics::Groups,
         velocities: &mut HashMap<InstanceId, Vec3>,
         spins: &mut HashMap<InstanceId, Vec3>,
         voxels: Option<&Voxels>,
@@ -487,7 +492,7 @@ impl Rigid {
         self.world.gravity = RVec::new(0.0, -gravity, 0.0);
         let slices = ((dt / (1.0 / 60.0)).ceil() as usize).clamp(1, 8);
         self.world.integration_parameters.dt = dt / slices as f32;
-        let filter = Filter { ignored };
+        let filter = Filter { ignored, groups };
         for k in 1..=slices {
             let t = k as f32 / slices as f32;
             for (handle, from, to) in &kinematic {

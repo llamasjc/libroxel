@@ -189,3 +189,93 @@ fn bound_actions_run_when_their_keys_go_down_and_up() {
     let printed: Vec<String> = session.take_log().into_iter().map(|l| l.text).collect();
     assert_eq!(printed, ["Wave true Begin F", "Wave false End F"]);
 }
+
+#[test]
+fn part_settings_are_kept_and_searches_skip_unqueryable_parts() {
+    let printed = run(r#"
+        local crate = workspace.Crate
+        print(crate.CanTouch, crate.CanQuery, crate.CastShadow, crate.Massless, crate.Locked, crate.Reflectance)
+        print(crate.CollisionGroup)
+        crate.CastShadow = false
+        crate.Reflectance = 2
+        print(crate.CastShadow, crate.Reflectance)
+        local down = Vector3.new(0, -50, 0)
+        print(workspace:Raycast(Vector3.new(0, 20, 0), down).Instance.Name)
+        crate.CanQuery = false
+        print(workspace:Raycast(Vector3.new(0, 20, 0), down).Instance.Name)
+        print(#workspace:GetPartBoundsInRadius(Vector3.new(0, 5, 0), 1))
+    "#);
+    assert_eq!(printed, ["true true true false false 0", "Default", "false 1", "Crate", "Floor", "0"]);
+}
+
+#[test]
+fn parts_in_groups_that_dont_collide_fall_through_each_other() {
+    let mut tree = InstanceTree::new();
+    let ws = tree.workspace();
+    let floor = tree.create(ClassKind::Part, "Floor").unwrap();
+    tree.set(floor, Property::Position, PropertyValue::Vec3(Vec3::new(0.0, -0.5, 0.0))).unwrap();
+    tree.set(floor, Property::Size, PropertyValue::Vec3(Vec3::new(100.0, 1.0, 100.0))).unwrap();
+    tree.set(floor, Property::Anchored, PropertyValue::Bool(true)).unwrap();
+    tree.set_parent(floor, Some(ws)).unwrap();
+    let mut boxes = Vec::new();
+    for (name, x) in [("Ghost", 0.0), ("Solid", 6.0)] {
+        let p = tree.create(ClassKind::Part, name).unwrap();
+        tree.set(p, Property::Position, PropertyValue::Vec3(Vec3::new(x, 3.0, 0.0))).unwrap();
+        tree.set(p, Property::Size, PropertyValue::Vec3(Vec3::new(2.0, 2.0, 2.0))).unwrap();
+        tree.set(p, Property::Anchored, PropertyValue::Bool(false)).unwrap();
+        tree.set_parent(p, Some(ws)).unwrap();
+        boxes.push(p);
+    }
+    let script = tree.create(ClassKind::Script, "Groups").unwrap();
+    let source = r#"
+        local physics = game:GetService("PhysicsService")
+        physics:RegisterCollisionGroup("Ghosts")
+        physics:CollisionGroupSetCollidable("Ghosts", "Default", false)
+        workspace.Ghost.CollisionGroup = "Ghosts"
+        print(physics:CollisionGroupsAreCollidable("Default", "Ghosts"), #physics:GetRegisteredCollisionGroups())
+    "#;
+    tree.set(script, Property::Source, PropertyValue::String(source.into())).unwrap();
+    tree.set_parent(script, Some(ws)).unwrap();
+    let mut session = start_on(tree, false).unwrap();
+    for _ in 0..60 {
+        session.step(1.0 / 60.0, CharacterInput::default());
+    }
+    let printed: Vec<String> = session.take_log().into_iter().map(|l| l.text).collect();
+    assert_eq!(printed, ["false 2"]);
+    let t = session.runtime().tree().clone();
+    let y = |id| t.borrow().get_vec3(id, Property::Position).unwrap().y;
+    assert!(y(boxes[0]) < -5.0, "the ghost fell through: {}", y(boxes[0]));
+    assert!((y(boxes[1]) - 1.0).abs() < 0.1, "the solid one landed: {}", y(boxes[1]));
+}
+
+#[test]
+fn parts_that_cant_touch_dont_fire_touched() {
+    let mut tree = InstanceTree::new();
+    let ws = tree.workspace();
+    for (name, y, anchored) in [("Floor", -0.5, true), ("Quiet", 3.0, false), ("Loud", 3.0, false)] {
+        let p = tree.create(ClassKind::Part, name).unwrap();
+        let x = if name == "Loud" { 6.0 } else { 0.0 };
+        let size = if name == "Floor" { Vec3::new(100.0, 1.0, 100.0) } else { Vec3::new(2.0, 2.0, 2.0) };
+        tree.set(p, Property::Position, PropertyValue::Vec3(Vec3::new(x, y, 0.0))).unwrap();
+        tree.set(p, Property::Size, PropertyValue::Vec3(size)).unwrap();
+        tree.set(p, Property::Anchored, PropertyValue::Bool(anchored)).unwrap();
+        tree.set_parent(p, Some(ws)).unwrap();
+    }
+    let script = tree.create(ClassKind::Script, "Touches").unwrap();
+    let source = r#"
+        workspace.Quiet.CanTouch = false
+        for _, name in { "Quiet", "Loud" } do
+            workspace[name].Touched:Connect(function(other)
+                if other.Name == "Floor" then print(name) end
+            end)
+        end
+    "#;
+    tree.set(script, Property::Source, PropertyValue::String(source.into())).unwrap();
+    tree.set_parent(script, Some(ws)).unwrap();
+    let mut session = start_on(tree, false).unwrap();
+    for _ in 0..60 {
+        session.step(1.0 / 60.0, CharacterInput::default());
+    }
+    let printed: Vec<String> = session.take_log().into_iter().map(|l| l.text).collect();
+    assert_eq!(printed, ["Loud"]);
+}

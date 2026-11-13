@@ -21,6 +21,7 @@ pub fn pick(tree: &InstanceTree, ray: Ray3d) -> Option<InstanceId> {
     let dir = ray.direction.as_vec3() * 10_000.0;
     libroxel_instance::geometry::raycast(tree, from_bevy(ray.origin), from_bevy(dir), |id| {
         tree.get_number(id, Property::Transparency).unwrap_or(0.0) < 1.0
+            && tree.get_bool(id, Property::Locked) != Some(true)
     })
     .map(|hit| hit.part)
 }

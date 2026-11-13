@@ -15,6 +15,20 @@ pub enum Property {
     Anchored,
     CanCollide,
     Transparency,
+    /// On a part: how mirror-like it is, from 0 to 1.
+    Reflectance,
+    /// On a part: whether it casts a shadow.
+    CastShadow,
+    /// On a part: whether it fires Touched and TouchEnded.
+    CanTouch,
+    /// On a part: whether ray and region searches find it.
+    CanQuery,
+    /// On a part welded to others: whether it adds nothing to their weight.
+    Massless,
+    /// On a part: whether the editor won't pick it in the view.
+    Locked,
+    /// On a part: the collision group it's in (see PhysicsService).
+    CollisionGroup,
     Disabled,
     Source,
     Health,
@@ -364,7 +378,8 @@ impl Property {
             | Property::Text
             | Property::ActionText
             | Property::ObjectText
-            | Property::PlaceholderText => "string",
+            | Property::PlaceholderText
+            | Property::CollisionGroup => "string",
             Property::Position | Property::Size | Property::Orientation | Property::StudsOffset => "Vec3",
             Property::Color | Property::BackgroundColor | Property::TextColor => "Color3",
             Property::Color3Value | Property::Ambient | Property::FogColor => "Color3",
@@ -451,6 +466,11 @@ impl Property {
             | Property::FallenPartsDestroyHeight => "number",
             Property::Anchored
             | Property::CanCollide
+            | Property::CastShadow
+            | Property::CanTouch
+            | Property::CanQuery
+            | Property::Massless
+            | Property::Locked
             | Property::Disabled
             | Property::BoolValue
             | Property::Visible
@@ -491,6 +511,7 @@ impl Property {
             | Property::Steer => "number",
             Property::KeyboardKeyCode => EnumKind::KeyCode.kind_name(),
             Property::Transparency
+            | Property::Reflectance
             | Property::Health
             | Property::MaxHealth
             | Property::WalkSpeed
@@ -537,6 +558,13 @@ impl Property {
         Property::Anchored,
         Property::CanCollide,
         Property::Transparency,
+        Property::Reflectance,
+        Property::CastShadow,
+        Property::CanTouch,
+        Property::CanQuery,
+        Property::Massless,
+        Property::Locked,
+        Property::CollisionGroup,
         Property::Disabled,
         Property::Source,
         Property::Health,
@@ -714,6 +742,13 @@ impl Property {
             Property::Anchored => "anchored",
             Property::CanCollide => "can_collide",
             Property::Transparency => "transparency",
+            Property::Reflectance => "reflectance",
+            Property::CastShadow => "cast_shadow",
+            Property::CanTouch => "can_touch",
+            Property::CanQuery => "can_query",
+            Property::Massless => "massless",
+            Property::Locked => "locked",
+            Property::CollisionGroup => "collision_group",
             Property::Disabled => "disabled",
             Property::Source => "source",
             Property::Health => "health",

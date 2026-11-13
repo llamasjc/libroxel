@@ -310,6 +310,11 @@ impl ScriptRuntime {
     }
 
     /// Takes the velocity changes scripts asked for since the last call, in order.
+    /// Pairs of collision groups that scripts said pass through each other.
+    pub fn collision_rules(&self) -> Vec<(String, String)> {
+        compat::collision_rules(&self.lua)
+    }
+
     pub fn take_velocity_requests(&self) -> Vec<(InstanceId, VelocityRequest)> {
         world::take_velocity_requests(&self.lua)
     }

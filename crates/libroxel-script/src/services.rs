@@ -498,6 +498,7 @@ fn query(
         let limit = if params.max_parts == 0 { usize::MAX } else { params.max_parts };
         geometry::parts_in(&tree, region, limit, |part| {
             Some(part) != skip
+                && tree.get_bool(part, Property::CanQuery) != Some(false)
                 && match params.filter_type {
                     RaycastFilterType::Exclude => !listed(part),
                     RaycastFilterType::Include => listed(part),
@@ -550,9 +551,12 @@ fn workspace_raycast(
         let listed = |part: InstanceId| {
             params.filter.iter().any(|f| *f == part || tree.is_descendant_of(part, *f).unwrap_or(false))
         };
-        let hit = geometry::raycast(&tree, origin, direction, |part| match params.filter_type {
-            RaycastFilterType::Exclude => !listed(part),
-            RaycastFilterType::Include => listed(part),
+        let hit = geometry::raycast(&tree, origin, direction, |part| {
+            tree.get_bool(part, Property::CanQuery) != Some(false)
+                && match params.filter_type {
+                    RaycastFilterType::Exclude => !listed(part),
+                    RaycastFilterType::Include => listed(part),
+                }
         });
         hit.map(|hit| {
             let material = match tree.voxels(hit.part) {

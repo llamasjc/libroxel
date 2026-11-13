@@ -155,6 +155,9 @@ pub(crate) struct Host {
     pub(crate) net: RefCell<crate::net::NetState>,
     /// Animations loaded on humanoids.
     pub(crate) animations: RefCell<crate::animation::Tracks>,
+    /// Collision groups scripts registered, and the pairs that pass
+    /// through each other (each pair in name order).
+    pub(crate) groups: RefCell<crate::compat::CollisionGroups>,
 }
 
 /// The number for `name`, giving it one if it has none yet.
@@ -1521,6 +1524,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         mouse: Cell::new(None),
         world: RefCell::new(Default::default()),
         net: RefCell::new(Default::default()),
+        groups: RefCell::new(Default::default()),
     });
 
     // Weak-valued cache so each instance has exactly one userdata.

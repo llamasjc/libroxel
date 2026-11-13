@@ -369,6 +369,8 @@ pub(crate) fn sync_terrain(
                         transparency: if material == Material::Water { 0.45 } else { 0.0 },
                         material,
                         texture_repeat: 1.0,
+                        reflectance: 0.0,
+                        shadow: true,
                     };
                     materials.add(material_for(&look, &textures))
                 })

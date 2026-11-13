@@ -336,6 +336,47 @@ pub struct Physics {
     rigid: rigid::Rigid,
     /// Hinges, ropes and springs joining parts.
     joints: Vec<JointSpec>,
+    /// Collision groups that pass through each other, and each part's group.
+    groups: Groups,
+}
+
+/// Which collision groups pass through each other, and which group each
+/// part is in (parts in the default group aren't listed).
+#[derive(Debug, Default)]
+pub(crate) struct Groups {
+    /// Pairs of group names that don't collide (each pair in name order).
+    apart: HashSet<(String, String)>,
+    of: HashMap<InstanceId, String>,
+}
+
+impl Groups {
+    /// Whether `a` and `b` pass through each other for being in groups
+    /// that don't collide.
+    pub(crate) fn apart(&self, a: InstanceId, b: InstanceId) -> bool {
+        if self.apart.is_empty() {
+            return false;
+        }
+        let default = libroxel_instance::DEFAULT_COLLISION_GROUP;
+        let ga = self.of.get(&a).map_or(default, String::as_str);
+        let gb = self.of.get(&b).map_or(default, String::as_str);
+        let pair = if ga <= gb { (ga.to_owned(), gb.to_owned()) } else { (gb.to_owned(), ga.to_owned()) };
+        self.apart.contains(&pair)
+    }
+
+    fn refresh(&mut self, tree: &InstanceTree) {
+        self.of.clear();
+        if self.apart.is_empty() {
+            return;
+        }
+        let default = libroxel_instance::DEFAULT_COLLISION_GROUP;
+        for part in tree.descendants(tree.workspace()).unwrap_or_default() {
+            if let Some(PropertyValue::String(g)) = tree.get(part, Property::CollisionGroup).ok()
+                && g != default
+            {
+                self.of.insert(part, g);
+            }
+        }
+    }
 }
 
 fn ordered(a: InstanceId, b: InstanceId) -> (InstanceId, InstanceId) {
@@ -436,7 +477,13 @@ impl Physics {
     }
 
     fn ignores(&self, a: InstanceId, b: InstanceId) -> bool {
-        !self.ignored.is_empty() && self.ignored.contains(&ordered(a, b))
+        (!self.ignored.is_empty() && self.ignored.contains(&ordered(a, b))) || self.groups.apart(a, b)
+    }
+
+    /// Sets which collision groups pass through each other: pairs of group
+    /// names (in any order).
+    pub fn set_collision_rules(&mut self, apart: impl IntoIterator<Item = (String, String)>) {
+        self.groups.apart = apart.into_iter().map(|(a, b)| if a <= b { (a, b) } else { (b, a) }).collect();
     }
 
     /// Keeps `id` where it is for the next step (something else moved it
@@ -606,6 +653,7 @@ impl Physics {
     /// Advances the simulation by `dt` seconds.
     pub fn step(&mut self, tree: &mut InstanceTree, dt: f32) -> StepResult {
         let gravity = tree.get_number(tree.workspace(), Property::Gravity).map_or(GRAVITY, |g| g as f32);
+        self.groups.refresh(tree);
         let mut bodies = self.collect_bodies(tree, dt, gravity, false);
         let fallen_height = fallen_parts_height(tree);
         let live: HashSet<InstanceId> = bodies.iter().map(|b| b.id).collect();
@@ -628,6 +676,7 @@ impl Physics {
         let moved = self.rigid.step(
             &specs,
             &self.ignored,
+            &self.groups,
             &mut self.velocities,
             &mut self.spins,
             voxels,

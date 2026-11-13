@@ -458,7 +458,28 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
 - **Part properties and events:** `Position`, `Orientation` (degrees),
   `Size`, `Shape` (`Enum.PartType`), `Color`, `Material` (`Enum.Material`),
   `Anchored`, `CanCollide`, `Transparency`, and the `Touched` event. Enum
-  properties also accept a name, as in `part.Material = "Neon"`.
+  properties also accept a name, as in `part.Material = "Neon"`. `CanTouch`
+  false stops `Touched`, `CanQuery` false hides it from raycasts and region
+  searches, `CastShadow` false drops its shadow, `Reflectance` makes it
+  shiny, `Locked` stops the editor picking it in the view, and `Massless`
+  is kept. `BrickColor` (named colours, `BrickColor.new("Bright red")`)
+  sets its colour too.
+- **Collision groups:** `PhysicsService:RegisterCollisionGroup(name)` and
+  `CollisionGroupSetCollidable(a, b, false)`, then `part.CollisionGroup =
+  name`: parts in those two groups pass through each other.
+- **Older and less-used APIs** so scripts written elsewhere run: `Ray.new`
+  with `workspace:FindPartOnRay` (and its ignore-list and whitelist
+  forms), `DateTime`, `PhysicalProperties`, every way of making and taking
+  apart a `CFrame` (`GetComponents`, Euler angles both ways, 7 and 12
+  numbers, `fromMatrix`, `ToAxisAngle`), `Enum.X:GetEnumItems()`,
+  `TweenService:GetValue`, model helpers (`MoveTo`, `TranslateBy`,
+  `GetBoundingBox`, `GetExtentsSize`, `SetPrimaryPartCFrame`), `AssemblyMass`,
+  `ApplyAngularImpulse`, `GetConnectedParts`, `Lighting:GetMinutesAfterMidnight`
+  and `game:BindToClose`. `ContextActionService:BindAction(name, handler,
+  button, keys...)` calls the handler with the action, its
+  `Enum.UserInputState` and the input; `MessagingService` delivers within
+  the game. Purchase, badge, teleport and similar services answer
+  harmlessly (nobody owns anything, teleports warn) instead of failing.
 - **Modules:** a `ModuleScript` returns one value; `require(module)` runs it
   once and hands every caller the same value. Modules may `task.wait`.
 - **Players:** `game:GetService("Players")` has `PlayerAdded`,

@@ -29,6 +29,13 @@ pub use enums::{
     Material, NormalId, PartShape, PathStatus, PathWaypointAction, RaycastFilterType, ScaleType,
     TextXAlignment, TextYAlignment, UserInputState, UserInputType,
 };
+/// The collision group parts are in unless put in another.
+pub const DEFAULT_COLLISION_GROUP: &str = "Default";
+
+fn names_default_group() -> String {
+    DEFAULT_COLLISION_GROUP.to_owned()
+}
+
 pub use math::{CFrame, Color3, Rotation, UDim, UDim2, Vec2, Vec3};
 pub use property::{Property, PropertyValue};
 pub use serde_json;
@@ -412,6 +419,13 @@ impl ClassKind {
             Property::Anchored,
             Property::CanCollide,
             Property::Transparency,
+            Property::Reflectance,
+            Property::CastShadow,
+            Property::CanTouch,
+            Property::CanQuery,
+            Property::Massless,
+            Property::Locked,
+            Property::CollisionGroup,
         ];
         const SCRIPT: &[Property] = &[Property::Name, Property::Disabled, Property::Source];
         const MODULE: &[Property] = &[Property::Name, Property::Source];
@@ -428,6 +442,13 @@ impl ClassKind {
             Property::Anchored,
             Property::CanCollide,
             Property::Transparency,
+            Property::Reflectance,
+            Property::CastShadow,
+            Property::CanTouch,
+            Property::CanQuery,
+            Property::Massless,
+            Property::Locked,
+            Property::CollisionGroup,
             Property::TeamColor,
             Property::Neutral,
         ];
@@ -614,6 +635,13 @@ impl ClassKind {
             Property::Anchored,
             Property::CanCollide,
             Property::Transparency,
+            Property::Reflectance,
+            Property::CastShadow,
+            Property::CanTouch,
+            Property::CanQuery,
+            Property::Massless,
+            Property::Locked,
+            Property::CollisionGroup,
             Property::Disabled,
             Property::Occupant,
         ];
@@ -628,6 +656,13 @@ impl ClassKind {
             Property::Anchored,
             Property::CanCollide,
             Property::Transparency,
+            Property::Reflectance,
+            Property::CastShadow,
+            Property::CanTouch,
+            Property::CanQuery,
+            Property::Massless,
+            Property::Locked,
+            Property::CollisionGroup,
             Property::Disabled,
             Property::Occupant,
             Property::MaxSpeed,
@@ -1102,6 +1137,10 @@ impl ClassKind {
             Property::CanCollide => PropertyValue::Bool(true),
             Property::Disabled => PropertyValue::Bool(false),
             Property::Transparency => PropertyValue::Number(0.0),
+            Property::Reflectance => PropertyValue::Number(0.0),
+            Property::CastShadow | Property::CanTouch | Property::CanQuery => PropertyValue::Bool(true),
+            Property::Massless | Property::Locked => PropertyValue::Bool(false),
+            Property::CollisionGroup => PropertyValue::String(names_default_group()),
             Property::Health | Property::MaxHealth => PropertyValue::Number(100.0),
             Property::WalkSpeed => PropertyValue::Number(16.0),
             Property::JumpPower => PropertyValue::Number(50.0),
