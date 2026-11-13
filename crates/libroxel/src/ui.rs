@@ -110,6 +110,7 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::ProximityPrompt,
     ClassKind::Tool,
     ClassKind::BillboardGui,
+    ClassKind::SurfaceGui,
     ClassKind::PointLight,
     ClassKind::SpotLight,
     ClassKind::RemoteEvent,
@@ -216,6 +217,7 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::Tool => "🔧",
         ClassKind::StarterPack | ClassKind::Backpack => "🎒",
         ClassKind::BillboardGui => "🪧",
+        ClassKind::SurfaceGui => "🖼",
         ClassKind::Camera => "🎥",
         ClassKind::PointLight | ClassKind::SpotLight => "💡",
         ClassKind::TextBox => "⌨",
@@ -276,7 +278,6 @@ fn icon(class: ClassKind) -> &'static str {
         | ClassKind::BlurEffect
         | ClassKind::SunRaysEffect
         | ClassKind::DepthOfFieldEffect
-        | ClassKind::SurfaceGui
         | ClassKind::SurfaceLight
         | ClassKind::UIGradient
         | ClassKind::BodyGyro
@@ -455,6 +456,9 @@ pub fn editor_ui(
             }
             if let Ok((cam, gt, _, _)) = cameras.single() {
                 let selected = if playing { None } else { editor.selection };
+                if let Some(hit) = gui::surfaces(ui, &tree_rc.borrow(), (cam, gt), selected) {
+                    gui_hit = Some(hit);
+                }
                 if let Some(hit) = gui::billboards(ui, &tree_rc.borrow(), (cam, gt), selected, &mut boxes) {
                     gui_hit = Some(hit);
                 }
@@ -1365,6 +1369,10 @@ fn properties(
         ClassKind::StarterPack => {
             Some("Tools in here go into every player's backpack when their character spawns.")
         }
+        ClassKind::SurfaceGui => Some(
+            "Put this inside a part, with frames, labels and buttons inside it. They are drawn on the part's Face \
+             like a screen or a sign, PixelsPerStud pixels to a stud, and buttons on it can be clicked.",
+        ),
         ClassKind::BillboardGui => Some(
             "Put this inside a part, with text labels or frames inside it. It floats StudsOffset above the part, \
              facing the camera. Size scale is in studs; offset is in pixels.",
@@ -2341,7 +2349,10 @@ fn save_to(engine: &mut EngineState, editor: &mut Editor, path: PathBuf) {
 /// first screen GUI in StarterGui (made if there is none).
 fn gui_parent(tree: &mut InstanceTree, selection: Option<InstanceId>) -> Option<InstanceId> {
     if let Some(sel) = selection
-        && tree.class(sel).is_ok_and(|c| c == ClassKind::ScreenGui || c.is_gui_object())
+        && tree.class(sel).is_ok_and(|c| {
+            matches!(c, ClassKind::ScreenGui | ClassKind::SurfaceGui | ClassKind::BillboardGui)
+                || c.is_gui_object()
+        })
     {
         return Some(sel);
     }
@@ -2483,6 +2494,17 @@ fn new_instance(
         let _ = tree.set(label, Property::BackgroundTransparency, PropertyValue::Number(1.0));
         let _ = tree.set(label, Property::TextColor, PropertyValue::Color3(libroxel_instance::Color3::WHITE));
         let _ = tree.set(label, Property::TextSize, PropertyValue::Number(20.0));
+        let _ = tree.set(label, Property::Text, PropertyValue::String("Hello!".into()));
+        tree.set_parent(label, Some(id)).ok()?;
+    }
+    if class == ClassKind::SurfaceGui {
+        let label = tree.create(ClassKind::TextLabel, "Label").ok()?;
+        let _ = tree.set(
+            label,
+            Property::GuiSize,
+            PropertyValue::UDim2(libroxel_instance::UDim2::new(1.0, 0.0, 1.0, 0.0)),
+        );
+        let _ = tree.set(label, Property::TextScaled, PropertyValue::Bool(true));
         let _ = tree.set(label, Property::Text, PropertyValue::String("Hello!".into()));
         tree.set_parent(label, Some(id)).ok()?;
     }
@@ -2822,6 +2844,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     | ClassKind::ClickDetector
                     | ClassKind::ProximityPrompt
                     | ClassKind::BillboardGui
+                    | ClassKind::SurfaceGui
                     | ClassKind::PointLight
                     | ClassKind::SpotLight
                     | ClassKind::BindableEvent

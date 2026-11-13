@@ -1297,6 +1297,7 @@ pub fn property_name(property: Property) -> &'static str {
         Property::SunAngularSize => "SunAngularSize",
         Property::MoonAngularSize => "MoonAngularSize",
         Property::TrailLifetime => "Lifetime",
+        Property::PixelsPerStud => "PixelsPerStud",
     }
 }
 

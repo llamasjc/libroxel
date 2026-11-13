@@ -387,6 +387,8 @@ pub enum Property {
     MoonAngularSize,
     /// On a trail: how long each bit of it lasts, in seconds (scripts call it Lifetime).
     TrailLifetime,
+    /// On a surface GUI: how many GUI pixels fit in one stud of its face.
+    PixelsPerStud,
 }
 
 /// The value of a property.
@@ -486,7 +488,8 @@ impl Property {
             | Property::StarCount
             | Property::SunAngularSize
             | Property::MoonAngularSize
-            | Property::TrailLifetime => "number",
+            | Property::TrailLifetime
+            | Property::PixelsPerStud => "number",
             Property::CelestialBodiesShown => "bool",
             Property::TintColor | Property::SelectionColor => "Color3",
             Property::MinSize | Property::MaxSize => "Vec2",
@@ -837,6 +840,7 @@ impl Property {
         Property::SunAngularSize,
         Property::MoonAngularSize,
         Property::TrailLifetime,
+        Property::PixelsPerStud,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -1048,6 +1052,7 @@ impl Property {
             Property::SunAngularSize => "sun_angular_size",
             Property::MoonAngularSize => "moon_angular_size",
             Property::TrailLifetime => "trail_lifetime",
+            Property::PixelsPerStud => "pixels_per_stud",
         }
     }
 

@@ -110,6 +110,9 @@ The first build compiles Bevy and takes a while. After that it is quick.
   Adornee (or its parent) in Color3, and a `Beam` draws a strip between
   its two attachments. `UISizeConstraint` and `UITextSizeConstraint` keep
   GUI objects and text within a minimum and maximum size.
+- **GUI on parts:** a `SurfaceGui` inside a part draws its frames, labels
+  and buttons on one Face of the part (PixelsPerStud pixels to a stud),
+  like a sign or a screen in the world, and its buttons can be clicked.
 - **Sky and trails:** a `Sky` in Lighting draws the sun and moon along
   ClockTime's path (SunAngularSize, MoonAngularSize, CelestialBodiesShown)
   and stars at night (StarCount). A `Trail` leaves a fading ribbon behind

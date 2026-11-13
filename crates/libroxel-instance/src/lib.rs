@@ -865,6 +865,14 @@ impl ClassKind {
             Property::Width1,
             Property::LightEmission,
         ];
+        const SURFACE_GUI: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::Face,
+            Property::Adornee,
+            Property::PixelsPerStud,
+            Property::AlwaysOnTop,
+        ];
         const SKY: &[Property] = &[
             Property::Name,
             Property::CelestialBodiesShown,
@@ -1086,6 +1094,7 @@ impl ClassKind {
             ClassKind::SelectionBox => SELECTION_BOX,
             ClassKind::Beam => BEAM,
             ClassKind::Sky => SKY,
+            ClassKind::SurfaceGui => SURFACE_GUI,
             ClassKind::Trail => TRAIL,
             ClassKind::UISizeConstraint => SIZE_LIMITS,
             ClassKind::UITextSizeConstraint => TEXT_SIZE_LIMITS,
@@ -1219,6 +1228,7 @@ impl ClassKind {
             Property::SunAngularSize => PropertyValue::Number(21.0),
             Property::MoonAngularSize => PropertyValue::Number(11.0),
             Property::TrailLifetime => PropertyValue::Number(2.0),
+            Property::PixelsPerStud => PropertyValue::Number(50.0),
             Property::Padding => PropertyValue::UDim(UDim::default()),
             Property::BlastRadius => PropertyValue::Number(4.0),
             Property::BlastPressure => PropertyValue::Number(500_000.0),

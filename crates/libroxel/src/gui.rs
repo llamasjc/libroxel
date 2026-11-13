@@ -581,6 +581,131 @@ pub fn billboards(
     hit
 }
 
+/// Where a surface GUI is drawn: the face it covers (a unit square facing
+/// +Z, stretched over the side) and its canvas size in GUI pixels.
+pub fn surface_canvas(
+    tree: &InstanceTree,
+    board: InstanceId,
+) -> Option<(bevy::prelude::Transform, egui::Vec2)> {
+    use libroxel_instance::{EnumValue, NormalId};
+    if tree.get_bool(board, Property::Enabled) == Some(false) {
+        return None;
+    }
+    let part = tree.get_ref(board, Property::Adornee).or_else(|| tree.parent(board).ok().flatten())?;
+    if !tree.class(part).is_ok_and(|c| c.is_physical()) {
+        return None;
+    }
+    let pos = tree.get_vec3(part, Property::Position)?;
+    let size = tree.get_vec3(part, Property::Size)?;
+    let orientation = tree.get_vec3(part, Property::Orientation).unwrap_or_default();
+    let face = match tree.get_enum(board, Property::Face) {
+        Some(EnumValue::NormalId(face)) => face,
+        _ => NormalId::Front,
+    };
+    let (transform, studs) = libroxel_engine::view::decal_transform(pos, size, orientation, face);
+    let per_stud = (tree.get_number(board, Property::PixelsPerStud).unwrap_or(50.0) as f32).clamp(1.0, 400.0);
+    Some((transform, egui::vec2(studs.x * per_stud, studs.y * per_stud)))
+}
+
+/// A point on a surface GUI's canvas (pixels from its top left) in the world.
+pub fn canvas_to_world(face: &bevy::prelude::Transform, canvas: egui::Vec2, at: Pos2) -> bevy::prelude::Vec3 {
+    let local = bevy::prelude::Vec3::new(at.x / canvas.x - 0.5, 0.5 - at.y / canvas.y, 0.0);
+    face.transform_point(local)
+}
+
+/// Draws every surface GUI in the world on its part's face, and returns
+/// the topmost GUI object under the pointer.
+pub fn surfaces(
+    ui: &egui::Ui,
+    tree: &InstanceTree,
+    camera: (&bevy::prelude::Camera, &bevy::prelude::GlobalTransform),
+    selected: Option<InstanceId>,
+) -> GuiHit {
+    let (cam, gt) = camera;
+    let ctx = ui.ctx();
+    let area = ui.max_rect();
+    let pointer = ctx.input(|i| i.pointer.hover_pos()).filter(|p| area.contains(*p));
+    let screen = ui.painter().with_clip_rect(area);
+    let eye = gt.translation();
+    let mut hit = None;
+    for board in tree.descendants_of_class(tree.workspace(), ClassKind::SurfaceGui) {
+        let Some((face, canvas)) = surface_canvas(tree, board) else { continue };
+        let centre = face.translation;
+        let normal = face.rotation * bevy::prelude::Vec3::Z;
+        // Only its front shows.
+        if (eye - centre).dot(normal) <= 0.0 {
+            continue;
+        }
+        if tree.get_bool(board, Property::AlwaysOnTop) != Some(true) {
+            let part = tree.get_ref(board, Property::Adornee).or_else(|| tree.parent(board).ok().flatten());
+            let from = Vec3::new(eye.x, eye.y, eye.z);
+            let toward = Vec3::new(centre.x, centre.y, centre.z) - from;
+            if libroxel_instance::geometry::raycast(tree, from, toward * 0.98, |p| Some(p) != part).is_some()
+            {
+                continue;
+            }
+        }
+        // Where the pointer falls on the canvas: along its ray to the face.
+        let on_canvas = pointer.and_then(|p| {
+            let ray = cam.viewport_to_world(gt, bevy::prelude::Vec2::new(p.x, p.y)).ok()?;
+            let along = ray.direction.dot(normal);
+            if along.abs() < 1e-5 {
+                return None;
+            }
+            let t = (centre - ray.origin).dot(normal) / along;
+            let local = face.compute_affine().inverse().transform_point3(ray.origin + ray.direction * t);
+            (t > 0.0 && local.x.abs() <= 0.5 && local.y.abs() <= 0.5)
+                .then(|| Pos2::new((local.x + 0.5) * canvas.x, (0.5 - local.y) * canvas.y))
+        });
+        // Draw it flat on a hidden layer, then bend each triangle onto the face.
+        let layer = egui::LayerId::new(egui::Order::Background, egui::Id::new(("surface gui", board)));
+        let rect = Rect::from_min_size(Pos2::ZERO, canvas);
+        let flat = egui::Painter::new(ctx.clone(), layer, rect);
+        let mut scratch = TextBoxes::default();
+        draw_children(&flat, tree, board, rect, on_canvas, selected, &mut hit, &mut scratch);
+        let shapes: Vec<egui::epaint::ClippedShape> = ctx.graphics_mut(|g| {
+            let list = g.entry(layer);
+            let shapes = list.all_entries().cloned().collect();
+            for i in 0..list.next_idx().0 {
+                list.reset_shape(egui::layers::ShapeIdx(i));
+            }
+            shapes
+        });
+        let mut meshes = Vec::new();
+        let mut behind = false;
+        for primitive in ctx.tessellate(shapes, ctx.pixels_per_point()) {
+            let egui::epaint::Primitive::Mesh(mut mesh) = primitive.primitive else { continue };
+            for v in &mut mesh.vertices {
+                let at = Pos2::new(v.pos.x.clamp(0.0, canvas.x), v.pos.y.clamp(0.0, canvas.y));
+                match cam.world_to_viewport(gt, canvas_to_world(&face, canvas, at)) {
+                    Ok(p) => v.pos = Pos2::new(p.x, p.y),
+                    Err(_) => behind = true,
+                }
+            }
+            meshes.push(egui::Shape::mesh(mesh));
+        }
+        if behind {
+            continue;
+        }
+        screen.extend(meshes);
+        if selected == Some(board) {
+            let corners = [(0.0, 0.0), (canvas.x, 0.0), (canvas.x, canvas.y), (0.0, canvas.y), (0.0, 0.0)];
+            let outline: Option<Vec<Pos2>> = corners
+                .iter()
+                .map(|(x, y)| {
+                    let p =
+                        cam.world_to_viewport(gt, canvas_to_world(&face, canvas, Pos2::new(*x, *y))).ok()?;
+                    Some(Pos2::new(p.x, p.y))
+                })
+                .collect();
+            if let Some(points) = outline {
+                screen.add(egui::Shape::line(points, Stroke::new(1.0, Color32::from_rgb(80, 170, 255))));
+            }
+        }
+    }
+    hit
+}
+
 /// Draws the player's tool slots along the bottom of the view. Returns each
 /// slot's rectangle, so clicks can pick a tool.
 pub fn hotbar(ui: &egui::Ui, tree: &InstanceTree, tools: &[(InstanceId, bool)]) -> Vec<(usize, Rect)> {
@@ -675,6 +800,30 @@ mod tests {
         let rect = |name: &str| placed.iter().find(|(c, _, _)| tree.name(*c) == Ok(name)).unwrap().2;
         assert_eq!(rect("Square").size(), egui::vec2(100.0, 100.0));
         assert_eq!(rect("Big").size(), egui::vec2(200.0, 200.0));
+    }
+
+    #[test]
+    fn a_surface_gui_covers_its_face_at_pixels_per_stud() {
+        use libroxel_instance::{EnumValue, NormalId};
+        let mut tree = InstanceTree::new();
+        let part = tree.create(ClassKind::Part, "Sign").unwrap();
+        tree.set(part, Property::Position, PropertyValue::Vec3(Vec3::new(0.0, 5.0, 0.0))).unwrap();
+        tree.set(part, Property::Size, PropertyValue::Vec3(Vec3::new(8.0, 4.0, 1.0))).unwrap();
+        tree.set_parent(part, Some(tree.workspace())).unwrap();
+        let board = tree.create(ClassKind::SurfaceGui, "Screen").unwrap();
+        tree.set_parent(board, Some(part)).unwrap();
+        let (face, canvas) = surface_canvas(&tree, board).unwrap();
+        assert_eq!(canvas, egui::vec2(400.0, 200.0));
+        // The canvas's top left is the front's top left, seen from the front.
+        let corner = canvas_to_world(&face, canvas, Pos2::ZERO);
+        assert!((corner - bevy::prelude::Vec3::new(4.0, 7.0, -0.51)).length() < 1e-3, "{corner}");
+        let middle = canvas_to_world(&face, canvas, Pos2::new(200.0, 100.0));
+        assert!((middle - bevy::prelude::Vec3::new(0.0, 5.0, -0.51)).length() < 1e-3, "{middle}");
+        tree.set(board, Property::Face, PropertyValue::Enum(EnumValue::NormalId(NormalId::Top))).unwrap();
+        tree.set(board, Property::PixelsPerStud, PropertyValue::Number(10.0)).unwrap();
+        assert_eq!(surface_canvas(&tree, board).unwrap().1, egui::vec2(80.0, 10.0));
+        tree.set(board, Property::Enabled, PropertyValue::Bool(false)).unwrap();
+        assert!(surface_canvas(&tree, board).is_none());
     }
 
     #[test]
