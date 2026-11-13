@@ -254,8 +254,10 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `smile`, `star`, `arrow` and `checker`.
   `ImageColor3` tints it, `ImageTransparency` fades it, and `ScaleType` is
   `Stretch`, `Fit` or `Crop`. Joined computers need the same files.
-- **Terrain:** `workspace.Terrain` is ground made of one-stud cubes, each
-  grass, sand, rock, snow or another material. `Terrain:FillBlock(cframe,
+- **Terrain:** `workspace.Terrain` is ground made of one-stud cells, each
+  grass, sand, rock, snow or another material. It's drawn smooth: hills
+  slope and balls of ground come out round rather than as stacks of cubes
+  (what you walk on is still the cells, so flat ground lines up exactly). `Terrain:FillBlock(cframe,
   size, material)`, `FillBall(centre, radius, material)` and
   `FillCylinder(cframe, height, radius, material)` fill it, filling with
   `Enum.Material.Air` digs, and `Clear()` empties it. Characters walk up
@@ -557,10 +559,8 @@ end)
 and one game's scripts can use at most 512 MB of memory between them, so a
 broken script can't freeze or fill up the computer running it.
 
-**Not yet:** Terrain is blocky, not smooth, and water doesn't flow. Hinges, ropes and springs are
-still worked out by Libroxel rather than as joints in the physics engine,
-so hinged wheels drive and steer but a car has no suspension: its wheels are rigid.
-Cylinders that aren't wheels collide as their shape, but characters
+**Not yet:** Water doesn't flow, and smooth terrain's slopes are walked on
+as one-stud steps. Cylinders that aren't wheels collide as their shape, but characters
 treat them as boxes. Characters climb steps up to 0.6 studs.
 
 ## Contributing
