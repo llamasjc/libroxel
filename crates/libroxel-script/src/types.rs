@@ -35,6 +35,18 @@ impl UserData for LuaCFrame {
         fields.add_field_method_get(LOOK_VECTOR, |_, this| Ok(LuaVector3(-this.0.rot.z)));
         fields.add_field_method_get(RIGHT_VECTOR, |_, this| Ok(LuaVector3(this.0.rot.x)));
         fields.add_field_method_get(UP_VECTOR, |_, this| Ok(LuaVector3(this.0.rot.y)));
+        fields.add_field_method_get(X_VECTOR, |_, this| {
+            let r = this.0.rot;
+            Ok(LuaVector3(Vec3::new(r.x.x, r.y.x, r.z.x)))
+        });
+        fields.add_field_method_get(Y_VECTOR, |_, this| {
+            let r = this.0.rot;
+            Ok(LuaVector3(Vec3::new(r.x.y, r.y.y, r.z.y)))
+        });
+        fields.add_field_method_get(Z_VECTOR, |_, this| {
+            let r = this.0.rot;
+            Ok(LuaVector3(Vec3::new(r.x.z, r.y.z, r.z.z)))
+        });
         fields.add_field_method_get(ROTATION, |_, this| Ok(LuaCFrame(CFrame::new(Vec3::ZERO, this.0.rot))));
         fields.add_meta_field(MetaMethod::Type, TYPE_NAME);
     }
@@ -64,6 +76,25 @@ impl UserData for LuaCFrame {
         methods.add_method(TO_ORIENTATION, |_, this, ()| {
             let d = this.0.rot.to_orientation();
             Ok((d.x.to_radians(), d.y.to_radians(), d.z.to_radians()))
+        });
+        methods.add_method(TO_EULER_ANGLES_YXZ, |_, this, ()| {
+            let d = this.0.rot.to_orientation();
+            Ok((d.x.to_radians(), d.y.to_radians(), d.z.to_radians()))
+        });
+        methods.add_method(TO_EULER_ANGLES_XYZ, |_, this, ()| Ok(euler_xyz(this.0.rot)));
+        methods.add_method(TO_AXIS_ANGLE, |_, this, ()| {
+            let [x, y, z, w] = this.0.rot.to_quat();
+            let w = w.clamp(-1.0, 1.0);
+            let angle = 2.0 * w.acos();
+            let s = (1.0 - w * w).sqrt();
+            let axis = if s > 1e-6 { Vec3::new(x / s, y / s, z / s) } else { Vec3::new(1.0, 0.0, 0.0) };
+            Ok((LuaVector3(axis), angle))
+        });
+        methods.add_method(GET_COMPONENTS, |_, this, ()| {
+            let (p, r) = (this.0.pos, this.0.rot);
+            Ok(mlua::Variadic::from_iter([
+                p.x, p.y, p.z, r.x.x, r.y.x, r.z.x, r.x.y, r.y.y, r.z.y, r.x.z, r.y.z, r.z.z,
+            ]))
         });
 
         methods.add_meta_function(MetaMethod::Mul, |lua, (a, b): (Value, Value)| {
@@ -101,6 +132,37 @@ impl UserData for LuaCFrame {
     }
 }
 
+/// The angles (radians) that `Angles` turns by to make `r`: about X, then
+/// Y, then Z.
+fn euler_xyz(r: Rotation) -> (f32, f32, f32) {
+    let b = r.z.x.clamp(-1.0, 1.0).asin();
+    if b.cos().abs() > 1e-5 {
+        ((-r.z.y).atan2(r.z.z), b, (-r.y.x).atan2(r.x.x))
+    } else {
+        // Straight up or down: put all the turn about X.
+        (r.y.z.atan2(r.y.y), b, 0.0)
+    }
+}
+
+fn rotation_xyz(x: f32, y: f32, z: f32) -> Rotation {
+    Rotation::about_x(x) * Rotation::about_y(y) * Rotation::about_z(z)
+}
+
+fn rotation_yxz(x: f32, y: f32, z: f32) -> Rotation {
+    Rotation::about_y(y) * Rotation::about_x(x) * Rotation::about_z(z)
+}
+
+/// A rotation from its rows, tidied into a proper one.
+fn rotation_rows(m: [f32; 9]) -> Rotation {
+    let x = Vec3::new(m[0], m[3], m[6]).normalize_or_zero();
+    let y0 = Vec3::new(m[1], m[4], m[7]);
+    let z = x.cross(y0).normalize_or_zero();
+    if x.length() < 0.5 || z.length() < 0.5 {
+        return Rotation::IDENTITY;
+    }
+    Rotation { x, y: z.cross(x), z }
+}
+
 fn cframe_lib(lua: &Lua) -> mlua::Result<Table> {
     let lib = lua.create_table()?;
     lib.set(
@@ -116,9 +178,24 @@ fn cframe_lib(lua: &Lua) -> mlua::Result<Table> {
                     let target = as_vector3(look).ok_or_else(|| err("CFrame.new expects two Vector3s"))?;
                     CFrame::look_at(as_vector3(p).unwrap_or_default(), target)
                 }
-                [x, y, z, ..] => {
+                [x, y, z, rest @ ..] => {
                     let n = |v: &Value| as_number(v).ok_or_else(|| err("CFrame.new expects numbers"));
-                    CFrame::new(Vec3::new(n(x)?, n(y)?, n(z)?), Rotation::IDENTITY)
+                    let pos = Vec3::new(n(x)?, n(y)?, n(z)?);
+                    let rot = match rest {
+                        [] => Rotation::IDENTITY,
+                        // A quaternion.
+                        [qx, qy, qz, qw] => Rotation::from_quat([n(qx)?, n(qy)?, n(qz)?, n(qw)?]),
+                        // The rotation's rows.
+                        m if m.len() == 9 => {
+                            let mut rows = [0.0; 9];
+                            for (r, v) in rows.iter_mut().zip(m) {
+                                *r = n(v)?;
+                            }
+                            rotation_rows(rows)
+                        }
+                        _ => return Err(err("CFrame.new expects 3, 7 or 12 numbers")),
+                    };
+                    CFrame::new(pos, rot)
                 }
                 _ => return Err(err("CFrame.new expects a position")),
             };
@@ -137,10 +214,35 @@ fn cframe_lib(lua: &Lua) -> mlua::Result<Table> {
     lib.set(
         cframe::ANGLES,
         lua.create_function(|_, (x, y, z): (Option<f32>, Option<f32>, Option<f32>)| {
-            let rot = Rotation::about_x(x.unwrap_or(0.0))
-                * Rotation::about_y(y.unwrap_or(0.0))
-                * Rotation::about_z(z.unwrap_or(0.0));
+            let rot = rotation_xyz(x.unwrap_or(0.0), y.unwrap_or(0.0), z.unwrap_or(0.0));
             Ok(LuaCFrame(CFrame::new(Vec3::ZERO, rot)))
+        })?,
+    )?;
+    lib.set(
+        cframe::FROM_EULER_ANGLES_XYZ,
+        lua.create_function(|_, (x, y, z): (Option<f32>, Option<f32>, Option<f32>)| {
+            let rot = rotation_xyz(x.unwrap_or(0.0), y.unwrap_or(0.0), z.unwrap_or(0.0));
+            Ok(LuaCFrame(CFrame::new(Vec3::ZERO, rot)))
+        })?,
+    )?;
+    lib.set(
+        cframe::FROM_EULER_ANGLES_YXZ,
+        lua.create_function(|_, (x, y, z): (Option<f32>, Option<f32>, Option<f32>)| {
+            let rot = rotation_yxz(x.unwrap_or(0.0), y.unwrap_or(0.0), z.unwrap_or(0.0));
+            Ok(LuaCFrame(CFrame::new(Vec3::ZERO, rot)))
+        })?,
+    )?;
+    lib.set(
+        cframe::FROM_MATRIX,
+        lua.create_function(|_, (pos, vx, vy, vz): (Value, Value, Value, Option<Value>)| {
+            let v = |v: &Value| as_vector3(v).ok_or_else(|| err("CFrame.fromMatrix expects Vector3s"));
+            let (x, y) = (v(&vx)?, v(&vy)?);
+            let z = match vz {
+                Some(z) => v(&z)?,
+                None => x.cross(y),
+            };
+            let rot = rotation_rows([x.x, y.x, z.x, x.y, y.y, z.y, x.z, y.z, z.z]);
+            Ok(LuaCFrame(CFrame::new(v(&pos)?, rot)))
         })?,
     )?;
     lib.set(

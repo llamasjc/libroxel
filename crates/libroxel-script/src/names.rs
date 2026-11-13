@@ -13,7 +13,7 @@
 use libroxel_instance::{
     ActuatorType, CameraType, ClassKind, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection,
     KeyCode, Material, NormalId, PartShape, PathStatus, PathWaypointAction, Property, RaycastFilterType,
-    ScaleType, TextXAlignment, TextYAlignment, UserInputType,
+    ScaleType, TextXAlignment, TextYAlignment, UserInputState, UserInputType,
 };
 
 /// Global variables installed into every script.
@@ -471,6 +471,16 @@ pub mod cframe {
     pub const POINT_TO_WORLD_SPACE: &str = "PointToWorldSpace";
     pub const POINT_TO_OBJECT_SPACE: &str = "PointToObjectSpace";
     pub const TO_ORIENTATION: &str = "ToOrientation";
+    pub const TO_EULER_ANGLES_XYZ: &str = "ToEulerAnglesXYZ";
+    pub const TO_EULER_ANGLES_YXZ: &str = "ToEulerAnglesYXZ";
+    pub const TO_AXIS_ANGLE: &str = "ToAxisAngle";
+    pub const GET_COMPONENTS: &str = "GetComponents";
+    pub const X_VECTOR: &str = "XVector";
+    pub const Y_VECTOR: &str = "YVector";
+    pub const Z_VECTOR: &str = "ZVector";
+    pub const FROM_EULER_ANGLES_XYZ: &str = "fromEulerAnglesXYZ";
+    pub const FROM_EULER_ANGLES_YXZ: &str = "fromEulerAnglesYXZ";
+    pub const FROM_MATRIX: &str = "fromMatrix";
     /// Constructors.
     pub const LOOK_AT: &str = "lookAt";
     pub const ANGLES: &str = "Angles";
@@ -518,6 +528,7 @@ pub fn enum_name(kind: EnumKind) -> &'static str {
         EnumKind::RaycastFilterType => "RaycastFilterType",
         EnumKind::CameraType => "CameraType",
         EnumKind::FillDirection => "FillDirection",
+        EnumKind::UserInputState => "UserInputState",
         EnumKind::TextXAlignment => "TextXAlignment",
         EnumKind::TextYAlignment => "TextYAlignment",
         EnumKind::ScaleType => "ScaleType",
@@ -682,6 +693,13 @@ pub fn enum_item_name(value: EnumValue) -> &'static str {
         EnumValue::FillDirection(d) => match d {
             FillDirection::Vertical => "Vertical",
             FillDirection::Horizontal => "Horizontal",
+        },
+        EnumValue::UserInputState(s) => match s {
+            UserInputState::Begin => "Begin",
+            UserInputState::Change => "Change",
+            UserInputState::End => "End",
+            UserInputState::Cancel => "Cancel",
+            UserInputState::None => "None",
         },
     }
 }
@@ -1139,4 +1157,210 @@ mod tests {
             }
         }
     }
+}
+
+/// Older and less-used parts of the scripting API (see `compat.rs`).
+pub mod compat {
+    pub const BRICK_COLOR: &str = "BrickColor";
+    pub const RAY: &str = "Ray";
+    pub const DATE_TIME: &str = "DateTime";
+    pub const PHYSICAL_PROPERTIES: &str = "PhysicalProperties";
+
+    /// BrickColor members and constructors.
+    pub const NAME: &str = "Name";
+    pub const NUMBER: &str = "Number";
+    pub const COLOR: &str = "Color";
+    pub const R: &str = "r";
+    pub const G: &str = "g";
+    pub const B: &str = "b";
+    pub const RANDOM: &str = "random";
+    pub const PALETTE: &str = "palette";
+    /// Shortcut constructors, each one colour.
+    pub const SHORTCUTS: &[(&str, &str)] = &[
+        ("White", "White"),
+        ("Gray", "Medium stone grey"),
+        ("DarkGray", "Dark stone grey"),
+        ("Black", "Black"),
+        ("Red", "Bright red"),
+        ("Yellow", "Bright yellow"),
+        ("Green", "Dark green"),
+        ("Blue", "Bright blue"),
+    ];
+    /// The named colours: name, number and red, green, blue.
+    pub const BRICK_COLORS: &[(&str, u16, [u8; 3])] = &[
+        ("White", 1, [242, 243, 243]),
+        ("Medium stone grey", 194, [163, 162, 165]),
+        ("Dark stone grey", 199, [99, 95, 98]),
+        ("Light stone grey", 208, [229, 228, 223]),
+        ("Black", 26, [27, 42, 53]),
+        ("Really black", 1003, [17, 17, 17]),
+        ("Institutional white", 1001, [248, 248, 248]),
+        ("Bright red", 21, [196, 40, 28]),
+        ("Really red", 1004, [255, 0, 0]),
+        ("Maroon", 1031, [117, 0, 0]),
+        ("Persimmon", 1027, [255, 89, 89]),
+        ("Bright blue", 23, [13, 105, 172]),
+        ("Really blue", 1010, [0, 0, 255]),
+        ("Deep blue", 1012, [33, 84, 185]),
+        ("Navy blue", 1011, [0, 32, 96]),
+        ("Medium blue", 102, [110, 153, 202]),
+        ("Pastel blue", 1024, [128, 187, 219]),
+        ("Cyan", 1019, [4, 175, 236]),
+        ("Toothpaste", 1020, [0, 255, 255]),
+        ("Teal", 1018, [18, 238, 212]),
+        ("Bright bluish green", 107, [0, 143, 156]),
+        ("Bright green", 37, [75, 151, 75]),
+        ("Dark green", 28, [40, 127, 71]),
+        ("Earth green", 141, [39, 70, 45]),
+        ("Lime green", 1021, [0, 255, 0]),
+        ("Camo", 1022, [58, 125, 21]),
+        ("Grime", 1023, [127, 142, 100]),
+        ("Br. yellowish green", 119, [164, 189, 71]),
+        ("Bright yellow", 24, [245, 205, 48]),
+        ("New Yeller", 1009, [255, 255, 0]),
+        ("Cool yellow", 226, [253, 234, 141]),
+        ("Gold", 1029, [239, 184, 56]),
+        ("Bright orange", 106, [218, 133, 65]),
+        ("Deep orange", 1005, [255, 176, 0]),
+        ("Bright violet", 104, [107, 50, 124]),
+        ("Magenta", 1015, [170, 0, 170]),
+        ("Pink", 1016, [255, 102, 204]),
+        ("Hot pink", 1032, [255, 0, 191]),
+        ("Brown", 217, [124, 92, 70]),
+        ("Reddish brown", 192, [105, 64, 40]),
+        ("Nougat", 18, [204, 142, 105]),
+        ("Sand red", 153, [149, 121, 119]),
+        ("Fossil", 1030, [159, 161, 172]),
+    ];
+    /// The colour a BrickColor falls back to.
+    pub const DEFAULT_BRICK_COLOR: &str = "Medium stone grey";
+
+    /// Ray members.
+    pub const ORIGIN: &str = "Origin";
+    pub const DIRECTION: &str = "Direction";
+    pub const UNIT: &str = "Unit";
+    pub const CLOSEST_POINT: &str = "ClosestPoint";
+    pub const DISTANCE: &str = "Distance";
+
+    /// DateTime members.
+    pub const NOW: &str = "now";
+    pub const FROM_UNIX_TIMESTAMP: &str = "fromUnixTimestamp";
+    pub const FROM_UNIX_TIMESTAMP_MILLIS: &str = "fromUnixTimestampMillis";
+    pub const UNIX_TIMESTAMP: &str = "UnixTimestamp";
+    pub const UNIX_TIMESTAMP_MILLIS: &str = "UnixTimestampMillis";
+    pub const TO_ISO_DATE: &str = "ToIsoDate";
+    pub const TO_UNIVERSAL_TIME: &str = "ToUniversalTime";
+    pub const TO_LOCAL_TIME: &str = "ToLocalTime";
+    pub const YEAR: &str = "Year";
+    pub const MONTH: &str = "Month";
+    pub const DAY: &str = "Day";
+    pub const HOUR: &str = "Hour";
+    pub const MINUTE: &str = "Minute";
+    pub const SECOND: &str = "Second";
+    pub const MILLISECOND: &str = "Millisecond";
+
+    /// PhysicalProperties members.
+    pub const DENSITY: &str = "Density";
+    pub const FRICTION: &str = "Friction";
+    pub const ELASTICITY: &str = "Elasticity";
+    pub const FRICTION_WEIGHT: &str = "FrictionWeight";
+    pub const ELASTICITY_WEIGHT: &str = "ElasticityWeight";
+
+    /// Part members.
+    pub const BRICK_COLOR_PROPERTY: &str = "BrickColor";
+    pub const ASSEMBLY_MASS: &str = "AssemblyMass";
+    pub const APPLY_ANGULAR_IMPULSE: &str = "ApplyAngularImpulse";
+    pub const SET_NETWORK_OWNER: &str = "SetNetworkOwner";
+    pub const GET_NETWORK_OWNER: &str = "GetNetworkOwner";
+    pub const SET_NETWORK_OWNERSHIP_AUTO: &str = "SetNetworkOwnershipAuto";
+    pub const CAN_SET_NETWORK_OWNERSHIP: &str = "CanSetNetworkOwnership";
+    pub const GET_CONNECTED_PARTS: &str = "GetConnectedParts";
+    pub const GET_JOINTS: &str = "GetJoints";
+
+    /// Model members.
+    pub const MOVE_TO: &str = "MoveTo";
+    pub const GET_BOUNDING_BOX: &str = "GetBoundingBox";
+    pub const GET_EXTENTS_SIZE: &str = "GetExtentsSize";
+    pub const SET_PRIMARY_PART_CFRAME: &str = "SetPrimaryPartCFrame";
+    pub const GET_PRIMARY_PART_CFRAME: &str = "GetPrimaryPartCFrame";
+    pub const TRANSLATE_BY: &str = "TranslateBy";
+
+    /// Workspace members.
+    pub const FIND_PART_ON_RAY: &str = "FindPartOnRay";
+    pub const FIND_PART_ON_RAY_WITH_IGNORE_LIST: &str = "FindPartOnRayWithIgnoreList";
+    pub const FIND_PART_ON_RAY_WITH_WHITELIST: &str = "FindPartOnRayWithWhitelist";
+    pub const GET_SERVER_TIME_NOW: &str = "GetServerTimeNow";
+    pub const DISTRIBUTED_GAME_TIME: &str = "DistributedGameTime";
+
+    /// Lighting members.
+    pub const GET_MINUTES_AFTER_MIDNIGHT: &str = "GetMinutesAfterMidnight";
+    pub const SET_MINUTES_AFTER_MIDNIGHT: &str = "SetMinutesAfterMidnight";
+
+    /// The root's members.
+    pub const BIND_TO_CLOSE: &str = "BindToClose";
+    pub const IS_LOADED: &str = "IsLoaded";
+
+    /// Humanoid members.
+    pub const MOVE_DIRECTION: &str = "MoveDirection";
+    pub const DISPLAY_NAME: &str = "DisplayName";
+
+    /// Enumeration tables.
+    pub const GET_ENUM_ITEMS: &str = "GetEnumItems";
+
+    /// TweenService.
+    pub const GET_VALUE: &str = "GetValue";
+
+    /// The input object's state.
+    pub const USER_INPUT_STATE: &str = "UserInputState";
+
+    /// Services with nothing (or little) behind them yet, so scripts that
+    /// use them still run.
+    pub const MARKETPLACE_SERVICE: &str = "MarketplaceService";
+    pub const BADGE_SERVICE: &str = "BadgeService";
+    pub const TELEPORT_SERVICE: &str = "TeleportService";
+    pub const SOUND_SERVICE: &str = "SoundService";
+    pub const PHYSICS_SERVICE: &str = "PhysicsService";
+    pub const GUI_SERVICE: &str = "GuiService";
+    pub const TEXT_SERVICE: &str = "TextService";
+    pub const CONTENT_PROVIDER: &str = "ContentProvider";
+    pub const VR_SERVICE: &str = "VRService";
+    pub const HAPTIC_SERVICE: &str = "HapticService";
+    pub const POLICY_SERVICE: &str = "PolicyService";
+    pub const MESSAGING_SERVICE: &str = "MessagingService";
+    pub const CONTEXT_ACTION_SERVICE: &str = "ContextActionService";
+
+    /// Their members.
+    pub const PROMPT_PURCHASE: &str = "PromptPurchase";
+    pub const PROMPT_GAME_PASS_PURCHASE: &str = "PromptGamePassPurchase";
+    pub const PROMPT_PRODUCT_PURCHASE: &str = "PromptProductPurchase";
+    pub const USER_OWNS_GAME_PASS_ASYNC: &str = "UserOwnsGamePassAsync";
+    pub const PLAYER_OWNS_ASSET: &str = "PlayerOwnsAsset";
+    pub const GET_PRODUCT_INFO: &str = "GetProductInfo";
+    pub const AWARD_BADGE: &str = "AwardBadge";
+    pub const USER_HAS_BADGE_ASYNC: &str = "UserHasBadgeAsync";
+    pub const TELEPORT: &str = "Teleport";
+    pub const TELEPORT_ASYNC: &str = "TeleportAsync";
+    pub const TELEPORT_TO_PLACE_INSTANCE: &str = "TeleportToPlaceInstance";
+    pub const PLAY_LOCAL_SOUND: &str = "PlayLocalSound";
+    pub const REGISTER_COLLISION_GROUP: &str = "RegisterCollisionGroup";
+    pub const COLLISION_GROUP_SET_COLLIDABLE: &str = "CollisionGroupSetCollidable";
+    pub const IS_TEN_FOOT_INTERFACE: &str = "IsTenFootInterface";
+    pub const GET_GUI_INSET: &str = "GetGuiInset";
+    pub const GET_TEXT_SIZE: &str = "GetTextSize";
+    pub const PRELOAD_ASYNC: &str = "PreloadAsync";
+    pub const VR_ENABLED: &str = "VREnabled";
+    pub const IS_VIBRATION_SUPPORTED: &str = "IsVibrationSupported";
+    pub const GET_POLICY_INFO_FOR_PLAYER_ASYNC: &str = "GetPolicyInfoForPlayerAsync";
+    pub const ARE_ADS_ALLOWED: &str = "AreAdsAllowed";
+    pub const PUBLISH_ASYNC: &str = "PublishAsync";
+    pub const SUBSCRIBE_ASYNC: &str = "SubscribeAsync";
+    pub const DATA: &str = "Data";
+    pub const SENT: &str = "Sent";
+    pub const DISCONNECT: &str = "Disconnect";
+    pub const BIND_ACTION: &str = "BindAction";
+    pub const BIND_ACTION_AT_PRIORITY: &str = "BindActionAtPriority";
+    pub const UNBIND_ACTION: &str = "UnbindAction";
+    pub const UNBIND_ALL_ACTIONS: &str = "UnbindAllActions";
+    /// What scripts get back when they ask about something that isn't here.
+    pub const NOT_AVAILABLE: &str = "isn't available in Libroxel yet";
 }

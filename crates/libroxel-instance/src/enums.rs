@@ -230,6 +230,17 @@ pub enum ScaleType {
     Crop,
 }
 
+/// Where a press is in its life: just down, held and moving, or let go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum UserInputState {
+    #[default]
+    Begin,
+    Change,
+    End,
+    Cancel,
+    None,
+}
+
 /// Which way a list layout lines things up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum FillDirection {
@@ -382,6 +393,7 @@ pub enum EnumKind {
     NormalId,
     PathStatus,
     PathWaypointAction,
+    UserInputState,
 }
 
 /// A value from one of the enumerations.
@@ -403,6 +415,7 @@ pub enum EnumValue {
     NormalId(NormalId),
     PathStatus(PathStatus),
     PathWaypointAction(PathWaypointAction),
+    UserInputState(UserInputState),
 }
 
 const KEY_CODES: &[EnumValue] = &[
@@ -479,6 +492,7 @@ impl EnumKind {
         EnumKind::NormalId,
         EnumKind::PathStatus,
         EnumKind::PathWaypointAction,
+        EnumKind::UserInputState,
     ];
 
     /// Every value of this enumeration, in a stable order.
@@ -545,6 +559,13 @@ impl EnumKind {
             EnumKind::FillDirection => {
                 &[E::FillDirection(FillDirection::Vertical), E::FillDirection(FillDirection::Horizontal)]
             }
+            EnumKind::UserInputState => &[
+                E::UserInputState(UserInputState::Begin),
+                E::UserInputState(UserInputState::Change),
+                E::UserInputState(UserInputState::End),
+                E::UserInputState(UserInputState::Cancel),
+                E::UserInputState(UserInputState::None),
+            ],
             EnumKind::TextXAlignment => &[
                 E::TextXAlignment(TextXAlignment::Left),
                 E::TextXAlignment(TextXAlignment::Center),
@@ -595,6 +616,7 @@ impl EnumKind {
             EnumKind::NormalId => "enum:normal_id",
             EnumKind::PathStatus => "enum:path_status",
             EnumKind::PathWaypointAction => "enum:path_waypoint_action",
+            EnumKind::UserInputState => "enum:user_input_state",
         }
     }
 
@@ -616,6 +638,7 @@ impl EnumValue {
             EnumValue::RaycastFilterType(_) => EnumKind::RaycastFilterType,
             EnumValue::CameraType(_) => EnumKind::CameraType,
             EnumValue::FillDirection(_) => EnumKind::FillDirection,
+            EnumValue::UserInputState(_) => EnumKind::UserInputState,
             EnumValue::TextXAlignment(_) => EnumKind::TextXAlignment,
             EnumValue::TextYAlignment(_) => EnumKind::TextYAlignment,
             EnumValue::ScaleType(_) => EnumKind::ScaleType,
@@ -752,6 +775,13 @@ impl EnumValue {
             EnumValue::FillDirection(d) => match d {
                 FillDirection::Vertical => "vertical",
                 FillDirection::Horizontal => "horizontal",
+            },
+            EnumValue::UserInputState(s) => match s {
+                UserInputState::Begin => "begin",
+                UserInputState::Change => "change",
+                UserInputState::End => "end",
+                UserInputState::Cancel => "cancel",
+                UserInputState::None => "none",
             },
             EnumValue::TextXAlignment(a) => match a {
                 TextXAlignment::Left => "left",

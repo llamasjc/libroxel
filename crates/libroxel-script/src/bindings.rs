@@ -127,7 +127,7 @@ pub(crate) struct Host {
     pub(crate) tree: SharedTree,
     connections: RefCell<Vec<Connection>>,
     next_connection: Cell<u64>,
-    output: RefCell<Vec<OutputLine>>,
+    pub(crate) output: RefCell<Vec<OutputLine>>,
     pub(crate) errors: RefCell<Vec<ScriptError>>,
     current_script: RefCell<String>,
     /// The script instance whose code is running, if it came from one.
@@ -647,7 +647,7 @@ pub(crate) fn set_part_cframe(lua: &Lua, id: InstanceId, cf: CFrame) -> mlua::Re
 }
 
 /// The part a model pivots around: its root part if it has one, else its first part.
-fn model_pivot_part(lua: &Lua, model: InstanceId) -> mlua::Result<Option<InstanceId>> {
+pub(crate) fn model_pivot_part(lua: &Lua, model: InstanceId) -> mlua::Result<Option<InstanceId>> {
     let host = host(lua);
     let tree = host.tree.borrow();
     let parts = tree.descendants_of_class(model, ClassKind::Part);
@@ -727,6 +727,9 @@ impl UserData for LuaInstance {
                 return Ok(service);
             }
             if let Some(service) = crate::pathfinding::get_service(lua, &name)? {
+                return Ok(service);
+            }
+            if let Some(service) = crate::compat::get_service(lua, &name)? {
                 return Ok(service);
             }
             let service = names::class_from_name(&name).and_then(|c| host(lua).tree.borrow().service(c));
@@ -833,6 +836,7 @@ impl UserData for LuaInstance {
         crate::services::add_instance_methods(methods);
         crate::items::add_instance_methods(methods);
         crate::world::add_instance_methods(methods);
+        crate::compat::add_instance_methods(methods);
         crate::calls::add_instance_methods(methods);
         crate::effects::add_instance_methods(methods);
         crate::terrain::add_instance_methods(methods);
@@ -866,6 +870,9 @@ impl UserData for LuaInstance {
                 return Ok(Value::UserData(lua.create_userdata(LuaCFrame(part_cframe(lua, id)?))?));
             }
             if let Some(value) = crate::world::index(lua, id, class, &key)? {
+                return Ok(value);
+            }
+            if let Some(value) = crate::compat::index(lua, id, class, &key)? {
                 return Ok(value);
             }
             if let Some(value) = crate::calls::index(lua, id, class, &key)? {
@@ -925,6 +932,9 @@ impl UserData for LuaInstance {
                 return set_part_cframe(lua, id, cf);
             }
             if crate::world::new_index(lua, id, class, &key, &value)? {
+                return Ok(());
+            }
+            if crate::compat::new_index(lua, id, class, &key, &value)? {
                 return Ok(());
             }
             if crate::calls::new_index(lua, id, class, &key, &value)? {
@@ -1113,6 +1123,12 @@ impl UserData for TweenService {
         methods.add_method(names::methods::CREATE, |lua, _, (target, info, goals): (Value, Value, Table)| {
             create_tween(lua, target, info, goals)
         });
+        methods.add_method(
+            names::compat::GET_VALUE,
+            |_, _, (alpha, style, direction): (f32, Value, Value)| {
+                crate::compat::tween_value(alpha, &style, &direction)
+            },
+        );
     }
 }
 
@@ -1624,6 +1640,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     install_tween_info(lua)?;
     crate::services::install(lua)?;
     crate::world::install(lua)?;
+    crate::compat::install(lua)?;
     lua.set_named_registry_value(WAIT_FOR_CHILD_FN, wait_for_child)?;
     g.set(globals::REQUIRE, require)?;
 
@@ -1633,6 +1650,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         for &item in kind.items() {
             items.set(names::enum_item_name(item), LuaEnumItem(item))?;
         }
+        crate::compat::add_enum_items(lua, &items, kind)?;
         items.set_readonly(true);
         enum_lib.set(names::enum_name(kind), items)?;
     }

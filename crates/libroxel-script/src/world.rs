@@ -90,6 +90,21 @@ fn spin(lua: &Lua, id: InstanceId) -> Vec3 {
     spin
 }
 
+/// A part's velocity, as scripts see it.
+pub(crate) fn velocity_of(lua: &Lua, id: InstanceId) -> Vec3 {
+    velocity(lua, id)
+}
+
+/// How fast a part spins, as scripts see it.
+pub(crate) fn spin_of(lua: &Lua, id: InstanceId) -> Vec3 {
+    spin(lua, id)
+}
+
+/// Asks for a part to spin at `spin`.
+pub(crate) fn request_spin(lua: &Lua, id: InstanceId, spin: Vec3) {
+    request(lua, id, VelocityRequest::Spin(spin));
+}
+
 fn request(lua: &Lua, id: InstanceId, request: VelocityRequest) {
     host(lua).world.borrow_mut().requests.push((id, request));
 }
@@ -212,6 +227,10 @@ fn project(lua: &Lua, camera: InstanceId, point: Vec3) -> mlua::Result<(Vec3, bo
 
 pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
     m.add_method(methods::MOVE_TO, |lua, this, (target, part): (Value, Value)| {
+        // A model's MoveTo puts it there; a humanoid's walks there.
+        if crate::bindings::class_of(lua, this.0)? == ClassKind::Model {
+            return crate::compat::model_move_to(lua, this.0, target);
+        }
         require_class(lua, this.0, ClassKind::Humanoid, methods::MOVE_TO)?;
         let mut at = as_vector3(&target).ok_or_else(|| runtime_err("MoveTo expects a Vector3"))?;
         // With a part, the point is where the part is now.

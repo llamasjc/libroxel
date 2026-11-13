@@ -27,7 +27,7 @@ pub mod voxels;
 pub use enums::{
     ActuatorType, CameraType, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection, KeyCode,
     Material, NormalId, PartShape, PathStatus, PathWaypointAction, RaycastFilterType, ScaleType,
-    TextXAlignment, TextYAlignment, UserInputType,
+    TextXAlignment, TextYAlignment, UserInputState, UserInputType,
 };
 pub use math::{CFrame, Color3, Rotation, UDim, UDim2, Vec2, Vec3};
 pub use property::{Property, PropertyValue};

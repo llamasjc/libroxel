@@ -84,7 +84,8 @@ impl UserData for UserInputService {
 }
 
 /// What an input event passes to scripts.
-struct InputObject(UserInput);
+/// A key or button, and whether it just went down.
+struct InputObject(UserInput, bool);
 
 impl UserData for InputObject {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
@@ -94,6 +95,9 @@ impl UserData for InputObject {
                 _ => KeyCode::Unknown,
             };
             Ok(LuaEnumItem(EnumValue::KeyCode(key)))
+        });
+        fields.add_field_method_get(names::compat::USER_INPUT_STATE, |_, this| {
+            Ok(crate::compat::input_state(this.1))
         });
         fields.add_field_method_get(user_input::USER_INPUT_TYPE, |_, this| {
             let kind = match this.0 {
@@ -121,9 +125,18 @@ pub(crate) fn input(lua: &Lua, input: UserInput, began: bool, processed: bool) -
     }
     let signal = if began { SignalKind::InputBegan } else { SignalKind::InputEnded };
     fire(lua, signal, || {
-        let object = Value::UserData(lua.create_userdata(InputObject(input))?);
+        let object = Value::UserData(lua.create_userdata(InputObject(input, began))?);
         Ok([object, Value::Boolean(processed)].into_iter().collect())
     });
+    if !processed {
+        let object = lua.create_userdata(InputObject(input, began)).map(Value::UserData);
+        if let Err(err) = object.and_then(|o| crate::compat::action_input(lua, input, began, &o)) {
+            host(lua).errors.borrow_mut().push(ScriptError {
+                script: names::compat::CONTEXT_ACTION_SERVICE.to_owned(),
+                message: err.to_string(),
+            });
+        }
+    }
     if input == UserInput::MouseButton1 && !processed {
         crate::items::mouse_button(lua, began);
     }

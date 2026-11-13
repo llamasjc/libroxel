@@ -22,6 +22,7 @@
 mod animation;
 mod bindings;
 mod calls;
+mod compat;
 mod effects;
 mod items;
 pub mod names;
