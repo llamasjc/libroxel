@@ -6,7 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bevy_egui::egui::{self, Color32, RichText};
-use libroxel_hub::{Announcer, GameInfo, HostKind, HubClient, Listing, Publish, RunningHub, ServerInfo};
+use libroxel_hub::{
+    AccountUpdate, Announcer, GameInfo, HostKind, HubClient, Listing, Profile, Publish, RunningHub,
+    ServerInfo,
+};
 use libroxel_instance::serde_json::{self, Value as Json, json};
 
 use crate::server::data_dir;
@@ -51,6 +54,17 @@ pub struct Platform {
     publishing: bool,
     published: Slot<String>,
     pub publish_status: Option<Result<String, String>>,
+    /// This player's account on the Hub: the name and words to claim, and
+    /// what the Hub last said.
+    pub account_name: String,
+    pub account_about: String,
+    /// The Hub the account was last looked up on.
+    account_hub: Option<String>,
+    account_found: Slot<Option<Profile>>,
+    account_saved: Slot<String>,
+    account_busy: bool,
+    pub account: Option<Profile>,
+    pub account_status: Option<Result<String, String>>,
 }
 
 impl Default for Platform {
@@ -77,6 +91,14 @@ impl Default for Platform {
             publishing: false,
             published: Arc::default(),
             publish_status: None,
+            account_name: String::new(),
+            account_about: String::new(),
+            account_hub: None,
+            account_found: Arc::default(),
+            account_saved: Arc::default(),
+            account_busy: false,
+            account: None,
+            account_status: None,
         }
     }
 }
@@ -155,6 +177,26 @@ impl Platform {
                 Err(e) => self.games_error = Some(e),
             }
         }
+        if let Some(result) = self.account_found.lock().unwrap().take() {
+            self.account_busy = false;
+            match result {
+                Ok(Some(profile)) => {
+                    self.account_name = profile.name.clone();
+                    self.account_about = profile.about.clone();
+                    self.account = Some(profile);
+                }
+                Ok(None) => self.account = None,
+                Err(e) => self.account_status = Some(Err(e)),
+            }
+        }
+        if let Some(result) = self.account_saved.lock().unwrap().take() {
+            self.account_busy = false;
+            if result.is_ok() {
+                // Look again, for the games and the name as the Hub has it.
+                self.account_hub = None;
+            }
+            self.account_status = Some(result);
+        }
         if let Some(result) = self.published.lock().unwrap().take() {
             self.publishing = false;
             self.publish_status = Some(result);
@@ -202,6 +244,14 @@ impl Platform {
             let hub = client.url().to_owned();
             let mut known = read_published();
             let mine = known.get(&key).filter(|m| m["hub"] == hub.as_str());
+            let me = crate::identity().ok();
+            let signed = |game: &mut Publish| {
+                // Signed, so the list shows our account name as the author.
+                if let Some(me) = &me {
+                    game.author_id = Some(me.player_id());
+                    game.author_signature = Some(me.sign(&libroxel_hub::publish_message(&game.secret)));
+                }
+            };
             let mut game = Publish {
                 game_id: mine.and_then(|m| m["game_id"].as_str()).map(str::to_owned),
                 secret: mine
@@ -211,12 +261,16 @@ impl Platform {
                 author,
                 description,
                 place,
+                author_id: None,
+                author_signature: None,
             };
+            signed(&mut game);
             let mut result = client.publish(&game);
             if result.as_ref().is_err_and(|e| e.contains("no published game")) {
                 // Taken down on the Hub since: publish it afresh.
                 game.game_id = None;
                 game.secret = libroxel_hub::new_secret();
+                signed(&mut game);
                 result = client.publish(&game);
             }
             let said = result.map(|done| {
@@ -231,6 +285,120 @@ impl Platform {
             });
             *out.lock().unwrap() = Some(said);
         });
+    }
+
+    /// Looks up this player's account on the Hub, once for each Hub.
+    pub fn look_up_account(&mut self) {
+        if self.account_busy || self.account_hub.as_deref() == Some(self.hub_address.as_str()) {
+            return;
+        }
+        self.account_hub = Some(self.hub_address.clone());
+        self.account_busy = true;
+        let client = self.client();
+        let out = self.account_found.clone();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| client.profile(&me.player_id()));
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    /// Claims the account name (or saves changes), with `look` as the avatar.
+    fn save_account(&mut self, look: Json) {
+        if self.account_busy {
+            return;
+        }
+        self.account_busy = true;
+        self.account_status = None;
+        let client = self.client();
+        let (name, about) = (self.account_name.trim().to_owned(), self.account_about.trim().to_owned());
+        let out = self.account_saved.clone();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| {
+                let player_id = me.player_id();
+                let time = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs() as i64);
+                let message = libroxel_hub::account_message(&player_id, &name, &about, &look, time);
+                let account = AccountUpdate {
+                    signature: me.sign(&message),
+                    player_id,
+                    name: name.clone(),
+                    about,
+                    look,
+                    time,
+                };
+                client.update_account(&account)?;
+                Ok(format!("Saved. You are {name} on {}.", client.url()))
+            });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    /// The account part of the Avatar tab. `look` is the avatar as saved.
+    pub fn account_ui(&mut self, ui: &mut egui::Ui, look: Json) {
+        self.look_up_account();
+        ui.label(RichText::new("Your account").size(18.0).strong());
+        ui.label(
+            RichText::new(format!(
+                "Claim a name on the Hub at {}. Games you publish then show it, and others can find your page. \
+                 It belongs to the identity key on this computer, so keep that file safe.",
+                self.hub_address
+            ))
+            .color(Color32::from_rgb(160, 168, 190)),
+        );
+        ui.add_space(6.0);
+        egui::Grid::new("account").num_columns(2).show(ui, |ui| {
+            ui.label("Name");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.account_name)
+                    .char_limit(20)
+                    .hint_text("3 to 20 letters"),
+            );
+            ui.end_row();
+            ui.label("About you");
+            ui.add(egui::TextEdit::multiline(&mut self.account_about).desired_rows(2).char_limit(300));
+            ui.end_row();
+        });
+        let name = self.account_name.trim().to_owned();
+        let valid = libroxel_hub::valid_account_name(&name);
+        ui.horizontal(|ui| {
+            let label = if self.account.is_some() { "Save changes" } else { "Claim this name" };
+            if ui.add_enabled(valid && !self.account_busy, egui::Button::new(label)).clicked() {
+                self.save_account(look);
+            }
+            if self.account_busy {
+                ui.label("⏳");
+            }
+        });
+        if !name.is_empty() && !valid {
+            ui.colored_label(
+                Color32::from_rgb(255, 200, 110),
+                "A name is 3 to 20 letters, digits or underscores.",
+            );
+        }
+        match &self.account_status {
+            Some(Ok(said)) => {
+                ui.colored_label(Color32::from_rgb(120, 220, 120), said);
+            }
+            Some(Err(why)) => {
+                ui.colored_label(Color32::from_rgb(255, 120, 110), why);
+            }
+            None => {}
+        }
+        if let Some(profile) = &self.account {
+            let games = match profile.games.len() {
+                0 => "no published games yet".to_owned(),
+                1 => "1 published game".to_owned(),
+                n => format!("{n} published games"),
+            };
+            ui.label(format!("Your page on this Hub: {} · {games}", profile.name));
+            for game in &profile.games {
+                ui.label(format!(
+                    "  • {} (version {}, played {} times)",
+                    game.title, game.version, game.plays
+                ));
+            }
+        }
     }
 
     /// Whether a publish is on its way.
@@ -296,6 +464,7 @@ impl Platform {
             ui.label(format!("⏳ Getting {title}…"));
         }
         let mut chosen = None;
+        let mut search = None;
         egui::ScrollArea::vertical().id_salt("published").max_height(300.0).show(ui, |ui| {
             egui::Grid::new("published-games").num_columns(4).striped(true).spacing([16.0, 6.0]).show(
                 ui,
@@ -314,7 +483,13 @@ impl Platform {
                             format!("{}\n\nVersion {}", game.description, game.version)
                         };
                         ui.label(&game.title).on_hover_text(about);
-                        ui.label(&game.author);
+                        let by = ui.link(&game.author);
+                        if by.clicked() {
+                            search = Some(game.author.clone());
+                        }
+                        if game.author_id.is_some() {
+                            by.on_hover_text("Their account on this Hub. Click for all their games");
+                        }
                         ui.label(game.plays.to_string());
                         ui.horizontal(|ui| {
                             let free = self.downloading.is_none();
@@ -336,6 +511,19 @@ impl Platform {
         });
         if let Some((game, host)) = chosen {
             self.download(&game, host);
+        }
+        if let Some(author) = search {
+            self.search = author;
+            self.refresh();
+        }
+        if !self.search.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label(format!("Showing games matching “{}”", self.search));
+                if ui.small_button("Show all").clicked() {
+                    self.search.clear();
+                    self.refresh();
+                }
+            });
         }
     }
 

@@ -141,6 +141,13 @@ The first build compiles Bevy and takes a while. After that it is quick.
   in `~/.config/libroxel/published.json`. Games stay published for as long
   as the Hub keeps running, so publish to a Hub on a computer that stays on
   (`libroxel hub`) if you want games to be there when you're not.
+- **Accounts:** the home screen's **👤 Avatar** tab has **Your account**:
+  claim a name on the Hub (3 to 20 letters, digits or underscores, one per
+  Hub) and say a little about yourself. The account belongs to your
+  identity key: every change is signed with it, so no one else can change
+  it or publish as you. Games you publish show your account name, and
+  clicking an author in Online lists all their games. Your account name is
+  also the name you play as, unless you type another.
 - **Editing together:** **Together → Edit together… → Share this game**
   lets others edit the game you have open, live, while you work on it. Send
   them the code from **📋 Copy edit code** (or, on your own network, your

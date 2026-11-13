@@ -11,6 +11,12 @@
 //! one needing to be online. Whoever publishes a game gets a secret back;
 //! publishing again with the same id and secret puts out a new version.
 //!
+//! Players can also claim an **account**: a name (unique on that Hub), a
+//! few words about themselves and how their avatar looks, tied to their
+//! player id (the public half of the identity key on their computer).
+//! Every change is signed with that key, so no one else can change it, and
+//! games published with a signature show their author's account name.
+//!
 //! [`HubClient`] is the blocking client the editor and servers use.
 
 use std::net::SocketAddr;
@@ -145,6 +151,90 @@ pub struct Publish {
     pub description: String,
     /// The saved place (`.lrx` text).
     pub place: String,
+    /// The publisher's player id, to show their account name as the author.
+    #[serde(default)]
+    pub author_id: Option<String>,
+    /// [`publish_message`] signed with that player's identity key.
+    #[serde(default)]
+    pub author_signature: Option<String>,
+}
+
+/// What a publisher signs to show a game is theirs: its secret, which only
+/// they know.
+pub fn publish_message(secret: &str) -> Vec<u8> {
+    format!("libroxel publish\n{secret}").into_bytes()
+}
+
+/// Claiming or changing an account.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AccountUpdate {
+    pub player_id: String,
+    /// 3 to 20 letters, digits or underscores, unique on the Hub (whatever the case).
+    pub name: String,
+    pub about: String,
+    /// How their avatar looks, as the app saves it.
+    pub look: serde_json::Value,
+    /// When it was signed, in seconds since 1970. Each change must be newer
+    /// than the last.
+    pub time: i64,
+    /// [`account_message`] signed with the player's identity key.
+    pub signature: String,
+}
+
+/// What a player signs to change their account.
+pub fn account_message(
+    player_id: &str,
+    name: &str,
+    about: &str,
+    look: &serde_json::Value,
+    time: i64,
+) -> Vec<u8> {
+    format!("libroxel account\n{player_id}\n{name}\n{about}\n{look}\n{time}").into_bytes()
+}
+
+/// Whether `name` can be an account's name.
+pub fn valid_account_name(name: &str) -> bool {
+    (3..=20).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// A player's public page.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Profile {
+    pub player_id: String,
+    pub name: String,
+    pub about: String,
+    pub look: serde_json::Value,
+    /// Seconds since they made the account.
+    pub joined_secs_ago: i64,
+    /// The games they published.
+    pub games: Vec<GameInfo>,
+}
+
+/// A player found by name.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Person {
+    pub player_id: String,
+    pub name: String,
+    pub about: String,
+}
+
+/// Signs `message` with an identity's secret key (32 bytes), as text.
+pub fn sign(secret_key: &[u8; 32], message: &[u8]) -> String {
+    let key = iroh_base::SecretKey::from_bytes(secret_key);
+    data_encoding::HEXLOWER.encode(&key.sign(message).to_bytes())
+}
+
+/// The player id of an identity's secret key (32 bytes).
+pub fn player_id_of(secret_key: &[u8; 32]) -> String {
+    iroh_base::SecretKey::from_bytes(secret_key).public().to_string()
+}
+
+/// Whether `signature` is `message` signed by the player `player_id`.
+pub fn verify(player_id: &str, message: &[u8], signature: &str) -> bool {
+    let Ok(key) = player_id.parse::<iroh_base::PublicKey>() else { return false };
+    let Ok(bytes) = data_encoding::HEXLOWER.decode(signature.as_bytes()) else { return false };
+    let Ok(bytes) = <[u8; 64]>::try_from(bytes.as_slice()) else { return false };
+    key.verify(message, &iroh_base::Signature::from_bytes(&bytes)).is_ok()
 }
 
 /// What publishing answers.
@@ -160,7 +250,11 @@ pub struct Published {
 pub struct GameInfo {
     pub game_id: String,
     pub title: String,
+    /// Their account name if the game is signed by someone with one.
     pub author: String,
+    /// The author's player id, when the game is signed.
+    #[serde(default)]
+    pub author_id: Option<String>,
     pub description: String,
     pub version: u32,
     /// How many times it has been downloaded.
@@ -232,9 +326,19 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
             plays       INTEGER NOT NULL,
             created     INTEGER NOT NULL,
             updated     INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS accounts (
+            player_id   TEXT PRIMARY KEY,
+            name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            about       TEXT NOT NULL,
+            look        TEXT NOT NULL,
+            signed_at   INTEGER NOT NULL,
+            created     INTEGER NOT NULL
         );",
     )
     .map_err(|e| format!("could not set up the Hub database: {e}"))?;
+    // Hubs from before accounts: games get an author id (this fails, harmlessly, once it has one).
+    let _ = db.execute("ALTER TABLE games ADD COLUMN author_id TEXT", []);
     Ok(db)
 }
 
@@ -249,6 +353,8 @@ pub fn router(db: Connection) -> Router {
         .route("/games", get(list_games).post(publish))
         .route("/games/{id}", get(game_info).delete(unpublish))
         .route("/games/{id}/place", get(download))
+        .route("/accounts", get(find_people).post(update_account))
+        .route("/accounts/{id}", get(profile))
         // Room for a big place, written out as JSON inside a JSON request.
         .layer(axum::extract::DefaultBodyLimit::max(MAX_PLACE * 2 + 64 * 1024))
         .with_state(db)
@@ -284,7 +390,10 @@ fn new_game_id() -> String {
     data_encoding::BASE32_NOPAD.encode(&bytes).to_ascii_lowercase()
 }
 
-const GAME_COLUMNS: &str = "game_id, title, author, description, version, plays, LENGTH(place), updated";
+const GAME_COLUMNS: &str =
+    "g.game_id, g.title, COALESCE(a.name, g.author), g.description, g.version, g.plays,
+    LENGTH(g.place), g.updated, g.author_id";
+const GAMES: &str = "games g LEFT JOIN accounts a ON a.player_id = g.author_id";
 
 fn game_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<GameInfo> {
     Ok(GameInfo {
@@ -296,6 +405,7 @@ fn game_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<GameInfo> {
         plays: r.get::<_, i64>(5)? as u32,
         size: r.get::<_, i64>(6)? as u64,
         updated_secs_ago: now - r.get::<_, i64>(7)?,
+        author_id: r.get(8)?,
     })
 }
 
@@ -305,9 +415,9 @@ async fn list_games(State(db): State<Db>, Query(query): Query<ListQuery>) -> Jso
     let now = now();
     let mut statement = db
         .prepare(&format!(
-            "SELECT {GAME_COLUMNS} FROM games
-             WHERE title LIKE ?1 OR author LIKE ?1 OR description LIKE ?1
-             ORDER BY plays DESC, updated DESC LIMIT 200"
+            "SELECT {GAME_COLUMNS} FROM {GAMES}
+             WHERE g.title LIKE ?1 OR COALESCE(a.name, g.author) LIKE ?1 OR g.description LIKE ?1
+             ORDER BY g.plays DESC, g.updated DESC LIMIT 200"
         ))
         .expect("the games query is valid");
     let rows = statement
@@ -320,7 +430,7 @@ async fn list_games(State(db): State<Db>, Query(query): Query<ListQuery>) -> Jso
 async fn game_info(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<Json<GameInfo>, StatusCode> {
     let db = db.lock().unwrap();
     let now = now();
-    db.query_row(&format!("SELECT {GAME_COLUMNS} FROM games WHERE game_id = ?1"), params![id], |r| {
+    db.query_row(&format!("SELECT {GAME_COLUMNS} FROM {GAMES} WHERE g.game_id = ?1"), params![id], |r| {
         game_row(r, now)
     })
     .optional()
@@ -358,6 +468,15 @@ async fn publish(
     if !serde_json::from_str::<serde_json::Value>(&game.place).is_ok_and(|v| v.is_object()) {
         return bad("that is not a saved game");
     }
+    let author_id = match (&game.author_id, &game.author_signature) {
+        (Some(id), Some(signature)) => {
+            if !verify(id, &publish_message(&game.secret), signature) {
+                return Err((StatusCode::FORBIDDEN, "the author's signature does not match".into()));
+            }
+            Some(id.clone())
+        }
+        _ => None,
+    };
     let db = db.lock().unwrap();
     let now = now();
     let title = clip(&game.title);
@@ -380,8 +499,8 @@ async fn publish(
             }
             db.execute(
                 "UPDATE games SET title = ?2, author = ?3, description = ?4, place = ?5, version = ?6,
-                     updated = ?7 WHERE game_id = ?1",
-                params![id, title, author, description, game.place, version + 1, now],
+                     updated = ?7, author_id = ?8 WHERE game_id = ?1",
+                params![id, title, author, description, game.place, version + 1, now, author_id],
             )
             .map_err(internal)?;
             Ok(Json(Published { game_id: id.to_owned(), version: version as u32 + 1 }))
@@ -389,14 +508,113 @@ async fn publish(
         None => {
             let id = new_game_id();
             db.execute(
-                "INSERT INTO games (game_id, secret, title, author, description, place, version, plays, created, updated)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, 0, ?7, ?7)",
-                params![id, game.secret, title, author, description, game.place, now],
+                "INSERT INTO games (game_id, secret, title, author, description, place, version, plays, created,
+                     updated, author_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, 0, ?7, ?7, ?8)",
+                params![id, game.secret, title, author, description, game.place, now, author_id],
             )
             .map_err(internal)?;
             Ok(Json(Published { game_id: id, version: 1 }))
         }
     }
+}
+
+async fn update_account(
+    State(db): State<Db>,
+    Json(account): Json<AccountUpdate>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
+    if !valid_account_name(&account.name) {
+        return bad("a name is 3 to 20 letters, digits or underscores");
+    }
+    if account.about.chars().count() > MAX_DESCRIPTION {
+        return bad("that is too much to say about yourself");
+    }
+    let about = account.about.clone();
+    let look = account.look.to_string();
+    if look.len() > 8 * 1024 {
+        return bad("that look is too big");
+    }
+    let message =
+        account_message(&account.player_id, &account.name, &account.about, &account.look, account.time);
+    if !verify(&account.player_id, &message, &account.signature) {
+        return Err((StatusCode::FORBIDDEN, "the signature does not match that player".into()));
+    }
+    let now = now();
+    if (account.time - now).abs() > 24 * 60 * 60 {
+        return bad("this computer's clock is too far off");
+    }
+    let db = db.lock().unwrap();
+    let internal = |e: rusqlite::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    let last: Option<i64> = db
+        .query_row("SELECT signed_at FROM accounts WHERE player_id = ?1", params![account.player_id], |r| {
+            r.get(0)
+        })
+        .optional()
+        .map_err(internal)?;
+    if last.is_some_and(|last| account.time <= last) {
+        return Err((StatusCode::CONFLICT, "a newer change to that account is already here".into()));
+    }
+    let taken: Option<String> = db
+        .query_row("SELECT player_id FROM accounts WHERE name = ?1", params![account.name], |r| r.get(0))
+        .optional()
+        .map_err(internal)?;
+    if taken.is_some_and(|owner| owner != account.player_id) {
+        return Err((StatusCode::CONFLICT, format!("someone already has the name {}", account.name)));
+    }
+    db.execute(
+        "INSERT INTO accounts (player_id, name, about, look, signed_at, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(player_id) DO UPDATE SET name = ?2, about = ?3, look = ?4, signed_at = ?5",
+        params![account.player_id, account.name, about, look, account.time, now],
+    )
+    .map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn find_people(State(db): State<Db>, Query(query): Query<ListQuery>) -> Json<Vec<Person>> {
+    let db = db.lock().unwrap();
+    let pattern = format!("%{}%", query.q.unwrap_or_default().trim().replace(['%', '_'], ""));
+    let mut statement = db
+        .prepare("SELECT player_id, name, about FROM accounts WHERE name LIKE ?1 ORDER BY name LIMIT 100")
+        .expect("the people query is valid");
+    let rows = statement
+        .query_map(params![pattern], |r| {
+            Ok(Person { player_id: r.get(0)?, name: r.get(1)?, about: r.get(2)? })
+        })
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default();
+    Json(rows)
+}
+
+async fn profile(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<Json<Profile>, StatusCode> {
+    let db = db.lock().unwrap();
+    let now = now();
+    let found: Option<(String, String, String, String, i64)> = db
+        .query_row(
+            "SELECT player_id, name, about, look, created FROM accounts WHERE player_id = ?1 OR name = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let (player_id, name, about, look, created) = found.ok_or(StatusCode::NOT_FOUND)?;
+    let mut statement = db
+        .prepare(&format!(
+            "SELECT {GAME_COLUMNS} FROM {GAMES} WHERE g.author_id = ?1 ORDER BY g.plays DESC, g.updated DESC"
+        ))
+        .expect("the profile query is valid");
+    let games = statement
+        .query_map(params![player_id], |r| game_row(r, now))
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default();
+    Ok(Json(Profile {
+        player_id,
+        name,
+        about,
+        look: serde_json::from_str(&look).unwrap_or(serde_json::Value::Null),
+        joined_secs_ago: now - created,
+        games,
+    }))
 }
 
 async fn unpublish(
@@ -690,6 +908,54 @@ impl HubClient {
             .call()
             .and_then(|mut r| r.body_mut().with_config().limit(MAX_PLACE as u64 + 1).read_to_string())
             .map_err(|e| format!("could not download the game: {e}"))
+    }
+
+    /// Claims or changes an account.
+    pub fn update_account(&self, account: &AccountUpdate) -> Result<(), String> {
+        self.agent
+            .post(format!("{}/accounts", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(account)
+            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .and_then(|mut r| {
+                if r.status().is_success() {
+                    Ok(())
+                } else {
+                    Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+                }
+            })
+    }
+
+    /// A player's page, by player id or account name.
+    pub fn profile(&self, who: &str) -> Result<Option<Profile>, String> {
+        let result = self
+            .agent
+            .get(format!("{}/accounts/{who}", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call()
+            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))?;
+        let mut result = result;
+        match result.status().as_u16() {
+            404 => Ok(None),
+            s if (200..300).contains(&s) => {
+                result.body_mut().read_json().map(Some).map_err(|e| e.to_string())
+            }
+            s => Err(format!("the Hub said {s}")),
+        }
+    }
+
+    /// Players whose names match `search`.
+    pub fn people(&self, search: &str) -> Result<Vec<Person>, String> {
+        self.agent
+            .get(format!("{}/accounts", self.base))
+            .query("q", search)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
     }
 
     /// Takes a published game down.

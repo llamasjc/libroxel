@@ -216,6 +216,13 @@ impl Menu {
             self.scanned = true;
         }
         self.servers.retain(|s| !s.finished() || !s.lines().is_empty());
+        // Play as your account's name unless you picked another.
+        platform.look_up_account();
+        if self.name == "Player"
+            && let Some(account) = &platform.account
+        {
+            self.name = account.name.clone();
+        }
         let screen = ctx.content_rect();
         let mut ui = egui::Ui::new(
             ctx.clone(),
@@ -261,7 +268,7 @@ impl Menu {
                     Tab::Create => self.create_tab(ui),
                     Tab::Host => self.host_tab(ui, platform),
                     Tab::Avatar => {
-                        self.avatar_tab(ui);
+                        self.avatar_tab(ui, platform);
                         None
                     }
                 };
@@ -289,7 +296,7 @@ impl Menu {
         })
     }
 
-    fn avatar_tab(&mut self, ui: &mut egui::Ui) {
+    fn avatar_tab(&mut self, ui: &mut egui::Ui, platform: &mut Platform) {
         let mut look = self.look();
         ui.label(RichText::new("Your avatar").size(22.0).strong());
         ui.label(
@@ -328,6 +335,8 @@ impl Menu {
                 }
             });
         });
+        ui.add_space(24.0);
+        platform.account_ui(ui, look.to_json());
         if Some(look) != self.look {
             self.look = Some(look);
             let saved = std::fs::create_dir_all(data_dir())

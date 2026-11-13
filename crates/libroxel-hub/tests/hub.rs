@@ -95,6 +95,8 @@ fn games_are_published_found_downloaded_and_updated() {
         author: "Kai".into(),
         description: "Climb before the lava does".into(),
         place: place.into(),
+        author_id: None,
+        author_signature: None,
     };
     let first = client.publish(&game(None, &secret, r#"{"version":1,"root":{}}"#)).unwrap();
     assert_eq!(first.version, 1);
@@ -125,4 +127,67 @@ fn games_are_published_found_downloaded_and_updated() {
     client.unpublish(&first.game_id, &secret).unwrap();
     assert!(client.games("").unwrap().is_empty());
     assert!(client.download(&first.game_id).is_err());
+}
+
+#[test]
+fn players_claim_names_and_their_signed_games_show_them() {
+    use libroxel_hub::{AccountUpdate, Publish, account_message, player_id_of, publish_message, sign};
+    let hub = start("127.0.0.1:0".parse().unwrap(), None).unwrap();
+    let client = HubClient::new(&hub.url());
+    let (kai_key, ana_key) = ([7u8; 32], [9u8; 32]);
+    let (kai, ana) = (player_id_of(&kai_key), player_id_of(&ana_key));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let account = |key: &[u8; 32], id: &str, name: &str, time: i64| {
+        let look = serde_json::json!({ "hat": "Crown" });
+        AccountUpdate {
+            player_id: id.into(),
+            name: name.into(),
+            about: "I build obbies".into(),
+            signature: sign(key, &account_message(id, name, "I build obbies", &look, time)),
+            look,
+            time,
+        }
+    };
+    client.update_account(&account(&kai_key, &kai, "Kai", now)).unwrap();
+    // Names are one per Hub, whatever the case, and checked.
+    assert!(client.update_account(&account(&ana_key, &ana, "kai", now)).unwrap_err().contains("already"));
+    assert!(client.update_account(&account(&ana_key, &ana, "a b", now)).is_err());
+    // No one can change someone else's account, or bring back an old change.
+    let mut forged = account(&ana_key, &kai, "Kai2", now + 1);
+    forged.signature = sign(&ana_key, b"anything");
+    assert!(client.update_account(&forged).is_err());
+    assert!(client.update_account(&account(&kai_key, &kai, "Kai", now)).is_err());
+    client.update_account(&account(&kai_key, &kai, "KaiBuilds", now + 1)).unwrap();
+
+    // A game signed by Kai shows his account name, and his page lists it.
+    let secret = new_secret();
+    let game = Publish {
+        game_id: None,
+        secret: secret.clone(),
+        title: "Lava Tower".into(),
+        author: "whatever".into(),
+        description: String::new(),
+        place: "{}".into(),
+        author_id: Some(kai.clone()),
+        author_signature: Some(sign(&kai_key, &publish_message(&secret))),
+    };
+    client.publish(&game).unwrap();
+    let listed = &client.games("KaiBuilds").unwrap()[0];
+    assert_eq!(listed.author, "KaiBuilds");
+    assert_eq!(listed.author_id.as_deref(), Some(kai.as_str()));
+    let page = client.profile("kaibuilds").unwrap().expect("found by name");
+    assert_eq!(page.player_id, kai);
+    assert_eq!(page.look["hat"], "Crown");
+    assert_eq!(page.games.len(), 1);
+    assert_eq!(client.people("kai").unwrap().len(), 1);
+    assert!(client.profile("nobody").unwrap().is_none());
+
+    // Claiming to be Kai without his key doesn't work.
+    let other = new_secret();
+    let fake = Publish {
+        secret: other.clone(),
+        author_signature: Some(sign(&ana_key, &publish_message(&other))),
+        ..game
+    };
+    assert!(client.publish(&fake).is_err());
 }

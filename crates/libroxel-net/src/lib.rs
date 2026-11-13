@@ -83,6 +83,12 @@ impl Identity {
     pub fn player_id(&self) -> String {
         self.key.public().to_string()
     }
+
+    /// `message` signed with this identity's secret key, as hex, for
+    /// anyone with the player id to check.
+    pub fn sign(&self, message: &[u8]) -> String {
+        data_encoding::HEXLOWER.encode(&self.key.sign(message).to_bytes())
+    }
 }
 
 impl fmt::Debug for Identity {
