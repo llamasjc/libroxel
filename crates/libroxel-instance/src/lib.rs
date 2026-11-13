@@ -167,6 +167,12 @@ pub enum ClassKind {
     /// Lets Attachment1's part turn about Attachment0's X axis, freely,
     /// driven by a motor, or held at an angle by a servo.
     HingeConstraint,
+    /// Lets Attachment1's part slide along Attachment0's X axis (and not
+    /// turn), between LowerLimit and UpperLimit when LimitsEnabled.
+    PrismaticConstraint,
+    /// Holds Attachment1 on Attachment0 while its part turns any way, like
+    /// a shoulder.
+    BallSocketConstraint,
     /// Spins Attachment0's part at AngularVelocity, with up to MaxTorque.
     AngularVelocity,
     /// Inside a part: the older way to make it spin at AngularVelocity.
@@ -285,6 +291,8 @@ impl ClassKind {
         ClassKind::BodyPosition,
         ClassKind::BodyForce,
         ClassKind::HingeConstraint,
+        ClassKind::PrismaticConstraint,
+        ClassKind::BallSocketConstraint,
         ClassKind::AngularVelocity,
         ClassKind::BodyAngularVelocity,
         ClassKind::Terrain,
@@ -495,6 +503,18 @@ impl ClassKind {
             Property::ServoMaxTorque,
             Property::CurrentAngle,
         ];
+        const PRISMATIC: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::Attachment0,
+            Property::Attachment1,
+            Property::LimitsEnabled,
+            Property::LowerLimit,
+            Property::UpperLimit,
+            Property::CurrentPosition,
+        ];
+        const BALL_SOCKET: &[Property] =
+            &[Property::Name, Property::Enabled, Property::Attachment0, Property::Attachment1];
         const ANGULAR_VELOCITY: &[Property] = &[
             Property::Name,
             Property::Enabled,
@@ -838,6 +858,8 @@ impl ClassKind {
             ClassKind::BodyPosition => BODY_POSITION,
             ClassKind::BodyForce => BODY_FORCE,
             ClassKind::HingeConstraint => HINGE,
+            ClassKind::PrismaticConstraint => PRISMATIC,
+            ClassKind::BallSocketConstraint => BALL_SOCKET,
             ClassKind::AngularVelocity => ANGULAR_VELOCITY,
             ClassKind::BodyAngularVelocity => BODY_ANGULAR_VELOCITY,
             ClassKind::Terrain => TERRAIN,
@@ -1016,6 +1038,10 @@ impl ClassKind {
             }),
             Property::BodyDamping => PropertyValue::Number(1_250.0),
             Property::ActuatorType => PropertyValue::Enum(EnumValue::ActuatorType(ActuatorType::None)),
+            Property::LimitsEnabled => PropertyValue::Bool(false),
+            Property::LowerLimit => PropertyValue::Number(0.0),
+            Property::UpperLimit => PropertyValue::Number(5.0),
+            Property::CurrentPosition => PropertyValue::Number(0.0),
             Property::MotorVelocity | Property::TargetAngle | Property::CurrentAngle => {
                 PropertyValue::Number(0.0)
             }
@@ -1148,6 +1174,8 @@ impl ClassKind {
             ClassKind::BodyPosition => "body_position",
             ClassKind::BodyForce => "body_force",
             ClassKind::HingeConstraint => "hinge_constraint",
+            ClassKind::PrismaticConstraint => "prismatic_constraint",
+            ClassKind::BallSocketConstraint => "ball_socket_constraint",
             ClassKind::AngularVelocity => "angular_velocity",
             ClassKind::BodyAngularVelocity => "body_angular_velocity",
             ClassKind::Terrain => "terrain",

@@ -889,6 +889,11 @@ impl PlaySession {
         &self.runtime
     }
 
+    /// The physics state (velocities and the like), to give parts a push.
+    pub fn physics_mut(&mut self) -> &mut Physics {
+        &mut self.physics
+    }
+
     /// The local player's character.
     pub fn character(&self) -> Option<Character> {
         self.local().and_then(|i| self.avatars[i].character)

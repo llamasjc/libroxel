@@ -39,6 +39,11 @@ pub enum JointKind {
     /// motor, it is driven at a speed (radians a second) with up to a torque.
     /// A servo's motor also holds its part up against gravity.
     Hinge { motor: Option<(f32, f32)>, servo: bool },
+    /// Part 1 slides along frame 0's X axis without turning, between the
+    /// limits (studs from frame 0) if there are any.
+    Slider { limits: Option<(f32, f32)> },
+    /// The two frames' origins held together; part 1 turns any way.
+    Ball,
     /// The two frames' origins stay at most `length` apart.
     Rope { length: f32 },
     /// The two frames' origins pulled towards `length` apart, like a spring.
@@ -575,6 +580,8 @@ impl Rigid {
                 let f1 = at1 * pose_of(spec.frame1.0, spec.frame1.1);
                 let mut joint = match spec.kind {
                     JointKind::Hinge { .. } => GenericJoint::new(JointAxesMask::LOCKED_REVOLUTE_AXES),
+                    JointKind::Slider { .. } => GenericJoint::new(JointAxesMask::LOCKED_PRISMATIC_AXES),
+                    JointKind::Ball => GenericJoint::new(JointAxesMask::LOCKED_SPHERICAL_AXES),
                     JointKind::Rope { length } => RopeJoint::new(length.max(0.01)).data,
                     JointKind::Spring { length, stiffness, damping } => {
                         SpringJoint::new(length, stiffness, damping).data
@@ -617,6 +624,11 @@ impl Rigid {
                     );
                     joint.data.set_motor_max_force(JointAxis::AngX, torque);
                 }
+                JointKind::Slider { limits } => {
+                    let [lo, hi] = limits.map_or([-1e6, 1e6], |(lo, hi)| [lo, hi]);
+                    joint.data.set_limits(JointAxis::LinX, [lo, hi]);
+                }
+                JointKind::Ball => {}
                 JointKind::Rope { length } => {
                     joint.data.set_limits(JointAxis::LinX, [0.0, length.max(0.0)]);
                 }

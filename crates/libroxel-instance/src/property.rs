@@ -191,6 +191,14 @@ pub enum Property {
     ServoMaxTorque,
     /// On a hinge: the angle it's at now, in degrees (set while playing).
     CurrentAngle,
+    /// On a slider: whether it stops at LowerLimit and UpperLimit.
+    LimitsEnabled,
+    /// On a slider: the least it slides, in studs along its axis.
+    LowerLimit,
+    /// On a slider: the most it slides, in studs along its axis.
+    UpperLimit,
+    /// On a slider: how far along its axis it is now, in studs (set while playing).
+    CurrentPosition,
     /// On a spinner: the spin it aims for, in radians per second about each axis.
     AngularVelocity,
     /// On an angular velocity: the most turning force it has.
@@ -364,7 +372,7 @@ impl Property {
             Property::VectorVelocity | Property::Force | Property::Velocity | Property::BodyMaxForce => {
                 "Vec3"
             }
-            Property::RigidityEnabled => "bool",
+            Property::RigidityEnabled | Property::LimitsEnabled => "bool",
             Property::Lifetime | Property::Speed | Property::SpreadAngle => "Vec2",
             Property::Acceleration => "Vec3",
             Property::SecondaryColor
@@ -417,6 +425,9 @@ impl Property {
             | Property::AngularSpeed
             | Property::ServoMaxTorque
             | Property::CurrentAngle
+            | Property::LowerLimit
+            | Property::UpperLimit
+            | Property::CurrentPosition
             | Property::MaxTorque
             | Property::StudsPerTileU
             | Property::StudsPerTileV => "number",
@@ -625,6 +636,10 @@ impl Property {
         Property::AngularSpeed,
         Property::ServoMaxTorque,
         Property::CurrentAngle,
+        Property::LimitsEnabled,
+        Property::LowerLimit,
+        Property::UpperLimit,
+        Property::CurrentPosition,
         Property::AngularVelocity,
         Property::MaxTorque,
         Property::BodyMaxTorque,
@@ -798,6 +813,10 @@ impl Property {
             Property::AngularSpeed => "angular_speed",
             Property::ServoMaxTorque => "servo_max_torque",
             Property::CurrentAngle => "current_angle",
+            Property::LimitsEnabled => "limits_enabled",
+            Property::LowerLimit => "lower_limit",
+            Property::UpperLimit => "upper_limit",
+            Property::CurrentPosition => "current_position",
             Property::AngularVelocity => "angular_velocity",
             Property::MaxTorque => "max_torque",
             Property::BodyMaxTorque => "body_max_torque",

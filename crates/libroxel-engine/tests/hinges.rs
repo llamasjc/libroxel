@@ -371,3 +371,111 @@ fn front_wheels_on_steering_hinges_turn_a_car() {
     assert!((at.y - 2.0).abs() < 0.3, "{at:?}");
     assert!((angle(&shared, steering[0]) - 25.0).abs() < 1.0, "{}", angle(&shared, steering[0]));
 }
+
+fn constraint(
+    tree: &mut InstanceTree,
+    class: ClassKind,
+    a0: InstanceId,
+    a1: InstanceId,
+    props: &[(Property, PropertyValue)],
+) -> InstanceId {
+    let id = tree.create(class, "Constraint").unwrap();
+    tree.set(id, Property::Attachment0, PropertyValue::Ref(Some(a0))).unwrap();
+    tree.set(id, Property::Attachment1, PropertyValue::Ref(Some(a1))).unwrap();
+    for (p, v) in props {
+        tree.set(id, *p, v.clone()).unwrap();
+    }
+    tree.set_parent(id, Some(tree.workspace())).unwrap();
+    id
+}
+
+#[test]
+fn a_slider_drops_its_part_straight_down_to_its_lower_limit() {
+    let mut tree = world();
+    let post = part(&mut tree, "Post", Vec3::new(0.0, 10.0, 0.0), Vec3::ONE, true);
+    let block = part(&mut tree, "Block", Vec3::new(0.0, 8.0, 0.0), Vec3::ONE, false);
+    // X axis pointing up.
+    let up = Vec3::new(0.0, 0.0, 90.0);
+    let a0 = attach_facing(&mut tree, post, Vec3::ZERO, up);
+    let a1 = attach_facing(&mut tree, block, Vec3::ZERO, up);
+    let s = constraint(
+        &mut tree,
+        ClassKind::PrismaticConstraint,
+        a0,
+        a1,
+        &[
+            (Property::LimitsEnabled, PropertyValue::Bool(true)),
+            (Property::LowerLimit, PropertyValue::Number(-5.0)),
+            (Property::UpperLimit, PropertyValue::Number(0.0)),
+        ],
+    );
+    // Knocked sideways and spun, it still only slides.
+    let t = {
+        let mut session = start_on(tree, false).unwrap();
+        session.physics_mut().set_velocity(block, Vec3::new(8.0, 0.0, 3.0));
+        session.physics_mut().set_angular_velocity(block, Vec3::new(0.0, 5.0, 2.0));
+        let shared = session.runtime().tree().clone();
+        for _ in 0..120 {
+            session.step(DT, CharacterInput::default());
+        }
+        shared
+    };
+    let at = vec(&t, block, Property::Position);
+    assert!((at - Vec3::new(0.0, 5.0, 0.0)).length() < 0.1, "{at:?}");
+    assert!(vec(&t, block, Property::Orientation).length() < 1.0);
+    let slid = t.borrow().get_number(s, Property::CurrentPosition).unwrap();
+    assert!((slid + 5.0).abs() < 0.1, "{slid}");
+}
+
+#[test]
+fn a_spring_beside_a_slider_is_suspension() {
+    let mut tree = world();
+    // A loose car body resting on a wheel through a sprung slider.
+    let wheel = part(&mut tree, "Wheel", Vec3::new(0.0, 1.0, 0.0), Vec3::new(2.0, 2.0, 2.0), false);
+    let body = part(&mut tree, "Body", Vec3::new(0.0, 4.0, 0.0), Vec3::new(2.0, 1.0, 2.0), false);
+    let up = Vec3::new(0.0, 0.0, 90.0);
+    let a0 = attach_facing(&mut tree, wheel, Vec3::ZERO, up);
+    let a1 = attach_facing(&mut tree, body, Vec3::ZERO, up);
+    constraint(&mut tree, ClassKind::PrismaticConstraint, a0, a1, &[]);
+    constraint(
+        &mut tree,
+        ClassKind::SpringConstraint,
+        a0,
+        a1,
+        &[
+            (Property::FreeLength, PropertyValue::Number(3.0)),
+            (Property::Stiffness, PropertyValue::Number(2000.0)),
+            (Property::Damping, PropertyValue::Number(60.0)),
+        ],
+    );
+    let t = run(tree, 4.0);
+    // The body (mass 2.8) squashes the spring by its weight over the stiffness.
+    let gap = vec(&t, body, Property::Position).y - vec(&t, wheel, Property::Position).y;
+    let squash = 2.8 * 196.2 / 2000.0;
+    assert!((gap - (3.0 - squash)).abs() < 0.1, "gap {gap}");
+    assert!((vec(&t, wheel, Property::Position).y - 1.0).abs() < 0.1);
+}
+
+#[test]
+fn a_ball_socket_swings_any_way_and_keeps_its_length() {
+    let mut tree = world();
+    let hook = part(&mut tree, "Hook", Vec3::new(0.0, 20.0, 0.0), Vec3::ONE, true);
+    let bob = part(&mut tree, "Bob", Vec3::new(3.0, 20.0, 0.0), Vec3::ONE, false);
+    let a0 = attach(&mut tree, hook, Vec3::ZERO);
+    let a1 = attach(&mut tree, bob, Vec3::new(-3.0, 0.0, 0.0));
+    constraint(&mut tree, ClassKind::BallSocketConstraint, a0, a1, &[]);
+    let mut session = start_on(tree, false).unwrap();
+    // Pushed sideways as it starts, it swings out of the X-Y plane.
+    session.physics_mut().set_velocity(bob, Vec3::new(0.0, 0.0, 6.0));
+    let shared = session.runtime().tree().clone();
+    let (mut widest, mut lowest): (f32, f32) = (0.0, f32::MAX);
+    for _ in 0..60 {
+        session.step(DT, CharacterInput::default());
+        let at = vec(&shared, bob, Property::Position);
+        widest = widest.max(at.z.abs());
+        lowest = lowest.min(at.y);
+        assert!(((at - Vec3::new(0.0, 20.0, 0.0)).length() - 3.0).abs() < 0.05, "{at:?}");
+    }
+    assert!(widest > 0.5, "{widest}");
+    assert!(lowest < 18.0, "{lowest}");
+}

@@ -134,6 +134,8 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::BodyPosition,
     ClassKind::BodyForce,
     ClassKind::HingeConstraint,
+    ClassKind::PrismaticConstraint,
+    ClassKind::BallSocketConstraint,
     ClassKind::AngularVelocity,
     ClassKind::BodyAngularVelocity,
     ClassKind::Decal,
@@ -208,6 +210,8 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::RopeConstraint => "➰",
         ClassKind::SpringConstraint => "🌀",
         ClassKind::HingeConstraint => "🚪",
+        ClassKind::PrismaticConstraint => "↔",
+        ClassKind::BallSocketConstraint => "⚪",
         ClassKind::AngularVelocity | ClassKind::BodyAngularVelocity => "🔄",
         ClassKind::Terrain => "🗻",
         ClassKind::Decal => "🏷",
@@ -1306,6 +1310,15 @@ fn properties(
         ClassKind::HingeConstraint => Some(
             "Joins Attachment1's part to Attachment0's so it can only turn about Attachment0's X axis              (turn the attachment to aim it). ActuatorType None swings freely, Motor turns at              AngularVelocity radians a second, Servo turns to TargetAngle degrees at AngularSpeed.",
         ),
+        ClassKind::PrismaticConstraint => Some(
+            "Joins Attachment1's part to Attachment0's so it can only slide along Attachment0's X \
+             axis, without turning. With LimitsEnabled it stops at LowerLimit and UpperLimit studs. \
+             Add a SpringConstraint beside it for suspension.",
+        ),
+        ClassKind::BallSocketConstraint => Some(
+            "Holds Attachment1 on Attachment0 while its part turns freely any way, like a shoulder \
+             or a chain link.",
+        ),
         ClassKind::AngularVelocity => Some(
             "While playing, spins Attachment0's part at AngularVelocity (radians a second about X, Y              and Z), with up to MaxTorque. Unanchor the part first.",
         ),
@@ -2398,6 +2411,8 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     | ClassKind::BodyPosition
                     | ClassKind::BodyForce
                     | ClassKind::HingeConstraint
+                    | ClassKind::PrismaticConstraint
+                    | ClassKind::BallSocketConstraint
                     | ClassKind::AngularVelocity
                     | ClassKind::BodyAngularVelocity
                     | ClassKind::Decal

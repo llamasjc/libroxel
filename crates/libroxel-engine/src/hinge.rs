@@ -13,6 +13,13 @@
 //! `MotorVelocity` radians a second with up to `MotorMaxTorque`; a Servo
 //! turns it to `TargetAngle` degrees at up to `AngularSpeed`, with up to
 //! `ServoMaxTorque`.
+//!
+//! Sliders and ball joints are handled here too. A `PrismaticConstraint`
+//! lets Attachment1's part slide along Attachment0's X axis without
+//! turning (between `LowerLimit` and `UpperLimit` studs when
+//! `LimitsEnabled`), and reports how far along it is as `CurrentPosition`:
+//! with a spring beside it, that is suspension. A `BallSocketConstraint`
+//! holds the two attachments together and lets the part turn any way.
 
 use std::collections::HashMap;
 
@@ -30,6 +37,15 @@ use crate::weld::assemblies;
 pub struct Hinges {
     /// Each working hinge, and its two attachments.
     working: HashMap<InstanceId, (InstanceId, InstanceId)>,
+    /// Each working slider, and its two attachments.
+    sliders: HashMap<InstanceId, (InstanceId, InstanceId)>,
+}
+
+/// How far Attachment1 is along Attachment0's X axis, in studs.
+fn slid(tree: &InstanceTree, a0: InstanceId, a1: InstanceId) -> Option<f32> {
+    let (f0, _) = attachment_frame(tree, a0)?;
+    let (f1, _) = attachment_frame(tree, a1)?;
+    Some((f1.pos - f0.pos).dot(f0.rot.x))
 }
 
 fn pose(tree: &InstanceTree, part: InstanceId) -> Option<(Vec3, Vec3)> {
@@ -153,16 +169,65 @@ impl Hinges {
             });
             self.working.insert(hinge, (a0, a1));
         }
+        self.sliders.clear();
+        for class in [ClassKind::PrismaticConstraint, ClassKind::BallSocketConstraint] {
+            for id in tree.descendants_of_class(ws, class) {
+                if tree.get_bool(id, Property::Enabled) != Some(true) {
+                    continue;
+                }
+                let (Some(a0), Some(a1)) =
+                    (tree.get_ref(id, Property::Attachment0), tree.get_ref(id, Property::Attachment1))
+                else {
+                    continue;
+                };
+                let (Some((l0, p0)), Some((l1, p1))) =
+                    (attachment_local(tree, a0), attachment_local(tree, a1))
+                else {
+                    continue;
+                };
+                let character = |p: InstanceId| tree.name(p) == Ok(names::character::ROOT_PART);
+                if p0 == p1 || welded(p0, p1) || character(p0) || character(p1) {
+                    continue;
+                }
+                let kind = if class == ClassKind::PrismaticConstraint {
+                    self.sliders.insert(id, (a0, a1));
+                    let limits = (tree.get_bool(id, Property::LimitsEnabled) == Some(true)).then(|| {
+                        let lo = number(tree, id, Property::LowerLimit);
+                        let hi = number(tree, id, Property::UpperLimit);
+                        (lo.min(hi), hi.max(lo))
+                    });
+                    JointKind::Slider { limits }
+                } else {
+                    JointKind::Ball
+                };
+                joints.push(JointSpec {
+                    id,
+                    part0: p0,
+                    part1: p1,
+                    frame0: frame(l0),
+                    frame1: frame(l1),
+                    kind,
+                });
+            }
+        }
         physics.set_joints(joints);
     }
 
-    /// Reports every hinge's angle. Call after the physics step.
+    /// Reports every hinge's angle and slider's position. Call after the
+    /// physics step.
     pub fn after_physics(&mut self, tree: &mut InstanceTree) {
         for (&hinge, &(a0, a1)) in &self.working {
             let Some(angle) = angle_of(tree, a0, a1) else { continue };
             let degrees = (angle.to_degrees() * 1000.0).round() as f64 / 1000.0;
             if tree.get_number(hinge, Property::CurrentAngle) != Some(degrees) {
                 let _ = tree.set(hinge, Property::CurrentAngle, PropertyValue::Number(degrees));
+            }
+        }
+        for (&slider, &(a0, a1)) in &self.sliders {
+            let Some(at) = slid(tree, a0, a1) else { continue };
+            let studs = (at * 1000.0).round() as f64 / 1000.0;
+            if tree.get_number(slider, Property::CurrentPosition) != Some(studs) {
+                let _ = tree.set(slider, Property::CurrentPosition, PropertyValue::Number(studs));
             }
         }
     }
