@@ -42,6 +42,109 @@ fn cframe(pose: (Vec3, Vec3)) -> CFrame {
     CFrame::new(pose.0, Rotation::from_orientation(pose.1))
 }
 
+/// The classes that join two parts into one assembly.
+pub const JOINT_CLASSES: &[ClassKind] = &[ClassKind::WeldConstraint, ClassKind::Weld, ClassKind::Motor6D];
+
+/// A joint's C0 or C1 (`second`) as a CFrame.
+pub fn joint_offset(tree: &InstanceTree, joint: InstanceId, second: bool) -> CFrame {
+    let (p, o) = if second {
+        (Property::C1Position, Property::C1Orientation)
+    } else {
+        (Property::C0Position, Property::C0Orientation)
+    };
+    cframe((tree.get_vec3(joint, p).unwrap_or_default(), tree.get_vec3(joint, o).unwrap_or_default()))
+}
+
+/// Sets a weld's or motor's C0 so its parts stay where they are now (and
+/// C1 to nothing). Does nothing unless both parts are set.
+pub fn keep_in_place(tree: &mut InstanceTree, joint: InstanceId) {
+    if !tree.class(joint).is_ok_and(|c| c.has_property(Property::C0Position)) {
+        return;
+    }
+    let (Some(a), Some(b)) = (tree.get_ref(joint, Property::Part0), tree.get_ref(joint, Property::Part1))
+    else {
+        return;
+    };
+    let (Some(pa), Some(pb)) = (pose(tree, a), pose(tree, b)) else { return };
+    let c0 = cframe(pa).inverse() * cframe(pb);
+    let _ = tree.set(joint, Property::C0Position, PropertyValue::Vec3(c0.pos));
+    let _ = tree.set(joint, Property::C0Orientation, PropertyValue::Vec3(c0.rot.to_orientation()));
+    let _ = tree.set(joint, Property::C1Position, PropertyValue::Vec3(Vec3::ZERO));
+    let _ = tree.set(joint, Property::C1Orientation, PropertyValue::Vec3(Vec3::ZERO));
+}
+
+/// Turns each motor towards its DesiredAngle and puts the parts that welds
+/// and motors hold at the place their C0 and C1 give, working out from
+/// each assembly's root (which physics moves) so the root itself stays put.
+pub fn pose_joints(tree: &mut InstanceTree, dt: f32) {
+    let ws = tree.workspace();
+    let motors = tree.descendants_of_class(ws, ClassKind::Motor6D);
+    for motor in motors {
+        let now = tree.get_number(motor, Property::CurrentAngle).unwrap_or(0.0);
+        let want = tree.get_number(motor, Property::DesiredAngle).unwrap_or(0.0);
+        let step = tree.get_number(motor, Property::MaxVelocity).unwrap_or(0.0).abs() * f64::from(dt) * 60.0;
+        let next = now + (want - now).clamp(-step, step);
+        if next != now {
+            let _ = tree.set(motor, Property::CurrentAngle, PropertyValue::Number(next));
+        }
+    }
+    // Each part's joints with C0 and C1: (joint, other part, this is Part0).
+    let mut links: HashMap<InstanceId, Vec<(InstanceId, InstanceId, bool)>> = HashMap::new();
+    for class in [ClassKind::Weld, ClassKind::Motor6D] {
+        for joint in tree.descendants_of_class(ws, class) {
+            if tree.get_bool(joint, Property::Enabled) != Some(true) {
+                continue;
+            }
+            let (Some(a), Some(b)) =
+                (tree.get_ref(joint, Property::Part0), tree.get_ref(joint, Property::Part1))
+            else {
+                continue;
+            };
+            if a == b {
+                continue;
+            }
+            links.entry(a).or_default().push((joint, b, true));
+            links.entry(b).or_default().push((joint, a, false));
+        }
+    }
+    if links.is_empty() {
+        return;
+    }
+    for parts in assemblies(tree) {
+        let root = root_of(tree, &parts);
+        let mut done: HashSet<InstanceId> = HashSet::from([root]);
+        let mut queue = std::collections::VecDeque::from([root]);
+        while let Some(at) = queue.pop_front() {
+            let Some(here) = pose(tree, at).map(cframe) else { continue };
+            for &(joint, other, at_is_part0) in links.get(&at).map(Vec::as_slice).unwrap_or(&[]) {
+                if !done.insert(other) {
+                    continue;
+                }
+                let c0 = joint_offset(tree, joint, false);
+                let c1 = joint_offset(tree, joint, true);
+                let angle = if tree.class(joint) == Ok(ClassKind::Motor6D) {
+                    tree.get_number(joint, Property::CurrentAngle).unwrap_or(0.0) as f32
+                } else {
+                    0.0
+                };
+                let turn = CFrame::new(Vec3::ZERO, Rotation::about_z(angle));
+                // Part1 = Part0 * C0 * turn * C1⁻¹, and the other way round.
+                let there = if at_is_part0 {
+                    here * c0 * turn * c1.inverse()
+                } else {
+                    here * c1 * turn.inverse() * c0.inverse()
+                };
+                let placed = (there.pos, there.rot.to_orientation());
+                if pose(tree, other) != Some(placed) {
+                    let _ = tree.set(other, Property::Position, PropertyValue::Vec3(placed.0));
+                    let _ = tree.set(other, Property::Orientation, PropertyValue::Vec3(placed.1));
+                }
+                queue.push_back(other);
+            }
+        }
+    }
+}
+
 /// The groups of parts that enabled welds in the workspace join, each with
 /// two or more parts.
 pub fn assemblies(tree: &InstanceTree) -> Vec<Vec<InstanceId>> {
@@ -62,7 +165,8 @@ pub fn assemblies(tree: &InstanceTree) -> Vec<Vec<InstanceId>> {
         parent.insert(x, r);
         r
     }
-    for weld in tree.descendants_of_class(ws, ClassKind::WeldConstraint) {
+    let welds = JOINT_CLASSES.iter().flat_map(|&c| tree.descendants_of_class(ws, c));
+    for weld in welds {
         if tree.get_bool(weld, Property::Enabled) != Some(true) {
             continue;
         }

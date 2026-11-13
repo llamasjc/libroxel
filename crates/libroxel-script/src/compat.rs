@@ -505,8 +505,27 @@ fn model_pivot(lua: &Lua, model: InstanceId) -> mlua::Result<CFrame> {
     }
 }
 
+/// The two saved halves (position, orientation) of a joint's C0 or C1.
+fn joint_halves(class: ClassKind, key: &str) -> Option<(Property, Property)> {
+    if !class.has_property(Property::C0Position) {
+        return None;
+    }
+    match key {
+        names::joint::C0 => Some((Property::C0Position, Property::C0Orientation)),
+        names::joint::C1 => Some((Property::C1Position, Property::C1Orientation)),
+        _ => None,
+    }
+}
+
 /// Members beyond the saved properties: `Some` when `key` is one of them.
 pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> mlua::Result<Option<Value>> {
+    if let Some(halves) = joint_halves(class, key) {
+        let host = host(lua);
+        let tree = host.tree.borrow();
+        let pos = tree.get_vec3(id, halves.0).unwrap_or_default();
+        let rot = Rotation::from_orientation(tree.get_vec3(id, halves.1).unwrap_or_default());
+        return Ok(Some(Value::UserData(lua.create_userdata(LuaCFrame(CFrame::new(pos, rot)))?)));
+    }
     Ok(Some(match key {
         BRICK_COLOR_PROPERTY if class.is_physical() => {
             let color = host(lua).tree.borrow().get_color(id, Property::Color).unwrap_or(Color3::WHITE);
@@ -555,6 +574,14 @@ pub(crate) fn new_index(
     key: &str,
     value: &Value,
 ) -> mlua::Result<bool> {
+    if let Some(halves) = joint_halves(class, key) {
+        let cf = as_cframe(value).ok_or_else(|| runtime_err(format!("{key} expects a CFrame")))?;
+        let host = host(lua);
+        let mut tree = host.tree.borrow_mut();
+        tree.set(id, halves.0, PropertyValue::Vec3(cf.pos)).map_err(tree_err)?;
+        tree.set(id, halves.1, PropertyValue::Vec3(cf.rot.to_orientation())).map_err(tree_err)?;
+        return Ok(true);
+    }
     match key {
         BRICK_COLOR_PROPERTY if class.is_physical() => {
             let brick = as_brick(value).ok_or_else(|| runtime_err("BrickColor expects a BrickColor"))?;

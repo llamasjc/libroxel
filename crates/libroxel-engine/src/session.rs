@@ -1109,6 +1109,7 @@ impl PlaySession {
                 self.avatars.iter().filter_map(|a| a.character.map(|c| c.model)).collect();
             let poses = self.npcs.before_physics(&mut tree, &mut self.physics, &player_models, dt);
             crate::seat::drive_vehicles(&mut tree, &mut self.physics, dt);
+            crate::weld::pose_joints(&mut tree, dt);
             self.welds.before_physics(&tree, &mut self.physics);
             let ties = crate::movers::apply(&tree, &self.welds, &mut self.physics, dt);
             self.hinges.before_physics(&tree, &mut self.physics, dt, ties);

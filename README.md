@@ -548,6 +548,24 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   part it touches, and Part0/Part1 can be picked from a list. Welds (and
   other links between saved instances) are saved in places, and `Clone`
   points a copy's welds at the copied parts.
+- **Welds with offsets and motors:** a `Weld` (or `ManualWeld`) holds
+  `Part1` at `Part0.CFrame * C0 * C1:Inverse()`, so changing `C0` from a
+  script swings a door or a lid. A `Motor6D` is a weld that turns about its
+  Z axis: set `DesiredAngle` (radians) and `CurrentAngle` follows at
+  `MaxVelocity` per 1/60 s. Inserting either from the editor keeps the
+  parts where they are. Models have a `PrimaryPart` that `GetPivot` and
+  `PivotTo` follow.
+- **Scripts from other engines:** `task.spawn` and `task.delay` return their
+  thread and `task.cancel` stops it; `AncestryChanged` fires; `IsA` knows
+  families such as `BasePart`, `GuiButton`, `ValueBase` and `Light`;
+  `WedgePart`, `MeshPart`, `TrussPart` and unions are made as parts. For
+  members libroxel has no engine side for yet (humanoid states, `Region3`,
+  `RichText`, `Font`, surfaces, `BindToRenderStep`, ordered data stores,
+  `MemoryStoreService`, `TextChatService`, `shared`, about 80 enums, and
+  classes like `Sky`, `Beam` or `UIGradient`), a lenient layer
+  (`crates/libroxel-script/src/lenient.luau`) gives sensible defaults,
+  remembers what scripts set while the game runs, and does the nearest
+  thing libroxel can, so more existing scripts run unchanged.
 - **Seats:** a character that touches a `Seat` or `VehicleSeat` sits in it
   and moves with it; jumping gets up. `seat.Occupant` is the humanoid in it,
   `seat:Sit(humanoid)` sits one down, `Disabled` keeps everyone off, and the

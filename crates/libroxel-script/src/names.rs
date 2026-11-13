@@ -16,6 +16,120 @@ use libroxel_instance::{
     ScaleType, TextXAlignment, TextYAlignment, UserInputState, UserInputType,
 };
 
+/// A weld's or motor's two offsets, as CFrames.
+pub mod joint {
+    pub const C0: &str = "C0";
+    pub const C1: &str = "C1";
+}
+
+/// Names `IsA` answers for that are families of classes rather than
+/// classes of their own (`None` for any other name).
+pub fn is_a_family(class: ClassKind, name: &str) -> Option<bool> {
+    use ClassKind as C;
+    Some(match name {
+        "Instance" | "Object" => true,
+        "BasePart" | "PVInstance" if class.is_physical() => true,
+        "PVInstance" => matches!(class, C::Model | C::Workspace),
+        "BasePart" | "FormFactorPart" => class.is_physical() && class != C::Terrain,
+        "GuiBase" | "GuiBase2d" => class.is_gui_object() || is_layer(class),
+        "GuiButton" => class.is_button(),
+        "LayerCollector" => is_layer(class),
+        "ValueBase" => matches!(
+            class,
+            C::IntValue
+                | C::NumberValue
+                | C::StringValue
+                | C::BoolValue
+                | C::ObjectValue
+                | C::Vector3Value
+                | C::Color3Value
+                | C::CFrameValue
+                | C::BrickColorValue
+        ),
+        "LuaSourceContainer" => matches!(class, C::Script | C::LocalScript | C::ModuleScript),
+        "BaseScript" => matches!(class, C::Script | C::LocalScript),
+        "JointInstance" => matches!(class, C::Weld | C::Motor6D),
+        "Light" => matches!(class, C::PointLight | C::SpotLight | C::SurfaceLight),
+        "PostEffect" => matches!(
+            class,
+            C::BloomEffect
+                | C::BlurEffect
+                | C::ColorCorrectionEffect
+                | C::SunRaysEffect
+                | C::DepthOfFieldEffect
+        ),
+        "Constraint" => matches!(
+            class,
+            C::RopeConstraint
+                | C::SpringConstraint
+                | C::HingeConstraint
+                | C::PrismaticConstraint
+                | C::BallSocketConstraint
+                | C::AlignPosition
+                | C::AlignOrientation
+                | C::LinearVelocity
+                | C::AngularVelocity
+                | C::VectorForce
+                | C::Torque
+                | C::RodConstraint
+                | C::CylindricalConstraint
+                | C::NoCollisionConstraint
+        ),
+        "BodyMover" => matches!(
+            class,
+            C::BodyVelocity | C::BodyPosition | C::BodyForce | C::BodyAngularVelocity | C::BodyGyro
+        ),
+        "UIComponent" | "UIBase" => matches!(
+            class,
+            C::UICorner
+                | C::UIListLayout
+                | C::UIGridLayout
+                | C::UIStroke
+                | C::UIPadding
+                | C::UIAspectRatioConstraint
+                | C::UIScale
+                | C::UIGradient
+                | C::UISizeConstraint
+                | C::UITextSizeConstraint
+        ),
+        "GuiLabel" => matches!(class, C::TextLabel | C::ImageLabel),
+        "Clothing" => matches!(class, C::Shirt | C::Pants),
+        "DataModelMesh" => class == C::SpecialMesh,
+        "FaceInstance" => matches!(class, C::Decal | C::Texture),
+        "BackpackItem" => class == C::Tool,
+        "Controller" | "ServiceProvider" => class == C::DataModel,
+        _ => return None,
+    })
+}
+
+fn is_layer(class: ClassKind) -> bool {
+    matches!(class, ClassKind::ScreenGui | ClassKind::BillboardGui | ClassKind::SurfaceGui)
+}
+
+/// Class names `Instance.new` makes as another class: parts with special
+/// meshes become plain parts (wedges keep their shape), and a manual weld
+/// is a weld.
+pub fn stand_in(name: &str) -> Option<(ClassKind, Option<PartShape>)> {
+    Some(match name {
+        "WedgePart" | "CornerWedgePart" => (ClassKind::Part, Some(PartShape::Wedge)),
+        "MeshPart" | "TrussPart" | "UnionOperation" | "NegateOperation" | "PartOperation" => {
+            (ClassKind::Part, None)
+        }
+        "ManualWeld" | "Snap" | "Glue" => (ClassKind::Weld, None),
+        "SoundGroup" => (ClassKind::Folder, None),
+        _ => return None,
+    })
+}
+
+/// Services that are another service under a second name.
+pub fn service_alias(name: &str) -> &str {
+    match name {
+        // Things that load first: libroxel loads everything up front.
+        "ReplicatedFirst" => class_name(ClassKind::ReplicatedStorage),
+        other => other,
+    }
+}
+
 /// Global variables installed into every script.
 pub mod globals {
     pub const GAME: &str = "game";
@@ -65,6 +179,8 @@ pub mod task {
     pub const DELAY: &str = "delay";
     /// Run a function in a new thread at the next step.
     pub const DEFER: &str = "defer";
+    /// Stop a thread from running again (one made by spawn, delay or defer).
+    pub const CANCEL: &str = "cancel";
 }
 
 /// Events that instances fire.
@@ -134,6 +250,9 @@ pub mod events {
     pub const DESCENDANT_REMOVING: &str = "DescendantRemoving";
     /// On any instance: fires when it is destroyed.
     pub const DESTROYING: &str = "Destroying";
+    /// On any instance: fires with (itself, its new parent) when it or an
+    /// ancestor moves to another parent.
+    pub const ANCESTRY_CHANGED: &str = "AncestryChanged";
     /// On a humanoid: fires with the new health whenever it changes.
     pub const HEALTH_CHANGED: &str = "HealthChanged";
     /// On a player: fires with their character just before it is removed.
@@ -920,6 +1039,35 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::Animator => "Animator",
         ClassKind::UIAspectRatioConstraint => "UIAspectRatioConstraint",
         ClassKind::UIScale => "UIScale",
+        ClassKind::Weld => "Weld",
+        ClassKind::Motor6D => "Motor6D",
+        ClassKind::Configuration => "Configuration",
+        ClassKind::CFrameValue => "CFrameValue",
+        ClassKind::BrickColorValue => "BrickColorValue",
+        ClassKind::Sky => "Sky",
+        ClassKind::Atmosphere => "Atmosphere",
+        ClassKind::BloomEffect => "BloomEffect",
+        ClassKind::BlurEffect => "BlurEffect",
+        ClassKind::ColorCorrectionEffect => "ColorCorrectionEffect",
+        ClassKind::SunRaysEffect => "SunRaysEffect",
+        ClassKind::DepthOfFieldEffect => "DepthOfFieldEffect",
+        ClassKind::Beam => "Beam",
+        ClassKind::Trail => "Trail",
+        ClassKind::SelectionBox => "SelectionBox",
+        ClassKind::SurfaceGui => "SurfaceGui",
+        ClassKind::SurfaceLight => "SurfaceLight",
+        ClassKind::UIGradient => "UIGradient",
+        ClassKind::UISizeConstraint => "UISizeConstraint",
+        ClassKind::UITextSizeConstraint => "UITextSizeConstraint",
+        ClassKind::BodyGyro => "BodyGyro",
+        ClassKind::AlignOrientation => "AlignOrientation",
+        ClassKind::Torque => "Torque",
+        ClassKind::NoCollisionConstraint => "NoCollisionConstraint",
+        ClassKind::RodConstraint => "RodConstraint",
+        ClassKind::CylindricalConstraint => "CylindricalConstraint",
+        ClassKind::SpecialMesh => "SpecialMesh",
+        ClassKind::Shirt => "Shirt",
+        ClassKind::Pants => "Pants",
     }
 }
 
@@ -1112,6 +1260,14 @@ pub fn property_name(property: Property) -> &'static str {
         Property::CellPadding => "CellPadding",
         Property::AspectRatio => "AspectRatio",
         Property::Scale => "Scale",
+        // A joint's C0 and C1 are CFrames; scripts reach them through
+        // `joint::C0` and `joint::C1`, made from these halves.
+        Property::C0Position => "C0Position",
+        Property::C0Orientation => "C0Orientation",
+        Property::C1Position => "C1Position",
+        Property::C1Orientation => "C1Orientation",
+        Property::DesiredAngle => "DesiredAngle",
+        Property::PrimaryPart => "PrimaryPart",
     }
 }
 

@@ -332,6 +332,19 @@ pub enum Property {
     AspectRatio,
     /// On a UI scale: how much bigger (or smaller, below 1).
     Scale,
+    /// On a weld or motor: where the joint sits on Part0, as a position and
+    /// an orientation (together the script-facing C0).
+    C0Position,
+    C0Orientation,
+    /// On a weld or motor: where the joint sits on Part1 (the script-facing C1).
+    C1Position,
+    C1Orientation,
+    /// On a motor: the angle (in radians) it turns towards about the
+    /// joint's Z axis. Its CurrentAngle is in radians too, and its
+    /// MaxVelocity is radians each 1/60 of a second.
+    DesiredAngle,
+    /// On a model: the part its pivot follows (and that PivotTo moves it by).
+    PrimaryPart,
 }
 
 /// The value of a property.
@@ -414,7 +427,12 @@ impl Property {
             | Property::TextTransparency
             | Property::ScrollBarThickness
             | Property::AspectRatio
-            | Property::Scale => "number",
+            | Property::Scale
+            | Property::DesiredAngle => "number",
+            Property::C0Position
+            | Property::C0Orientation
+            | Property::C1Position
+            | Property::C1Orientation => "Vec3",
             Property::Rate
             | Property::EffectSize
             | Property::Drag
@@ -528,7 +546,8 @@ impl Property {
             | Property::SeatPart
             | Property::ObjectValue
             | Property::Attachment0
-            | Property::Attachment1 => "ref",
+            | Property::Attachment1
+            | Property::PrimaryPart => "ref",
         }
     }
 
@@ -730,6 +749,12 @@ impl Property {
         Property::CellPadding,
         Property::AspectRatio,
         Property::Scale,
+        Property::C0Position,
+        Property::C0Orientation,
+        Property::C1Position,
+        Property::C1Orientation,
+        Property::DesiredAngle,
+        Property::PrimaryPart,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -914,6 +939,12 @@ impl Property {
             Property::CellPadding => "cell_padding",
             Property::AspectRatio => "aspect_ratio",
             Property::Scale => "scale",
+            Property::C0Position => "c0_position",
+            Property::C0Orientation => "c0_orientation",
+            Property::C1Position => "c1_position",
+            Property::C1Orientation => "c1_orientation",
+            Property::DesiredAngle => "desired_angle",
+            Property::PrimaryPart => "primary_part",
         }
     }
 

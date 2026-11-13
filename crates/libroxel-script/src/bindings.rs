@@ -71,6 +71,7 @@ pub(crate) enum SignalKind {
     DescendantAdded(InstanceId),
     DescendantRemoving(InstanceId),
     Destroying(InstanceId),
+    AncestryChanged(InstanceId),
     HealthChanged(InstanceId),
     CharacterRemoving(InstanceId),
     Seated(InstanceId),
@@ -92,6 +93,7 @@ impl SignalKind {
             | SignalKind::DescendantAdded(id)
             | SignalKind::DescendantRemoving(id)
             | SignalKind::Destroying(id)
+            | SignalKind::AncestryChanged(id)
             | SignalKind::HealthChanged(id)
             | SignalKind::AttributeChanged(id)
             | SignalKind::AttributeNamedChanged(id, _) => Some(id),
@@ -621,6 +623,7 @@ fn instance_event(class: ClassKind, id: InstanceId, key: &str) -> Option<SignalK
         DESCENDANT_ADDED => SignalKind::DescendantAdded(id),
         DESCENDANT_REMOVING => SignalKind::DescendantRemoving(id),
         DESTROYING => SignalKind::Destroying(id),
+        ANCESTRY_CHANGED => SignalKind::AncestryChanged(id),
         HEALTH_CHANGED if class == ClassKind::Humanoid => SignalKind::HealthChanged(id),
         CHARACTER_REMOVING if class == ClassKind::Player => SignalKind::CharacterRemoving(id),
         SEATED if class == ClassKind::Humanoid => SignalKind::Seated(id),
@@ -653,6 +656,11 @@ pub(crate) fn set_part_cframe(lua: &Lua, id: InstanceId, cf: CFrame) -> mlua::Re
 pub(crate) fn model_pivot_part(lua: &Lua, model: InstanceId) -> mlua::Result<Option<InstanceId>> {
     let host = host(lua);
     let tree = host.tree.borrow();
+    if let Some(primary) = tree.get_ref(model, Property::PrimaryPart)
+        && tree.is_descendant_of(primary, model).unwrap_or(false)
+    {
+        return Ok(Some(primary));
+    }
     let parts = tree.descendants_of_class(model, ClassKind::Part);
     let root = parts.iter().copied().find(|p| tree.name(*p) == Ok(names::character::ROOT_PART));
     Ok(root.or_else(|| parts.first().copied()))
@@ -683,9 +691,13 @@ impl UserData for LuaInstance {
             let all = host(lua).tree.borrow().descendants(this.0).map_err(tree_err)?;
             all.into_iter().map(|id| push_instance(lua, id)).collect::<mlua::Result<Vec<_>>>()
         });
-        methods.add_method(IS_A, |lua, this, class: String| {
-            let Some(class) = names::class_from_name(&class) else { return Ok(false) };
-            Ok(host(lua).tree.borrow().class(this.0).map_err(tree_err)?.is_a(class))
+        methods.add_method(IS_A, |lua, this, name: String| {
+            let class = class_of(lua, this.0)?;
+            if let Some(answer) = names::is_a_family(class, &name) {
+                return Ok(answer);
+            }
+            let Some(other) = names::class_from_name(&name) else { return Ok(false) };
+            Ok(class.is_a(other))
         });
         methods.add_method(IS_DESCENDANT_OF, |lua, this, other: Value| {
             let other = as_instance(&other)
@@ -735,7 +747,11 @@ impl UserData for LuaInstance {
             if let Some(service) = crate::compat::get_service(lua, &name)? {
                 return Ok(service);
             }
-            let service = names::class_from_name(&name).and_then(|c| host(lua).tree.borrow().service(c));
+            if let Some(service) = crate::lenient::service(lua, &name)? {
+                return Ok(service);
+            }
+            let service = names::class_from_name(names::service_alias(&name))
+                .and_then(|c| host(lua).tree.borrow().service(c));
             match service {
                 Some(id) => Ok(Value::UserData(push_instance(lua, id)?)),
                 None => Err(mlua::Error::runtime(format!("{name} is not a valid service name"))),
@@ -911,8 +927,11 @@ impl UserData for LuaInstance {
             }
             // `instance.ChildName` finds a child by name.
             let child = host(lua).tree.borrow().find_first_child(id, &key).map_err(tree_err)?;
-            match child {
-                Some(child) => Ok(Value::UserData(push_instance(lua, child)?)),
+            if let Some(child) = child {
+                return Ok(Value::UserData(push_instance(lua, child)?));
+            }
+            match crate::lenient::index(lua, id, class, push_instance(lua, id)?, &key)? {
+                Some(value) => Ok(value),
                 None => Err(not_a_member(lua, id, &key)),
             }
         });
@@ -944,6 +963,9 @@ impl UserData for LuaInstance {
                 return Ok(());
             }
             let Some(property) = names::property_from_name(class, &key) else {
+                if crate::lenient::new_index(lua, id, class, push_instance(lua, id)?, &key, value)? {
+                    return Ok(());
+                }
                 return Err(not_a_member(lua, id, &key));
             };
             let value = property_from_lua(property, &value).ok_or_else(|| {
@@ -986,6 +1008,7 @@ impl UserData for RunService {
         methods.add_method(IS_CLIENT, |lua, _, ()| Ok(crate::net::role(lua) != NetRole::Server));
         methods.add_method(IS_SERVER, |lua, _, ()| Ok(crate::net::role(lua) != NetRole::Client));
         methods.add_method(IS_STUDIO, |lua, _, ()| Ok(crate::net::role(lua) == NetRole::Solo));
+        crate::lenient::add_service_members(methods, names::services::RUN_SERVICE);
     }
 }
 
@@ -1542,7 +1565,10 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     instance_lib.set(
         constructors::NEW,
         lua.create_function(|lua, (class, parent): (String, Option<Value>)| {
-            let class = class_arg(&class)?;
+            let (class, shape) = match names::stand_in(&class) {
+                Some(stand_in) => stand_in,
+                None => (class_arg(&class)?, None),
+            };
             if !class.is_user_creatable() {
                 return Err(tree_err(TreeError::NotCreatable(class)));
             }
@@ -1551,6 +1577,9 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
                 let host = host(lua);
                 let mut tree = host.tree.borrow_mut();
                 let id = tree.create(class, names::class_name(class)).map_err(tree_err)?;
+                if let Some(shape) = shape {
+                    let _ = tree.set(id, Property::Shape, PropertyValue::Enum(EnumValue::Shape(shape)));
+                }
                 if parent.is_some() {
                     tree.set_parent(id, parent).map_err(tree_err)?;
                 }
@@ -1594,10 +1623,24 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     let task_lib = lua.create_table()?;
     task_lib.set(
         names::task::SPAWN,
-        lua.create_function(|lua, (func, args): (Function, Variadic<Value>)| {
+        lua.create_function(|lua, (func, args): (Value, Variadic<Value>)| {
             let script = host(lua).current_script.borrow().clone();
             let owner = host(lua).current_owner.get();
-            spawn(lua, func, args.into_iter().collect(), &script, owner)
+            // A function runs in a new thread; a thread carries on where it stopped.
+            let thread = match func {
+                Value::Function(f) => lua.create_thread(f)?,
+                Value::Thread(t) => t,
+                other => {
+                    return Err(mlua::Error::runtime(format!(
+                        "task.spawn expects a function or a thread, got a {}",
+                        other.type_name()
+                    )));
+                }
+            };
+            if let Some(err) = resume(lua, thread.clone(), args.into_iter().collect(), &script, owner) {
+                host(lua).errors.borrow_mut().push(err);
+            }
+            Ok(thread)
         })?,
     )?;
     task_lib.set(
@@ -1608,13 +1651,20 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
             let now = host.clock.get();
             let script = host.current_script.borrow().clone();
             host.waiting.borrow_mut().push(Waiting {
-                thread,
+                thread: thread.clone(),
                 resume_at: now + seconds.max(0.0),
                 since: now,
                 args: Some(args.into_iter().collect()),
                 script,
                 owner: host.current_owner.get(),
             });
+            Ok(thread)
+        })?,
+    )?;
+    task_lib.set(
+        names::task::CANCEL,
+        lua.create_function(|lua, thread: Thread| {
+            host(lua).waiting.borrow_mut().retain(|w| w.thread != thread);
             Ok(())
         })?,
     )?;
@@ -1658,8 +1708,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         items.set_readonly(true);
         enum_lib.set(names::enum_name(kind), items)?;
     }
-    enum_lib.set_readonly(true);
-    g.set(globals::ENUM, enum_lib)?;
+    g.set(globals::ENUM, enum_lib.clone())?;
     g.set(globals::TASK, task_lib)?;
     g.set(globals::WAIT, wait)?;
     g.set(globals::TIME, lua.create_function(|lua, ()| Ok(host(lua).clock.get()))?)?;
@@ -1684,6 +1733,8 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
+    crate::lenient::install(lua, &enum_lib)?;
+    enum_lib.set_readonly(true);
     Ok(())
 }
 
@@ -1907,6 +1958,25 @@ pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
                     }
                     (moved, left, arrived)
                 };
+                // The instance and everything inside it that listens hears
+                // that its ancestry changed.
+                let listening: Vec<InstanceId> = {
+                    let host = host(lua);
+                    let tree = host.tree.borrow();
+                    std::iter::once(*id)
+                        .chain(tree.descendants(*id).unwrap_or_default())
+                        .filter(|i| watched.contains(i))
+                        .collect()
+                };
+                for item in listening {
+                    fire(lua, SignalKind::AncestryChanged(item), || {
+                        let parent = match new_parent {
+                            Some(p) => Value::UserData(push_instance(lua, *p)?),
+                            None => Value::Nil,
+                        };
+                        Ok([Value::UserData(push_instance(lua, *id)?), parent].into_iter().collect())
+                    });
+                }
                 for &ancestor in &left {
                     for &item in &moved {
                         with_instance(SignalKind::DescendantRemoving(ancestor), item);

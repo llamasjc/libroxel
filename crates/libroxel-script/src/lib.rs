@@ -26,6 +26,7 @@ mod compat;
 mod effects;
 pub mod filter;
 mod items;
+mod lenient;
 pub mod names;
 mod net;
 mod pathfinding;
@@ -111,6 +112,7 @@ impl ScriptRuntime {
         // Freeze the standard library and our globals; each script gets its
         // own global environment on top.
         lua.sandbox(true)?;
+        lenient::after_sandbox(&lua)?;
         lua.set_memory_limit(MEMORY_LIMIT)?;
         Ok(Self { lua, tree })
     }

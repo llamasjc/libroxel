@@ -134,6 +134,9 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::UIScale,
     ClassKind::Team,
     ClassKind::WeldConstraint,
+    ClassKind::Weld,
+    ClassKind::Motor6D,
+    ClassKind::Configuration,
     ClassKind::Seat,
     ClassKind::VehicleSeat,
     ClassKind::RemoteFunction,
@@ -250,6 +253,34 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::UIAspectRatioConstraint => "⬌",
         ClassKind::UIScale => "🔍",
         ClassKind::Teams | ClassKind::Team => "🚩",
+        ClassKind::Weld | ClassKind::Motor6D => "🔗",
+        ClassKind::Configuration => "⚙",
+        ClassKind::CFrameValue
+        | ClassKind::BrickColorValue
+        | ClassKind::Sky
+        | ClassKind::Atmosphere
+        | ClassKind::BloomEffect
+        | ClassKind::BlurEffect
+        | ClassKind::ColorCorrectionEffect
+        | ClassKind::SunRaysEffect
+        | ClassKind::DepthOfFieldEffect
+        | ClassKind::Beam
+        | ClassKind::Trail
+        | ClassKind::SelectionBox
+        | ClassKind::SurfaceGui
+        | ClassKind::SurfaceLight
+        | ClassKind::UIGradient
+        | ClassKind::UISizeConstraint
+        | ClassKind::UITextSizeConstraint
+        | ClassKind::BodyGyro
+        | ClassKind::AlignOrientation
+        | ClassKind::Torque
+        | ClassKind::NoCollisionConstraint
+        | ClassKind::RodConstraint
+        | ClassKind::CylindricalConstraint
+        | ClassKind::SpecialMesh
+        | ClassKind::Shirt
+        | ClassKind::Pants => "▫",
     }
 }
 
@@ -1477,6 +1508,15 @@ fn properties(
             "Outlines and tints its Adornee (a part or model), or what it's inside if Adornee is empty. \
              Good for showing what a player can pick up or who is selected.",
         ),
+        ClassKind::Weld => Some(
+            "Holds Part1 to Part0 while playing: Part1 sits at Part0's CFrame * C0 * C1:Inverse(). \
+             Scripts change C0 or C1 to move Part1 around Part0, like a door on a hinge.",
+        ),
+        ClassKind::Motor6D => Some(
+            "A weld that turns: Part1 sits at Part0 * C0 * (a turn of CurrentAngle about Z) * C1:Inverse(). \
+             Set DesiredAngle (in radians) and it turns there by MaxVelocity each 1/60 of a second.",
+        ),
+        ClassKind::Configuration => Some("A folder for a model's settings: put value objects inside it."),
         ClassKind::WeldConstraint => Some(
             "Holds Part0 and Part1 together while playing: they move as one, keeping how they sit now. \
              Unanchor one part and the whole assembly falls, rolls and gets pushed together.",
@@ -2264,7 +2304,9 @@ fn needs_attachment(class: ClassKind) -> bool {
 fn ref_choices(tree: &InstanceTree, property: Property) -> Vec<InstanceId> {
     let ws = tree.workspace();
     match property {
-        Property::Part0 | Property::Part1 => tree.descendants_of_class(ws, ClassKind::Part),
+        Property::Part0 | Property::Part1 | Property::PrimaryPart => {
+            tree.descendants_of_class(ws, ClassKind::Part)
+        }
         Property::Attachment0 | Property::Attachment1 => tree.descendants_of_class(ws, ClassKind::Attachment),
         _ => tree.descendants(tree.root()).unwrap_or_default(),
     }
@@ -2777,13 +2819,14 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                         let _ = tree.set(id, Property::Attachment0, PropertyValue::Ref(Some(at)));
                     }
                 }
-                if class == ClassKind::WeldConstraint
+                if matches!(class, ClassKind::WeldConstraint | ClassKind::Weld | ClassKind::Motor6D)
                     && let Some(part) = near
                 {
                     // Weld the selected part to whatever it touches.
                     let _ = tree.set(id, Property::Part0, PropertyValue::Ref(Some(part)));
                     let other = touching_part(&tree, part);
                     let _ = tree.set(id, Property::Part1, PropertyValue::Ref(other));
+                    libroxel_engine::weld::keep_in_place(&mut tree, id);
                 }
                 editor.selection = Some(id);
                 if is_code(class) {

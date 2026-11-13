@@ -49,6 +49,7 @@ impl UserData for Path {
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        crate::lenient::add_service_members(methods, names::PATH_TYPE_NAME);
         methods.add_method_mut(names::COMPUTE_ASYNC, |lua, this, (start, finish): (Value, Value)| {
             let start =
                 as_vector3(&start).ok_or_else(|| runtime_err("ComputeAsync expects a Vector3 start"))?;

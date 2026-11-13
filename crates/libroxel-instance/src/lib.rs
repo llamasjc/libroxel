@@ -230,6 +230,64 @@ pub enum ClassKind {
     Animation,
     /// Inside a humanoid: plays animations on its character.
     Animator,
+    /// Holds Part1 to Part0 at C0 and C1: Part1 sits at Part0 * C0 * C1:Inverse().
+    Weld,
+    /// A weld that turns about its Z axis, by CurrentAngle, towards DesiredAngle.
+    Motor6D,
+    /// A container for a model's settings (value objects).
+    Configuration,
+    /// Holds a CFrame (while the game runs).
+    CFrameValue,
+    /// Holds a BrickColor (while the game runs).
+    BrickColorValue,
+    /// In Lighting: the sky's look (kept for scripts; libroxel draws its own sky).
+    Sky,
+    /// In Lighting: haze (kept for scripts).
+    Atmosphere,
+    /// In Lighting or the camera: glow (kept for scripts).
+    BloomEffect,
+    /// In Lighting or the camera: blur (kept for scripts).
+    BlurEffect,
+    /// In Lighting or the camera: colour grading (kept for scripts).
+    ColorCorrectionEffect,
+    /// In Lighting: rays from the sun (kept for scripts).
+    SunRaysEffect,
+    /// In Lighting or the camera: focus blur (kept for scripts).
+    DepthOfFieldEffect,
+    /// A strip between two attachments (kept for scripts).
+    Beam,
+    /// A trail behind two attachments (kept for scripts).
+    Trail,
+    /// An outline around Adornee (kept for scripts).
+    SelectionBox,
+    /// GUI on the face of a part (kept for scripts).
+    SurfaceGui,
+    /// Light from one face of a part (kept for scripts).
+    SurfaceLight,
+    /// Inside a GUI object: a colour gradient (kept for scripts).
+    UIGradient,
+    /// Inside a GUI object: a smallest and biggest size (kept for scripts).
+    UISizeConstraint,
+    /// Inside a text object: a smallest and biggest text size (kept for scripts).
+    UITextSizeConstraint,
+    /// Turns its part towards a CFrame (kept for scripts).
+    BodyGyro,
+    /// Turns one attachment's part to match another (kept for scripts).
+    AlignOrientation,
+    /// Turns its part with a constant torque (kept for scripts).
+    Torque,
+    /// Lets Part0 and Part1 pass through each other (kept for scripts).
+    NoCollisionConstraint,
+    /// Keeps two attachments a fixed distance apart (kept for scripts).
+    RodConstraint,
+    /// Lets a part slide and turn along an axis (kept for scripts).
+    CylindricalConstraint,
+    /// Inside a part: a mesh shape (kept for scripts).
+    SpecialMesh,
+    /// Inside a character: a shirt picture (kept for scripts).
+    Shirt,
+    /// Inside a character: a pants picture (kept for scripts).
+    Pants,
 }
 
 impl ClassKind {
@@ -323,6 +381,35 @@ impl ClassKind {
         ClassKind::Accessory,
         ClassKind::Animation,
         ClassKind::Animator,
+        ClassKind::Weld,
+        ClassKind::Motor6D,
+        ClassKind::Configuration,
+        ClassKind::CFrameValue,
+        ClassKind::BrickColorValue,
+        ClassKind::Sky,
+        ClassKind::Atmosphere,
+        ClassKind::BloomEffect,
+        ClassKind::BlurEffect,
+        ClassKind::ColorCorrectionEffect,
+        ClassKind::SunRaysEffect,
+        ClassKind::DepthOfFieldEffect,
+        ClassKind::Beam,
+        ClassKind::Trail,
+        ClassKind::SelectionBox,
+        ClassKind::SurfaceGui,
+        ClassKind::SurfaceLight,
+        ClassKind::UIGradient,
+        ClassKind::UISizeConstraint,
+        ClassKind::UITextSizeConstraint,
+        ClassKind::BodyGyro,
+        ClassKind::AlignOrientation,
+        ClassKind::Torque,
+        ClassKind::NoCollisionConstraint,
+        ClassKind::RodConstraint,
+        ClassKind::CylindricalConstraint,
+        ClassKind::SpecialMesh,
+        ClassKind::Shirt,
+        ClassKind::Pants,
     ];
 
     /// The services every tree has under its root, in order. They can't be
@@ -743,6 +830,30 @@ impl ClassKind {
             &[Property::Name, Property::CellSize, Property::CellPadding, Property::FillDirection];
         const ASPECT: &[Property] = &[Property::Name, Property::AspectRatio];
         const SCALE: &[Property] = &[Property::Name, Property::Scale];
+        const MODEL: &[Property] = &[Property::Name, Property::PrimaryPart];
+        const JOINT: &[Property] = &[
+            Property::Name,
+            Property::Part0,
+            Property::Part1,
+            Property::Enabled,
+            Property::C0Position,
+            Property::C0Orientation,
+            Property::C1Position,
+            Property::C1Orientation,
+        ];
+        const MOTOR: &[Property] = &[
+            Property::Name,
+            Property::Part0,
+            Property::Part1,
+            Property::Enabled,
+            Property::C0Position,
+            Property::C0Orientation,
+            Property::C1Position,
+            Property::C1Orientation,
+            Property::CurrentAngle,
+            Property::DesiredAngle,
+            Property::MaxVelocity,
+        ];
         const TEXT: &[Property] = &[
             Property::Name,
             Property::GuiPosition,
@@ -915,6 +1026,9 @@ impl ClassKind {
             ClassKind::UIScale => SCALE,
             ClassKind::BodyColors => BODY_COLORS,
             ClassKind::Animation => ANIMATION,
+            ClassKind::Model => MODEL,
+            ClassKind::Weld => JOINT,
+            ClassKind::Motor6D => MOTOR,
             _ => COMMON,
         }
     }
@@ -1017,6 +1131,12 @@ impl ClassKind {
             Property::CellSize => PropertyValue::UDim2(UDim2::new(0.0, 100.0, 0.0, 100.0)),
             Property::CellPadding => PropertyValue::UDim2(UDim2::new(0.0, 5.0, 0.0, 5.0)),
             Property::AspectRatio | Property::Scale => PropertyValue::Number(1.0),
+            Property::C0Position
+            | Property::C0Orientation
+            | Property::C1Position
+            | Property::C1Orientation => PropertyValue::Vec3(Vec3::ZERO),
+            Property::DesiredAngle => PropertyValue::Number(0.0),
+            Property::PrimaryPart => PropertyValue::Ref(None),
             Property::Padding => PropertyValue::UDim(UDim::default()),
             Property::BlastRadius => PropertyValue::Number(4.0),
             Property::BlastPressure => PropertyValue::Number(500_000.0),
@@ -1054,7 +1174,10 @@ impl ClassKind {
                 ClassKind::AlignPosition => 10_000.0,
                 _ => 1_000.0,
             }),
-            Property::MaxVelocity => PropertyValue::Number(1_000_000.0),
+            Property::MaxVelocity => PropertyValue::Number(match self {
+                ClassKind::Motor6D => 0.1,
+                _ => 1_000_000.0,
+            }),
             Property::Responsiveness => PropertyValue::Number(10.0),
             Property::RigidityEnabled => PropertyValue::Bool(false),
             Property::Length => PropertyValue::Number(5.0),
@@ -1238,6 +1361,35 @@ impl ClassKind {
             ClassKind::Accessory => "accessory",
             ClassKind::Animation => "animation",
             ClassKind::Animator => "animator",
+            ClassKind::Weld => "weld",
+            ClassKind::Motor6D => "motor6d",
+            ClassKind::Configuration => "configuration",
+            ClassKind::CFrameValue => "cframe_value",
+            ClassKind::BrickColorValue => "brick_color_value",
+            ClassKind::Sky => "sky",
+            ClassKind::Atmosphere => "atmosphere",
+            ClassKind::BloomEffect => "bloom_effect",
+            ClassKind::BlurEffect => "blur_effect",
+            ClassKind::ColorCorrectionEffect => "color_correction_effect",
+            ClassKind::SunRaysEffect => "sun_rays_effect",
+            ClassKind::DepthOfFieldEffect => "depth_of_field_effect",
+            ClassKind::Beam => "beam",
+            ClassKind::Trail => "trail",
+            ClassKind::SelectionBox => "selection_box",
+            ClassKind::SurfaceGui => "surface_gui",
+            ClassKind::SurfaceLight => "surface_light",
+            ClassKind::UIGradient => "ui_gradient",
+            ClassKind::UISizeConstraint => "ui_size_constraint",
+            ClassKind::UITextSizeConstraint => "ui_text_size_constraint",
+            ClassKind::BodyGyro => "body_gyro",
+            ClassKind::AlignOrientation => "align_orientation",
+            ClassKind::Torque => "torque",
+            ClassKind::NoCollisionConstraint => "no_collision_constraint",
+            ClassKind::RodConstraint => "rod_constraint",
+            ClassKind::CylindricalConstraint => "cylindrical_constraint",
+            ClassKind::SpecialMesh => "special_mesh",
+            ClassKind::Shirt => "shirt",
+            ClassKind::Pants => "pants",
         }
     }
 

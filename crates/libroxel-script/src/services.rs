@@ -80,6 +80,7 @@ impl UserData for UserInputService {
             };
             Ok(host(lua).inputs_down.borrow().contains(&input))
         });
+        crate::lenient::add_service_members(methods, services::USER_INPUT_SERVICE);
     }
 }
 
@@ -155,6 +156,7 @@ impl UserData for DataStoreService {
             check_name("data store name", &name)?;
             Ok(DataStore(name))
         });
+        crate::lenient::add_service_members(methods, services::DATA_STORE_SERVICE);
     }
 }
 
