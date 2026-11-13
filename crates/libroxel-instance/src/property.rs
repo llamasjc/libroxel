@@ -345,6 +345,38 @@ pub enum Property {
     DesiredAngle,
     /// On a model: the part its pivot follows (and that PivotTo moves it by).
     PrimaryPart,
+    /// On an atmosphere: how thick the haze is, 0 to 1.
+    Density,
+    /// On an atmosphere: extra haze towards the horizon, 0 to 10.
+    Haze,
+    /// On a bloom effect: how strongly bright things glow (scripts call it Intensity).
+    BloomIntensity,
+    /// On a bloom effect or a blur: how far the glow spreads (scripts call it Size).
+    BloomSize,
+    /// On a bloom effect: how bright something must be to glow.
+    Threshold,
+    /// On a colour correction: more (or, below 0, less) contrast.
+    Contrast,
+    /// On a colour correction: more (or, below 0, less) colour; -1 is grey.
+    Saturation,
+    /// On a colour correction: a colour the whole view is multiplied by.
+    TintColor,
+    /// On a selection box: the outline's colour (scripts call it Color3).
+    SelectionColor,
+    /// On a selection box: how thick the outline is, in studs.
+    LineThickness,
+    /// On a beam: how wide it is at Attachment0, in studs.
+    Width0,
+    /// On a beam: how wide it is at Attachment1, in studs.
+    Width1,
+    /// On a size constraint: the smallest its GUI object may be, in pixels.
+    MinSize,
+    /// On a size constraint: the biggest its GUI object may be, in pixels.
+    MaxSize,
+    /// On a text size constraint: the smallest its text may be.
+    MinTextSize,
+    /// On a text size constraint: the biggest its text may be.
+    MaxTextSize,
 }
 
 /// The value of a property.
@@ -428,7 +460,21 @@ impl Property {
             | Property::ScrollBarThickness
             | Property::AspectRatio
             | Property::Scale
-            | Property::DesiredAngle => "number",
+            | Property::DesiredAngle
+            | Property::Density
+            | Property::Haze
+            | Property::BloomIntensity
+            | Property::BloomSize
+            | Property::Threshold
+            | Property::Contrast
+            | Property::Saturation
+            | Property::LineThickness
+            | Property::Width0
+            | Property::Width1
+            | Property::MinTextSize
+            | Property::MaxTextSize => "number",
+            Property::TintColor | Property::SelectionColor => "Color3",
+            Property::MinSize | Property::MaxSize => "Vec2",
             Property::C0Position
             | Property::C0Orientation
             | Property::C1Position
@@ -755,6 +801,22 @@ impl Property {
         Property::C1Orientation,
         Property::DesiredAngle,
         Property::PrimaryPart,
+        Property::Density,
+        Property::Haze,
+        Property::BloomIntensity,
+        Property::BloomSize,
+        Property::Threshold,
+        Property::Contrast,
+        Property::Saturation,
+        Property::TintColor,
+        Property::SelectionColor,
+        Property::LineThickness,
+        Property::Width0,
+        Property::Width1,
+        Property::MinSize,
+        Property::MaxSize,
+        Property::MinTextSize,
+        Property::MaxTextSize,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -945,6 +1007,22 @@ impl Property {
             Property::C1Orientation => "c1_orientation",
             Property::DesiredAngle => "desired_angle",
             Property::PrimaryPart => "primary_part",
+            Property::Density => "density",
+            Property::Haze => "haze",
+            Property::BloomIntensity => "bloom_intensity",
+            Property::BloomSize => "bloom_size",
+            Property::Threshold => "threshold",
+            Property::Contrast => "contrast",
+            Property::Saturation => "saturation",
+            Property::TintColor => "tint_color",
+            Property::SelectionColor => "selection_color",
+            Property::LineThickness => "line_thickness",
+            Property::Width0 => "width0",
+            Property::Width1 => "width1",
+            Property::MinSize => "min_size",
+            Property::MaxSize => "max_size",
+            Property::MinTextSize => "min_text_size",
+            Property::MaxTextSize => "max_text_size",
         }
     }
 

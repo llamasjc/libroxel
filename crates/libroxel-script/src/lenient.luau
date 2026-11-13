@@ -1278,16 +1278,10 @@ add(props, "Sky", {
 	SunTextureId = "", MoonTextureId = "", SunAngularSize = 21, MoonAngularSize = 11,
 	StarCount = 3000, CelestialBodiesShown = true, SkyboxOrientation = Vector3.zero,
 })
-add(props, "Atmosphere", {
-	Density = 0.395, Offset = 0, Color = Color3.fromRGB(199, 199, 199), Decay = Color3.fromRGB(106, 112, 125),
-	Glare = 0, Haze = 0,
-})
+-- (Atmosphere's Density, Haze and Color are real; these aren't drawn yet.)
+add(props, "Atmosphere", { Offset = 0, Decay = Color3.fromRGB(106, 112, 125), Glare = 0 })
 add(props, "PostEffect", { Enabled = true })
-add(props, "BloomEffect", { Intensity = 1, Size = 24, Threshold = 2 })
 add(props, "BlurEffect", { Size = 24 })
-add(props, "ColorCorrectionEffect", {
-	Brightness = 0, Contrast = 0, Saturation = 0, TintColor = Color3.new(1, 1, 1),
-})
 add(props, "SunRaysEffect", { Intensity = 0.25, Spread = 1 })
 add(props, "DepthOfFieldEffect", { FarIntensity = 0.75, FocusDistance = 0.05, InFocusRadius = 10, NearIntensity = 0.75 })
 local strip = {
@@ -1300,15 +1294,10 @@ add(props, "Beam", strip)
 add(props, "Trail", strip)
 add(methods, "Trail", { Clear = function() end })
 add(methods, "Beam", { SetTextureOffset = function() end })
-add(props, "SelectionBox", {
-	Adornee = NIL, Color3 = Color3.fromRGB(13, 105, 172), LineThickness = 0.15, SurfaceColor3 = Color3.fromRGB(13, 105, 172),
-	SurfaceTransparency = 1, Transparency = 0, Visible = true,
-})
+add(props, "SelectionBox", { SurfaceColor3 = Color3.fromRGB(13, 105, 172), SurfaceTransparency = 1, Transparency = 0 })
 add(props, "UIGradient", {
 	Color = NIL, Enabled = true, Offset = Vector2.zero, Rotation = 0, Transparency = NIL,
 })
-add(props, "UISizeConstraint", { MinSize = Vector2.zero, MaxSize = Vector2.new(math.huge, math.huge) })
-add(props, "UITextSizeConstraint", { MinTextSize = 1, MaxTextSize = 100 })
 add(props, "Constraint", {
 	Attachment0 = NIL, Attachment1 = NIL, Enabled = true, Visible = false, Color = NIL,
 })

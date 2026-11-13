@@ -253,6 +253,7 @@ impl Plugin for RenderPlugin {
             .add_systems(Update, crate::terrain_view::sync_terrain.after(EngineSet::Sync))
             .add_systems(Update, update_lighting.after(EngineSet::Sync))
             .add_plugins((crate::effects::EffectsPlugin, crate::sounds::SoundPlugin));
+        crate::view_effects::build(app);
     }
 }
 
@@ -521,9 +522,11 @@ fn update_lighting(
     mut ambient: ResMut<GlobalAmbientLight>,
     mut fogs: Query<&mut bevy::pbr::DistanceFog>,
 ) {
-    let (clock, brightness, tint, fog) = {
+    let (clock, brightness, tint, fog, haze) = {
         let tree = engine.tree.borrow();
         let lighting = tree.service(ClassKind::Lighting);
+        let atmosphere =
+            lighting.and_then(|l| tree.find_first_child_of_class(l, ClassKind::Atmosphere).ok().flatten());
         let read = |p| lighting.and_then(|l| tree.get_number(l, p)).map(|n| n as f32);
         let colour = |p| lighting.and_then(|l| tree.get_color(l, p));
         (
@@ -535,6 +538,7 @@ fn update_lighting(
                 read(Property::FogStart).unwrap_or(0.0),
                 read(Property::FogEnd).unwrap_or(100_000.0),
             ),
+            atmosphere.map(|a| atmosphere_fog(&tree, a)),
         )
     };
     let (dir, illuminance, sky, ambient_brightness) = sky_at(clock, brightness);
@@ -550,15 +554,28 @@ fn update_lighting(
         ambient.color = ambient_color;
     }
     let (fog_colour, fog_start, fog_end) = fog;
-    let fog_colour = Color::srgb(fog_colour.r, fog_colour.g, fog_colour.b);
     let fog_end = fog_end.max(fog_start + 0.01);
+    // An atmosphere in Lighting replaces the fog with haze that thickens
+    // with distance.
+    let (fog_colour, falloff) = match haze {
+        Some((colour, density)) => (colour, bevy::pbr::FogFalloff::Exponential { density }),
+        None => (fog_colour, bevy::pbr::FogFalloff::Linear { start: fog_start, end: fog_end }),
+    };
+    let fog_colour = Color::srgb(fog_colour.r, fog_colour.g, fog_colour.b);
     for mut f in &mut fogs {
-        let changed = match f.falloff {
-            bevy::pbr::FogFalloff::Linear { start, end } => start != fog_start || end != fog_end,
+        let changed = match (&f.falloff, &falloff) {
+            (
+                bevy::pbr::FogFalloff::Linear { start, end },
+                bevy::pbr::FogFalloff::Linear { start: s, end: e },
+            ) => start != s || end != e,
+            (
+                bevy::pbr::FogFalloff::Exponential { density },
+                bevy::pbr::FogFalloff::Exponential { density: d },
+            ) => density != d,
             _ => true,
         };
         if changed {
-            f.falloff = bevy::pbr::FogFalloff::Linear { start: fog_start, end: fog_end };
+            f.falloff = falloff.clone();
         }
         if f.color != fog_colour {
             f.color = fog_colour;
@@ -579,6 +596,17 @@ fn update_lighting(
     if (ambient.brightness - ambient_brightness).abs() > 0.5 {
         ambient.brightness = ambient_brightness;
     }
+}
+
+/// An atmosphere's haze: its colour and how fast it thickens (per stud).
+pub fn atmosphere_fog(tree: &InstanceTree, atmosphere: InstanceId) -> (libroxel_instance::Color3, f32) {
+    let n = |p, d: f64| tree.get_number(atmosphere, p).unwrap_or(d) as f32;
+    let density = n(Property::Density, 0.395).clamp(0.0, 1.0) * 0.004
+        + n(Property::Haze, 0.0).clamp(0.0, 10.0) * 0.0015;
+    let colour = tree
+        .get_color(atmosphere, Property::Color)
+        .unwrap_or(libroxel_instance::Color3::new(0.78, 0.78, 0.78));
+    (colour, density)
 }
 
 pub(crate) fn material_for(appearance: &PartAppearance, textures: &MaterialTextures) -> StandardMaterial {

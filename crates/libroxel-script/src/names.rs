@@ -1276,6 +1276,22 @@ pub fn property_name(property: Property) -> &'static str {
         Property::C1Orientation => "C1Orientation",
         Property::DesiredAngle => "DesiredAngle",
         Property::PrimaryPart => "PrimaryPart",
+        Property::Density => "Density",
+        Property::Haze => "Haze",
+        Property::BloomIntensity => "Intensity",
+        Property::BloomSize => "Size",
+        Property::Threshold => "Threshold",
+        Property::Contrast => "Contrast",
+        Property::Saturation => "Saturation",
+        Property::TintColor => "TintColor",
+        Property::SelectionColor => "Color3",
+        Property::LineThickness => "LineThickness",
+        Property::Width0 => "Width0",
+        Property::Width1 => "Width1",
+        Property::MinSize => "MinSize",
+        Property::MaxSize => "MaxSize",
+        Property::MinTextSize => "MinTextSize",
+        Property::MaxTextSize => "MaxTextSize",
     }
 }
 

@@ -22,6 +22,7 @@ pub mod session;
 pub mod sounds;
 mod terrain_view;
 pub mod view;
+pub mod view_effects;
 pub mod weld;
 
 pub use character::{Character, CharacterInput};

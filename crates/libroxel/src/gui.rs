@@ -157,9 +157,15 @@ fn arrange_unsorted(
         .collect()
 }
 
-/// A GUI object's size after its UI scale and aspect ratio constraint.
+/// A GUI object's size after its UI scale, size constraint and aspect
+/// ratio constraint.
 fn constrained(tree: &InstanceTree, id: InstanceId, size: Vec2) -> Vec2 {
     let mut size = size;
+    if let Some(limits) = child_of_class(tree, id, ClassKind::UISizeConstraint) {
+        let lo = vec2(tree, limits, Property::MinSize);
+        let hi = vec2(tree, limits, Property::MaxSize);
+        size = Vec2::new(size.x.clamp(lo.x, hi.x.max(lo.x)), size.y.clamp(lo.y, hi.y.max(lo.y)));
+    }
     if let Some(scale) = child_of_class(tree, id, ClassKind::UIScale) {
         let k = tree.get_number(scale, Property::Scale).unwrap_or(1.0).max(0.0) as f32;
         size = Vec2::new(size.x * k, size.y * k);
@@ -249,9 +255,17 @@ fn draw_text(
         job.halign = halign;
         painter.layout_job(job)
     };
+    // A text size constraint keeps the size (scaled or not) within its limits.
+    let (least, most) = match child_of_class(tree, id, ClassKind::UITextSizeConstraint) {
+        Some(c) => {
+            let lo = tree.get_number(c, Property::MinTextSize).unwrap_or(1.0).max(1.0) as f32;
+            (lo, (tree.get_number(c, Property::MaxTextSize).unwrap_or(100.0) as f32).max(lo))
+        }
+        None => (1.0, 100.0),
+    };
     let galley = if scaled {
         // The biggest size that fits, found by halving the gap a few times.
-        let (mut lo, mut hi) = (1.0f32, 100.0f32);
+        let (mut lo, mut hi) = (least, most);
         for _ in 0..8 {
             let mid = (lo + hi) / 2.0;
             let g = lay(mid);
@@ -263,7 +277,7 @@ fn draw_text(
         }
         lay(lo)
     } else {
-        lay(size)
+        lay(size.clamp(least, most))
     };
     let bounds = galley.rect;
     let left = match x {
@@ -661,5 +675,30 @@ mod tests {
         let rect = |name: &str| placed.iter().find(|(c, _, _)| tree.name(*c) == Ok(name)).unwrap().2;
         assert_eq!(rect("Square").size(), egui::vec2(100.0, 100.0));
         assert_eq!(rect("Big").size(), egui::vec2(200.0, 200.0));
+    }
+
+    #[test]
+    fn size_constraints_keep_objects_within_limits() {
+        let mut tree = InstanceTree::new();
+        let root = tree.root();
+        let screen = gui(&mut tree, ClassKind::ScreenGui, root, "Screen");
+        let wide = gui(&mut tree, ClassKind::Frame, screen, "Wide");
+        set(&mut tree, wide, Property::GuiSize, PropertyValue::UDim2(UDim2::new(1.0, 0.0, 0.0, 10.0)));
+        let limits = gui(&mut tree, ClassKind::UISizeConstraint, wide, "Limits");
+        set(
+            &mut tree,
+            limits,
+            Property::MinSize,
+            PropertyValue::Vec2(libroxel_instance::Vec2::new(0.0, 40.0)),
+        );
+        set(
+            &mut tree,
+            limits,
+            Property::MaxSize,
+            PropertyValue::Vec2(libroxel_instance::Vec2::new(300.0, 500.0)),
+        );
+        let placed = arrange(&tree, screen, Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)));
+        let rect = placed.iter().find(|(c, _, _)| *c == wide).unwrap().2;
+        assert_eq!(rect.size(), egui::vec2(300.0, 40.0));
     }
 }

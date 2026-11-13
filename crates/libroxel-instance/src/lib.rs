@@ -831,6 +831,42 @@ impl ClassKind {
         const ASPECT: &[Property] = &[Property::Name, Property::AspectRatio];
         const SCALE: &[Property] = &[Property::Name, Property::Scale];
         const MODEL: &[Property] = &[Property::Name, Property::PrimaryPart];
+        const ATMOSPHERE: &[Property] = &[Property::Name, Property::Density, Property::Haze, Property::Color];
+        const BLOOM: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::BloomIntensity,
+            Property::BloomSize,
+            Property::Threshold,
+        ];
+        const COLOR_CORRECTION: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::Brightness,
+            Property::Contrast,
+            Property::Saturation,
+            Property::TintColor,
+        ];
+        const SELECTION_BOX: &[Property] = &[
+            Property::Name,
+            Property::Adornee,
+            Property::SelectionColor,
+            Property::LineThickness,
+            Property::Visible,
+        ];
+        const BEAM: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::Attachment0,
+            Property::Attachment1,
+            Property::Color,
+            Property::Transparency,
+            Property::Width0,
+            Property::Width1,
+            Property::LightEmission,
+        ];
+        const SIZE_LIMITS: &[Property] = &[Property::Name, Property::MinSize, Property::MaxSize];
+        const TEXT_SIZE_LIMITS: &[Property] = &[Property::Name, Property::MinTextSize, Property::MaxTextSize];
         const JOINT: &[Property] = &[
             Property::Name,
             Property::Part0,
@@ -1027,6 +1063,13 @@ impl ClassKind {
             ClassKind::BodyColors => BODY_COLORS,
             ClassKind::Animation => ANIMATION,
             ClassKind::Model => MODEL,
+            ClassKind::Atmosphere => ATMOSPHERE,
+            ClassKind::BloomEffect => BLOOM,
+            ClassKind::ColorCorrectionEffect => COLOR_CORRECTION,
+            ClassKind::SelectionBox => SELECTION_BOX,
+            ClassKind::Beam => BEAM,
+            ClassKind::UISizeConstraint => SIZE_LIMITS,
+            ClassKind::UITextSizeConstraint => TEXT_SIZE_LIMITS,
             ClassKind::Weld => JOINT,
             ClassKind::Motor6D => MOTOR,
             _ => COMMON,
@@ -1087,6 +1130,7 @@ impl ClassKind {
             Property::ClockTime => PropertyValue::Number(14.0),
             Property::Brightness => PropertyValue::Number(match self {
                 ClassKind::Lighting => 2.0,
+                ClassKind::ColorCorrectionEffect => 0.0,
                 _ => 1.0,
             }),
             Property::LayoutOrder => PropertyValue::Number(0.0),
@@ -1137,6 +1181,20 @@ impl ClassKind {
             | Property::C1Orientation => PropertyValue::Vec3(Vec3::ZERO),
             Property::DesiredAngle => PropertyValue::Number(0.0),
             Property::PrimaryPart => PropertyValue::Ref(None),
+            Property::Density => PropertyValue::Number(0.395),
+            Property::Haze | Property::Contrast | Property::Saturation => PropertyValue::Number(0.0),
+            Property::BloomIntensity => PropertyValue::Number(1.0),
+            Property::BloomSize => PropertyValue::Number(24.0),
+            Property::Threshold => PropertyValue::Number(2.0),
+            Property::TintColor => PropertyValue::Color3(Color3::WHITE),
+            Property::SelectionColor => PropertyValue::Color3(Color3::from_rgb8(13, 105, 172)),
+            Property::LineThickness => PropertyValue::Number(0.15),
+            Property::Width0 | Property::Width1 => PropertyValue::Number(1.0),
+            Property::MinSize => PropertyValue::Vec2(Vec2::ZERO),
+            // Big rather than infinite, so places can save it.
+            Property::MaxSize => PropertyValue::Vec2(Vec2::new(1.0e6, 1.0e6)),
+            Property::MinTextSize => PropertyValue::Number(1.0),
+            Property::MaxTextSize => PropertyValue::Number(100.0),
             Property::Padding => PropertyValue::UDim(UDim::default()),
             Property::BlastRadius => PropertyValue::Number(4.0),
             Property::BlastPressure => PropertyValue::Number(500_000.0),
@@ -1254,6 +1312,8 @@ impl ClassKind {
                 ClassKind::Smoke => Color3::WHITE,
                 ClassKind::UIStroke => Color3::new(0.0, 0.0, 0.0),
                 ClassKind::SpringConstraint => Color3::from_rgb8(200, 200, 210),
+                ClassKind::Atmosphere => Color3::from_rgb8(199, 199, 199),
+                ClassKind::Beam => Color3::WHITE,
                 _ => Color3::MEDIUM_GREY,
             }),
             Property::Anchored => PropertyValue::Bool(self == ClassKind::SpawnLocation),

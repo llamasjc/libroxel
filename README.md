@@ -102,6 +102,14 @@ The first build compiles Bevy and takes a while. After that it is quick.
   and tap to click (View → Touch controls shows them without touching).
   Scripts see `UserInputService.TouchEnabled`, `GamepadEnabled` and
   `GetLastInputType()`.
+- **Haze, glow and colour:** an `Atmosphere` in Lighting thickens the
+  distance into haze (Density, Haze, Color); a `BloomEffect` makes bright
+  things glow (Intensity, Size, Threshold); a `ColorCorrectionEffect`
+  changes Brightness, Contrast, Saturation and TintColor. Either effect
+  also works inside the workspace's Camera. A `SelectionBox` outlines its
+  Adornee (or its parent) in Color3, and a `Beam` draws a strip between
+  its two attachments. `UISizeConstraint` and `UITextSizeConstraint` keep
+  GUI objects and text within a minimum and maximum size.
 - **Screen GUIs:** put a `ScreenGui` in StarterGui and fill it with frames,
   text labels and text buttons (Insert menu). They are drawn over the view
   while you edit, so you can click one to select it and lay it out with

@@ -166,6 +166,13 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::Smoke,
     ClassKind::Sparkles,
     ClassKind::Highlight,
+    ClassKind::SelectionBox,
+    ClassKind::Beam,
+    ClassKind::Atmosphere,
+    ClassKind::BloomEffect,
+    ClassKind::ColorCorrectionEffect,
+    ClassKind::UISizeConstraint,
+    ClassKind::UITextSizeConstraint,
 ];
 
 const SHAPES: &[(PartShape, &str)] = &[
@@ -254,24 +261,22 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::UIScale => "🔍",
         ClassKind::Teams | ClassKind::Team => "🚩",
         ClassKind::Weld | ClassKind::Motor6D => "🔗",
+        ClassKind::Beam => "〰",
+        ClassKind::SelectionBox => "⬚",
+        ClassKind::Atmosphere => "🌫",
+        ClassKind::BloomEffect | ClassKind::ColorCorrectionEffect => "✨",
+        ClassKind::UISizeConstraint | ClassKind::UITextSizeConstraint => "⬌",
         ClassKind::Configuration => "⚙",
         ClassKind::CFrameValue
         | ClassKind::BrickColorValue
         | ClassKind::Sky
-        | ClassKind::Atmosphere
-        | ClassKind::BloomEffect
         | ClassKind::BlurEffect
-        | ClassKind::ColorCorrectionEffect
         | ClassKind::SunRaysEffect
         | ClassKind::DepthOfFieldEffect
-        | ClassKind::Beam
         | ClassKind::Trail
-        | ClassKind::SelectionBox
         | ClassKind::SurfaceGui
         | ClassKind::SurfaceLight
         | ClassKind::UIGradient
-        | ClassKind::UISizeConstraint
-        | ClassKind::UITextSizeConstraint
         | ClassKind::BodyGyro
         | ClassKind::AlignOrientation
         | ClassKind::Torque
@@ -1537,6 +1542,31 @@ fn properties(
              Set DesiredAngle (in radians) and it turns there by MaxVelocity each 1/60 of a second.",
         ),
         ClassKind::Configuration => Some("A folder for a model's settings: put value objects inside it."),
+        ClassKind::Atmosphere => Some(
+            "Put this in Lighting: haze that thickens with distance. Density is how thick (0 to 1), Haze adds more \
+             towards the horizon, and Color tints it. It replaces Lighting's fog.",
+        ),
+        ClassKind::BloomEffect => Some(
+            "Put this in Lighting (or the camera): bright things such as neon parts glow. Intensity is how strongly, \
+             Size how far it spreads and Threshold how bright something must be.",
+        ),
+        ClassKind::ColorCorrectionEffect => Some(
+            "Put this in Lighting (or the camera) to grade the picture: Brightness, Contrast and Saturation \
+             (each 0 for no change; Saturation -1 is black and white), and TintColor to warm or cool it.",
+        ),
+        ClassKind::SelectionBox => Some(
+            "Draws an outline round its Adornee (a part or model), or what it's inside if Adornee is empty.",
+        ),
+        ClassKind::Beam => Some(
+            "A flat strip between Attachment0 and Attachment1 that always faces the camera: lasers, light shafts, \
+             ropes of light. Width0 and Width1 set how wide, LightEmission makes it glow.",
+        ),
+        ClassKind::UISizeConstraint => {
+            Some("Put this in a GUI object to keep its size between MinSize and MaxSize (in pixels).")
+        }
+        ClassKind::UITextSizeConstraint => Some(
+            "Put this in a text object to keep its text size between MinTextSize and MaxTextSize, even with TextScaled.",
+        ),
         ClassKind::WeldConstraint => Some(
             "Holds Part0 and Part1 together while playing: they move as one, keeping how they sit now. \
              Unanchor one part and the whole assembly falls, rolls and gets pushed together.",
