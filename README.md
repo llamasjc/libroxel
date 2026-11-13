@@ -148,6 +148,13 @@ The first build compiles Bevy and takes a while. After that it is quick.
   it or publish as you. Games you publish show your account name, and
   clicking an author in Online lists all their games. Your account name is
   also the name you play as, unless you type another.
+- **Catalog:** make a hat in the editor from up to 32 parts (each at most
+  6 studs across), select its model and use **Edit > Share as a hat**. Its
+  bottom sits on the character's head, centred. It goes in the catalog on
+  the Hub, signed as you, and everyone using that Hub sees it on the
+  **👤 Avatar** tab under **Catalog** with a **Wear** button. A worn catalog
+  hat goes with you into every game, including ones you join. Everything
+  in the catalog is free.
 - **Editing together:** **Together → Edit together… → Share this game**
   lets others edit the game you have open, live, while you work on it. Send
   them the code from **📋 Copy edit code** (or, on your own network, your

@@ -197,6 +197,54 @@ pub fn valid_account_name(name: &str) -> bool {
     (3..=20).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Sharing something to wear in the catalog.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NewItem {
+    /// Who made it: items always belong to someone.
+    pub creator_id: String,
+    pub name: String,
+    /// What kind of thing it is; only "hat" for now.
+    pub kind: String,
+    /// The item itself, as the app saves it.
+    pub data: serde_json::Value,
+    pub time: i64,
+    /// [`item_message`] signed with the creator's identity key.
+    pub signature: String,
+}
+
+/// What a creator signs to share an item.
+pub fn item_message(
+    creator_id: &str,
+    name: &str,
+    kind: &str,
+    data: &serde_json::Value,
+    time: i64,
+) -> Vec<u8> {
+    format!("libroxel item\n{creator_id}\n{name}\n{kind}\n{data}\n{time}").into_bytes()
+}
+
+/// What a creator signs to take an item out of the catalog.
+pub fn unlist_message(item_id: &str) -> Vec<u8> {
+    format!("libroxel unlist\n{item_id}").into_bytes()
+}
+
+/// The biggest item the catalog takes, in bytes of JSON.
+pub const MAX_ITEM: usize = 16 * 1024;
+
+/// Something to wear, as the catalog lists it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Item {
+    pub item_id: String,
+    pub name: String,
+    pub kind: String,
+    /// The creator's account name, or "Someone" if they have none here.
+    pub creator: String,
+    pub creator_id: String,
+    pub data: serde_json::Value,
+    /// How many times someone has put it on.
+    pub wears: u32,
+}
+
 /// A player's public page.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Profile {
@@ -327,6 +375,15 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
             created     INTEGER NOT NULL,
             updated     INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS items (
+            item_id     TEXT PRIMARY KEY,
+            creator_id  TEXT NOT NULL,
+            name        TEXT NOT NULL,
+            kind        TEXT NOT NULL,
+            data        TEXT NOT NULL,
+            wears       INTEGER NOT NULL,
+            created     INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS accounts (
             player_id   TEXT PRIMARY KEY,
             name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -355,6 +412,9 @@ pub fn router(db: Connection) -> Router {
         .route("/games/{id}/place", get(download))
         .route("/accounts", get(find_people).post(update_account))
         .route("/accounts/{id}", get(profile))
+        .route("/catalog", get(list_items).post(share_item))
+        .route("/catalog/{id}", delete(unlist_item))
+        .route("/catalog/{id}/wear", post(wear_item))
         // Room for a big place, written out as JSON inside a JSON request.
         .layer(axum::extract::DefaultBodyLimit::max(MAX_PLACE * 2 + 64 * 1024))
         .with_state(db)
@@ -569,6 +629,111 @@ async fn update_account(
     )
     .map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn share_item(
+    State(db): State<Db>,
+    Json(item): Json<NewItem>,
+) -> Result<Json<Item>, (StatusCode, String)> {
+    let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
+    if item.kind != "hat" {
+        return bad("the catalog only takes hats for now");
+    }
+    let name = clip(&item.name);
+    if name.is_empty() || name != item.name {
+        return bad("an item needs a name, without spaces at the ends");
+    }
+    let data = item.data.to_string();
+    if data.len() > MAX_ITEM || !item.data.get("parts").is_some_and(serde_json::Value::is_array) {
+        return bad("that is not a hat the catalog can take");
+    }
+    if !verify(
+        &item.creator_id,
+        &item_message(&item.creator_id, &item.name, &item.kind, &item.data, item.time),
+        &item.signature,
+    ) {
+        return Err((StatusCode::FORBIDDEN, "the signature does not match that creator".into()));
+    }
+    let db = db.lock().unwrap();
+    let item_id = new_game_id();
+    db.execute(
+        "INSERT INTO items (item_id, creator_id, name, kind, data, wears, created) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)",
+        params![item_id, item.creator_id, name, item.kind, data, now()],
+    )
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let creator: Option<String> = db
+        .query_row("SELECT name FROM accounts WHERE player_id = ?1", params![item.creator_id], |r| r.get(0))
+        .optional()
+        .ok()
+        .flatten();
+    Ok(Json(Item {
+        item_id,
+        name,
+        kind: item.kind,
+        creator: creator.unwrap_or_else(|| "Someone".into()),
+        creator_id: item.creator_id,
+        data: item.data,
+        wears: 0,
+    }))
+}
+
+async fn list_items(State(db): State<Db>, Query(query): Query<ListQuery>) -> Json<Vec<Item>> {
+    let db = db.lock().unwrap();
+    let pattern = format!("%{}%", query.q.unwrap_or_default().trim().replace(['%', '_'], ""));
+    let mut statement = db
+        .prepare(
+            "SELECT i.item_id, i.name, i.kind, COALESCE(a.name, 'Someone'), i.creator_id, i.data, i.wears
+             FROM items i LEFT JOIN accounts a ON a.player_id = i.creator_id
+             WHERE i.name LIKE ?1 OR COALESCE(a.name, '') LIKE ?1
+             ORDER BY i.wears DESC, i.created DESC LIMIT 200",
+        )
+        .expect("the catalog query is valid");
+    let rows = statement
+        .query_map(params![pattern], |r| {
+            let data: String = r.get(5)?;
+            Ok(Item {
+                item_id: r.get(0)?,
+                name: r.get(1)?,
+                kind: r.get(2)?,
+                creator: r.get(3)?,
+                creator_id: r.get(4)?,
+                data: serde_json::from_str(&data).unwrap_or(serde_json::Value::Null),
+                wears: r.get::<_, i64>(6)? as u32,
+            })
+        })
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default();
+    Json(rows)
+}
+
+async fn wear_item(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> StatusCode {
+    let db = db.lock().unwrap();
+    match db.execute("UPDATE items SET wears = wears + 1 WHERE item_id = ?1", params![id]) {
+        Ok(0) => StatusCode::NOT_FOUND,
+        Ok(_) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+async fn unlist_item(
+    State(db): State<Db>,
+    UrlPath(id): UrlPath<String>,
+    Json(signed): Json<Secret>,
+) -> StatusCode {
+    let db = db.lock().unwrap();
+    let creator: Option<String> = db
+        .query_row("SELECT creator_id FROM items WHERE item_id = ?1", params![id], |r| r.get(0))
+        .optional()
+        .ok()
+        .flatten();
+    let Some(creator) = creator else { return StatusCode::NOT_FOUND };
+    if !verify(&creator, &unlist_message(&id), &signed.secret) {
+        return StatusCode::FORBIDDEN;
+    }
+    match db.execute("DELETE FROM items WHERE item_id = ?1", params![id]) {
+        Ok(_) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 async fn find_people(State(db): State<Db>, Query(query): Query<ListQuery>) -> Json<Vec<Person>> {
@@ -946,6 +1111,53 @@ impl HubClient {
             }
             s => Err(format!("the Hub said {s}")),
         }
+    }
+
+    /// Shares something to wear in the catalog.
+    pub fn share_item(&self, item: &NewItem) -> Result<Item, String> {
+        self.agent
+            .post(format!("{}/catalog", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(item)
+            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .and_then(|mut r| {
+                if r.status().is_success() {
+                    r.body_mut().read_json().map_err(|e| e.to_string())
+                } else {
+                    Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+                }
+            })
+    }
+
+    /// The catalog, most worn first, matching `search` if given.
+    pub fn catalog(&self, search: &str) -> Result<Vec<Item>, String> {
+        self.agent
+            .get(format!("{}/catalog", self.base))
+            .query("q", search)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+    }
+
+    /// Counts someone putting an item on.
+    pub fn wore(&self, item_id: &str) -> Result<(), String> {
+        self.agent
+            .post(format!("{}/catalog/{item_id}/wear", self.base))
+            .send_empty()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Takes an item out of the catalog, with [`unlist_message`] signed by its creator.
+    pub fn unlist(&self, item_id: &str, signature: &str) -> Result<(), String> {
+        self.agent
+            .delete(format!("{}/catalog/{item_id}", self.base))
+            .force_send_body()
+            .send_json(serde_json::json!({ "secret": signature }))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     /// Players whose names match `search`.

@@ -258,6 +258,7 @@ fn everyone_sees_how_a_joined_player_chose_to_look() {
         colors: BodyColors { shirt: green, ..BodyColors::for_player(0) },
         hat: Hat::Crown,
         hat_color: Color3::from_rgb8(250, 210, 60),
+        item: None,
     };
     guest.set_local_look(look);
     let dressed = |session: &PlaySession| {

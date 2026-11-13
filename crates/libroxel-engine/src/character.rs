@@ -155,18 +155,191 @@ impl Hat {
     }
 }
 
+/// One part of a [`CustomHat`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct HatPart {
+    pub size: Vec3,
+    /// From the middle of the head.
+    pub offset: Vec3,
+    /// Turned this many degrees about X, Y and Z.
+    pub turn: Vec3,
+    pub shape: PartShape,
+    pub color: Color3,
+    pub neon: bool,
+}
+
+/// A hat someone made in the editor and shared in the catalog.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CustomHat {
+    pub name: String,
+    pub parts: Vec<HatPart>,
+}
+
+impl CustomHat {
+    /// The most parts a hat may have.
+    pub const MAX_PARTS: usize = 32;
+    /// How far (in studs) from the middle of the head a part may be, and how big.
+    pub const REACH: f32 = 6.0;
+
+    /// Makes a hat from the parts under `model` (a model, a folder or an
+    /// accessory), or from `model` itself if it's a part. It sits on the
+    /// head so that the bottom of the parts' box rests on top of the head,
+    /// centred over it.
+    pub fn from_parts(tree: &InstanceTree, model: InstanceId) -> Result<CustomHat, String> {
+        let mut parts = Vec::new();
+        let mut found = Vec::new();
+        if tree.class(model).is_ok_and(|c| c.is_physical()) {
+            found.push(model);
+        }
+        found.extend(
+            tree.descendants(model)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|d| tree.class(*d).is_ok_and(|c| c.is_physical())),
+        );
+        if found.is_empty() {
+            return Err("there are no parts in it".into());
+        }
+        if found.len() > Self::MAX_PARTS {
+            return Err(format!("a hat has at most {} parts", Self::MAX_PARTS));
+        }
+        let (mut low, mut high) =
+            (Vec3::new(f32::MAX, f32::MAX, f32::MAX), Vec3::new(f32::MIN, f32::MIN, f32::MIN));
+        let mut pieces = Vec::new();
+        for id in found {
+            let get = |p| tree.get_vec3(id, p).unwrap_or(Vec3::ZERO);
+            let (pos, size, turn) =
+                (get(Property::Position), get(Property::Size), get(Property::Orientation));
+            let rotation = Rotation::from_orientation(turn);
+            for corner in 0..8 {
+                let pick = |bit: u32, v: f32| if corner & (1 << bit) == 0 { -v * 0.5 } else { v * 0.5 };
+                let at = pos + rotation.apply(Vec3::new(pick(0, size.x), pick(1, size.y), pick(2, size.z)));
+                low = Vec3::new(low.x.min(at.x), low.y.min(at.y), low.z.min(at.z));
+                high = Vec3::new(high.x.max(at.x), high.y.max(at.y), high.z.max(at.z));
+            }
+            let shape = match tree.get(id, Property::Shape) {
+                Ok(PropertyValue::Enum(EnumValue::Shape(shape))) => shape,
+                _ => PartShape::Block,
+            };
+            let color = match tree.get(id, Property::Color) {
+                Ok(PropertyValue::Color3(c)) => c,
+                _ => Color3::WHITE,
+            };
+            let neon = matches!(
+                tree.get(id, Property::Material),
+                Ok(PropertyValue::Enum(EnumValue::Material(Material::Neon)))
+            );
+            pieces.push((pos, size, turn, shape, color, neon));
+        }
+        // The bottom of the hat sits on the top of the head.
+        let seat = Vec3::new((low.x + high.x) * 0.5, low.y, (low.z + high.z) * 0.5);
+        let head_top = Vec3::new(0.0, HEAD_SIZE.y * 0.5, 0.0);
+        for (pos, size, turn, shape, color, neon) in pieces {
+            parts.push(HatPart { size, offset: pos - seat + head_top, turn, shape, color, neon });
+        }
+        let name = tree.name(model).unwrap_or("Hat").to_owned();
+        let hat = CustomHat { name, parts };
+        hat.check()?;
+        Ok(hat)
+    }
+
+    /// Whether every part is in reach and of a sensible size.
+    pub fn check(&self) -> Result<(), String> {
+        if self.parts.is_empty() || self.parts.len() > Self::MAX_PARTS {
+            return Err(format!("a hat has 1 to {} parts", Self::MAX_PARTS));
+        }
+        let fits = |v: Vec3, low: f32| {
+            [v.x, v.y, v.z].iter().all(|c| c.is_finite() && *c >= low && *c <= Self::REACH)
+        };
+        for part in &self.parts {
+            if !fits(part.size, 0.05) {
+                return Err(format!("its parts are at most {} studs across", Self::REACH));
+            }
+            if !fits(part.offset, -Self::REACH) {
+                return Err(format!("it reaches more than {} studs from the head", Self::REACH));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn to_json(&self) -> libroxel_instance::serde_json::Value {
+        use libroxel_instance::serde_json::json;
+        let v = |v: Vec3| json!([v.x, v.y, v.z]);
+        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let parts: Vec<_> = self
+            .parts
+            .iter()
+            .map(|p| {
+                json!({
+                    "size": v(p.size),
+                    "at": v(p.offset),
+                    "turn": v(p.turn),
+                    "shape": format!("{:?}", p.shape),
+                    "color": [byte(p.color.r), byte(p.color.g), byte(p.color.b)],
+                    "neon": p.neon,
+                })
+            })
+            .collect();
+        json!({ "name": self.name, "parts": parts })
+    }
+
+    /// Reads [`to_json`](Self::to_json)'s object, if it's a hat that fits.
+    pub fn from_json(value: &libroxel_instance::serde_json::Value) -> Option<CustomHat> {
+        let v = |j: &libroxel_instance::serde_json::Value| {
+            let a = j.as_array().filter(|a| a.len() == 3)?;
+            let f = |i: usize| a[i].as_f64().map(|n| n as f32);
+            Some(Vec3::new(f(0)?, f(1)?, f(2)?))
+        };
+        let parts = value.get("parts")?.as_array()?;
+        let mut hat = CustomHat {
+            name: value.get("name").and_then(|n| n.as_str()).unwrap_or("Hat").chars().take(40).collect(),
+            parts: Vec::new(),
+        };
+        for part in parts.iter().take(Self::MAX_PARTS + 1) {
+            let color =
+                part.get("color").and_then(|c| c.as_array()).filter(|a| a.len() == 3).and_then(|a| {
+                    let n = |i: usize| a[i].as_u64().filter(|n| *n <= 255).map(|n| n as u8);
+                    Some(Color3::from_rgb8(n(0)?, n(1)?, n(2)?))
+                })?;
+            let shape = match part.get("shape").and_then(|s| s.as_str()) {
+                Some("Ball") => PartShape::Ball,
+                Some("Cylinder") => PartShape::Cylinder,
+                Some("Wedge") => PartShape::Wedge,
+                _ => PartShape::Block,
+            };
+            hat.parts.push(HatPart {
+                size: v(part.get("size")?)?,
+                offset: v(part.get("at")?)?,
+                turn: part.get("turn").and_then(v).unwrap_or(Vec3::ZERO),
+                shape,
+                color,
+                neon: part.get("neon").and_then(|n| n.as_bool()).unwrap_or(false),
+            });
+        }
+        hat.check().ok()?;
+        Some(hat)
+    }
+}
+
 /// How a player looks: their body colours and what they wear.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Look {
     pub colors: BodyColors,
     pub hat: Hat,
     pub hat_color: Color3,
+    /// A hat from the catalog, worn instead of `hat`.
+    pub item: Option<std::sync::Arc<CustomHat>>,
 }
 
 impl Look {
     /// The usual look for player number `n`: no hat.
     pub fn for_player(n: usize) -> Look {
-        Look { colors: BodyColors::for_player(n), hat: Hat::None, hat_color: Color3::from_rgb8(240, 200, 60) }
+        Look {
+            colors: BodyColors::for_player(n),
+            hat: Hat::None,
+            hat_color: Color3::from_rgb8(240, 200, 60),
+            item: None,
+        }
     }
 
     /// As a small JSON object, to save or send to a host.
@@ -175,13 +348,17 @@ impl Look {
             let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
             libroxel_instance::serde_json::json!([byte(c.r), byte(c.g), byte(c.b)])
         };
-        libroxel_instance::serde_json::json!({
+        let mut json = libroxel_instance::serde_json::json!({
             "skin": rgb(self.colors.skin),
             "shirt": rgb(self.colors.shirt),
             "pants": rgb(self.colors.pants),
             "hat": self.hat.name(),
             "hat_color": rgb(self.hat_color),
-        })
+        });
+        if let Some(item) = &self.item {
+            json["item"] = item.to_json();
+        }
+        json
     }
 
     /// Reads [`to_json`](Self::to_json)'s object; anything missing or wrong
@@ -206,6 +383,10 @@ impl Look {
             },
             hat: value.get("hat").and_then(|h| h.as_str()).map_or(fallback.hat, Hat::named),
             hat_color: rgb("hat_color", fallback.hat_color),
+            item: match value.get("item") {
+                Some(item) => CustomHat::from_json(item).map(std::sync::Arc::new),
+                None => fallback.item,
+            },
         }
     }
 }
@@ -235,6 +416,38 @@ pub fn wear_hat(tree: &mut InstanceTree, model: InstanceId, hat: Hat, color: Col
         if *turn != 0.0 {
             let turn = Vec3::new(0.0, 0.0, *turn);
             let _ = tree.set_attribute(id, names::HEAD_ORIENTATION, Some(PropertyValue::Vec3(turn)));
+        }
+    }
+    Some(accessory)
+}
+
+/// Puts what `look` wears on the character `model`: its catalog hat if it
+/// has one, else its hat.
+pub fn wear(tree: &mut InstanceTree, model: InstanceId, look: &Look) -> Option<InstanceId> {
+    match &look.item {
+        Some(item) => wear_custom_hat(tree, model, item),
+        None => wear_hat(tree, model, look.hat, look.hat_color),
+    }
+}
+
+/// Puts a catalog hat on the character `model` as an accessory.
+pub fn wear_custom_hat(tree: &mut InstanceTree, model: InstanceId, hat: &CustomHat) -> Option<InstanceId> {
+    let accessory = tree.create(ClassKind::Accessory, hat.name.as_str()).ok()?;
+    tree.set_parent(accessory, Some(model)).ok()?;
+    for (n, part) in hat.parts.iter().enumerate() {
+        let id = tree.create(ClassKind::Part, format!("Part{}", n + 1)).expect("parts can be created");
+        tree.set_parent(id, Some(accessory)).expect("fresh parts can be parented");
+        set(tree, id, Property::Size, PropertyValue::Vec3(part.size));
+        set(tree, id, Property::Color, PropertyValue::Color3(part.color));
+        set(tree, id, Property::Anchored, PropertyValue::Bool(true));
+        set(tree, id, Property::CanCollide, PropertyValue::Bool(false));
+        set(tree, id, Property::Shape, PropertyValue::Enum(EnumValue::Shape(part.shape)));
+        if part.neon {
+            set(tree, id, Property::Material, PropertyValue::Enum(EnumValue::Material(Material::Neon)));
+        }
+        let _ = tree.set_attribute(id, names::HEAD_OFFSET, Some(PropertyValue::Vec3(part.offset)));
+        if part.turn != Vec3::ZERO {
+            let _ = tree.set_attribute(id, names::HEAD_ORIENTATION, Some(PropertyValue::Vec3(part.turn)));
         }
     }
     Some(accessory)
@@ -595,7 +808,7 @@ impl Character {
             }
         }
         add_body_colors(tree, model, colors);
-        wear_hat(tree, model, look.hat, look.hat_color);
+        wear(tree, model, &look);
         let character = Character { model, root, head, humanoid, limbs };
         character.pose(tree, Pose::default());
         character
@@ -610,7 +823,7 @@ impl Character {
             }
         }
         add_body_colors(tree, self.model, look.colors);
-        wear_hat(tree, self.model, look.hat, look.hat_color);
+        wear(tree, self.model, &look);
         self.pose(tree, Pose::default());
     }
 

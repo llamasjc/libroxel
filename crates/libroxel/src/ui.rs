@@ -83,6 +83,8 @@ enum Action {
         name: String,
     },
     StopEdits,
+    /// Share a model (or part) as a hat in the catalog.
+    ShareHat(InstanceId),
     /// Put the open game on the Hub for anyone to play.
     Publish {
         title: String,
@@ -303,6 +305,11 @@ pub fn editor_ui(
     editor.platform.tick(hosting);
     if !playing {
         edit_together(engine, editor);
+    }
+    match editor.platform.item_status.take() {
+        Some(Ok(said)) => log(engine, LogLevel::Info, said),
+        Some(Err(why)) => log(engine, LogLevel::Error, format!("Could not share the hat: {why}")),
+        None => {}
     }
 
     // A game played from the main menu ended: back to the menu.
@@ -855,6 +862,18 @@ fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
                 && let Some(id) = selected
             {
                 actions.push(Action::Rotate90(id));
+            }
+            ui.separator();
+            if ui
+                .add_enabled(selected.is_some() && !playing, egui::Button::new("Share as a hat"))
+                .on_hover_text(
+                    "Put the selected model's parts in the catalog as a hat anyone can wear. It sits with its \
+                     bottom on the head, so build it the way up it goes.",
+                )
+                .clicked()
+                && let Some(id) = selected
+            {
+                actions.push(Action::ShareHat(id));
             }
         });
         ui.menu_button("Insert", |ui| {
@@ -2588,6 +2607,16 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     editor.edit_tunnel = tunnel;
                 }
                 Err(e) => log(engine, LogLevel::Error, e),
+            }
+        }
+        Action::ShareHat(id) => {
+            let made = libroxel_engine::character::CustomHat::from_parts(&engine.tree.borrow(), id);
+            match made {
+                Ok(hat) => {
+                    log(engine, LogLevel::Info, format!("Sharing {} ({} parts)…", hat.name, hat.parts.len()));
+                    editor.platform.share_hat(&hat);
+                }
+                Err(why) => log(engine, LogLevel::Error, format!("That can't be a hat: {why}")),
             }
         }
         Action::Publish { title, description } => {

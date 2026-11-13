@@ -98,7 +98,7 @@ fn looks_survive_being_saved_and_read_back() {
     assert_eq!(Look::from_json(&look.to_json(), Look::for_player(0)), look);
     // Rubbish falls back.
     let rubbish = libroxel_instance::serde_json::json!({ "hat": "Space helmet", "skin": [1, 2] });
-    assert_eq!(Look::from_json(&rubbish, look).colors, look.colors);
+    assert_eq!(Look::from_json(&rubbish, look.clone()).colors, look.colors);
     assert_eq!(Look::from_json(&rubbish, look).hat, Hat::None);
 }
 
@@ -196,4 +196,52 @@ fn a_character_that_dies_falls_apart_and_its_hat_stays_on_its_head() {
     let gap =
         tree.get_vec3(jewel, Property::Position).unwrap() - tree.get_vec3(head, Property::Position).unwrap();
     assert!(gap.length() < 2.5, "{gap:?}");
+}
+
+#[test]
+fn a_hat_made_from_parts_sits_on_the_head_and_survives_being_sent() {
+    use libroxel_engine::character::{Character, CustomHat};
+    use libroxel_instance::{Color3, PropertyValue, Vec3};
+    let mut tree = InstanceTree::new();
+    let ws = tree.workspace();
+    let model = tree.create(ClassKind::Model, "Top hat").unwrap();
+    tree.set_parent(model, Some(ws)).unwrap();
+    // Built anywhere: a wide brim with a tall tower on it.
+    for (name, at, size) in [
+        ("Brim", Vec3::new(50.0, 20.0, 10.0), Vec3::new(3.0, 0.2, 3.0)),
+        ("Tower", Vec3::new(50.0, 21.1, 10.0), Vec3::new(1.6, 2.0, 1.6)),
+    ] {
+        let part = tree.create(ClassKind::Part, name).unwrap();
+        tree.set_parent(part, Some(model)).unwrap();
+        tree.set(part, Property::Position, PropertyValue::Vec3(at)).unwrap();
+        tree.set(part, Property::Size, PropertyValue::Vec3(size)).unwrap();
+        tree.set(part, Property::Color, PropertyValue::Color3(Color3::from_rgb8(20, 20, 30))).unwrap();
+    }
+    let hat = CustomHat::from_parts(&tree, model).unwrap();
+    assert_eq!(hat.name, "Top hat");
+    assert_eq!(hat.parts.len(), 2);
+    // The brim's bottom rests on the top of the head (0.7 above its middle), centred.
+    let brim = &hat.parts[0];
+    assert!((brim.offset - Vec3::new(0.0, 0.8, 0.0)).length() < 1e-4, "{:?}", brim.offset);
+    assert!((hat.parts[1].offset - Vec3::new(0.0, 1.9, 0.0)).length() < 1e-4);
+
+    // Sent as JSON (to a host, or the catalog) it comes back the same.
+    let look = Look { item: Some(std::sync::Arc::new(hat.clone())), ..Look::for_player(0) };
+    let back = Look::from_json(&look.to_json(), Look::for_player(0));
+    assert_eq!(back, look);
+
+    // A character wearing it has its parts, placed by the head.
+    let character = Character::spawn_wearing(&mut tree, "Kai", None, look);
+    let accessory = tree.find_first_child_of_class(character.model, ClassKind::Accessory).unwrap().unwrap();
+    assert_eq!(tree.name(accessory).unwrap(), "Top hat");
+    assert_eq!(tree.children(accessory).unwrap().len(), 2);
+
+    // Hats too big, or reaching too far, are turned away.
+    let mut huge = hat.clone();
+    huge.parts[0].size = Vec3::new(40.0, 1.0, 1.0);
+    assert!(huge.check().is_err());
+    assert!(CustomHat::from_json(&huge.to_json()).is_none());
+    let mut far = hat;
+    far.parts[1].offset = Vec3::new(0.0, 30.0, 0.0);
+    assert!(far.check().is_err());
 }

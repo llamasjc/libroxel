@@ -191,3 +191,37 @@ fn players_claim_names_and_their_signed_games_show_them() {
     };
     assert!(client.publish(&fake).is_err());
 }
+
+#[test]
+fn creators_share_hats_and_others_find_and_wear_them() {
+    use libroxel_hub::{NewItem, item_message, player_id_of, sign, unlist_message};
+    let hub = start("127.0.0.1:0".parse().unwrap(), None).unwrap();
+    let client = HubClient::new(&hub.url());
+    let key = [3u8; 32];
+    let me = player_id_of(&key);
+    let hat = serde_json::json!({ "name": "Top hat", "parts": [{ "size": [1, 1, 1], "at": [0, 1, 0], "color": [0, 0, 0] }] });
+    let item = |name: &str, data: serde_json::Value, signer: &[u8; 32]| NewItem {
+        creator_id: me.clone(),
+        name: name.into(),
+        kind: "hat".into(),
+        signature: sign(signer, &item_message(&me, name, "hat", &data, 5)),
+        data,
+        time: 5,
+    };
+    let shared = client.share_item(&item("Top hat", hat.clone(), &key)).unwrap();
+    assert_eq!(shared.creator, "Someone");
+    // Signed by someone else, or not a hat: turned away.
+    assert!(client.share_item(&item("Fake", hat.clone(), &[4u8; 32])).is_err());
+    assert!(client.share_item(&item("Shoe", serde_json::json!({ "laces": 2 }), &key)).is_err());
+
+    let found = client.catalog("top").unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].data, hat);
+    client.wore(&shared.item_id).unwrap();
+    assert_eq!(client.catalog("").unwrap()[0].wears, 1);
+
+    // Only the creator takes it out.
+    assert!(client.unlist(&shared.item_id, &sign(&[4u8; 32], &unlist_message(&shared.item_id))).is_err());
+    client.unlist(&shared.item_id, &sign(&key, &unlist_message(&shared.item_id))).unwrap();
+    assert!(client.catalog("").unwrap().is_empty());
+}

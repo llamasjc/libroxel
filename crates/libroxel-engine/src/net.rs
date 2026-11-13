@@ -698,9 +698,10 @@ impl PlaySession {
                     "input" => self.avatars[index].input = input_from(&message),
                     "look" => {
                         let usual = crate::character::Look::for_player(index);
-                        let look = message
-                            .get("look")
-                            .map_or(usual, |l| crate::character::Look::from_json(l, usual));
+                        let look = message.get("look").map_or_else(
+                            || usual.clone(),
+                            |l| crate::character::Look::from_json(l, usual.clone()),
+                        );
                         self.set_look(player, look);
                     }
                     "move" => self.remote_move(index, &message),

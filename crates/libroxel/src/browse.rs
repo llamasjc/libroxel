@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use bevy_egui::egui::{self, Color32, RichText};
 use libroxel_hub::{
-    AccountUpdate, Announcer, GameInfo, HostKind, HubClient, Listing, Profile, Publish, RunningHub,
-    ServerInfo,
+    AccountUpdate, Announcer, GameInfo, HostKind, HubClient, Item, Listing, NewItem, Profile, Publish,
+    RunningHub, ServerInfo,
 };
 use libroxel_instance::serde_json::{self, Value as Json, json};
 
@@ -65,6 +65,12 @@ pub struct Platform {
     account_busy: bool,
     pub account: Option<Profile>,
     pub account_status: Option<Result<String, String>>,
+    /// The catalog: things to wear that people made.
+    pub items: Vec<Item>,
+    fetched_items: Slot<Vec<Item>>,
+    item_shared: Slot<String>,
+    /// What the Hub said about the last item shared, for the editor's output.
+    pub item_status: Option<Result<String, String>>,
 }
 
 impl Default for Platform {
@@ -99,6 +105,10 @@ impl Default for Platform {
             account_busy: false,
             account: None,
             account_status: None,
+            items: Vec::new(),
+            fetched_items: Arc::default(),
+            item_shared: Arc::default(),
+            item_status: None,
         }
     }
 }
@@ -177,6 +187,13 @@ impl Platform {
                 Err(e) => self.games_error = Some(e),
             }
         }
+        if let Some(Ok(items)) = self.fetched_items.lock().unwrap().take() {
+            self.items = items;
+        }
+        if let Some(result) = self.item_shared.lock().unwrap().take() {
+            self.item_status = Some(result);
+            self.last_fetch = None;
+        }
         if let Some(result) = self.account_found.lock().unwrap().take() {
             self.account_busy = false;
             match result {
@@ -223,9 +240,11 @@ impl Platform {
         let search = self.search.clone();
         let out = self.fetched.clone();
         let games = self.fetched_games.clone();
+        let items = self.fetched_items.clone();
         std::thread::spawn(move || {
             *out.lock().unwrap() = Some(client.servers(&search));
             *games.lock().unwrap() = Some(client.games(&search));
+            *items.lock().unwrap() = Some(client.catalog(""));
         });
     }
 
@@ -285,6 +304,98 @@ impl Platform {
             });
             *out.lock().unwrap() = Some(said);
         });
+    }
+
+    /// Shares a hat made in the editor in the catalog, signed as this player.
+    pub fn share_hat(&mut self, hat: &libroxel_engine::character::CustomHat) {
+        let client = self.client();
+        let (name, data) = (hat.name.trim().to_owned(), hat.to_json());
+        let out = self.item_shared.clone();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| {
+                let creator_id = me.player_id();
+                let time = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs() as i64);
+                let signature = me.sign(&libroxel_hub::item_message(&creator_id, &name, "hat", &data, time));
+                let item = NewItem { creator_id, name, kind: "hat".into(), data, time, signature };
+                let shared = client.share_item(&item)?;
+                Ok(format!(
+                    "{} is in the catalog on {}. Anyone can wear it from the Avatar tab.",
+                    shared.name,
+                    client.url()
+                ))
+            });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    /// The catalog part of the Avatar tab: hats to put on. Returns the one
+    /// picked, or `Some(None)` to take a catalog hat off.
+    #[allow(clippy::option_option)]
+    pub fn catalog_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        wearing: Option<&libroxel_engine::character::CustomHat>,
+    ) -> Option<Option<libroxel_engine::character::CustomHat>> {
+        if self.last_fetch.is_none_or(|t| t.elapsed() > Duration::from_secs(5)) {
+            self.refresh();
+        }
+        let mut picked = None;
+        ui.label(RichText::new("Catalog").size(18.0).strong());
+        ui.label(
+            RichText::new(
+                "Hats people made and shared. To make one, build it from parts in the editor, select its \
+                 model and use Edit > Share as a hat.",
+            )
+            .color(Color32::from_rgb(160, 168, 190)),
+        );
+        if let Some(hat) = wearing {
+            ui.horizontal(|ui| {
+                ui.label(format!("Wearing {}", hat.name));
+                if ui.button("Take it off").clicked() {
+                    picked = Some(None);
+                }
+            });
+        }
+        if self.items.is_empty() {
+            ui.label("Nothing in the catalog on this Hub yet.");
+        }
+        let mut worn = None;
+        ui.horizontal_wrapped(|ui| {
+            for item in &self.items {
+                let Some(hat) = libroxel_engine::character::CustomHat::from_json(&item.data) else {
+                    continue;
+                };
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(31, 36, 50))
+                    .corner_radius(8.0)
+                    .inner_margin(8.0)
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            ui.strong(&item.name);
+                            ui.label(
+                                RichText::new(format!("by {} · worn {}", item.creator, item.wears)).small(),
+                            );
+                            let on = wearing.is_some_and(|w| *w == hat);
+                            if ui
+                                .add_enabled(!on, egui::Button::new(if on { "Wearing" } else { "Wear" }))
+                                .clicked()
+                            {
+                                worn = Some(item.item_id.clone());
+                                picked = Some(Some(hat));
+                            }
+                        });
+                    });
+            }
+        });
+        if let Some(id) = worn {
+            let client = self.client();
+            std::thread::spawn(move || {
+                let _ = client.wore(&id);
+            });
+        }
+        picked
     }
 
     /// Looks up this player's account on the Hub, once for each Hub.

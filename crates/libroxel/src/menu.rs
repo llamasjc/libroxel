@@ -268,7 +268,9 @@ impl Menu {
                     Tab::Create => self.create_tab(ui),
                     Tab::Host => self.host_tab(ui, platform),
                     Tab::Avatar => {
-                        self.avatar_tab(ui, platform);
+                        egui::ScrollArea::vertical()
+                            .id_salt("avatar")
+                            .show(ui, |ui| self.avatar_tab(ui, platform));
                         None
                     }
                 };
@@ -287,13 +289,15 @@ impl Menu {
 
     /// How the player looks, as saved on the Avatar tab.
     pub fn look(&mut self) -> Look {
-        *self.look.get_or_insert_with(|| {
-            let usual = Look::for_player(0);
-            std::fs::read_to_string(avatar_file())
-                .ok()
-                .and_then(|text| libroxel_instance::serde_json::from_str(&text).ok())
-                .map_or(usual, |json| Look::from_json(&json, usual))
-        })
+        self.look
+            .get_or_insert_with(|| {
+                let usual = Look::for_player(0);
+                std::fs::read_to_string(avatar_file())
+                    .ok()
+                    .and_then(|text| libroxel_instance::serde_json::from_str(&text).ok())
+                    .map_or_else(|| usual.clone(), |json| Look::from_json(&json, usual.clone()))
+            })
+            .clone()
     }
 
     fn avatar_tab(&mut self, ui: &mut egui::Ui, platform: &mut Platform) {
@@ -322,7 +326,12 @@ impl Menu {
                 ui.label(RichText::new("Hat").strong());
                 ui.horizontal_wrapped(|ui| {
                     for hat in Hat::ALL {
-                        ui.selectable_value(&mut look.hat, hat, hat.name());
+                        let on = look.hat == hat && look.item.is_none();
+                        if ui.selectable_label(on, hat.name()).clicked() {
+                            look.hat = hat;
+                            // A hat from here replaces one from the catalog.
+                            look.item = None;
+                        }
                     }
                 });
                 if look.hat != Hat::None {
@@ -336,11 +345,15 @@ impl Menu {
             });
         });
         ui.add_space(24.0);
+        if let Some(picked) = platform.catalog_ui(ui, look.item.as_deref()) {
+            look.item = picked.map(std::sync::Arc::new);
+        }
+        ui.add_space(24.0);
         platform.account_ui(ui, look.to_json());
-        if Some(look) != self.look {
+        if Some(&look) != self.look.as_ref() {
+            let json = look.to_json().to_string();
             self.look = Some(look);
-            let saved = std::fs::create_dir_all(data_dir())
-                .and_then(|_| std::fs::write(avatar_file(), look.to_json().to_string()));
+            let saved = std::fs::create_dir_all(data_dir()).and_then(|_| std::fs::write(avatar_file(), json));
             if let Err(e) = saved {
                 self.error = Some(format!("Could not save your avatar: {e}"));
             }
@@ -733,7 +746,23 @@ fn draw_avatar(ui: &mut egui::Ui, look: &Look) {
     let eye = Color32::from_rgb(30, 30, 40);
     block(-0.35, 2.65, 0.25, 0.35, eye);
     block(0.35, 2.65, 0.25, 0.35, eye);
-    for (_, size, offset, turn, shape, _, tinted) in look.hat.parts() {
+    if let Some(item) = &look.item {
+        // Seen from the front, sorted back to front so nearer parts cover farther ones.
+        let mut parts: Vec<_> = item.parts.iter().collect();
+        parts.sort_by(|a, b| b.offset.z.total_cmp(&a.offset.z));
+        for part in parts {
+            let sideways = (part.turn.z.abs() - 90.0).abs() < 1.0;
+            let (w, h) = if sideways { (part.size.y, part.size.x) } else { (part.size.x, part.size.y) };
+            let (x, y) = (part.offset.x, 2.55 + part.offset.y);
+            if part.shape == libroxel_instance::PartShape::Ball {
+                painter.circle_filled(at(x, y), w * scale / 2.0, colour(part.color));
+            } else {
+                block(x, y, w, h, colour(part.color));
+            }
+        }
+    }
+    let hat = if look.item.is_some() { libroxel_engine::character::Hat::None } else { look.hat };
+    for (_, size, offset, turn, shape, _, tinted) in hat.parts() {
         let c = if *tinted { colour(look.hat_color) } else { Color32::from_rgb(35, 35, 42) };
         // A part turned on its side shows its other face.
         let (w, h) = if *turn != 0.0 { (size[1], size[0]) } else { (size[0], size[1]) };
@@ -747,7 +776,7 @@ fn draw_avatar(ui: &mut egui::Ui, look: &Look) {
     painter.text(
         egui::pos2(rect.center().x, rect.max.y - 14.0),
         egui::Align2::CENTER_CENTER,
-        look.hat.name(),
+        look.item.as_ref().map_or(look.hat.name(), |item| item.name.as_str()),
         egui::FontId::proportional(13.0),
         SOFT,
     );

@@ -349,7 +349,8 @@ impl PlaySession {
                 .filter(|_| t.get_bool(player, Property::Neutral) == Some(false))
                 .and_then(|team| t.get_color(team, Property::TeamColor));
             let n = t.get_number(player, Property::UserId).unwrap_or(1.0).max(1.0) as usize - 1;
-            let look = self.avatars[index].look.unwrap_or_else(|| crate::character::Look::for_player(n));
+            let look =
+                self.avatars[index].look.clone().unwrap_or_else(|| crate::character::Look::for_player(n));
             let character = Character::spawn_wearing(&mut t, &name, team, look);
             let _ = t.set(player, Property::Character, PropertyValue::Ref(Some(character.model)));
             character
@@ -367,7 +368,7 @@ impl PlaySession {
     /// Makes `player` look like `look`, now and every time they respawn.
     pub fn set_look(&mut self, player: InstanceId, look: crate::character::Look) {
         let Some(index) = self.avatar_of(player) else { return };
-        self.avatars[index].look = Some(look);
+        self.avatars[index].look = Some(look.clone());
         if let Some(character) = self.avatars[index].character {
             character.restyle(&mut self.runtime.tree().borrow_mut(), look);
         }
