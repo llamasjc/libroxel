@@ -134,6 +134,10 @@ pub enum UserInputType {
     Keyboard,
     MouseButton1,
     MouseButton2,
+    /// A finger on a touch screen.
+    Touch,
+    /// The first game controller.
+    Gamepad1,
 }
 
 /// Whether a path search found a way.
@@ -543,6 +547,8 @@ impl EnumKind {
                 E::UserInputType(UserInputType::Keyboard),
                 E::UserInputType(UserInputType::MouseButton1),
                 E::UserInputType(UserInputType::MouseButton2),
+                E::UserInputType(UserInputType::Touch),
+                E::UserInputType(UserInputType::Gamepad1),
             ],
             EnumKind::PathStatus => &[E::PathStatus(PathStatus::Success), E::PathStatus(PathStatus::NoPath)],
             EnumKind::PathWaypointAction => &[
@@ -755,6 +761,8 @@ impl EnumValue {
                 UserInputType::Keyboard => "keyboard",
                 UserInputType::MouseButton1 => "mouse_button1",
                 UserInputType::MouseButton2 => "mouse_button2",
+                UserInputType::Touch => "touch",
+                UserInputType::Gamepad1 => "gamepad1",
             },
             EnumValue::PathStatus(s) => match s {
                 PathStatus::Success => "success",

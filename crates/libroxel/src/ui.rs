@@ -316,6 +316,7 @@ pub fn editor_ui(
     mut cameras: Query<(&mut Camera, &GlobalTransform, &mut Transform, &mut CameraRig)>,
     window: Query<&Window, With<PrimaryWindow>>,
     time: Res<Time>,
+    mut touch_input: ResMut<libroxel_engine::devices::VirtualInput>,
 ) -> Result {
     let ctx = contexts.ctx_mut()?.clone();
     let now = time.elapsed_secs_f64();
@@ -501,6 +502,23 @@ pub fn editor_ui(
     if let Some((address, name)) = editor.platform.window(&ctx) {
         actions.push(Action::Join { address, name });
     }
+
+    // Touch screens get on-screen controls while playing.
+    if playing && !editor.menu.open {
+        editor.touch.show(&ctx, central);
+        let stick = editor.touch.stick();
+        touch_input.stick = Vec2::new(stick.x, stick.y);
+        touch_input.jump = editor.touch.jump();
+        // Dragging up looks up, as the right stick does.
+        let look = editor.touch.take_look();
+        touch_input.look += Vec2::new(look.x, -look.y);
+        touch_input.zoom += editor.touch.take_zoom();
+    } else {
+        editor.touch.reset();
+        touch_input.stick = Vec2::ZERO;
+        touch_input.jump = false;
+    }
+    touch_input.touched = editor.touch.seen;
 
     // Decide who gets the mouse and keyboard this frame.
     let pointer = ctx.input(|i| i.pointer.hover_pos());
@@ -931,6 +949,8 @@ fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
         });
         ui.menu_button("View", |ui| {
             ui.checkbox(&mut editor.show_grid, "Show grid");
+            ui.checkbox(&mut editor.touch.seen, "Touch controls")
+                .on_hover_text("Show the on-screen stick and jump button while playing (they turn on by themselves when you touch the screen)");
         });
         ui.menu_button("Together", |ui| {
             if editor.coedit.is_none() {

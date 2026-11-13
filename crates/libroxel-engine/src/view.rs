@@ -237,6 +237,7 @@ pub struct RenderPlugin;
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_scene)
+            .init_resource::<crate::devices::VirtualInput>()
             .add_systems(Update, (camera_controls, play_input, forward_keys).chain().in_set(EngineSet::Input))
             .add_systems(PostUpdate, (attach_visuals, update_materials, update_meshes).chain())
             // The camera moves in Update, right after the world, and its global
@@ -707,6 +708,7 @@ fn update_meshes(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn camera_controls(
     capture: Res<InputCapture>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -714,9 +716,16 @@ fn camera_controls(
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     time: Res<Time>,
+    gamepads: Query<&Gamepad>,
+    mut touch: ResMut<crate::devices::VirtualInput>,
     mut rigs: Query<(&mut CameraRig, &mut Transform)>,
 ) {
     let looking = mouse.pressed(MouseButton::Right) && !capture.pointer;
+    let pad = crate::devices::read_pads(gamepads.iter());
+    // Fingers dragging and the right stick look round too.
+    let turn = pad.look * crate::devices::LOOK_SPEED * time.delta_secs() + touch.look * 0.006;
+    let pad_zoom = pad.zoom + std::mem::take(&mut touch.zoom);
+    touch.look = Vec2::ZERO;
     let scroll_lines = if capture.pointer {
         0.0
     } else {
@@ -730,9 +739,12 @@ fn camera_controls(
             rig.yaw -= motion.delta.x * 0.005;
             rig.pitch = (rig.pitch - motion.delta.y * 0.005).clamp(-1.4, 1.4);
         }
+        rig.yaw -= turn.x;
+        rig.pitch = (rig.pitch + turn.y).clamp(-1.4, 1.4);
         // Following, the comma and full stop keys swing the camera round
         // in steps, and I and O zoom, as well as the mouse.
-        let mut zoom_lines = scroll_lines;
+        let mut zoom_lines = scroll_lines + pad_zoom;
+        rig.yaw += pad.swing * std::f32::consts::FRAC_PI_4;
         if rig.mode == CameraMode::Follow && !capture.keyboard {
             if keys.just_pressed(KeyCode::Comma) {
                 rig.yaw += std::f32::consts::FRAC_PI_4;
@@ -852,9 +864,52 @@ fn forward_keys(
     mut engine: NonSendMut<EngineState>,
     capture: Res<InputCapture>,
     keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    gamepads: Query<&Gamepad>,
+    touch: Res<crate::devices::VirtualInput>,
+    mut last: Local<libroxel_instance::UserInputType>,
 ) {
+    use libroxel_instance::UserInputType;
     let engine = &mut *engine;
     let Some(session) = engine.session.as_mut() else { return };
+    // A controller's buttons stand in for the mouse button and keys.
+    let pad = crate::devices::read_pads(gamepads.iter());
+    if let Some(down) = pad.click {
+        if down {
+            session.input_began(libroxel_script::UserInput::MouseButton1, false);
+        } else {
+            session.input_ended(libroxel_script::UserInput::MouseButton1, false);
+        }
+    }
+    if let Some(down) = pad.interact {
+        let key = session.active_prompt().map(|p| p.key).unwrap_or(libroxel_instance::KeyCode::E);
+        if down {
+            session.input_began(libroxel_script::UserInput::Key(key), false);
+        } else {
+            session.input_ended(libroxel_script::UserInput::Key(key), false);
+        }
+    }
+    if pad.tool {
+        session.input_began(libroxel_script::UserInput::Key(libroxel_instance::KeyCode::One), false);
+        session.input_ended(libroxel_script::UserInput::Key(libroxel_instance::KeyCode::One), false);
+    }
+    // What scripts are told the player plays with.
+    if pad.used {
+        *last = UserInputType::Gamepad1;
+    } else if touch.stick != Vec2::ZERO || touch.jump || touch.look != Vec2::ZERO {
+        *last = UserInputType::Touch;
+    } else if keys.get_just_pressed().next().is_some() {
+        *last = UserInputType::Keyboard;
+    } else if mouse.just_pressed(MouseButton::Left) {
+        *last = UserInputType::MouseButton1;
+    } else if mouse.just_pressed(MouseButton::Right) {
+        *last = UserInputType::MouseButton2;
+    }
+    session.set_devices(libroxel_script::Devices {
+        touch: touch.touched,
+        gamepad: !gamepads.is_empty(),
+        last: *last,
+    });
     if !capture.keyboard {
         for key in keys.get_just_pressed().filter_map(|k| script_key(*k)) {
             session.input_began(libroxel_script::UserInput::Key(key), false);
@@ -873,10 +928,26 @@ fn play_input(
     capture: Res<InputCapture>,
     keys: Res<ButtonInput<KeyCode>>,
     rigs: Query<&Transform, With<CameraRig>>,
+    gamepads: Query<&Gamepad>,
+    touch: Res<crate::devices::VirtualInput>,
     mut input: ResMut<PlayInput>,
 ) {
     input.0 = CharacterInput::default();
-    if !engine.is_playing() || capture.keyboard {
+    if !engine.is_playing() {
+        return;
+    }
+    // A controller's left stick and the on-screen stick walk (and drive).
+    let pad = crate::devices::read_pads(gamepads.iter());
+    let stick = (pad.stick + touch.stick).clamp_length_max(1.0);
+    let look = rigs.iter().next().map(|t| t.forward().as_vec3()).unwrap_or(Vec3::NEG_Z);
+    let walk = crate::devices::walk_direction(stick, look);
+    input.0 = CharacterInput {
+        move_dir: libroxel_instance::Vec3::new(walk.x, 0.0, walk.z),
+        jump: pad.jump || touch.jump,
+        throttle: stick.y,
+        steer: stick.x,
+    };
+    if capture.keyboard {
         return;
     }
     // Relative to where the camera looks, flattened onto the ground.
@@ -900,12 +971,18 @@ fn play_input(
     let axis = |plus: [KeyCode; 2], minus: [KeyCode; 2]| {
         (plus.iter().any(|k| keys.pressed(*k)) as i32 - minus.iter().any(|k| keys.pressed(*k)) as i32) as f32
     };
-    input.0 = CharacterInput {
-        move_dir: libroxel_instance::Vec3::new(dir.x, 0.0, dir.z),
-        jump: keys.pressed(KeyCode::Space),
-        throttle: axis([KeyCode::KeyW, KeyCode::ArrowUp], [KeyCode::KeyS, KeyCode::ArrowDown]),
-        steer: axis([KeyCode::KeyD, KeyCode::ArrowRight], [KeyCode::KeyA, KeyCode::ArrowLeft]),
-    };
+    if dir != Vec3::ZERO {
+        input.0.move_dir = libroxel_instance::Vec3::new(dir.x, 0.0, dir.z);
+    }
+    input.0.jump |= keys.pressed(KeyCode::Space);
+    let throttle = axis([KeyCode::KeyW, KeyCode::ArrowUp], [KeyCode::KeyS, KeyCode::ArrowDown]);
+    let steer = axis([KeyCode::KeyD, KeyCode::ArrowRight], [KeyCode::KeyA, KeyCode::ArrowLeft]);
+    if throttle != 0.0 {
+        input.0.throttle = throttle;
+    }
+    if steer != 0.0 {
+        input.0.steer = steer;
+    }
 }
 
 /// Copies the camera's transform into its global transform straight away

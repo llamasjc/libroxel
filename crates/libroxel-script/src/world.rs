@@ -37,6 +37,8 @@ pub(crate) struct WorldState {
     focused: Option<InstanceId>,
     /// The 3D view's size in pixels.
     viewport: Vec2,
+    /// What the player plays with.
+    pub(crate) devices: crate::Devices,
     /// Humanoids asked to walk somewhere (or to stop, with `None`).
     moves: Vec<(InstanceId, Option<Vec3>)>,
     /// Players whose character scripts asked to (re)spawn.
@@ -461,6 +463,10 @@ pub(crate) fn focused_text_box(lua: &Lua) -> Option<InstanceId> {
     let host = host(lua);
     let tree = host.tree.borrow();
     tree.exists(focused).then_some(focused).filter(|id| !tree.is_destroyed(*id).unwrap_or(true))
+}
+
+pub(crate) fn set_devices(lua: &Lua, devices: crate::Devices) {
+    host(lua).world.borrow_mut().devices = devices;
 }
 
 pub(crate) fn set_viewport(lua: &Lua, size: Vec2) {

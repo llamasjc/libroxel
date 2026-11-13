@@ -1093,3 +1093,28 @@ fn finds_parts_in_boxes_balls_and_other_parts() {
         vec!["Crate", "Ball", "Floor", "Floor", "Ball,Crate,Far", "Floor OverlapParams", "1", "Crate,Far"]
     );
 }
+
+#[test]
+fn scripts_see_what_the_player_plays_with() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local uis = game:GetService("UserInputService")
+        print(uis.TouchEnabled, uis.GamepadEnabled, uis:GetLastInputType().Name)
+    "#,
+    );
+    rt.set_devices(libroxel_script::Devices {
+        touch: true,
+        gamepad: true,
+        last: libroxel_instance::UserInputType::Gamepad1,
+    });
+    run(
+        &rt,
+        r#"
+        local uis = game:GetService("UserInputService")
+        print(uis.TouchEnabled, uis.GamepadEnabled, uis:GetLastInputType() == Enum.UserInputType.Gamepad1)
+    "#,
+    );
+    assert_eq!(printed(&rt), vec!["false false Keyboard", "true true true"]);
+}

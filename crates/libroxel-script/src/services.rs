@@ -63,6 +63,12 @@ impl UserData for UserInputService {
         use names::events::*;
         fields.add_field_method_get(INPUT_BEGAN, |_, _| Ok(Signal(SignalKind::InputBegan)));
         fields.add_field_method_get(INPUT_ENDED, |_, _| Ok(Signal(SignalKind::InputEnded)));
+        fields.add_field_method_get(user_input::TOUCH_ENABLED, |lua, _| {
+            Ok(host(lua).world.borrow().devices.touch)
+        });
+        fields.add_field_method_get(user_input::GAMEPAD_ENABLED, |lua, _| {
+            Ok(host(lua).world.borrow().devices.gamepad)
+        });
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
@@ -79,6 +85,9 @@ impl UserData for UserInputService {
                 _ => return Ok(false),
             };
             Ok(host(lua).inputs_down.borrow().contains(&input))
+        });
+        methods.add_method(user_input::GET_LAST_INPUT_TYPE, |lua, _, ()| {
+            Ok(LuaEnumItem(EnumValue::UserInputType(host(lua).world.borrow().devices.last)))
         });
         crate::lenient::add_service_members(methods, services::USER_INPUT_SERVICE);
     }

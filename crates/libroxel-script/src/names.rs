@@ -432,6 +432,12 @@ pub mod user_input {
     pub const INPUT_OBJECT_TYPE_NAME: &str = "InputObject";
     pub const KEY_CODE: &str = "KeyCode";
     pub const USER_INPUT_TYPE: &str = "UserInputType";
+    /// Whether the player has a touch screen they've used.
+    pub const TOUCH_ENABLED: &str = "TouchEnabled";
+    /// Whether a game controller is plugged in.
+    pub const GAMEPAD_ENABLED: &str = "GamepadEnabled";
+    /// The kind of input the player used last.
+    pub const GET_LAST_INPUT_TYPE: &str = "GetLastInputType";
 }
 
 /// Members of the saved-data service and its stores.
@@ -766,6 +772,8 @@ pub fn enum_item_name(value: EnumValue) -> &'static str {
             UserInputType::Keyboard => "Keyboard",
             UserInputType::MouseButton1 => "MouseButton1",
             UserInputType::MouseButton2 => "MouseButton2",
+            UserInputType::Touch => "Touch",
+            UserInputType::Gamepad1 => "Gamepad1",
         },
         EnumValue::PathStatus(s) => match s {
             PathStatus::Success => "Success",

@@ -613,10 +613,20 @@ mod tests {
             session.step(1.0 / 60.0, CharacterInput::default());
         }
         assert!(value(&session, "game.ReplicatedStorage.Status.Value").contains("seconds left"));
-        // Stand on the first coin.
+        // Stand on a coin the robot hasn't taken (with the lava bar made
+        // harmless, since the coin may have landed where it sweeps).
         session
             .runtime()
-            .run("grab", "workspace.Player1.HumanoidRootPart.Position = workspace.Coin.Position")
+            .run(
+                "grab",
+                "workspace.Arena.Sweeper.CanTouch = false
+                for _, coin in workspace:GetChildren() do
+                    if coin.Name == 'Coin' and coin.Transparency == 0 then
+                        workspace.Player1.HumanoidRootPart.Position = coin.Position
+                        break
+                    end
+                end",
+            )
             .unwrap();
         for _ in 0..30 {
             session.step(1.0 / 60.0, CharacterInput::default());

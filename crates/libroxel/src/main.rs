@@ -22,6 +22,7 @@ mod server;
 mod starter_games;
 mod templates;
 mod terrain_tools;
+mod touch;
 mod ui;
 mod viewport;
 
@@ -125,6 +126,8 @@ pub struct Editor {
     /// Playing a game started from the main menu: only the game shows, and
     /// leaving it goes back to the menu.
     pub player_mode: bool,
+    /// Fingers on a touch screen, for the on-screen controls.
+    pub touch: touch::TouchPad,
 }
 
 /// A game carried over the internet with a join code.
@@ -168,6 +171,7 @@ impl Default for Editor {
             platform: browse::Platform::default(),
             menu: menu::Menu::default(),
             player_mode: false,
+            touch: Default::default(),
         }
     }
 }

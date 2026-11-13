@@ -92,6 +92,16 @@ The first build compiles Bevy and takes a while. After that it is quick.
   I and O) zooms from far out right into first person, where your own
   body is hidden, and `,` and `.` swing it round in steps. Walls between
   the camera and you pull it in so you never lose sight of your character.
+- **Controllers and touch screens:** a game controller works as soon as
+  it's plugged in: the left stick walks (and drives), the right stick
+  looks round, A jumps, the right trigger clicks (it uses the tool in
+  hand), X uses a prompt, Y takes out the first tool, the shoulder buttons
+  swing the camera and the d-pad zooms. Touch the screen while playing and
+  on-screen controls appear: a stick in the bottom left to walk, a jump
+  button in the bottom right, drag anywhere else to look, pinch to zoom
+  and tap to click (View → Touch controls shows them without touching).
+  Scripts see `UserInputService.TouchEnabled`, `GamepadEnabled` and
+  `GetLastInputType()`.
 - **Screen GUIs:** put a `ScreenGui` in StarterGui and fill it with frames,
   text labels and text buttons (Insert menu). They are drawn over the view
   while you edit, so you can click one to select it and lay it out with

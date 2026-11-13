@@ -82,6 +82,17 @@ pub enum UserInput {
     MouseButton2,
 }
 
+/// What the player plays with, for scripts' input service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Devices {
+    /// They have touched the screen.
+    pub touch: bool,
+    /// A game controller is plugged in.
+    pub gamepad: bool,
+    /// The kind of input they used last.
+    pub last: libroxel_instance::UserInputType,
+}
+
 /// Where the player's mouse points: a ray into the world from the camera,
 /// and the pointer's position on screen in pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -297,6 +308,11 @@ impl ScriptRuntime {
     /// Starts every enabled `Script` under `ancestor` (such as a tool copied into a backpack).
     pub fn run_scripts(&self, ancestor: InstanceId) -> Vec<ScriptError> {
         bindings::run_scripts_under(&self.lua, ancestor, libroxel_instance::ClassKind::Script)
+    }
+
+    /// Tells scripts what the player plays with (touch, a controller).
+    pub fn set_devices(&self, devices: Devices) {
+        world::set_devices(&self.lua, devices)
     }
 
     /// Tells scripts how big the 3D view is, in pixels (for the camera).

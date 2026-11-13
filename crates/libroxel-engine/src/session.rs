@@ -931,6 +931,11 @@ impl PlaySession {
         &self.blasts
     }
 
+    /// Tells scripts what the player plays with (touch, a controller).
+    pub fn set_devices(&mut self, devices: libroxel_script::Devices) {
+        self.runtime.set_devices(devices);
+    }
+
     /// Tells scripts how big the view is, in pixels.
     pub fn set_viewport(&mut self, width: f32, height: f32) {
         self.runtime.set_viewport(width, height);
