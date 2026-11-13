@@ -159,6 +159,11 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::BallSocketConstraint,
     ClassKind::AngularVelocity,
     ClassKind::BodyAngularVelocity,
+    ClassKind::AlignOrientation,
+    ClassKind::BodyGyro,
+    ClassKind::Torque,
+    ClassKind::RodConstraint,
+    ClassKind::NoCollisionConstraint,
     ClassKind::Decal,
     ClassKind::Texture,
     ClassKind::Sound,
@@ -239,6 +244,10 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::VectorForce | ClassKind::BodyForce => "💨",
         ClassKind::AlignPosition | ClassKind::BodyPosition => "🎯",
         ClassKind::RopeConstraint => "➰",
+        ClassKind::RodConstraint => "📏",
+        ClassKind::AlignOrientation | ClassKind::BodyGyro => "🧭",
+        ClassKind::Torque => "🌀",
+        ClassKind::NoCollisionConstraint => "👻",
         ClassKind::SpringConstraint => "🌀",
         ClassKind::HingeConstraint => "🚪",
         ClassKind::PrismaticConstraint => "↔",
@@ -280,11 +289,6 @@ fn icon(class: ClassKind) -> &'static str {
         | ClassKind::DepthOfFieldEffect
         | ClassKind::SurfaceLight
         | ClassKind::UIGradient
-        | ClassKind::BodyGyro
-        | ClassKind::AlignOrientation
-        | ClassKind::Torque
-        | ClassKind::NoCollisionConstraint
-        | ClassKind::RodConstraint
         | ClassKind::CylindricalConstraint
         | ClassKind::SpecialMesh
         | ClassKind::Shirt
@@ -1456,6 +1460,24 @@ fn properties(
             "Keeps Attachment0 and Attachment1 no further apart than Length studs, so a loose part \
              hangs and swings from an anchored one. Visible draws the rope.",
         ),
+        ClassKind::RodConstraint => Some(
+            "Keeps Attachment0 and Attachment1 exactly Length studs apart, like a stiff bar between them.",
+        ),
+        ClassKind::AlignOrientation => Some(
+            "While playing, turns Attachment0's part so the attachment faces the same way as Attachment1, \
+             or as its CFrame when Attachment1 is empty. Responsiveness is how quickly, MaxTorque how hard.",
+        ),
+        ClassKind::BodyGyro => Some(
+            "Put this inside a loose part to turn it to face the way its CFrame does. P is how hard, D how \
+             quickly the wobbling stops, MaxTorque the most it pushes about each axis.",
+        ),
+        ClassKind::Torque => Some(
+            "While playing, keeps turning Attachment0's part with a steady Torque about the attachment's own \
+             axes. Unanchor the part first.",
+        ),
+        ClassKind::NoCollisionConstraint => {
+            Some("Lets Part0 and Part1 pass through each other while still hitting everything else.")
+        }
         ClassKind::SpringConstraint => Some(
             "Pulls Attachment0 and Attachment1 towards FreeLength studs apart. Stiffness is how hard, \
              Damping how quickly the bouncing stops.",
@@ -2872,6 +2894,11 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     | ClassKind::BallSocketConstraint
                     | ClassKind::AngularVelocity
                     | ClassKind::BodyAngularVelocity
+                    | ClassKind::AlignOrientation
+                    | ClassKind::BodyGyro
+                    | ClassKind::Torque
+                    | ClassKind::RodConstraint
+                    | ClassKind::NoCollisionConstraint
                     | ClassKind::Decal
                     | ClassKind::Texture
                     | ClassKind::Sound

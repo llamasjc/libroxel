@@ -518,7 +518,17 @@ fn joint_halves(class: ClassKind, key: &str) -> Option<(Property, Property)> {
 }
 
 /// Members beyond the saved properties: `Some` when `key` is one of them.
+/// An align orientation's or body gyro's `CFrame`: only its turn is kept.
+fn is_target_turn(class: ClassKind, key: &str) -> bool {
+    key == "CFrame" && class.has_property(Property::TargetOrientation)
+}
+
 pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> mlua::Result<Option<Value>> {
+    if is_target_turn(class, key) {
+        let turn = host(lua).tree.borrow().get_vec3(id, Property::TargetOrientation).unwrap_or_default();
+        let cf = CFrame::new(Vec3::ZERO, Rotation::from_orientation(turn));
+        return Ok(Some(Value::UserData(lua.create_userdata(LuaCFrame(cf))?)));
+    }
     if let Some(halves) = joint_halves(class, key) {
         let host = host(lua);
         let tree = host.tree.borrow();
@@ -574,6 +584,12 @@ pub(crate) fn new_index(
     key: &str,
     value: &Value,
 ) -> mlua::Result<bool> {
+    if is_target_turn(class, key) {
+        let cf = as_cframe(value).ok_or_else(|| runtime_err(format!("{key} expects a CFrame")))?;
+        let turn = PropertyValue::Vec3(cf.rot.to_orientation());
+        host(lua).tree.borrow_mut().set(id, Property::TargetOrientation, turn).map_err(tree_err)?;
+        return Ok(true);
+    }
     if let Some(halves) = joint_halves(class, key) {
         let cf = as_cframe(value).ok_or_else(|| runtime_err(format!("{key} expects a CFrame")))?;
         let host = host(lua);

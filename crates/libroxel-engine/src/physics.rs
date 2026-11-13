@@ -454,6 +454,13 @@ impl Physics {
         self.joints = joints;
     }
 
+    /// Lets `a` and `b` pass through each other for the next step.
+    pub fn pass_through(&mut self, a: InstanceId, b: InstanceId) {
+        if a != b {
+            self.ignored.insert(ordered(a, b));
+        }
+    }
+
     /// Also holds `id` still for the next step, passing through `together`.
     pub fn carry(&mut self, id: InstanceId, together: &[InstanceId]) {
         self.velocities.remove(&id);

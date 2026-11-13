@@ -1303,7 +1303,7 @@ fn sync_ropes(
     let Some(meshes) = meshes else { return };
     let tree = engine.tree.borrow();
     let mut wanted: HashMap<InstanceId, (Transform, libroxel_instance::Color3)> = HashMap::new();
-    for class in [ClassKind::RopeConstraint, ClassKind::SpringConstraint] {
+    for class in [ClassKind::RopeConstraint, ClassKind::SpringConstraint, ClassKind::RodConstraint] {
         for id in tree.descendants_of_class(tree.workspace(), class) {
             if tree.get_bool(id, Property::Visible) != Some(true) {
                 continue;

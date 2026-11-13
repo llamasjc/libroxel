@@ -389,6 +389,10 @@ pub enum Property {
     TrailLifetime,
     /// On a surface GUI: how many GUI pixels fit in one stud of its face.
     PixelsPerStud,
+    /// On a torque: how hard it turns its attachment's assembly, about the attachment's axes (scripts call it Torque).
+    TorqueVector,
+    /// On an align orientation or body gyro: the turn to hold (scripts set it as a CFrame).
+    TargetOrientation,
 }
 
 /// The value of a property.
@@ -440,7 +444,7 @@ impl Property {
             Property::Position | Property::Size | Property::Orientation | Property::StudsOffset => "Vec3",
             Property::Color | Property::BackgroundColor | Property::TextColor => "Color3",
             Property::Color3Value | Property::Ambient | Property::FogColor => "Color3",
-            Property::Vector3Value => "Vec3",
+            Property::Vector3Value | Property::TorqueVector | Property::TargetOrientation => "Vec3",
             Property::VectorVelocity | Property::Force | Property::Velocity | Property::BodyMaxForce => {
                 "Vec3"
             }
@@ -841,6 +845,8 @@ impl Property {
         Property::MoonAngularSize,
         Property::TrailLifetime,
         Property::PixelsPerStud,
+        Property::TorqueVector,
+        Property::TargetOrientation,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -1053,6 +1059,8 @@ impl Property {
             Property::MoonAngularSize => "moon_angular_size",
             Property::TrailLifetime => "trail_lifetime",
             Property::PixelsPerStud => "pixels_per_stud",
+            Property::TorqueVector => "torque_vector",
+            Property::TargetOrientation => "target_orientation",
         }
     }
 

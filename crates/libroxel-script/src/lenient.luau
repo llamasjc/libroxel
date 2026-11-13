@@ -1300,16 +1300,11 @@ add(props, "UIGradient", {
 add(props, "Constraint", {
 	Attachment0 = NIL, Attachment1 = NIL, Enabled = true, Visible = false, Color = NIL,
 })
-add(props, "BodyGyro", {
-	CFrame = CFrame.new(), D = 500, MaxTorque = Vector3.new(400000, 0, 400000), P = 3000,
-})
 add(props, "AlignOrientation", {
-	CFrame = CFrame.new(), MaxTorque = 10000, MaxAngularVelocity = math.huge, Responsiveness = 10,
-	RigidityEnabled = false, Mode = NIL, PrimaryAxisOnly = false, AlignType = "AlignType.Parallel",
+	MaxAngularVelocity = math.huge, Mode = NIL, PrimaryAxisOnly = false, AlignType = "AlignType.Parallel",
 })
-add(props, "Torque", { Torque = Vector3.zero, RelativeTo = "ActuatorRelativeTo.Attachment0" })
-add(props, "NoCollisionConstraint", { Part0 = NIL, Part1 = NIL, Enabled = true })
-add(props, "RodConstraint", { Length = 5, Thickness = 0.1, LimitsEnabled = false })
+add(props, "Torque", { RelativeTo = "ActuatorRelativeTo.Attachment0" })
+add(props, "RodConstraint", { LimitsEnabled = false })
 add(getters, "RodConstraint", {
 	CurrentDistance = function(self)
 		local a, b = self.Attachment0, self.Attachment1

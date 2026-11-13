@@ -279,3 +279,100 @@ fn regions_shared_tables_and_old_globals() {
     );
     assert_eq!(printed, vec!["4, 4, 4 0, 5, 0", "1 Crate", "true true 1, 2, -1", "10 5", "42 hi"]);
 }
+
+/// A loose part held up in the air at `at` by an AlignPosition, for turning tests.
+const HELD: &str = r#"
+    local function held(at)
+        local p = Instance.new("Part")
+        p.Size = Vector3.new(4, 1, 2)
+        p.Anchored = false
+        p.Position = at
+        p.Parent = workspace
+        local a = Instance.new("Attachment", p)
+        local hold = Instance.new("AlignPosition")
+        hold.Attachment0 = a
+        hold.Position = at
+        hold.MaxForce = 1e6
+        hold.Responsiveness = 50
+        hold.Parent = p
+        return p, a
+    end
+"#;
+
+#[test]
+fn align_orientation_and_body_gyro_turn_a_part_to_face_a_way() {
+    let source = format!(
+        r#"{HELD}
+        local p, a = held(Vector3.new(20, 10, 0))
+        local align = Instance.new("AlignOrientation")
+        align.Attachment0 = a
+        align.CFrame = CFrame.Angles(0, math.rad(90), 0)
+        align.Responsiveness = 20
+        align.Parent = p
+        local q = held(Vector3.new(-20, 10, 0))
+        local gyro = Instance.new("BodyGyro")
+        gyro.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
+        gyro.CFrame = CFrame.Angles(0, math.rad(-45), 0)
+        gyro.Parent = q
+        task.wait(2)
+        print(math.floor(p.Orientation.Y + 0.5), math.floor(q.Orientation.Y + 0.5))
+        print(math.abs(p.Orientation.X) < 2, math.abs(q.Orientation.Z) < 2)
+    "#
+    );
+    let printed = run_for(&[&source], 150);
+    assert_eq!(printed, vec!["90 -45", "true true"]);
+}
+
+#[test]
+fn a_torque_spins_a_part_up() {
+    let source = format!(
+        r#"{HELD}
+        local p, a = held(Vector3.new(0, 20, 0))
+        local t = Instance.new("Torque")
+        t.Attachment0 = a
+        t.Torque = Vector3.new(0, 50, 0)
+        t.Parent = p
+        local before = p.Orientation.Y
+        task.wait(1)
+        print(math.abs(p.Orientation.Y - before) > 5, typeof(t.Torque))
+    "#
+    );
+    assert_eq!(run_for(&[&source], 75), vec!["true Vector3"]);
+}
+
+#[test]
+fn a_rod_keeps_its_length_and_no_collision_lets_parts_through() {
+    let printed = run_for(
+        &[r#"
+        local hub = workspace.Crate
+        local ball = Instance.new("Part")
+        ball.Shape = Enum.PartType.Ball
+        ball.Size = Vector3.new(1, 1, 1)
+        ball.Anchored = false
+        ball.Position = Vector3.new(4, 5, 0)
+        ball.Parent = workspace
+        local a0 = Instance.new("Attachment", hub)
+        local a1 = Instance.new("Attachment", ball)
+        local rod = Instance.new("RodConstraint")
+        rod.Attachment0 = a0
+        rod.Attachment1 = a1
+        rod.Length = 4
+        rod.Parent = hub
+        -- A brick dropped on the crate falls straight through it.
+        local brick = Instance.new("Part")
+        brick.Size = Vector3.new(1, 1, 1)
+        brick.Anchored = false
+        brick.Position = Vector3.new(0, 9, 0.5)
+        brick.Parent = workspace
+        local nc = Instance.new("NoCollisionConstraint")
+        nc.Part0 = brick
+        nc.Part1 = hub
+        nc.Parent = brick
+        task.wait(1.5)
+        print(string.format("%.1f", (ball.Position - hub.Position).Magnitude), ball.Position.Y < 4)
+        print(brick.Position.Y < 2)
+    "#],
+        110,
+    );
+    assert_eq!(printed, vec!["4.0 true", "true"]);
+}

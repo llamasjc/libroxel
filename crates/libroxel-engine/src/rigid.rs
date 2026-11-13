@@ -46,6 +46,8 @@ pub enum JointKind {
     Ball,
     /// The two frames' origins stay at most `length` apart.
     Rope { length: f32 },
+    /// The two frames' origins stay exactly `length` apart.
+    Rod { length: f32 },
     /// The two frames' origins pulled towards `length` apart, like a spring.
     Spring { length: f32, stiffness: f32, damping: f32 },
 }
@@ -587,7 +589,9 @@ impl Rigid {
                     JointKind::Hinge { .. } => GenericJoint::new(JointAxesMask::LOCKED_REVOLUTE_AXES),
                     JointKind::Slider { .. } => GenericJoint::new(JointAxesMask::LOCKED_PRISMATIC_AXES),
                     JointKind::Ball => GenericJoint::new(JointAxesMask::LOCKED_SPHERICAL_AXES),
-                    JointKind::Rope { length } => RopeJoint::new(length.max(0.01)).data,
+                    JointKind::Rope { length } | JointKind::Rod { length } => {
+                        RopeJoint::new(length.max(0.01)).data
+                    }
                     JointKind::Spring { length, stiffness, damping } => {
                         SpringJoint::new(length, stiffness, damping).data
                     }
@@ -636,6 +640,9 @@ impl Rigid {
                 JointKind::Ball => {}
                 JointKind::Rope { length } => {
                     joint.data.set_limits(JointAxis::LinX, [0.0, length.max(0.0)]);
+                }
+                JointKind::Rod { length } => {
+                    joint.data.set_limits(JointAxis::LinX, [length.max(0.0), length.max(0.0)]);
                 }
                 JointKind::Spring { length, stiffness, damping } => {
                     joint.data.set_motor_position(JointAxis::LinX, length, stiffness, damping);

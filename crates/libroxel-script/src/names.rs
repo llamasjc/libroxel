@@ -1298,6 +1298,8 @@ pub fn property_name(property: Property) -> &'static str {
         Property::MoonAngularSize => "MoonAngularSize",
         Property::TrailLifetime => "Lifetime",
         Property::PixelsPerStud => "PixelsPerStud",
+        Property::TorqueVector => "Torque",
+        Property::TargetOrientation => "TargetOrientation",
     }
 }
 

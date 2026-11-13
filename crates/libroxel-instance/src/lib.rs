@@ -865,6 +865,27 @@ impl ClassKind {
             Property::Width1,
             Property::LightEmission,
         ];
+        const ALIGN_ORIENTATION: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::Attachment0,
+            Property::Attachment1,
+            Property::TargetOrientation,
+            Property::MaxTorque,
+            Property::Responsiveness,
+            Property::RigidityEnabled,
+        ];
+        const BODY_GYRO: &[Property] = &[
+            Property::Name,
+            Property::TargetOrientation,
+            Property::BodyMaxTorque,
+            Property::BodyPower,
+            Property::BodyDamping,
+        ];
+        const TORQUE: &[Property] =
+            &[Property::Name, Property::Enabled, Property::Attachment0, Property::TorqueVector];
+        const NO_COLLISION: &[Property] =
+            &[Property::Name, Property::Enabled, Property::Part0, Property::Part1];
         const SURFACE_GUI: &[Property] = &[
             Property::Name,
             Property::Enabled,
@@ -1095,6 +1116,11 @@ impl ClassKind {
             ClassKind::Beam => BEAM,
             ClassKind::Sky => SKY,
             ClassKind::SurfaceGui => SURFACE_GUI,
+            ClassKind::AlignOrientation => ALIGN_ORIENTATION,
+            ClassKind::BodyGyro => BODY_GYRO,
+            ClassKind::Torque => TORQUE,
+            ClassKind::NoCollisionConstraint => NO_COLLISION,
+            ClassKind::RodConstraint => ROPE,
             ClassKind::Trail => TRAIL,
             ClassKind::UISizeConstraint => SIZE_LIMITS,
             ClassKind::UITextSizeConstraint => TEXT_SIZE_LIMITS,
@@ -1229,6 +1255,7 @@ impl ClassKind {
             Property::MoonAngularSize => PropertyValue::Number(11.0),
             Property::TrailLifetime => PropertyValue::Number(2.0),
             Property::PixelsPerStud => PropertyValue::Number(50.0),
+            Property::TorqueVector | Property::TargetOrientation => PropertyValue::Vec3(Vec3::ZERO),
             Property::Padding => PropertyValue::UDim(UDim::default()),
             Property::BlastRadius => PropertyValue::Number(4.0),
             Property::BlastPressure => PropertyValue::Number(500_000.0),
@@ -1284,9 +1311,13 @@ impl ClassKind {
             Property::BodyMaxForce => PropertyValue::Vec3(Vec3::new(4000.0, 4000.0, 4000.0)),
             Property::BodyPower => PropertyValue::Number(match self {
                 ClassKind::BodyPosition => 10_000.0,
+                ClassKind::BodyGyro => 3_000.0,
                 _ => 1_250.0,
             }),
-            Property::BodyDamping => PropertyValue::Number(1_250.0),
+            Property::BodyDamping => PropertyValue::Number(match self {
+                ClassKind::BodyGyro => 500.0,
+                _ => 1_250.0,
+            }),
             Property::ActuatorType => PropertyValue::Enum(EnumValue::ActuatorType(ActuatorType::None)),
             Property::LimitsEnabled => PropertyValue::Bool(false),
             Property::LowerLimit => PropertyValue::Number(0.0),
@@ -1315,7 +1346,10 @@ impl ClassKind {
             }
             Property::StudsPerTileU | Property::StudsPerTileV => PropertyValue::Number(2.0),
             Property::AngularVelocity => PropertyValue::Vec3(Vec3::ZERO),
-            Property::BodyMaxTorque => PropertyValue::Vec3(Vec3::new(4000.0, 4000.0, 4000.0)),
+            Property::BodyMaxTorque => PropertyValue::Vec3(match self {
+                ClassKind::BodyGyro => Vec3::new(400_000.0, 0.0, 400_000.0),
+                _ => Vec3::new(4000.0, 4000.0, 4000.0),
+            }),
             Property::Rate => PropertyValue::Number(20.0),
             Property::Lifetime => PropertyValue::Vec2(Vec2::new(5.0, 10.0)),
             Property::Speed => PropertyValue::Vec2(Vec2::new(5.0, 5.0)),

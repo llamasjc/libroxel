@@ -438,7 +438,14 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   (radians a second about X, Y and Z; scripts read and set it), and slow
   down rubbing on the ground. `AngularVelocity` (`AngularVelocity`,
   `MaxTorque`, on `Attachment0`) and the older `BodyAngularVelocity`
-  (inside a part) keep them spinning. A `HingeConstraint` lets
+  (inside a part) keep them spinning. `Torque` (`Torque`, about
+  `Attachment0`'s axes) turns steadily. `AlignOrientation` turns
+  `Attachment0` to face the way `Attachment1` does, or its `CFrame` when
+  there's no `Attachment1` (`Responsiveness`, `MaxTorque`,
+  `RigidityEnabled`), and the older `BodyGyro` (`CFrame`, `P`, `D`,
+  `MaxTorque`) does the same inside a part. A `RodConstraint` holds two
+  attachments exactly `Length` apart, and a `NoCollisionConstraint` lets
+  its `Part0` and `Part1` pass through each other. A `HingeConstraint` lets
   `Attachment1`'s part, and everything welded to it, turn only about
   `Attachment0`'s X axis (attachments have an `Orientation` to aim it).
   `ActuatorType` None swings freely under gravity, `Motor` turns at

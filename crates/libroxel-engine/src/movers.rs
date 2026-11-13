@@ -11,6 +11,11 @@
 //! - `SpringConstraint` pulls two attachments towards a length.
 //! - `AngularVelocity` and `BodyAngularVelocity` spin towards an angular
 //!   velocity. An assembly spins about its root part's middle.
+//! - `AlignOrientation` and `BodyGyro` turn towards an orientation (another
+//!   attachment's, or their CFrame's), like a stiff spring with damping.
+//! - `Torque` turns steadily, about Attachment0's axes.
+//! - `RodConstraint` keeps two attachments exactly a length apart.
+//! - `NoCollisionConstraint` lets two parts pass through each other.
 //!
 //! Ropes and springs between loose and anchored parts are real joints in
 //! the physics engine (returned by [`apply`]), so they pull at their
@@ -93,6 +98,33 @@ fn inertia_of(tree: &InstanceTree, welds: &Welds, root: InstanceId) -> f32 {
     (one(root) + welds.carried_by(root).map(one).sum::<f32>()).max(0.01)
 }
 
+/// How a part is turned in the world.
+fn part_turn(tree: &InstanceTree, part: InstanceId) -> bevy::math::Quat {
+    let o = tree.get_vec3(part, Property::Orientation).unwrap_or_default();
+    crate::physics::orientation_quat(o)
+}
+
+/// How an attachment is turned in the world.
+fn attachment_turn(tree: &InstanceTree, attachment: InstanceId) -> Option<bevy::math::Quat> {
+    attachment_local(tree, attachment)?;
+    let part = tree.parent(attachment).ok()??;
+    let o = tree.get_vec3(attachment, Property::Orientation).unwrap_or_default();
+    Some(part_turn(tree, part) * crate::physics::orientation_quat(o))
+}
+
+/// The turn (axis times angle in radians, in world space) that takes `from` to `to`.
+pub fn turn_between(from: bevy::math::Quat, to: bevy::math::Quat) -> Vec3 {
+    let mut q = to * from.inverse();
+    if q.w < 0.0 {
+        q = -q;
+    }
+    let (axis, angle) = q.to_axis_angle();
+    if angle.abs() < 1e-6 {
+        return Vec3::ZERO;
+    }
+    Vec3::new(axis.x * angle, axis.y * angle, axis.z * angle)
+}
+
 fn enabled(tree: &InstanceTree, id: InstanceId) -> bool {
     !tree.class(id).is_ok_and(|c| c.has_property(Property::Enabled))
         || tree.get_bool(id, Property::Enabled) == Some(true)
@@ -134,6 +166,8 @@ fn as_joint(tree: &InstanceTree, welds: &Welds, id: InstanceId, class: ClassKind
     }
     let kind = if class == ClassKind::RopeConstraint {
         JointKind::Rope { length: number(tree, id, Property::Length).max(0.0) }
+    } else if class == ClassKind::RodConstraint {
+        JointKind::Rod { length: number(tree, id, Property::Length).max(0.0) }
     } else {
         JointKind::Spring {
             length: number(tree, id, Property::FreeLength).max(0.0),
@@ -181,6 +215,11 @@ pub fn apply(tree: &InstanceTree, welds: &Welds, physics: &mut Physics, dt: f32)
                 | ClassKind::BodyForce
                 | ClassKind::AngularVelocity
                 | ClassKind::BodyAngularVelocity
+                | ClassKind::AlignOrientation
+                | ClassKind::BodyGyro
+                | ClassKind::Torque
+                | ClassKind::RodConstraint
+                | ClassKind::NoCollisionConstraint
         ) || !enabled(tree, id)
         {
             continue;
@@ -248,7 +287,7 @@ pub fn apply(tree: &InstanceTree, welds: &Welds, physics: &mut Physics, dt: f32)
                 };
                 push(physics, &e, clamp_length(accel, max) * dt);
             }
-            ClassKind::RopeConstraint | ClassKind::SpringConstraint => {
+            ClassKind::RopeConstraint | ClassKind::SpringConstraint | ClassKind::RodConstraint => {
                 if let Some(joint) = as_joint(tree, welds, id, class) {
                     joints.push(joint);
                     continue;
@@ -266,7 +305,10 @@ pub fn apply(tree: &InstanceTree, welds: &Welds, physics: &mut Physics, dt: f32)
                 let n = d / dist;
                 // How fast the ends are moving apart, by the end of the step.
                 let rel = (predicted(physics, &e1) - predicted(physics, &e0)).dot(n);
-                let wanted = if class == ClassKind::RopeConstraint {
+                let wanted = if class == ClassKind::RodConstraint {
+                    // Neither longer nor shorter: close a share of any gap.
+                    -(dist - number(tree, id, Property::Length)) * 0.4 / dt
+                } else if class == ClassKind::RopeConstraint {
                     let slack = dist - number(tree, id, Property::Length);
                     if slack <= 0.0 && rel * dt + slack <= 0.0 {
                         continue; // slack, and staying slack this step
@@ -304,6 +346,69 @@ pub fn apply(tree: &InstanceTree, welds: &Welds, physics: &mut Physics, dt: f32)
                 let rate = (number(tree, id, Property::BodyPower) / inertia).min(1.0 / dt);
                 let most = vec(tree, id, Property::BodyMaxTorque) * (dt / inertia);
                 physics.drive_spin(e.root, spin + clamp_axes((target - spin) * (rate * dt), most));
+            }
+            ClassKind::AlignOrientation | ClassKind::BodyGyro => {
+                let (e, now) = if class == ClassKind::BodyGyro {
+                    let Some(e) = parent_end(tree, welds, id) else { continue };
+                    let Some(part) = tree.parent(id).ok().flatten() else { continue };
+                    (e, part_turn(tree, part))
+                } else {
+                    let Some(e) = end(tree, welds, a0).filter(|e| e.inv_mass > 0.0) else { continue };
+                    let Some(now) = a0.and_then(|a| attachment_turn(tree, a)) else { continue };
+                    (e, now)
+                };
+                let target = match a1.filter(|_| class == ClassKind::AlignOrientation) {
+                    Some(a) => match attachment_turn(tree, a) {
+                        Some(t) => t,
+                        None => continue,
+                    },
+                    None => {
+                        let o = vec(tree, id, Property::TargetOrientation);
+                        crate::physics::orientation_quat(o)
+                    }
+                };
+                let off = turn_between(now, target);
+                let spin = physics.angular_velocity(e.root);
+                let inertia = inertia_of(tree, welds, e.root);
+                let rigid = class == ClassKind::AlignOrientation
+                    && tree.get_bool(id, Property::RigidityEnabled) == Some(true);
+                let wanted = if rigid {
+                    off / dt
+                } else if class == ClassKind::AlignOrientation {
+                    let r = number(tree, id, Property::Responsiveness).max(0.01);
+                    spin + spring_dv(Vec3::ZERO, spin, off, r * r, 2.0 * r, dt)
+                } else {
+                    let k = number(tree, id, Property::BodyPower) / inertia;
+                    let c = number(tree, id, Property::BodyDamping) / inertia;
+                    spin + spring_dv(Vec3::ZERO, spin, off, k, c, dt)
+                };
+                let change = wanted - spin;
+                let change = if rigid {
+                    change
+                } else if class == ClassKind::BodyGyro {
+                    clamp_axes(change, vec(tree, id, Property::BodyMaxTorque) * (dt / inertia))
+                } else {
+                    clamp_length(change, number(tree, id, Property::MaxTorque) / inertia * dt)
+                };
+                if change.length() > 1e-6 {
+                    physics.set_angular_velocity(e.root, spin + change);
+                }
+            }
+            ClassKind::Torque => {
+                let Some(e) = end(tree, welds, a0).filter(|e| e.inv_mass > 0.0) else { continue };
+                let Some(turn) = a0.and_then(|a| attachment_turn(tree, a)) else { continue };
+                let t = vec(tree, id, Property::TorqueVector);
+                let t = turn * bevy::math::Vec3::new(t.x, t.y, t.z);
+                let spin = physics.angular_velocity(e.root);
+                let more = Vec3::new(t.x, t.y, t.z) * (dt / inertia_of(tree, welds, e.root));
+                physics.set_angular_velocity(e.root, spin + more);
+            }
+            ClassKind::NoCollisionConstraint => {
+                if let (Some(p0), Some(p1)) =
+                    (tree.get_ref(id, Property::Part0), tree.get_ref(id, Property::Part1))
+                {
+                    physics.pass_through(p0, p1);
+                }
             }
             _ => {}
         }
