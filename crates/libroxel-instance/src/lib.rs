@@ -865,6 +865,23 @@ impl ClassKind {
             Property::Width1,
             Property::LightEmission,
         ];
+        const SKY: &[Property] = &[
+            Property::Name,
+            Property::CelestialBodiesShown,
+            Property::SunAngularSize,
+            Property::MoonAngularSize,
+            Property::StarCount,
+        ];
+        const TRAIL: &[Property] = &[
+            Property::Name,
+            Property::Enabled,
+            Property::Attachment0,
+            Property::Attachment1,
+            Property::Color,
+            Property::Transparency,
+            Property::TrailLifetime,
+            Property::LightEmission,
+        ];
         const SIZE_LIMITS: &[Property] = &[Property::Name, Property::MinSize, Property::MaxSize];
         const TEXT_SIZE_LIMITS: &[Property] = &[Property::Name, Property::MinTextSize, Property::MaxTextSize];
         const JOINT: &[Property] = &[
@@ -1068,6 +1085,8 @@ impl ClassKind {
             ClassKind::ColorCorrectionEffect => COLOR_CORRECTION,
             ClassKind::SelectionBox => SELECTION_BOX,
             ClassKind::Beam => BEAM,
+            ClassKind::Sky => SKY,
+            ClassKind::Trail => TRAIL,
             ClassKind::UISizeConstraint => SIZE_LIMITS,
             ClassKind::UITextSizeConstraint => TEXT_SIZE_LIMITS,
             ClassKind::Weld => JOINT,
@@ -1195,6 +1214,11 @@ impl ClassKind {
             Property::MaxSize => PropertyValue::Vec2(Vec2::new(1.0e6, 1.0e6)),
             Property::MinTextSize => PropertyValue::Number(1.0),
             Property::MaxTextSize => PropertyValue::Number(100.0),
+            Property::StarCount => PropertyValue::Number(3000.0),
+            Property::CelestialBodiesShown => PropertyValue::Bool(true),
+            Property::SunAngularSize => PropertyValue::Number(21.0),
+            Property::MoonAngularSize => PropertyValue::Number(11.0),
+            Property::TrailLifetime => PropertyValue::Number(2.0),
             Property::Padding => PropertyValue::UDim(UDim::default()),
             Property::BlastRadius => PropertyValue::Number(4.0),
             Property::BlastPressure => PropertyValue::Number(500_000.0),
@@ -1313,7 +1337,7 @@ impl ClassKind {
                 ClassKind::UIStroke => Color3::new(0.0, 0.0, 0.0),
                 ClassKind::SpringConstraint => Color3::from_rgb8(200, 200, 210),
                 ClassKind::Atmosphere => Color3::from_rgb8(199, 199, 199),
-                ClassKind::Beam => Color3::WHITE,
+                ClassKind::Beam | ClassKind::Trail => Color3::WHITE,
                 _ => Color3::MEDIUM_GREY,
             }),
             Property::Anchored => PropertyValue::Bool(self == ClassKind::SpawnLocation),

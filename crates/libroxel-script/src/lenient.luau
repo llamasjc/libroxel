@@ -1275,8 +1275,7 @@ add(props, "JointInstance", { Active = true })
 
 add(props, "Sky", {
 	SkyboxBk = "", SkyboxDn = "", SkyboxFt = "", SkyboxLf = "", SkyboxRt = "", SkyboxUp = "",
-	SunTextureId = "", MoonTextureId = "", SunAngularSize = 21, MoonAngularSize = 11,
-	StarCount = 3000, CelestialBodiesShown = true, SkyboxOrientation = Vector3.zero,
+	SunTextureId = "", MoonTextureId = "", SkyboxOrientation = Vector3.zero,
 })
 -- (Atmosphere's Density, Haze and Color are real; these aren't drawn yet.)
 add(props, "Atmosphere", { Offset = 0, Decay = Color3.fromRGB(106, 112, 125), Glare = 0 })

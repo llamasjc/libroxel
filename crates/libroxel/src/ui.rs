@@ -168,6 +168,8 @@ const INSERTABLE: &[ClassKind] = &[
     ClassKind::Highlight,
     ClassKind::SelectionBox,
     ClassKind::Beam,
+    ClassKind::Trail,
+    ClassKind::Sky,
     ClassKind::Atmosphere,
     ClassKind::BloomEffect,
     ClassKind::ColorCorrectionEffect,
@@ -262,6 +264,8 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::Teams | ClassKind::Team => "🚩",
         ClassKind::Weld | ClassKind::Motor6D => "🔗",
         ClassKind::Beam => "〰",
+        ClassKind::Trail => "☄",
+        ClassKind::Sky => "🌙",
         ClassKind::SelectionBox => "⬚",
         ClassKind::Atmosphere => "🌫",
         ClassKind::BloomEffect | ClassKind::ColorCorrectionEffect => "✨",
@@ -269,11 +273,9 @@ fn icon(class: ClassKind) -> &'static str {
         ClassKind::Configuration => "⚙",
         ClassKind::CFrameValue
         | ClassKind::BrickColorValue
-        | ClassKind::Sky
         | ClassKind::BlurEffect
         | ClassKind::SunRaysEffect
         | ClassKind::DepthOfFieldEffect
-        | ClassKind::Trail
         | ClassKind::SurfaceGui
         | ClassKind::SurfaceLight
         | ClassKind::UIGradient
@@ -1556,6 +1558,14 @@ fn properties(
         ),
         ClassKind::SelectionBox => Some(
             "Draws an outline round its Adornee (a part or model), or what it's inside if Adornee is empty.",
+        ),
+        ClassKind::Trail => Some(
+            "Leaves a fading ribbon behind it as Attachment0 and Attachment1 move: put both in something that moves, \
+             a little apart. Lifetime is how long the ribbon lasts.",
+        ),
+        ClassKind::Sky => Some(
+            "Put this in Lighting to draw the sun and moon (SunAngularSize, MoonAngularSize) and stars at night \
+             (StarCount). They follow Lighting's ClockTime.",
         ),
         ClassKind::Beam => Some(
             "A flat strip between Attachment0 and Attachment1 that always faces the camera: lasers, light shafts, \

@@ -110,6 +110,10 @@ The first build compiles Bevy and takes a while. After that it is quick.
   Adornee (or its parent) in Color3, and a `Beam` draws a strip between
   its two attachments. `UISizeConstraint` and `UITextSizeConstraint` keep
   GUI objects and text within a minimum and maximum size.
+- **Sky and trails:** a `Sky` in Lighting draws the sun and moon along
+  ClockTime's path (SunAngularSize, MoonAngularSize, CelestialBodiesShown)
+  and stars at night (StarCount). A `Trail` leaves a fading ribbon behind
+  its two attachments as they move, lasting Lifetime seconds.
 - **Screen GUIs:** put a `ScreenGui` in StarterGui and fill it with frames,
   text labels and text buttons (Insert menu). They are drawn over the view
   while you edit, so you can click one to select it and lay it out with

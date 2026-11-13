@@ -1292,6 +1292,11 @@ pub fn property_name(property: Property) -> &'static str {
         Property::MaxSize => "MaxSize",
         Property::MinTextSize => "MinTextSize",
         Property::MaxTextSize => "MaxTextSize",
+        Property::StarCount => "StarCount",
+        Property::CelestialBodiesShown => "CelestialBodiesShown",
+        Property::SunAngularSize => "SunAngularSize",
+        Property::MoonAngularSize => "MoonAngularSize",
+        Property::TrailLifetime => "Lifetime",
     }
 }
 

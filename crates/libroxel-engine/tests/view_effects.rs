@@ -78,3 +78,50 @@ fn selection_boxes_outline_parts_and_models_and_beams_join_attachments() {
     assert!((drawn[0].to.x - drawn[0].from.x - 10.0).abs() < 1e-4);
     assert_eq!(drawn[0].width, 2.0);
 }
+
+#[test]
+fn a_sky_shows_the_sun_by_day_and_stars_at_night() {
+    use libroxel_engine::view_effects::{sky_look, star_directions};
+    let mut tree = InstanceTree::new();
+    assert_eq!(sky_look(&tree), None, "no sky, nothing extra drawn");
+    let lighting = tree.service(ClassKind::Lighting).unwrap();
+    let sky = add(&mut tree, ClassKind::Sky, lighting);
+    tree.set(lighting, Property::ClockTime, PropertyValue::Number(12.0)).unwrap();
+    let noon = sky_look(&tree).unwrap();
+    let (sun, size) = noon.sun.expect("the sun is up at noon");
+    assert!(sun.y > 0.9 && size == 21.0);
+    assert!(noon.moon.is_none(), "the moon is below the ground");
+    assert_eq!(noon.stars, (3000, 0.0));
+    tree.set(lighting, Property::ClockTime, PropertyValue::Number(0.0)).unwrap();
+    let midnight = sky_look(&tree).unwrap();
+    assert!(midnight.sun.is_none() && midnight.moon.unwrap().0.y > 0.9);
+    assert_eq!(midnight.stars.1, 1.0);
+    tree.set(sky, Property::CelestialBodiesShown, PropertyValue::Bool(false)).unwrap();
+    tree.set(sky, Property::StarCount, PropertyValue::Number(10.0)).unwrap();
+    let hidden = sky_look(&tree).unwrap();
+    assert!(hidden.moon.is_none() && hidden.stars.0 == 10);
+    let stars = star_directions(500);
+    assert_eq!(stars.len(), 500);
+    assert!(stars.iter().all(|s| (s.length() - 1.0).abs() < 1e-4 && s.y > -0.15));
+}
+
+#[test]
+fn a_trail_remembers_where_it_was_and_forgets_it_in_time() {
+    use bevy::math::Vec3 as V;
+    use libroxel_engine::view_effects::TrailHistory;
+    let mut trail = TrailHistory::default();
+    for i in 0..10 {
+        let x = i as f32;
+        trail.record(i as f32 * 0.1, V::new(x, 0.0, 0.0), V::new(x, 1.0, 0.0), 0.5);
+    }
+    let strip = trail.strip(0.9, 0.5);
+    // Only the last half second is left, newest last and least faded.
+    assert_eq!(strip.len(), 6, "{strip:?}");
+    assert_eq!(strip.last().unwrap().0, V::new(9.0, 0.0, 0.0));
+    assert!(strip[0].2 > 0.9 && strip.last().unwrap().2 == 0.0);
+    // Standing still adds nothing new, and the old part fades away.
+    for i in 10..20 {
+        trail.record(i as f32 * 0.1, V::new(9.0, 0.0, 0.0), V::new(9.0, 1.0, 0.0), 0.5);
+    }
+    assert_eq!(trail.strip(1.9, 0.5).len(), 1);
+}

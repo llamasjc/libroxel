@@ -377,6 +377,16 @@ pub enum Property {
     MinTextSize,
     /// On a text size constraint: the biggest its text may be.
     MaxTextSize,
+    /// On a sky: how many stars show at night.
+    StarCount,
+    /// On a sky: the sun and moon are drawn.
+    CelestialBodiesShown,
+    /// On a sky: how wide the sun looks, in degrees.
+    SunAngularSize,
+    /// On a sky: how wide the moon looks, in degrees.
+    MoonAngularSize,
+    /// On a trail: how long each bit of it lasts, in seconds (scripts call it Lifetime).
+    TrailLifetime,
 }
 
 /// The value of a property.
@@ -472,7 +482,12 @@ impl Property {
             | Property::Width0
             | Property::Width1
             | Property::MinTextSize
-            | Property::MaxTextSize => "number",
+            | Property::MaxTextSize
+            | Property::StarCount
+            | Property::SunAngularSize
+            | Property::MoonAngularSize
+            | Property::TrailLifetime => "number",
+            Property::CelestialBodiesShown => "bool",
             Property::TintColor | Property::SelectionColor => "Color3",
             Property::MinSize | Property::MaxSize => "Vec2",
             Property::C0Position
@@ -817,6 +832,11 @@ impl Property {
         Property::MaxSize,
         Property::MinTextSize,
         Property::MaxTextSize,
+        Property::StarCount,
+        Property::CelestialBodiesShown,
+        Property::SunAngularSize,
+        Property::MoonAngularSize,
+        Property::TrailLifetime,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -1023,6 +1043,11 @@ impl Property {
             Property::MaxSize => "max_size",
             Property::MinTextSize => "min_text_size",
             Property::MaxTextSize => "max_text_size",
+            Property::StarCount => "star_count",
+            Property::CelestialBodiesShown => "celestial_bodies_shown",
+            Property::SunAngularSize => "sun_angular_size",
+            Property::MoonAngularSize => "moon_angular_size",
+            Property::TrailLifetime => "trail_lifetime",
         }
     }
 
