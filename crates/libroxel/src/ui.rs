@@ -251,6 +251,8 @@ pub fn editor_ui(
     let tree_rc = engine.tree.clone();
     let playing = engine.is_playing();
     let mut actions: Vec<Action> = Vec::new();
+    // Everything in the Output also goes to a log file.
+    editor.log_file.write_new(&engine.log);
     // Model files dropped on the window come in as parts.
     for file in ctx.input(|i| i.raw.dropped_files.clone()) {
         let path = file.path();
@@ -1818,6 +1820,58 @@ fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree) {
         });
 }
 
+/// What the Output panel shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputView {
+    /// Every line, filtered.
+    Log,
+    /// Errors and warnings grouped by what they say.
+    Problems,
+    /// Roblox members and classes scripts asked for that Libroxel lacks.
+    Missing,
+}
+
+/// The game's name, for reports.
+fn game_name(editor: &Editor) -> String {
+    editor
+        .file
+        .as_ref()
+        .or(editor.imported_from.as_ref())
+        .and_then(|p| p.file_name())
+        .map_or_else(|| "an unsaved game".to_owned(), |n| n.to_string_lossy().into_owned())
+}
+
+/// Opens a folder in the computer's file manager.
+fn open_folder(path: &std::path::Path) {
+    let _ = std::fs::create_dir_all(path);
+    #[cfg(target_os = "windows")]
+    let program = "explorer";
+    #[cfg(target_os = "macos")]
+    let program = "open";
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let program = "xdg-open";
+    let _ = std::process::Command::new(program).arg(path).spawn();
+}
+
+/// The first script called `name`, for jumping to where an error happened.
+fn script_named(tree: &InstanceTree, name: &str) -> Option<InstanceId> {
+    tree.descendants(tree.root()).ok()?.into_iter().find(|id| {
+        tree.name(*id) == Ok(name)
+            && matches!(
+                tree.class(*id),
+                Ok(ClassKind::Script | ClassKind::LocalScript | ClassKind::ModuleScript)
+            )
+    })
+}
+
+/// A small toggle button.
+fn toggle(ui: &mut egui::Ui, on: &mut bool, text: String, colour: Color32) {
+    let label = RichText::new(text).color(if *on { colour } else { colour.gamma_multiply(0.4) });
+    if ui.add(egui::Button::new(label).small().selected(*on)).clicked() {
+        *on = !*on;
+    }
+}
+
 fn output(
     ui: &mut egui::Ui,
     engine: &mut EngineState,
@@ -1825,60 +1879,194 @@ fn output(
     playing: bool,
     actions: &mut Vec<Action>,
 ) {
+    let problems = crate::debugging::problems(&engine.log);
+    let missing = crate::debugging::missing(&engine.log);
+    let count = |level: LogLevel| engine.log.iter().filter(|e| e.level == level).count();
+    let (prints, warnings, errors) = (count(LogLevel::Info), count(LogLevel::Warn), count(LogLevel::Error));
     ui.horizontal(|ui| {
         theme::panel_name(ui, icon::TERMINAL_WINDOW, "Output");
+        let views = [
+            (OutputView::Log, "Log".to_owned()),
+            (OutputView::Problems, format!("Problems ({})", problems.len())),
+            (OutputView::Missing, format!("Missing ({})", missing.len())),
+        ];
+        for (view, label) in views {
+            if ui.selectable_label(editor.output_view == view, label).clicked() {
+                editor.output_view = view;
+            }
+        }
+        ui.separator();
         if ui.small_button("Clear").clicked() {
             actions.push(Action::ClearOutput);
         }
-        // The whole log in one click, for pasting somewhere else.
+        // The whole log, or a report of what went wrong, in one click.
         let copied_at = egui::Id::new("output-copied-at");
         let now = ui.input(|i| i.time);
-        let recently = ui.data(|d| d.get_temp::<f64>(copied_at)).is_some_and(|t| now - t < 1.5);
-        let label =
-            if recently { format!("{} Copied", icon::CHECK) } else { format!("{} Copy all", icon::COPY) };
+        let copied =
+            ui.data(|d| d.get_temp::<(f64, u8)>(copied_at)).filter(|(t, _)| now - t < 1.5).map(|c| c.1);
+        let label = |which: u8, text: &str, glyph: &str| {
+            if copied == Some(which) { format!("{} Copied", icon::CHECK) } else { format!("{glyph} {text}") }
+        };
         let copy = ui
-            .add_enabled(!engine.log.is_empty(), egui::Button::new(label).small())
+            .add_enabled(!engine.log.is_empty(), egui::Button::new(label(0, "Copy all", icon::COPY)).small())
             .on_hover_text("Copy everything in the output, to paste into a message or a file");
         if copy.clicked() {
             ui.ctx().copy_text(output_text(&engine.log));
-            ui.data_mut(|d| d.insert_temp(copied_at, now));
+            ui.data_mut(|d| d.insert_temp(copied_at, (now, 0)));
         }
-        if recently {
+        let report = ui
+            .add_enabled(
+                !engine.log.is_empty(),
+                egui::Button::new(label(1, "Copy report", icon::BUG)).small(),
+            )
+            .on_hover_text("Copy what's missing and each kind of error once, with where it happened");
+        if report.clicked() {
+            let text = crate::debugging::report(&engine.log, &game_name(editor), editor.log_file.path());
+            ui.ctx().copy_text(text);
+            ui.data_mut(|d| d.insert_temp(copied_at, (now, 1)));
+        }
+        let folder = ui.small_button(format!("{} Logs", icon::FOLDER_OPEN)).on_hover_text(format!(
+            "Every Output is also saved to a file here (latest.log is the newest):\n{}",
+            crate::debugging::logs_dir().display()
+        ));
+        if folder.clicked() {
+            open_folder(&crate::debugging::logs_dir());
+        }
+        if copied.is_some() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
-        ui.separator();
-        let hint =
-            if playing { "Run Luau in the running game…" } else { "Press Play to run Luau commands" };
-        let response = ui.add_enabled(
-            playing,
-            egui::TextEdit::singleline(&mut editor.command).hint_text(hint).desired_width(f32::INFINITY),
-        );
-        if response.lost_focus()
-            && ui.input(|i| i.key_pressed(Key::Enter))
-            && !editor.command.trim().is_empty()
-        {
-            actions.push(Action::RunCommand(std::mem::take(&mut editor.command)));
-            response.request_focus();
-        }
     });
-    ui.separator();
-    egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
-        let start = engine.log.len().saturating_sub(1000);
-        for entry in &engine.log[start..] {
-            ui.label(
-                RichText::new(format!("[{:>6.1}s] {}", entry.time, entry.text))
-                    .monospace()
-                    .color(level_color(entry.level)),
+    if editor.output_view == OutputView::Log {
+        ui.horizontal(|ui| {
+            toggle(ui, &mut editor.show_errors, format!("{} {errors}", icon::X_CIRCLE), theme::BRICK);
+            toggle(ui, &mut editor.show_warnings, format!("{} {warnings}", icon::WARNING), theme::SUN);
+            toggle(ui, &mut editor.show_prints, format!("{} {prints}", icon::INFO), theme::CHALK);
+            let group = RichText::new(format!("{} Group repeats", icon::STACK));
+            if ui
+                .add(egui::Button::new(group).small().selected(editor.group_repeats))
+                .on_hover_text("Show an error or warning that keeps happening once, with how many times")
+                .clicked()
+            {
+                editor.group_repeats = !editor.group_repeats;
+            }
+            ui.add(
+                egui::TextEdit::singleline(&mut editor.output_search)
+                    .hint_text(format!("{} Filter the output…", icon::MAGNIFYING_GLASS))
+                    .desired_width(220.0),
             );
+            ui.separator();
+            let hint =
+                if playing { "Run Luau in the running game…" } else { "Press Play to run Luau commands" };
+            let response = ui.add_enabled(
+                playing,
+                egui::TextEdit::singleline(&mut editor.command).hint_text(hint).desired_width(f32::INFINITY),
+            );
+            if response.lost_focus()
+                && ui.input(|i| i.key_pressed(Key::Enter))
+                && !editor.command.trim().is_empty()
+            {
+                actions.push(Action::RunCommand(std::mem::take(&mut editor.command)));
+                response.request_focus();
+            }
+        });
+    }
+    ui.separator();
+    match editor.output_view {
+        OutputView::Log => {
+            let search = editor.output_search.to_lowercase();
+            let shown = |e: &&LogEntry| {
+                let level_on = match e.level {
+                    LogLevel::Error => editor.show_errors,
+                    LogLevel::Warn => editor.show_warnings,
+                    _ => editor.show_prints,
+                };
+                level_on && (search.is_empty() || e.text.to_lowercase().contains(&search))
+            };
+            let mut lines: Vec<&LogEntry> = engine.log.iter().filter(shown).collect();
+            // Errors and warnings that repeat: the first one stands for all.
+            let mut repeats: std::collections::HashMap<&str, (usize, f64)> = Default::default();
+            if editor.group_repeats {
+                for e in &lines {
+                    if e.level != LogLevel::Info {
+                        let seen = repeats.entry(e.text.as_str()).or_insert((0, e.time));
+                        seen.0 += 1;
+                        seen.1 = e.time;
+                    }
+                }
+                let mut first = std::collections::HashSet::new();
+                lines.retain(|e| e.level == LogLevel::Info || first.insert(e.text.as_str()));
+            }
+            let start = lines.len().saturating_sub(2000);
+            egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
+                for entry in &lines[start..] {
+                    let text = match repeats.get(entry.text.as_str()) {
+                        Some(&(n, last)) if n > 1 => {
+                            format!("[{:>6.1}s] (×{n}, last at {last:.1}s) {}", entry.time, entry.text)
+                        }
+                        _ => format!("[{:>6.1}s] {}", entry.time, entry.text),
+                    };
+                    ui.label(RichText::new(text).monospace().color(level_color(entry.level)));
+                }
+            });
         }
-    });
+        OutputView::Problems => {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                if problems.is_empty() {
+                    ui.label("No errors or warnings.");
+                }
+                let tree = engine.tree.borrow();
+                for (i, p) in problems.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("×{}", p.count)).monospace().strong());
+                        let at = match (&p.script, p.line) {
+                            (Some(s), Some(l)) => format!("{s}:{l}"),
+                            (Some(s), None) => s.clone(),
+                            _ => String::new(),
+                        };
+                        let script = p.script.as_deref().and_then(|s| script_named(&tree, s));
+                        if let Some(id) = script {
+                            if ui.link(at).on_hover_text("Open this script").clicked() {
+                                actions.push(Action::OpenScript(id));
+                            }
+                        } else if !at.is_empty() {
+                            ui.label(RichText::new(at).monospace());
+                        }
+                        egui::CollapsingHeader::new(
+                            RichText::new(&p.message).monospace().color(level_color(p.level)),
+                        )
+                        .id_salt(("problem", i))
+                        .show(ui, |ui| {
+                            ui.label(RichText::new(&p.detail).monospace().small());
+                        });
+                    });
+                }
+            });
+        }
+        OutputView::Missing => {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                if missing.is_empty() {
+                    ui.label("Nothing missing so far: every member and class scripts asked for exists.");
+                } else {
+                    ui.label(
+                        "Members and classes your scripts asked for that don't exist here: either \
+                         Libroxel doesn't have them yet, or the name is misspelled. Copy report puts \
+                         this list in your clipboard.",
+                    );
+                }
+                for (m, n) in &missing {
+                    ui.label(RichText::new(format!("{}.{}   ×{n}", m.on, m.member)).monospace());
+                }
+            });
+        }
+    }
 }
 
 /// The output log as plain text, one line per entry, as it's shown.
 fn output_text<'a>(log: impl IntoIterator<Item = &'a LogEntry>) -> String {
     let mut text = String::new();
     for entry in log {
-        text.push_str(&format!("[{:>6.1}s] {}\n", entry.time, entry.text));
+        text.push_str(&crate::debugging::line_text(entry));
+        text.push('\n');
     }
     text
 }

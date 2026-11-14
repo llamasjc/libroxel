@@ -265,9 +265,21 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
         };
         Ok(crate::bindings::LuaColor3(c))
     });
-    m.add_method(terrain::CLEAR, |lua, this, ()| {
-        require_class(lua, this.0, ClassKind::Terrain, terrain::CLEAR)?;
-        edit(lua, this.0, |v| {
+    m.add_function(terrain::CLEAR, |lua, (obj, rest): (mlua::AnyUserData, mlua::MultiValue)| {
+        let id = obj.borrow::<LuaInstance>()?.0;
+        let class = host(lua).tree.borrow().class(id).map_err(tree_err)?;
+        if class != ClassKind::Terrain {
+            // Trails, particle emitters and others have a Clear of their own.
+            let Some(Value::Function(f)) =
+                crate::lenient::index(lua, id, class, obj.clone(), terrain::CLEAR)?
+            else {
+                return Err(crate::bindings::not_a_member(lua, id, terrain::CLEAR));
+            };
+            let mut args = rest;
+            args.push_front(Value::UserData(obj));
+            return f.call::<()>(args);
+        }
+        edit(lua, id, |v| {
             v.clear();
             0
         })

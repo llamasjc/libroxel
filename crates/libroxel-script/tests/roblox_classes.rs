@@ -236,3 +236,98 @@ fn raycast_params_have_every_setting() {
     );
     assert_eq!(printed(&rt), ["true true Bullets 1"]);
 }
+
+#[test]
+fn members_beyond_saved_properties_have_change_events() {
+    let rt = ScriptRuntime::new_with_tree(tree_with_player().0).unwrap();
+    run(
+        &rt,
+        r#"
+        workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function() end)
+        workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+            print("viewport", workspace.CurrentCamera.ViewportSize.X)
+        end)
+        local d = Instance.new("Dialog")
+        d:GetPropertyChangedSignal("InitialPrompt"):Connect(function() print("prompt", d.InitialPrompt) end)
+        d.InitialPrompt = "Hi"
+        local ok, err = pcall(function() d:GetPropertyChangedSignal("Bogus") end)
+        print(ok, tostring(err):find("Bogus is not a valid member of Dialog") ~= nil)
+        "#,
+    );
+    rt.set_viewport(800.0, 600.0);
+    for _ in 0..2 {
+        assert!(rt.step(0.05).is_empty());
+    }
+    let mut out = printed(&rt);
+    out.sort();
+    assert_eq!(out, ["false true", "prompt Hi", "viewport 800"]);
+}
+
+#[test]
+fn settings_and_services_act_like_instances() {
+    let rt = ScriptRuntime::new_with_tree(tree_with_player().0).unwrap();
+    run(
+        &rt,
+        r#"
+        local gs = UserSettings().GameSettings
+        gs:GetPropertyChangedSignal("SavedQualityLevel"):Connect(function() print("quality", gs.SavedQualityLevel.Name) end)
+        gs.SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel5
+        settings().Rendering:GetPropertyChangedSignal("QualityLevel"):Connect(function() end)
+        local gui = game:GetService("GuiService")
+        gui.MenuOpened:Connect(function() end)
+        game:GetService("ContextActionService"):SetTitle("x", "y")
+        local chat = game:GetService("TextChatService")
+        chat:GetPropertyChangedSignal("ChatVersion"):Connect(function() end)
+        chat:SetAttribute("Muted", true)
+        print(chat:GetAttribute("Muted"), chat:IsA("Instance"), gui:IsA("GuiService"))
+        local h = Instance.new("Highlight")
+        h.Parent = chat
+        print(h.Parent == chat)
+        local ok, err = pcall(function() return gui.NotAThing end)
+        print(ok, tostring(err):find("NotAThing is not a valid member of GuiService") ~= nil)
+        "#,
+    );
+    assert!(rt.step(0.05).is_empty());
+    let mut out = printed(&rt);
+    out.sort();
+    assert_eq!(out, ["false true", "quality QualityLevel5", "true", "true true true"]);
+}
+
+#[test]
+fn more_of_the_script_library_is_there() {
+    let rt = ScriptRuntime::new_with_tree(tree_with_player().0).unwrap();
+    run(
+        &rt,
+        r#"
+        debug.profilebegin("tick") debug.profileend()
+        task.desynchronize() task.synchronize()
+        local a, b = Vector2.new(3, 4), Vector2.new(1, 0)
+        print(a:Dot(b), a:Cross(b), a.Unit.X, a:Max(Vector2.new(5, 0)).X, a:Lerp(b, 0.5).X)
+        print(Vector3.FromNormalId(Enum.NormalId.Front).Z, Vector3.FromAxis(Enum.Axis.Y).Y)
+        local v = Random.new(3):NextUnitVector()
+        print(math.abs(v.Magnitude - 1) < 1e-4)
+        local d = DateTime.fromUniversalTime(2024, 3, 5, 14, 7, 9)
+        print(d:FormatUniversalTime("dddd, MMMM D YYYY HH:mm:ss", "en-us"), d:FormatLocalTime("LT", "en-us"))
+        local p = Instance.new("Part", workspace)
+        p:PivotTo(CFrame.new(1, 2, 3))
+        print(p:GetPivot().Position.Y, p.Position.X)
+        local actor = Instance.new("Actor")
+        print(actor.Name, actor.ClassName)
+        actor:BindToMessage("go", function(n) print("message", n) end)
+        actor:SendMessage("go", 5)
+        "#,
+    );
+    assert!(rt.step(0.05).is_empty());
+    assert_eq!(
+        printed(&rt),
+        [
+            "3 -4 0.6000000238418579 5 2",
+            "-1 1",
+            "true",
+            "Tuesday, March 5 2024 14:07:09 2:07 PM",
+            "2 1",
+            "Actor Actor",
+            "message 5",
+        ]
+    );
+}
