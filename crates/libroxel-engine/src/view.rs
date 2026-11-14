@@ -324,6 +324,7 @@ impl Plugin for RenderPlugin {
             .add_systems(Update, (camera_controls, play_input, forward_keys).chain().in_set(EngineSet::Input))
             .init_resource::<crate::mesh_files::MeshFiles>()
             .init_resource::<MeshTextures>()
+            .init_resource::<SharedMaterials>()
             .add_systems(
                 PostUpdate,
                 (attach_visuals, update_materials, update_meshes, use_mesh_files, use_mesh_textures).chain(),
@@ -575,6 +576,15 @@ fn setup_scene(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ima
     commands.spawn((
         Sun,
         DirectionalLight { illuminance: 9_000.0, shadow_maps_enabled: true, ..default() },
+        // Two shadow cascades instead of four: each one draws every part
+        // again, which a big map can't afford.
+        bevy::light::CascadeShadowConfigBuilder {
+            num_cascades: 2,
+            first_cascade_far_bound: 40.0,
+            maximum_distance: 220.0,
+            ..default()
+        }
+        .build(),
         Transform::from_xyz(8.0, 20.0, 6.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     commands.insert_resource(ClearColor(Color::srgb(0.53, 0.72, 0.9)));
@@ -815,18 +825,54 @@ fn visibility_for(appearance: &PartAppearance) -> Visibility {
     if appearance.transparency >= 0.999 { Visibility::Hidden } else { Visibility::Inherited }
 }
 
+/// One material for every part that looks the same, so the GPU draws them
+/// together in big batches instead of one by one (a big map has thousands
+/// of parts but only a few hundred looks).
+#[derive(Resource, Default)]
+pub(crate) struct SharedMaterials(std::collections::HashMap<LookKey, Handle<StandardMaterial>>);
+
+/// A part's look, rounded to what can be told apart on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct LookKey([u16; 4], u16, Material, u16, u16);
+
+impl LookKey {
+    fn of(a: &PartAppearance) -> Self {
+        let c = a.color.to_srgba();
+        let q = |x: f32| (x.clamp(0.0, 1.0) * 1000.0).round() as u16;
+        let colour = [q(c.red), q(c.green), q(c.blue), q(c.alpha)];
+        // Textured materials repeat by size: a quarter step is as fine as shows.
+        let repeat = (a.texture_repeat * 4.0).round().clamp(0.0, 60000.0) as u16;
+        Self(colour, q(a.transparency), a.material, repeat, q(a.reflectance))
+    }
+}
+
+impl SharedMaterials {
+    pub(crate) fn get(
+        &mut self,
+        appearance: &PartAppearance,
+        textures: &MaterialTextures,
+        materials: &mut Assets<StandardMaterial>,
+    ) -> Handle<StandardMaterial> {
+        self.0
+            .entry(LookKey::of(appearance))
+            .or_insert_with(|| materials.add(material_for(appearance, textures)))
+            .clone()
+    }
+}
+
 fn attach_visuals(
     mut commands: Commands,
     meshes: Res<PartMeshes>,
     textures: Res<MaterialTextures>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut shared: ResMut<SharedMaterials>,
     new_parts: Query<(Entity, &PartAppearance, &PartGeometry), Added<PartLink>>,
 ) {
     for (entity, appearance, geometry) in &new_parts {
         let mut e = commands.entity(entity);
         e.insert((
             Mesh3d(meshes.get(geometry.0)),
-            MeshMaterial3d(materials.add(material_for(appearance, &textures))),
+            MeshMaterial3d(shared.get(appearance, &textures, &mut materials)),
             visibility_for(appearance),
         ));
         if !appearance.shadow {
@@ -840,20 +886,26 @@ fn attach_visuals(
 type ChangedLook<'a> = (
     Entity,
     &'a PartAppearance,
-    &'a MeshMaterial3d<StandardMaterial>,
+    &'a mut MeshMaterial3d<StandardMaterial>,
     &'a mut Visibility,
     Has<bevy::light::NotShadowCaster>,
+    &'a PartMeshTexture,
 );
 
 fn update_materials(
     mut commands: Commands,
     textures: Res<MaterialTextures>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut shared: ResMut<SharedMaterials>,
     mut changed: Query<ChangedLook, Changed<PartAppearance>>,
 ) {
-    for (entity, appearance, handle, mut visibility, shadowless) in &mut changed {
-        if let Some(mut material) = materials.get_mut(&handle.0) {
-            *material = material_for(appearance, &textures);
+    for (entity, appearance, mut handle, mut visibility, shadowless, texture) in &mut changed {
+        // A part with its own picture has its own material (see use_mesh_textures).
+        if texture.0.is_empty() {
+            let wanted = shared.get(appearance, &textures, &mut materials);
+            if handle.0 != wanted {
+                handle.0 = wanted;
+            }
         }
         visibility.set_if_neq(visibility_for(appearance));
         if appearance.shadow == shadowless {
@@ -914,24 +966,28 @@ fn use_mesh_textures(
     mut cache: ResMut<MeshTextures>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    parts: Query<(Ref<PartMeshTexture>, Ref<PartAppearance>, &MeshMaterial3d<StandardMaterial>)>,
+    mut shared: ResMut<SharedMaterials>,
+    mut parts: Query<(Ref<PartMeshTexture>, Ref<PartAppearance>, &mut MeshMaterial3d<StandardMaterial>)>,
 ) {
     let generation = crate::pictures::generation();
     if cache.generation != generation {
         cache.loaded.clear();
         cache.generation = generation;
     }
-    for (texture, appearance, handle) in &parts {
+    for (texture, appearance, mut handle) in &mut parts {
         if !texture.is_changed() && !appearance.is_changed() {
             continue;
         }
-        let Some(mut material) = materials.get_mut(&handle.0) else { continue };
         if texture.0.is_empty() {
             if texture.is_changed() {
-                *material = material_for(&appearance, &textures);
+                handle.0 = shared.get(&appearance, &textures, &mut materials);
             }
             continue;
         }
+        // Its own material, so the picture isn't put on every part that looks the same.
+        let own = materials.add(material_for(&appearance, &textures));
+        handle.0 = own;
+        let Some(mut material) = materials.get_mut(&handle.0) else { continue };
         let picture = cache
             .loaded
             .entry(texture.0.clone())

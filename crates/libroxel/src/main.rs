@@ -154,6 +154,8 @@ pub struct Editor {
     pub output_search: String,
     /// What the Output shows, worked out again only for new lines.
     pub output_cache: ui::OutputCache,
+    /// Shift+F1's frame stats.
+    pub stats: ui::Stats,
     /// The Explorer's filter: only what matches (and what leads to it) shows.
     pub explorer_filter: String,
     /// The Properties panel's filter.
@@ -221,6 +223,7 @@ impl Default for Editor {
             output_view: ui::OutputView::Log,
             output_search: String::new(),
             output_cache: Default::default(),
+            stats: Default::default(),
             explorer_filter: String::new(),
             properties_filter: String::new(),
             focus_filter: None,

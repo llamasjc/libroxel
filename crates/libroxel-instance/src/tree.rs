@@ -803,66 +803,79 @@ impl InstanceTree {
         found.into_iter().map(|(_, id)| id).collect()
     }
 
+    /// A property's value, borrowed (no copy). `Name` isn't stored here.
+    pub fn peek(&self, id: InstanceId, property: Property) -> Option<&PropertyValue> {
+        self.data(id).ok()?.prop(property)
+    }
+
+    /// A string property, borrowed.
+    pub fn get_str(&self, id: InstanceId, property: Property) -> Option<&str> {
+        match self.peek(id, property)? {
+            PropertyValue::String(v) => Some(v.as_str()),
+            _ => None,
+        }
+    }
+
     /// Typed read of a `Vec3` property.
     pub fn get_vec3(&self, id: InstanceId, property: Property) -> Option<Vec3> {
-        match self.get(id, property).ok()? {
-            PropertyValue::Vec3(v) => Some(v),
+        match self.peek(id, property)? {
+            PropertyValue::Vec3(v) => Some(*v),
             _ => None,
         }
     }
 
     /// Typed read of a 2D vector property.
     pub fn get_vec2(&self, id: InstanceId, property: Property) -> Option<crate::Vec2> {
-        match self.get(id, property).ok()? {
-            PropertyValue::Vec2(v) => Some(v),
+        match self.peek(id, property)? {
+            PropertyValue::Vec2(v) => Some(*v),
             _ => None,
         }
     }
 
     /// Typed read of a number property.
     pub fn get_number(&self, id: InstanceId, property: Property) -> Option<f64> {
-        match self.get(id, property).ok()? {
-            PropertyValue::Number(v) => Some(v),
+        match self.peek(id, property)? {
+            PropertyValue::Number(v) => Some(*v),
             _ => None,
         }
     }
 
     /// Typed read of a bool property.
     pub fn get_bool(&self, id: InstanceId, property: Property) -> Option<bool> {
-        match self.get(id, property).ok()? {
-            PropertyValue::Bool(v) => Some(v),
+        match self.peek(id, property)? {
+            PropertyValue::Bool(v) => Some(*v),
             _ => None,
         }
     }
 
     /// Typed read of a colour property.
     pub fn get_color(&self, id: InstanceId, property: Property) -> Option<Color3> {
-        match self.get(id, property).ok()? {
-            PropertyValue::Color3(v) => Some(v),
+        match self.peek(id, property)? {
+            PropertyValue::Color3(v) => Some(*v),
             _ => None,
         }
     }
 
     /// Typed read of an enum property.
     pub fn get_enum(&self, id: InstanceId, property: Property) -> Option<EnumValue> {
-        match self.get(id, property).ok()? {
-            PropertyValue::Enum(v) => Some(v),
+        match self.peek(id, property)? {
+            PropertyValue::Enum(v) => Some(*v),
             _ => None,
         }
     }
 
     /// Typed read of a link property.
     pub fn get_ref(&self, id: InstanceId, property: Property) -> Option<InstanceId> {
-        match self.get(id, property).ok()? {
-            PropertyValue::Ref(v) => v,
+        match self.peek(id, property)? {
+            PropertyValue::Ref(v) => *v,
             _ => None,
         }
     }
 
     /// Typed read of a string property.
     pub fn get_string(&self, id: InstanceId, property: Property) -> Option<String> {
-        match self.get(id, property).ok()? {
-            PropertyValue::String(v) => Some(v),
+        match self.peek(id, property)? {
+            PropertyValue::String(v) => Some(v.clone()),
             _ => None,
         }
     }
