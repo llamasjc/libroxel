@@ -516,6 +516,12 @@ fn sync_highlights(
             commands.entity(o.outline).despawn();
             false
         });
+        // Roblox outlines a highlighted model once, around its silhouette.
+        // Outlining each of many parts instead (a dome of a thousand
+        // triangles) piles the outlines up where the parts meet, as dots
+        // and seams, so a model of many parts gets the fill only.
+        let outlined = parts.len() <= 16;
+        let fill_grow = if outlined { 0.04 } else { 0.0 };
         for part in parts {
             let (Some(pos), Some(size)) =
                 (tree.get_vec3(part, Property::Position), tree.get_vec3(part, Property::Size))
@@ -538,7 +544,7 @@ fn sync_highlights(
             match state.parts.get(&part) {
                 Some(o) => {
                     if let Ok(mut t) = transforms.get_mut(o.fill) {
-                        t.set_if_neq(at(0.04));
+                        t.set_if_neq(at(fill_grow));
                     }
                     if let Ok(mut t) = transforms.get_mut(o.outline) {
                         t.set_if_neq(at(OUTLINE));
@@ -550,7 +556,7 @@ fn sync_highlights(
                         .spawn((
                             Mesh3d(mesh.clone()),
                             MeshMaterial3d(state.fill.clone()),
-                            at(0.04),
+                            at(fill_grow),
                             bevy::light::NotShadowCaster,
                         ))
                         .id();
@@ -560,6 +566,7 @@ fn sync_highlights(
                             MeshMaterial3d(state.outline.clone()),
                             at(OUTLINE),
                             bevy::light::NotShadowCaster,
+                            if outlined { Visibility::Inherited } else { Visibility::Hidden },
                         ))
                         .id();
                     state.parts.insert(part, Overlay { fill, outline });
