@@ -133,6 +133,10 @@ impl ScriptRuntime {
     /// Creates a runtime bound to `tree`.
     pub fn new(tree: SharedTree) -> mlua::Result<Self> {
         let lua = Lua::new();
+        // As Roblox runs live games: optimised, with inlining, and turned
+        // into machine code where the computer allows it.
+        lua.set_compiler(mlua::chunk::Compiler::new().set_optimization_level(2).set_debug_level(1));
+        lua.enable_jit(true);
         bindings::install(&lua, tree.clone())?;
         // Freeze the standard library and our globals; each script gets its
         // own global environment on top.
