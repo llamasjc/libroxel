@@ -21,6 +21,12 @@ use crate::{Dialog, Editor, Tool, Tunnel, games_dir, gui, templates, viewport};
 /// Things the UI asks for; applied after drawing so nothing is borrowed twice.
 enum Action {
     New,
+    /// Put the selection in a new model (Ctrl+G).
+    Group(InstanceId),
+    /// Put a model's or folder's contents where it is, and remove it (Ctrl+U).
+    Ungroup(InstanceId),
+    /// Anchor or unanchor the selected part.
+    ToggleAnchor(InstanceId),
     /// One of the starter games, by name.
     OpenStarter(&'static str),
     Open(PathBuf),
@@ -305,35 +311,65 @@ pub fn editor_ui(
         egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(ctx.viewport_rect()),
     );
 
-    if !editor.player_mode {
-        egui::Panel::top("menu").show(&mut root, |ui| {
-            menu_bar(ui, editor, playing, &mut actions);
+    if editor.player_mode {
+        egui::Panel::top("toolbar").show(&mut root, |ui| {
+            toolbar(ui, editor, engine.session.as_ref(), &mut actions);
         });
-    }
-    egui::Panel::top("toolbar").show(&mut root, |ui| {
-        toolbar(ui, editor, engine.session.as_ref(), &mut actions);
-    });
-    if !editor.player_mode {
-        egui::Panel::left("explorer").resizable(true).default_size(260.0).show(&mut root, |ui| {
-            theme::panel_title(ui, icon::TREE_STRUCTURE, "Explorer");
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                // A tree reads best packed close.
-                ui.spacing_mut().item_spacing.y = 0.0;
-                ui.spacing_mut().interact_size.y = 22.0;
-                let tree = tree_rc.borrow();
-                explorer_node(ui, &tree, tree.root(), editor, &mut actions, 0);
-                editor.reveal_selection = false;
+    } else {
+        // Laid out the way Studio users know: the ribbon on top, the
+        // toolbox on the left, the explorer over the properties on the
+        // right, and the output along the bottom.
+        egui::Panel::top("ribbon").show(&mut root, |ui| {
+            ribbon(ui, editor, engine.session.as_ref(), &tree_rc.borrow(), &mut actions);
+        });
+        if editor.show_toolbox {
+            egui::Panel::left("toolbox").resizable(true).default_size(190.0).show(&mut root, |ui| {
+                toolbox(ui, editor, playing, &mut actions);
             });
-        });
-        egui::Panel::right("properties").resizable(true).default_size(300.0).show(&mut root, |ui| {
-            theme::panel_title(ui, icon::SLIDERS_HORIZONTAL, "Properties");
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                properties(ui, editor, &mut tree_rc.borrow_mut(), now, playing, &mut actions);
+        }
+        if editor.show_explorer || editor.show_properties {
+            egui::Panel::right("side").resizable(true).default_size(300.0).show(&mut root, |ui| {
+                if editor.show_explorer {
+                    let explorer = |ui: &mut egui::Ui, editor: &mut Editor, actions: &mut Vec<Action>| {
+                        theme::panel_title(ui, icon::TREE_STRUCTURE, "Explorer");
+                        egui::ScrollArea::vertical().id_salt("explorer").auto_shrink([false, false]).show(
+                            ui,
+                            |ui| {
+                                // A tree reads best packed close.
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                ui.spacing_mut().interact_size.y = 22.0;
+                                let tree = tree_rc.borrow();
+                                explorer_node(ui, &tree, tree.root(), editor, actions, 0);
+                                editor.reveal_selection = false;
+                            },
+                        );
+                    };
+                    if editor.show_properties {
+                        let half = ui.available_height() * 0.45;
+                        egui::Panel::top("explorer")
+                            .resizable(true)
+                            .default_size(half)
+                            .show(ui, |ui| explorer(ui, editor, &mut actions));
+                    } else {
+                        explorer(ui, editor, &mut actions);
+                    }
+                }
+                if editor.show_properties {
+                    theme::panel_title(ui, icon::SLIDERS_HORIZONTAL, "Properties");
+                    egui::ScrollArea::vertical().id_salt("properties").auto_shrink([false, false]).show(
+                        ui,
+                        |ui| {
+                            properties(ui, editor, &mut tree_rc.borrow_mut(), now, playing, &mut actions);
+                        },
+                    );
+                }
             });
-        });
-        egui::Panel::bottom("output").resizable(true).default_size(170.0).show(&mut root, |ui| {
-            output(ui, engine, editor, playing, &mut actions);
-        });
+        }
+        if editor.show_output {
+            egui::Panel::bottom("output").resizable(true).default_size(170.0).show(&mut root, |ui| {
+                output(ui, engine, editor, playing, &mut actions);
+            });
+        }
     }
 
     // The space left over is the 3D view.
@@ -729,6 +765,10 @@ fn shortcuts(ctx: &egui::Context, editor: &mut Editor, playing: bool, actions: &
         if i.consume_shortcut(&cmd(Key::Z)) {
             actions.push(Action::Undo);
         }
+        // As in Studio: F5 plays, Shift+F5 stops.
+        if i.consume_key(Modifiers::SHIFT, Key::F5) {
+            actions.push(Action::Stop);
+        }
         if i.consume_key(Modifiers::NONE, Key::F5) {
             actions.push(if playing { Action::Stop } else { Action::Play });
         }
@@ -759,161 +799,160 @@ fn shortcuts(ctx: &egui::Context, editor: &mut Editor, playing: bool, actions: &
             if i.consume_key(Modifiers::NONE, Key::Delete) {
                 actions.push(Action::Delete(id));
             }
+            if i.consume_shortcut(&cmd(Key::G)) {
+                actions.push(Action::Group(id));
+            }
+            if i.consume_shortcut(&cmd(Key::U)) {
+                actions.push(Action::Ungroup(id));
+            }
+            // F looks at the selection.
+            if i.consume_key(Modifiers::NONE, Key::F) && !playing {
+                editor.focus_selection = true;
+            }
         }
     });
 }
 
-fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut Vec<Action>) {
-    egui::MenuBar::new().ui(ui, |ui| {
-        ui.menu_button("File", |ui| {
-            if ui.add_enabled(!playing, egui::Button::new("Main menu")).clicked() {
-                editor.menu.open = true;
-                editor.menu.scanned = false;
-            }
-            ui.separator();
-            if ui.button("New").clicked() {
-                actions.push(Action::New);
-            }
-            ui.menu_button("Open a starter game", |ui| {
-                for game in crate::starter_games::STARTER_GAMES {
-                    if ui.button(format!("{} {}", game.symbol, game.name)).on_hover_text(game.about).clicked()
-                    {
-                        actions.push(Action::OpenStarter(game.name));
+/// How a hosted or joined game is going: who joined, the join code, the connection.
+fn session_status(
+    ui: &mut egui::Ui,
+    editor: &mut Editor,
+    session: Option<&PlaySession>,
+    actions: &mut Vec<Action>,
+) {
+    if let Some(session) = session {
+        let red = theme::BRICK;
+        if let Some(address) = session.host_address() {
+            let joined = session.joined_count();
+            let who = if joined == 1 { "1 joined".to_owned() } else { format!("{joined} joined") };
+            theme::status(ui, theme::MINT, &format!("Hosting on port {} · {who}", address.port()))
+                .on_hover_text("Others on your network join with this computer's address and this port");
+            let players = session.joined_players();
+            if !players.is_empty() {
+                ui.menu_button(format!("{}  Players", icon::USERS_THREE), |ui| {
+                    for (player, name) in players {
+                        ui.horizontal(|ui| {
+                            ui.label(name);
+                            if ui
+                                .small_button("Remove")
+                                .on_hover_text("Take them out of this game; they can't join it again")
+                                .clicked()
+                            {
+                                actions.push(Action::Kick(player));
+                                ui.close();
+                            }
+                        });
                     }
-                }
-            });
-            if ui
-                .add_enabled(!playing, egui::Button::new("Clear saved data"))
-                .on_hover_text("Forget what this game's data stores saved in earlier play tests")
-                .clicked()
-            {
-                actions.push(Action::ClearData);
+                });
             }
-            if ui.button("Open…").clicked() {
-                let path = games_dir().join("untitled.lrx").display().to_string();
-                editor.dialog = Some(Dialog::Open { path });
-            }
-            ui.separator();
-            if ui.add_enabled(!playing, egui::Button::new("Save        Ctrl+S")).clicked() {
-                actions.push(Action::Save);
-            }
-            if ui.add_enabled(!playing, egui::Button::new("Save as…")).clicked() {
-                let path = editor
-                    .file
-                    .clone()
-                    .unwrap_or_else(|| games_dir().join("untitled.lrx"))
-                    .display()
-                    .to_string();
-                editor.dialog = Some(Dialog::SaveAs { path });
-            }
-            ui.separator();
-            if ui
-                .add_enabled(!playing, egui::Button::new(format!("{}  Publish…", icon::GLOBE_HEMISPHERE_WEST)))
-                .on_hover_text("Put this game on the Hub, so anyone can find it Online and play it")
-                .clicked()
-            {
-                let title = editor
-                    .file
-                    .as_ref()
-                    .and_then(|f| f.file_stem())
-                    .map_or_else(|| "My game".to_owned(), |s| s.to_string_lossy().into_owned());
-                editor.platform.publish_status = None;
-                editor.dialog = Some(Dialog::Publish { title, description: String::new() });
-            }
-        });
-        ui.menu_button("Edit", |ui| {
-            if ui
-                .add_enabled(!playing && editor.history.can_undo(), egui::Button::new("Undo   Ctrl+Z"))
-                .clicked()
-            {
-                actions.push(Action::Undo);
-            }
-            if ui
-                .add_enabled(!playing && editor.history.can_redo(), egui::Button::new("Redo   Ctrl+Y"))
-                .clicked()
-            {
-                actions.push(Action::Redo);
-            }
-            ui.separator();
-            let selected = editor.selection;
-            if ui.add_enabled(selected.is_some(), egui::Button::new("Duplicate   Ctrl+D")).clicked()
-                && let Some(id) = selected
-            {
-                actions.push(Action::Duplicate(id));
-            }
-            if ui.add_enabled(selected.is_some(), egui::Button::new("Delete   Del")).clicked()
-                && let Some(id) = selected
-            {
-                actions.push(Action::Delete(id));
-            }
-            if ui.add_enabled(selected.is_some(), egui::Button::new("Turn 90°   Ctrl+R")).clicked()
-                && let Some(id) = selected
-            {
-                actions.push(Action::Rotate90(id));
-            }
-            ui.separator();
-            if ui
-                .add_enabled(selected.is_some() && !playing, egui::Button::new("Share as a hat"))
-                .on_hover_text(
-                    "Put the selected model's parts in the catalog as a hat anyone can wear. It sits with its \
-                     bottom on the head, so build it the way up it goes.",
-                )
-                .clicked()
-                && let Some(id) = selected
-            {
-                actions.push(Action::ShareHat(id));
-            }
-        });
-        ui.menu_button("Insert", |ui| {
-            for &class in INSERTABLE {
-                if ui.button(format!("{} {}", icon(class), names::class_name(class))).clicked() {
-                    actions.push(Action::Insert(class));
+            if let Some(Tunnel::Host(tunnel)) = &editor.tunnel {
+                if let Some(code) = tunnel.code() {
+                    let copy = ui
+                        .button(format!("{}  Copy join code", icon::COPY))
+                        .on_hover_text(format!("Friends anywhere paste this into Join:\n{code}"));
+                    if copy.clicked() {
+                        ui.ctx().copy_text(code);
+                    }
+                } else if let Some(error) = tunnel.error() {
+                    ui.colored_label(red, "No join code").on_hover_text(error);
+                } else {
+                    theme::status(ui, theme::SUN, "Getting a join code…");
                 }
             }
-            ui.separator();
-            for &(shape, label) in SHAPES {
-                if ui.button(format!("{} part", label)).clicked() {
-                    actions.push(Action::InsertShape(shape));
-                }
+        } else if session.is_joined() {
+            let tunnel = match &editor.tunnel {
+                Some(Tunnel::Join(tunnel)) => Some(tunnel),
+                _ => None,
+            };
+            if let Some(error) = tunnel.and_then(|t| t.error()) {
+                theme::status(ui, theme::BRICK, "Could not reach the host").on_hover_text(error);
+            } else if session.disconnected() {
+                theme::status(ui, theme::BRICK, "Disconnected");
+            } else if tunnel.is_some_and(|t| !t.connected()) {
+                theme::status(ui, theme::SUN, "Connecting…");
+            } else {
+                theme::status(ui, theme::MINT, "Joined");
             }
-            ui.separator();
-            if ui.button(format!("{}  Character (NPC)", icon::PERSON_SIMPLE)).clicked() {
-                actions.push(Action::InsertNpc);
-            }
-            if ui.button(format!("{}  Go-kart", icon::STEERING_WHEEL)).clicked() {
-                actions.push(Action::InsertKart);
-            }
-        });
-        ui.menu_button("View", |ui| {
-            ui.checkbox(&mut editor.show_grid, "Show grid");
-            ui.checkbox(&mut editor.touch.seen, "Touch controls")
-                .on_hover_text("Show the on-screen stick and jump button while playing (they turn on by themselves when you touch the screen)");
-        });
-        ui.menu_button("Together", |ui| {
-            if editor.coedit.is_none() {
-                if ui
-                    .add_enabled(!playing, egui::Button::new(format!("{}  Edit together…", icon::USERS_THREE)))
-                    .on_hover_text("Share this game so others can edit it with you, or join someone's")
-                    .clicked()
-                {
-                    let name = editor.menu.name.trim().to_owned();
-                    editor.dialog = Some(Dialog::EditTogether { address: String::new(), name });
-                }
-            } else if ui.button("Stop editing together").clicked() {
-                actions.push(Action::StopEdits);
-            }
-        });
-        ui.menu_button("Help", |ui| {
-            ui.label("Right mouse + WASD/QE: fly the camera (Shift = faster)");
-            ui.label("Scroll: move forward/back");
-            ui.label("Click: select · Del: delete · Ctrl+D: duplicate · Ctrl+R: turn 90°");
-            ui.label("Ctrl+1..4: select, move, resize, rotate tools");
-            ui.label("F5: play / stop · Esc: stop");
-            ui.label("While playing: WASD walk, Space jump, right mouse turns the camera");
-        });
-    });
+        }
+    }
 }
 
+/// The File menu: new, open, save, publish and the main menu.
+fn file_menu(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut Vec<Action>) {
+    if ui.add_enabled(!playing, egui::Button::new("Main menu")).clicked() {
+        editor.menu.open = true;
+        editor.menu.scanned = false;
+    }
+    ui.separator();
+    if ui.button("New").clicked() {
+        actions.push(Action::New);
+    }
+    ui.menu_button("Open a starter game", |ui| {
+        for game in crate::starter_games::STARTER_GAMES {
+            if ui.button(format!("{} {}", game.symbol, game.name)).on_hover_text(game.about).clicked() {
+                actions.push(Action::OpenStarter(game.name));
+            }
+        }
+    });
+    if ui
+        .add_enabled(!playing, egui::Button::new("Clear saved data"))
+        .on_hover_text("Forget what this game's data stores saved in earlier play tests")
+        .clicked()
+    {
+        actions.push(Action::ClearData);
+    }
+    if ui.button("Open…").clicked() {
+        let path = games_dir().join("untitled.lrx").display().to_string();
+        editor.dialog = Some(Dialog::Open { path });
+    }
+    ui.separator();
+    if ui.add_enabled(!playing, egui::Button::new("Save        Ctrl+S")).clicked() {
+        actions.push(Action::Save);
+    }
+    if ui.add_enabled(!playing, egui::Button::new("Save as…")).clicked() {
+        let path =
+            editor.file.clone().unwrap_or_else(|| games_dir().join("untitled.lrx")).display().to_string();
+        editor.dialog = Some(Dialog::SaveAs { path });
+    }
+    ui.separator();
+    if ui
+        .add_enabled(!playing, egui::Button::new(format!("{}  Publish…", icon::GLOBE_HEMISPHERE_WEST)))
+        .on_hover_text("Put this game on the Hub, so anyone can find it Online and play it")
+        .clicked()
+    {
+        let title = editor
+            .file
+            .as_ref()
+            .and_then(|f| f.file_stem())
+            .map_or_else(|| "My game".to_owned(), |s| s.to_string_lossy().into_owned());
+        editor.platform.publish_status = None;
+        editor.dialog = Some(Dialog::Publish { title, description: String::new() });
+    }
+}
+
+/// Every class the editor can insert, with the ready-made part shapes and models.
+fn insert_menu(ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+    for &class in INSERTABLE {
+        if ui.button(format!("{} {}", icon(class), names::class_name(class))).clicked() {
+            actions.push(Action::Insert(class));
+        }
+    }
+    ui.separator();
+    for &(shape, label) in SHAPES {
+        if ui.button(format!("{} part", label)).clicked() {
+            actions.push(Action::InsertShape(shape));
+        }
+    }
+    ui.separator();
+    if ui.button(format!("{}  Character (NPC)", icon::PERSON_SIMPLE)).clicked() {
+        actions.push(Action::InsertNpc);
+    }
+    if ui.button(format!("{}  Go-kart", icon::STEERING_WHEEL)).clicked() {
+        actions.push(Action::InsertKart);
+    }
+}
+
+/// The bar along the top while playing a game from the main menu: leave, and how the connection is going.
 fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>, actions: &mut Vec<Action>) {
     let playing = session.is_some();
     ui.horizontal(|ui| {
@@ -945,130 +984,8 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
                 editor.platform.open = true;
             }
         }
-        if let Some(session) = session {
-            let red = theme::BRICK;
-            if let Some(address) = session.host_address() {
-                let joined = session.joined_count();
-                let who = if joined == 1 { "1 joined".to_owned() } else { format!("{joined} joined") };
-                theme::status(ui, theme::MINT, &format!("Hosting on port {} · {who}", address.port()))
-                    .on_hover_text("Others on your network join with this computer's address and this port");
-                let players = session.joined_players();
-                if !players.is_empty() {
-                    ui.menu_button(format!("{}  Players", icon::USERS_THREE), |ui| {
-                        for (player, name) in players {
-                            ui.horizontal(|ui| {
-                                ui.label(name);
-                                if ui
-                                    .small_button("Remove")
-                                    .on_hover_text("Take them out of this game; they can't join it again")
-                                    .clicked()
-                                {
-                                    actions.push(Action::Kick(player));
-                                    ui.close();
-                                }
-                            });
-                        }
-                    });
-                }
-                if let Some(Tunnel::Host(tunnel)) = &editor.tunnel {
-                    if let Some(code) = tunnel.code() {
-                        let copy = ui
-                            .button(format!("{}  Copy join code", icon::COPY))
-                            .on_hover_text(format!("Friends anywhere paste this into Join:\n{code}"));
-                        if copy.clicked() {
-                            ui.ctx().copy_text(code);
-                        }
-                    } else if let Some(error) = tunnel.error() {
-                        ui.colored_label(red, "No join code").on_hover_text(error);
-                    } else {
-                        theme::status(ui, theme::SUN, "Getting a join code…");
-                    }
-                }
-            } else if session.is_joined() {
-                let tunnel = match &editor.tunnel {
-                    Some(Tunnel::Join(tunnel)) => Some(tunnel),
-                    _ => None,
-                };
-                if let Some(error) = tunnel.and_then(|t| t.error()) {
-                    theme::status(ui, theme::BRICK, "Could not reach the host").on_hover_text(error);
-                } else if session.disconnected() {
-                    theme::status(ui, theme::BRICK, "Disconnected");
-                } else if tunnel.is_some_and(|t| !t.connected()) {
-                    theme::status(ui, theme::SUN, "Connecting…");
-                } else {
-                    theme::status(ui, theme::MINT, "Joined");
-                }
-            }
-        }
-        if editor.player_mode {
-            return;
-        }
-        if let Some(coedit) = &editor.coedit {
-            ui.separator();
-            together_status(ui, coedit, editor.edit_tunnel.as_ref());
-        }
-        ui.separator();
-        for (tool, glyph, label) in [
-            (Tool::Select, icon::CURSOR, "Select"),
-            (Tool::Move, icon::ARROWS_OUT_CARDINAL, "Move"),
-            (Tool::Scale, icon::ARROWS_OUT, "Resize"),
-            (Tool::Rotate, icon::ARROW_CLOCKWISE, "Rotate"),
-        ] {
-            if theme::tool_button(ui, glyph, label, editor.tool == tool).clicked() {
-                editor.tool = tool;
-            }
-        }
-        if !playing {
-            let terrain = theme::tool_button(ui, icon::MOUNTAINS, "Terrain", editor.tool == Tool::Terrain);
-            if terrain.clicked() {
-                editor.tool = Tool::Terrain;
-            }
-            terrain.on_hover_text("Add, dig or paint terrain by clicking and dragging in the view");
-        }
-        ui.separator();
-        ui.label("Snap");
-        egui::ComboBox::from_id_salt("snap")
-            .selected_text(if editor.snap > 0.0 { format!("{} stud", editor.snap) } else { "Off".into() })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut editor.snap, 0.0, "Off");
-                for s in [0.25, 0.5, 1.0, 2.0, 4.0] {
-                    ui.selectable_value(&mut editor.snap, s, format!("{s} stud"));
-                }
-            });
-        egui::ComboBox::from_id_salt("angle-snap")
-            .selected_text(if editor.angle_snap > 0.0 {
-                format!("{}°", editor.angle_snap)
-            } else {
-                "Free".into()
-            })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut editor.angle_snap, 0.0, "Free");
-                for a in [5.0, 15.0, 45.0, 90.0] {
-                    ui.selectable_value(&mut editor.angle_snap, a, format!("{a}°"));
-                }
-            });
-        ui.separator();
-        ui.add_enabled_ui(!playing, |ui| {
-            ui.menu_button(format!("{}  Part", icon::CUBE), |ui| {
-                for &(shape, label) in SHAPES {
-                    if ui.button(label).clicked() {
-                        actions.push(Action::InsertShape(shape));
-                        ui.close();
-                    }
-                }
-            });
-            if ui.button(format!("{}  Script", icon::CODE)).clicked() {
-                actions.push(Action::Insert(ClassKind::Script));
-            }
-        });
-        if playing {
-            ui.separator();
-            ui.label(RichText::new("Playing: edits are undone when you stop").italics());
-        }
+        session_status(ui, editor, session, actions);
     });
-    if editor.tool == Tool::Terrain && !playing {
-        terrain_bar(ui, editor, actions);
-    }
 }
 
 /// The terrain tool's options, under the toolbar.
@@ -3116,6 +3033,52 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                 editor.selection = Some(copy);
             }
         }
+        Action::Group(id) => {
+            if playing {
+                return;
+            }
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            let Some(parent) = tree.parent(id).ok().flatten() else { return };
+            if tree.class(id).is_ok_and(|c| c.is_service()) {
+                return;
+            }
+            editor.history.begin_edit(&tree, now);
+            editor.dirty = true;
+            if let Ok(model) = tree.create(ClassKind::Model, "Model") {
+                let _ = tree.set_parent(model, Some(parent));
+                let _ = tree.set_parent(id, Some(model));
+                editor.selection = Some(model);
+                editor.reveal_selection = true;
+            }
+        }
+        Action::Ungroup(id) => {
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            if playing || !tree.class(id).is_ok_and(|c| matches!(c, ClassKind::Model | ClassKind::Folder)) {
+                return;
+            }
+            let Some(parent) = tree.parent(id).ok().flatten() else { return };
+            editor.history.begin_edit(&tree, now);
+            editor.dirty = true;
+            let children = tree.children(id).map(<[InstanceId]>::to_vec).unwrap_or_default();
+            for child in &children {
+                let _ = tree.set_parent(*child, Some(parent));
+            }
+            let _ = tree.destroy(id);
+            editor.selection = children.first().copied();
+            editor.reveal_selection = true;
+        }
+        Action::ToggleAnchor(id) => {
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            let Some(anchored) = tree.get_bool(id, Property::Anchored) else { return };
+            if !playing {
+                editor.history.begin_edit(&tree, now);
+                editor.dirty = true;
+            }
+            let _ = tree.set(id, Property::Anchored, PropertyValue::Bool(!anchored));
+        }
         Action::Select(id) => editor.selection = id,
         Action::GuiHover(id) => {
             if let Some(session) = engine.session.as_mut() {
@@ -3252,4 +3215,556 @@ impl PurgeExt for InstanceTree {
             self.purge_destroyed();
         }
     }
+}
+
+/// The ribbon's tabs, in the order Studio users know them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RibbonTab {
+    Home,
+    Model,
+    Test,
+    View,
+}
+
+impl RibbonTab {
+    const ALL: [RibbonTab; 4] = [RibbonTab::Home, RibbonTab::Model, RibbonTab::Test, RibbonTab::View];
+
+    fn name(self) -> &'static str {
+        match self {
+            RibbonTab::Home => "Home",
+            RibbonTab::Model => "Model",
+            RibbonTab::Test => "Test",
+            RibbonTab::View => "View",
+        }
+    }
+}
+
+/// The ribbon along the top of the editor: a File menu and tabs, and the
+/// open tab's buttons in named groups under them.
+fn ribbon(
+    ui: &mut egui::Ui,
+    editor: &mut Editor,
+    session: Option<&PlaySession>,
+    tree: &InstanceTree,
+    actions: &mut Vec<Action>,
+) {
+    let playing = session.is_some();
+    ui.add_space(3.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let file = egui::Button::new(RichText::new("FILE").font(theme::display(12.5)).color(theme::INK0))
+            .fill(theme::TANGERINE)
+            .corner_radius(egui::CornerRadius::same(theme::CORNER))
+            .min_size(egui::vec2(54.0, 24.0));
+        let response = ui.add(file);
+        egui::Popup::menu(&response).show(|ui| {
+            ui.set_min_width(220.0);
+            file_menu(ui, editor, playing, actions);
+            ui.separator();
+            ui.menu_button("Keyboard shortcuts", help_items);
+        });
+        ui.add_space(8.0);
+        for tab in RibbonTab::ALL {
+            if theme::ribbon_tab(ui, tab.name(), editor.ribbon == tab).clicked() {
+                editor.ribbon = tab;
+            }
+        }
+        ui.add_space(12.0);
+        session_status(ui, editor, session, actions);
+        if let Some(coedit) = &editor.coedit {
+            together_status(ui, coedit, editor.edit_tunnel.as_ref());
+        }
+        if playing {
+            theme::status(ui, theme::SUN, "Playing: edits are undone when you stop");
+        }
+    });
+    egui::Frame::new()
+        .fill(theme::INK2)
+        .inner_margin(egui::Margin { left: 6, right: 6, top: 4, bottom: 2 })
+        .corner_radius(egui::CornerRadius::same(theme::CORNER))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            egui::ScrollArea::horizontal().id_salt("ribbon").show(ui, |ui| {
+                ui.horizontal(|ui| match editor.ribbon {
+                    RibbonTab::Home => home_tab(ui, editor, playing, tree, actions),
+                    RibbonTab::Model => model_tab(ui, editor, playing, actions),
+                    RibbonTab::Test => test_tab(ui, editor, playing, actions),
+                    RibbonTab::View => view_tab(ui, editor),
+                });
+            });
+        });
+    if editor.tool == Tool::Terrain && !playing {
+        terrain_bar(ui, editor, actions);
+    }
+    ui.add_space(2.0);
+}
+
+/// The Select, Move, Scale and Rotate tools, in Studio's order.
+fn tools_group(ui: &mut egui::Ui, editor: &mut Editor) {
+    theme::ribbon_group(ui, "Tools", |ui| {
+        for (tool, glyph, label, keys) in [
+            (Tool::Select, icon::CURSOR, "Select", "Ctrl+1"),
+            (Tool::Move, icon::ARROWS_OUT_CARDINAL, "Move", "Ctrl+2"),
+            (Tool::Scale, icon::ARROWS_OUT, "Scale", "Ctrl+3"),
+            (Tool::Rotate, icon::ARROW_CLOCKWISE, "Rotate", "Ctrl+4"),
+        ] {
+            if theme::ribbon_button(ui, glyph, label, editor.tool == tool).on_hover_text(keys).clicked() {
+                editor.tool = tool;
+            }
+        }
+    });
+}
+
+/// Play and Stop.
+fn play_group(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut Vec<Action>) {
+    theme::ribbon_group(ui, "Test", |ui| {
+        if !playing {
+            if theme::ribbon_button(ui, icon::PLAY, "Play", false).on_hover_text("F5").clicked() {
+                actions.push(Action::Play);
+            }
+        } else {
+            let stop = if editor.player_mode { "Leave" } else { "Stop" };
+            if theme::ribbon_button(ui, icon::STOP, stop, true).on_hover_text("Shift+F5").clicked() {
+                actions.push(Action::Stop);
+            }
+        }
+    });
+}
+
+fn home_tab(
+    ui: &mut egui::Ui,
+    editor: &mut Editor,
+    playing: bool,
+    tree: &InstanceTree,
+    actions: &mut Vec<Action>,
+) {
+    let selected = editor.selection;
+    theme::ribbon_group(ui, "Edit", |ui| {
+        let undo = !playing && editor.history.can_undo();
+        if ui
+            .add_enabled_ui(undo, |ui| theme::ribbon_button(ui, icon::ARROW_COUNTER_CLOCKWISE, "Undo", false))
+            .inner
+            .on_hover_text("Ctrl+Z")
+            .clicked()
+        {
+            actions.push(Action::Undo);
+        }
+        let redo = !playing && editor.history.can_redo();
+        if ui
+            .add_enabled_ui(redo, |ui| theme::ribbon_button(ui, icon::ARROW_CLOCKWISE, "Redo", false))
+            .inner
+            .on_hover_text("Ctrl+Y")
+            .clicked()
+        {
+            actions.push(Action::Redo);
+        }
+        if let Some(id) = selected {
+            if theme::ribbon_button(ui, icon::COPY, "Duplicate", false).on_hover_text("Ctrl+D").clicked() {
+                actions.push(Action::Duplicate(id));
+            }
+            if theme::ribbon_button(ui, icon::TRASH, "Delete", false).on_hover_text("Del").clicked() {
+                actions.push(Action::Delete(id));
+            }
+        } else {
+            ui.add_enabled_ui(false, |ui| {
+                theme::ribbon_button(ui, icon::COPY, "Duplicate", false);
+                theme::ribbon_button(ui, icon::TRASH, "Delete", false);
+            });
+        }
+    });
+    tools_group(ui, editor);
+    theme::ribbon_group(ui, "Terrain", |ui| {
+        ui.add_enabled_ui(!playing, |ui| {
+            if theme::ribbon_button(ui, icon::MOUNTAINS, "Editor", editor.tool == Tool::Terrain)
+                .on_hover_text("Ctrl+5")
+                .clicked()
+            {
+                editor.tool = if editor.tool == Tool::Terrain { Tool::Move } else { Tool::Terrain };
+            }
+        });
+    });
+    theme::ribbon_group(ui, "Insert", |ui| {
+        ui.add_enabled_ui(!playing, |ui| {
+            let part = theme::ribbon_button(ui, icon::CUBE, "Part", false);
+            if part.clicked() {
+                actions.push(Action::InsertShape(PartShape::Block));
+            }
+            egui::Popup::context_menu(&part).show(|ui| {
+                for &(shape, label) in SHAPES {
+                    if ui.button(label).clicked() {
+                        actions.push(Action::InsertShape(shape));
+                    }
+                }
+            });
+            if theme::ribbon_button(ui, icon::APP_WINDOW, "UI", false)
+                .on_hover_text("A screen GUI in StarterGui")
+                .clicked()
+            {
+                actions.push(Action::Insert(ClassKind::ScreenGui));
+            }
+            if theme::ribbon_button(ui, icon::CODE, "Script", false).clicked() {
+                actions.push(Action::Insert(ClassKind::Script));
+            }
+            let object = theme::ribbon_button(ui, icon::PLUS_SQUARE, "Object", false);
+            egui::Popup::menu(&object).show(|ui| insert_menu(ui, actions));
+        });
+    });
+    let part = selected.filter(|s| tree.get_bool(*s, Property::Anchored).is_some());
+    theme::ribbon_group(ui, "Arrange", |ui| {
+        ui.add_enabled_ui(!playing && selected.is_some(), |ui| {
+            if theme::ribbon_button(ui, icon::SELECTION_PLUS, "Group", false)
+                .on_hover_text("Ctrl+G")
+                .clicked()
+                && let Some(id) = selected
+            {
+                actions.push(Action::Group(id));
+            }
+            if theme::ribbon_button(ui, icon::SELECTION_SLASH, "Ungroup", false)
+                .on_hover_text("Ctrl+U")
+                .clicked()
+                && let Some(id) = selected
+            {
+                actions.push(Action::Ungroup(id));
+            }
+        });
+        ui.add_enabled_ui(part.is_some(), |ui| {
+            let anchored = part.and_then(|p| tree.get_bool(p, Property::Anchored)) == Some(true);
+            if theme::ribbon_button(ui, icon::ANCHOR, "Anchor", anchored).clicked()
+                && let Some(id) = part
+            {
+                actions.push(Action::ToggleAnchor(id));
+            }
+        });
+    });
+    play_group(ui, editor, playing, actions);
+}
+
+fn model_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut Vec<Action>) {
+    tools_group(ui, editor);
+    theme::ribbon_group(ui, "Snap to grid", |ui| {
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.spacing_mut().interact_size.y = 22.0;
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Rotate").color(theme::DUST));
+                egui::ComboBox::from_id_salt("angle-snap")
+                    .width(76.0)
+                    .selected_text(if editor.angle_snap > 0.0 {
+                        format!("{}°", editor.angle_snap)
+                    } else {
+                        "Free".into()
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut editor.angle_snap, 0.0, "Free");
+                        for a in [5.0, 15.0, 45.0, 90.0] {
+                            ui.selectable_value(&mut editor.angle_snap, a, format!("{a}°"));
+                        }
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Move  ").color(theme::DUST));
+                egui::ComboBox::from_id_salt("snap")
+                    .width(76.0)
+                    .selected_text(if editor.snap > 0.0 {
+                        format!("{} studs", editor.snap)
+                    } else {
+                        "Off".into()
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut editor.snap, 0.0, "Off");
+                        for s in [0.25, 0.5, 1.0, 2.0, 4.0] {
+                            ui.selectable_value(&mut editor.snap, s, format!("{s} studs"));
+                        }
+                    });
+            });
+        });
+    });
+    ui.add_enabled_ui(!playing, |ui| {
+        theme::ribbon_group(ui, "Parts", |ui| {
+            for &(shape, label) in SHAPES {
+                let glyph = match shape {
+                    PartShape::Ball => icon::CIRCLE,
+                    PartShape::Cylinder => icon::CYLINDER,
+                    PartShape::Wedge => icon::TRIANGLE,
+                    _ => icon::CUBE,
+                };
+                if theme::ribbon_button(ui, glyph, label, false).clicked() {
+                    actions.push(Action::InsertShape(shape));
+                }
+            }
+        });
+        theme::ribbon_group(ui, "Advanced", |ui| {
+            for (class, label) in [
+                (ClassKind::Script, "Script"),
+                (ClassKind::LocalScript, "LocalScript"),
+                (ClassKind::ModuleScript, "Module"),
+            ] {
+                if theme::ribbon_button(ui, icon(class), label, false).clicked() {
+                    actions.push(Action::Insert(class));
+                }
+            }
+        });
+        theme::ribbon_group(ui, "Physics", |ui| {
+            for (class, label) in [
+                (ClassKind::WeldConstraint, "Weld"),
+                (ClassKind::HingeConstraint, "Hinge"),
+                (ClassKind::SpringConstraint, "Spring"),
+                (ClassKind::RopeConstraint, "Rope"),
+            ] {
+                if theme::ribbon_button(ui, icon(class), label, false).clicked() {
+                    actions.push(Action::Insert(class));
+                }
+            }
+        });
+        theme::ribbon_group(ui, "Avatar", |ui| {
+            let selected = editor.selection;
+            ui.add_enabled_ui(selected.is_some(), |ui| {
+                if theme::ribbon_button(ui, icon::T_SHIRT, "Share as hat", false)
+                    .on_hover_text(
+                        "Put the selected model's parts in the catalog as a hat anyone can wear. It sits with its \
+                         bottom on the head, so build it the way up it goes.",
+                    )
+                    .clicked()
+                    && let Some(id) = selected
+                {
+                    actions.push(Action::ShareHat(id));
+                }
+            });
+        });
+        theme::ribbon_group(ui, "Effects", |ui| {
+            for (class, label) in [
+                (ClassKind::PointLight, "Light"),
+                (ClassKind::ParticleEmitter, "Particles"),
+                (ClassKind::Fire, "Fire"),
+                (ClassKind::Sound, "Sound"),
+            ] {
+                if theme::ribbon_button(ui, icon(class), label, false).clicked() {
+                    actions.push(Action::Insert(class));
+                }
+            }
+        });
+    });
+    play_group(ui, editor, playing, actions);
+}
+
+fn test_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut Vec<Action>) {
+    play_group(ui, editor, playing, actions);
+    ui.add_enabled_ui(!playing, |ui| {
+        theme::ribbon_group(ui, "Clients and servers", |ui| {
+            if theme::ribbon_button(ui, icon::BROADCAST, "Host", false)
+                .on_hover_text("Play, and let other computers join")
+                .clicked()
+            {
+                actions.push(Action::Host);
+            }
+            if theme::ribbon_button(ui, icon::SIGN_IN, "Join", false)
+                .on_hover_text("Join a game another computer hosts")
+                .clicked()
+            {
+                editor.dialog = Some(Dialog::Join { address: "127.0.0.1".into(), name: "Player".into() });
+            }
+            if theme::ribbon_button(ui, icon::GLOBE_HEMISPHERE_WEST, "Browse", false)
+                .on_hover_text("Find games being hosted right now")
+                .clicked()
+            {
+                editor.platform.open = true;
+            }
+        });
+        theme::ribbon_group(ui, "Collaborate", |ui| {
+            if editor.coedit.is_none() {
+                if theme::ribbon_button(ui, icon::USERS_THREE, "Edit together", false)
+                    .on_hover_text("Share this game so others can edit it with you, or join someone's")
+                    .clicked()
+                {
+                    let name = editor.menu.name.trim().to_owned();
+                    editor.dialog = Some(Dialog::EditTogether { address: String::new(), name });
+                }
+            } else if theme::ribbon_button(ui, icon::USERS_THREE, "Stop sharing", true).clicked() {
+                actions.push(Action::StopEdits);
+            }
+        });
+        theme::ribbon_group(ui, "Data", |ui| {
+            if theme::ribbon_button(ui, icon::DATABASE, "Clear saved", false)
+                .on_hover_text("Forget what this game's data stores saved in earlier play tests")
+                .clicked()
+            {
+                actions.push(Action::ClearData);
+            }
+        });
+    });
+}
+
+fn view_tab(ui: &mut egui::Ui, editor: &mut Editor) {
+    theme::ribbon_group(ui, "Show", |ui| {
+        for (glyph, label, on) in [
+            (icon::TREE_STRUCTURE, "Explorer", &mut editor.show_explorer),
+            (icon::SLIDERS_HORIZONTAL, "Properties", &mut editor.show_properties),
+            (icon::TOOLBOX, "Toolbox", &mut editor.show_toolbox),
+            (icon::TERMINAL_WINDOW, "Output", &mut editor.show_output),
+        ] {
+            if theme::ribbon_button(ui, glyph, label, *on).clicked() {
+                *on = !*on;
+            }
+        }
+    });
+    theme::ribbon_group(ui, "Settings", |ui| {
+        if theme::ribbon_button(ui, icon::GRID_FOUR, "Grid", editor.show_grid).clicked() {
+            editor.show_grid = !editor.show_grid;
+        }
+        if theme::ribbon_button(ui, icon::HAND_TAP, "Touch", editor.touch.seen)
+            .on_hover_text("Show the on-screen stick and jump button while playing")
+            .clicked()
+        {
+            editor.touch.seen = !editor.touch.seen;
+        }
+    });
+    theme::ribbon_group(ui, "Help", |ui| {
+        let keys = theme::ribbon_button(ui, icon::KEYBOARD, "Shortcuts", false);
+        egui::Popup::menu(&keys).show(help_items);
+    });
+}
+
+/// The keyboard shortcuts, as a menu's contents.
+fn help_items(ui: &mut egui::Ui) {
+    for line in [
+        "Right mouse + WASD/QE: fly the camera (Shift = faster)",
+        "Scroll: move forward/back · F: look at the selection",
+        "Ctrl+1..4: Select, Move, Scale, Rotate · Ctrl+5: terrain",
+        "Ctrl+D: duplicate · Del: delete · Ctrl+R: turn 90°",
+        "Ctrl+G: group · Ctrl+U: ungroup",
+        "Ctrl+Z / Ctrl+Y: undo / redo · Ctrl+S: save",
+        "F5: play · Shift+F5 or Esc: stop",
+        "While playing: WASD walk, Space jump, right mouse turns the camera",
+    ] {
+        ui.label(line);
+    }
+}
+
+/// A toolbox tile: its icon and colour, its name, and what clicking it does.
+type ToolboxItem = (&'static str, Color32, &'static str, Action);
+
+/// The toolbox: ready-made things to drop into the game.
+fn toolbox(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut Vec<Action>) {
+    theme::panel_title(ui, icon::TOOLBOX, "Toolbox");
+    ui.add(
+        egui::TextEdit::singleline(&mut editor.toolbox_search)
+            .hint_text("Search")
+            .desired_width(f32::INFINITY),
+    );
+    ui.add_space(6.0);
+    let search = editor.toolbox_search.trim().to_lowercase();
+    let shown = |name: &str| search.is_empty() || name.to_lowercase().contains(&search);
+    egui::ScrollArea::vertical().id_salt("toolbox").auto_shrink([false, false]).show(ui, |ui| {
+        ui.add_enabled_ui(!playing, |ui| {
+            let sections: [(&str, Vec<ToolboxItem>); 4] = [
+                (
+                    "Parts",
+                    SHAPES
+                        .iter()
+                        .map(|&(shape, label)| {
+                            let glyph = match shape {
+                                PartShape::Ball => icon::CIRCLE,
+                                PartShape::Cylinder => icon::CYLINDER,
+                                PartShape::Wedge => icon::TRIANGLE,
+                                _ => icon::CUBE,
+                            };
+                            (glyph, theme::TANGERINE, label, Action::InsertShape(shape))
+                        })
+                        .collect(),
+                ),
+                (
+                    "Models",
+                    vec![
+                        (icon::PERSON_SIMPLE, theme::TANGERINE, "Character", Action::InsertNpc),
+                        (icon::STEERING_WHEEL, theme::TANGERINE, "Go-kart", Action::InsertKart),
+                        (
+                            icon(ClassKind::SpawnLocation),
+                            theme::TANGERINE,
+                            "Spawn",
+                            Action::Insert(ClassKind::SpawnLocation),
+                        ),
+                        (icon(ClassKind::Tool), theme::DUST, "Tool", Action::Insert(ClassKind::Tool)),
+                    ],
+                ),
+                (
+                    "Gameplay",
+                    vec![
+                        (icon(ClassKind::Script), theme::MINT, "Script", Action::Insert(ClassKind::Script)),
+                        (
+                            icon(ClassKind::ClickDetector),
+                            theme::MINT,
+                            "Click detector",
+                            Action::Insert(ClassKind::ClickDetector),
+                        ),
+                        (
+                            icon(ClassKind::ProximityPrompt),
+                            theme::MINT,
+                            "Prompt",
+                            Action::Insert(ClassKind::ProximityPrompt),
+                        ),
+                        (
+                            icon(ClassKind::RemoteEvent),
+                            theme::MINT,
+                            "Remote event",
+                            Action::Insert(ClassKind::RemoteEvent),
+                        ),
+                        (icon(ClassKind::Team), theme::DUST, "Team", Action::Insert(ClassKind::Team)),
+                    ],
+                ),
+                (
+                    "Look",
+                    vec![
+                        (
+                            icon(ClassKind::PointLight),
+                            theme::SUN,
+                            "Light",
+                            Action::Insert(ClassKind::PointLight),
+                        ),
+                        (
+                            icon(ClassKind::ParticleEmitter),
+                            theme::SUN,
+                            "Particles",
+                            Action::Insert(ClassKind::ParticleEmitter),
+                        ),
+                        (icon(ClassKind::Fire), theme::SUN, "Fire", Action::Insert(ClassKind::Fire)),
+                        (icon(ClassKind::Smoke), theme::SUN, "Smoke", Action::Insert(ClassKind::Smoke)),
+                        (
+                            icon(ClassKind::ScreenGui),
+                            theme::SKY,
+                            "Screen GUI",
+                            Action::Insert(ClassKind::ScreenGui),
+                        ),
+                        (
+                            icon(ClassKind::TextLabel),
+                            theme::SKY,
+                            "Text label",
+                            Action::Insert(ClassKind::TextLabel),
+                        ),
+                    ],
+                ),
+            ];
+            for (title, items) in sections {
+                let items: Vec<_> = items.into_iter().filter(|(_, _, name, _)| shown(name)).collect();
+                if items.is_empty() {
+                    continue;
+                }
+                theme::label_caps(ui, title);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    for (glyph, colour, name, action) in items {
+                        if theme::toolbox_tile(ui, glyph, colour, name).clicked() {
+                            actions.push(action);
+                        }
+                    }
+                });
+                ui.add_space(8.0);
+            }
+            theme::label_caps(ui, "From Roblox Studio");
+            ui.label(
+                RichText::new("Drop a .rbxm model on the window to add it, or a .rbxl place to open it.")
+                    .color(theme::DUST),
+            );
+        });
+    });
 }

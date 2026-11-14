@@ -545,3 +545,129 @@ pub fn panel_name(ui: &mut egui::Ui, glyph: &str, text: &str) {
     ui.label(RichText::new(glyph).color(TANGERINE).size(14.0));
     ui.label(RichText::new(spaced(&text.to_uppercase())).font(display(13.5)).color(CHALK));
 }
+
+/// How tall a ribbon button is (icon over label).
+pub const RIBBON_HEIGHT: f32 = 50.0;
+
+/// A big ribbon button: its icon over its name, lit while `on`.
+pub fn ribbon_button(ui: &mut egui::Ui, glyph: &str, label: &str, on: bool) -> Response {
+    let enabled = ui.is_enabled();
+    let name = ui.painter().layout_no_wrap(label.to_owned(), FontId::proportional(11.5), CHALK);
+    let width = name.size().x.max(30.0) + 14.0;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, RIBBON_HEIGHT), Sense::click());
+    let painter = ui.painter();
+    if on {
+        painter.rect_filled(rect, CornerRadius::same(CORNER), TANGERINE.gamma_multiply(0.16));
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(CORNER),
+            Stroke::new(1.0, TANGERINE.gamma_multiply(0.7)),
+            egui::StrokeKind::Inside,
+        );
+    } else if response.hovered() && enabled {
+        painter.rect_filled(rect, CornerRadius::same(CORNER), INK3);
+    }
+    let ink = if !enabled {
+        DUST.gamma_multiply(0.6)
+    } else if on {
+        TANGERINE
+    } else {
+        CHALK
+    };
+    let glyph_colour = if enabled && !on { TANGERINE.lerp_to_gamma(CHALK, 0.25) } else { ink };
+    painter.text(
+        Pos2::new(rect.center().x, rect.min.y + 17.0),
+        egui::Align2::CENTER_CENTER,
+        glyph,
+        FontId::proportional(21.0),
+        glyph_colour,
+    );
+    painter.text(
+        Pos2::new(rect.center().x, rect.max.y - 9.0),
+        egui::Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(11.5),
+        ink,
+    );
+    if enabled { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response }
+}
+
+/// A group of ribbon buttons with its name under them and a divider after.
+pub fn ribbon_group<R>(ui: &mut egui::Ui, caption: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let inner = ui
+        .vertical(|ui| {
+            let r = ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                ui.set_min_height(RIBBON_HEIGHT);
+                add(ui)
+            });
+            ui.add_space(1.0);
+            let width = ui.min_rect().width();
+            let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 13.0), Sense::hover());
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                caption.to_uppercase(),
+                display(10.0),
+                DUST.gamma_multiply(0.85),
+            );
+            r.inner
+        })
+        .inner;
+    let height = RIBBON_HEIGHT + 16.0;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(9.0, height), Sense::hover());
+    ui.painter().line_segment(
+        [Pos2::new(rect.center().x, rect.min.y + 4.0), Pos2::new(rect.center().x, rect.max.y - 2.0)],
+        Stroke::new(1.0, LINE),
+    );
+    inner
+}
+
+/// A tab along the ribbon's top edge.
+pub fn ribbon_tab(ui: &mut egui::Ui, label: &str, on: bool) -> Response {
+    let galley = ui.painter().layout_no_wrap(label.to_uppercase(), display(12.5), CHALK);
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(galley.size().x + 22.0, 26.0), Sense::click());
+    let colour = if on {
+        CHALK
+    } else if response.hovered() {
+        Color32::WHITE
+    } else {
+        DUST
+    };
+    if on {
+        ui.painter().rect_filled(rect, CornerRadius { nw: CORNER, ne: CORNER, sw: 0, se: 0 }, INK2);
+        ui.painter().rect_filled(
+            Rect::from_min_size(rect.left_top(), Vec2::new(rect.width(), 2.0)),
+            CornerRadius::ZERO,
+            TANGERINE,
+        );
+    }
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, colour);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A tile in the toolbox: an icon over a name.
+pub fn toolbox_tile(ui: &mut egui::Ui, glyph: &str, colour: Color32, label: &str) -> Response {
+    let size = Vec2::new(74.0, 66.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let painter = ui.painter();
+    let face = if response.hovered() && ui.is_enabled() { INK3 } else { INK2 };
+    painter.rect_filled(rect, CornerRadius::same(CORNER), face);
+    painter.rect_stroke(rect, CornerRadius::same(CORNER), Stroke::new(1.0, LINE), egui::StrokeKind::Inside);
+    painter.text(
+        Pos2::new(rect.center().x, rect.min.y + 23.0),
+        egui::Align2::CENTER_CENTER,
+        glyph,
+        FontId::proportional(24.0),
+        if ui.is_enabled() { colour } else { DUST },
+    );
+    text_line(
+        painter,
+        Pos2::new(rect.min.x + 5.0, rect.max.y - 19.0),
+        label,
+        FontId::proportional(11.5),
+        CHALK,
+        rect.width() - 10.0,
+    );
+    response
+}

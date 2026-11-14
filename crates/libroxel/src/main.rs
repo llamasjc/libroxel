@@ -131,6 +131,15 @@ pub struct Editor {
     pub player_mode: bool,
     /// Fingers on a touch screen, for the on-screen controls.
     pub touch: touch::TouchPad,
+    /// Which tab of the ribbon along the top is open.
+    pub ribbon: ui::RibbonTab,
+    /// Which of the editor's panels are showing.
+    pub show_explorer: bool,
+    pub show_properties: bool,
+    pub show_output: bool,
+    pub show_toolbox: bool,
+    /// What's typed in the toolbox's search box.
+    pub toolbox_search: String,
 }
 
 /// A game carried over the internet with a join code.
@@ -175,6 +184,12 @@ impl Default for Editor {
             menu: menu::Menu::default(),
             player_mode: false,
             touch: Default::default(),
+            ribbon: ui::RibbonTab::Home,
+            show_explorer: true,
+            show_properties: true,
+            show_output: true,
+            show_toolbox: true,
+            toolbox_search: String::new(),
         }
     }
 }
