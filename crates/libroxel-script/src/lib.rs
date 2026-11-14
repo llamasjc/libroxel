@@ -110,6 +110,19 @@ pub struct MouseRay {
 /// the whole computer (or server) down with it.
 pub const MEMORY_LIMIT: usize = 512 * 1024 * 1024;
 
+/// Script threads waiting at one place: see [`ScriptRuntime::waiting_report`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct WaitingThread {
+    /// The script the threads belong to.
+    pub script: String,
+    /// Where they wait: the stack, innermost first.
+    pub trace: String,
+    /// How many threads wait there.
+    pub count: usize,
+    /// The longest any of them has waited so far, in seconds.
+    pub seconds: f64,
+}
+
 /// A sandboxed Luau VM bound to an instance tree.
 pub struct ScriptRuntime {
     lua: Lua,
@@ -385,6 +398,24 @@ impl ScriptRuntime {
     /// Number of threads paused in a wait or delay.
     pub fn waiting_count(&self) -> usize {
         bindings::waiting_count(&self.lua)
+    }
+
+    /// Every script thread that is waiting (on `task.wait`, `WaitForChild`,
+    /// an event and so on): where it is waiting, for how long, and how many
+    /// threads wait at that same place. Longest waits first.
+    /// Each script's total running time in seconds and how many times it
+    /// ran, slowest first, for a Script Performance view.
+    pub fn script_times(&self) -> Vec<(String, f64, u64)> {
+        let host = bindings::host(&self.lua);
+        let mut out: Vec<(String, f64, u64)> =
+            host.script_time.borrow().iter().map(|(k, v)| (k.clone(), v.0, v.1)).collect();
+        out.sort_by(|a, b| b.1.total_cmp(&a.1));
+        out
+    }
+
+    /// What each waiting script thread is waiting in, longest first.
+    pub fn waiting_report(&self) -> Vec<WaitingThread> {
+        bindings::waiting_report(&self.lua)
     }
 
     /// Takes everything scripts have printed since the last call.

@@ -28,4 +28,4 @@ pub mod view_effects;
 pub mod weld;
 
 pub use character::{Character, CharacterInput};
-pub use session::{Blast, LogEntry, LogLevel, PlaySession};
+pub use session::{Blast, FrameTimes, LogEntry, LogLevel, PlaySession};

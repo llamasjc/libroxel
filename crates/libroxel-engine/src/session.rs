@@ -155,7 +155,23 @@ impl Avatar {
 }
 
 /// Scripts, physics and the players' characters, all running against one tree.
+/// Where the last frames' time went, in seconds summed since the last
+/// [`PlaySession::take_frame_times`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FrameTimes {
+    pub frames: u32,
+    /// Firing Changed, ChildAdded and the other change events.
+    pub change_events: f64,
+    /// Resuming waiting scripts and the frame signals.
+    pub scripts: f64,
+    /// Moving parts and characters.
+    pub physics: f64,
+    /// Everything else in a frame.
+    pub other: f64,
+}
+
 pub struct PlaySession {
+    pub(crate) frame_times: FrameTimes,
     pub(crate) runtime: ScriptRuntime,
     pub(crate) physics: Physics,
     /// Everyone in the game. The one on this computer (if any) is the one
@@ -208,6 +224,7 @@ impl PlaySession {
         let runtime = ScriptRuntime::new(tree.clone()).map_err(|e| format!("could not start Luau: {e}"))?;
         runtime.set_net_role(role);
         let mut session = Self {
+            frame_times: FrameTimes::default(),
             runtime,
             physics: Physics::default(),
             avatars: Vec::new(),
@@ -1074,12 +1091,16 @@ impl PlaySession {
     }
 
     fn simulate(&mut self, dt: f32, input: CharacterInput) {
+        let began = std::time::Instant::now();
         // Everything that changed since last frame, for Changed events.
         let changes = self.runtime.tree().borrow_mut().drain_changes();
         let errors = self.runtime.fire_changes(&changes);
         self.collect(errors);
+        let changed = began.elapsed().as_secs_f64();
         let errors = self.runtime.step(dt as f64);
         self.collect(errors);
+        let scripted = began.elapsed().as_secs_f64();
+        let physics_time;
         for index in 0..self.avatars.len() {
             self.advance_hold(index, dt);
         }
@@ -1190,7 +1211,9 @@ impl PlaySession {
             for avatar in &self.avatars {
                 avatar.seating.hold(&tree, &mut self.physics, avatar.character);
             }
+            let physics_began = std::time::Instant::now();
             let result = self.physics.step(&mut tree, dt);
+            physics_time = physics_began.elapsed().as_secs_f64();
             for avatar in &self.avatars {
                 if let Some(c) = avatar.character.filter(|c| !c.is_dead(&tree)) {
                     c.follow(&mut tree);
@@ -1277,6 +1300,17 @@ impl PlaySession {
         for index in 0..self.avatars.len() {
             self.handle_death(index, dt);
         }
+        let t = &mut self.frame_times;
+        t.frames += 1;
+        t.change_events += changed;
+        t.scripts += scripted - changed;
+        t.physics += physics_time;
+        t.other += began.elapsed().as_secs_f64() - scripted - physics_time;
+    }
+
+    /// Where frame time went since the last call, and resets the sums.
+    pub fn take_frame_times(&mut self) -> FrameTimes {
+        std::mem::take(&mut self.frame_times)
     }
 
     /// Sets off every explosion that has arrived in the workspace: each
