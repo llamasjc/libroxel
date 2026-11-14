@@ -2640,6 +2640,39 @@ pub(crate) fn fire_touched(lua: &Lua, part: InstanceId, other: InstanceId) -> Ve
     take_errors(lua)
 }
 
+/// Where the functions given to `game:BindToClose` are kept.
+pub(crate) const CLOSE_KEY: &str = "libroxel.bind_to_close";
+const CLOSING: &str = "BindToClose";
+
+/// Shuts the game down as Roblox does: every function given to
+/// `game:BindToClose` runs, and the game keeps going (up to 30 seconds of
+/// game time, as on Roblox) until they have all finished.
+pub(crate) fn close(lua: &Lua) -> Vec<ScriptError> {
+    let funcs: Vec<Function> = match lua.named_registry_value::<Value>(CLOSE_KEY) {
+        Ok(Value::Table(t)) => t.sequence_values::<Function>().filter_map(Result::ok).collect(),
+        _ => Vec::new(),
+    };
+    if funcs.is_empty() {
+        return Vec::new();
+    }
+    for f in funcs {
+        if let Err(err) = spawn(lua, f, MultiValue::new(), CLOSING, None) {
+            host(lua)
+                .errors
+                .borrow_mut()
+                .push(ScriptError { script: CLOSING.into(), message: err.to_string() });
+        }
+    }
+    let mut errors = take_errors(lua);
+    for _ in 0..300 {
+        if !host(lua).waiting.borrow().iter().any(|w| w.script == CLOSING) {
+            break;
+        }
+        errors.extend(step(lua, 0.1));
+    }
+    errors
+}
+
 pub(crate) fn take_errors(lua: &Lua) -> Vec<ScriptError> {
     std::mem::take(&mut *host(lua).errors.borrow_mut())
 }

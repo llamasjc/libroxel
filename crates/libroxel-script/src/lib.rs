@@ -290,6 +290,12 @@ impl ScriptRuntime {
     }
 
     /// Fires the players service's leave event for `player`.
+    /// Shuts the game down: runs what scripts gave `game:BindToClose`
+    /// until it finishes (call after every player has left).
+    pub fn close(&self) -> Vec<ScriptError> {
+        bindings::close(&self.lua)
+    }
+
     pub fn player_removing(&self, player: InstanceId) -> Vec<ScriptError> {
         bindings::fire_with_instance(&self.lua, bindings::SignalKind::PlayerRemoving, player)
     }

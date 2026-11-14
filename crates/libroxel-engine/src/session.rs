@@ -823,6 +823,8 @@ impl PlaySession {
             let errors = self.runtime.player_removing(avatar.player);
             self.collect(errors);
         }
+        let errors = self.runtime.close();
+        self.collect(errors);
         self.link = Default::default();
     }
 

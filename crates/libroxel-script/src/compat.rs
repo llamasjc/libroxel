@@ -862,9 +862,18 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
             .map_err(tree_err)
     });
 
-    m.add_method(BIND_TO_CLOSE, |lua, this, _f: Function| {
+    m.add_method(BIND_TO_CLOSE, |lua, this, f: Function| {
         require_class(lua, this.0, ClassKind::DataModel, BIND_TO_CLOSE)?;
-        Ok(())
+        // Run when the game shuts down (when you stop playing), so games can save.
+        let list = match lua.named_registry_value::<Value>(crate::bindings::CLOSE_KEY)? {
+            Value::Table(t) => t,
+            _ => {
+                let t = lua.create_table()?;
+                lua.set_named_registry_value(crate::bindings::CLOSE_KEY, t.clone())?;
+                t
+            }
+        };
+        list.push(f)
     });
     m.add_method(IS_LOADED, |lua, this, ()| {
         require_class(lua, this.0, ClassKind::DataModel, IS_LOADED)?;
