@@ -152,6 +152,12 @@ pub struct Editor {
     /// What the Output panel shows, and how it's filtered.
     pub output_view: ui::OutputView,
     pub output_search: String,
+    /// The Explorer's filter: only what matches (and what leads to it) shows.
+    pub explorer_filter: String,
+    /// The Properties panel's filter.
+    pub properties_filter: String,
+    /// A filter box to give the keyboard to next frame.
+    pub focus_filter: Option<bevy_egui::egui::Id>,
     pub show_prints: bool,
     pub show_warnings: bool,
     pub show_errors: bool,
@@ -212,6 +218,9 @@ impl Default for Editor {
             log_file: Default::default(),
             output_view: ui::OutputView::Log,
             output_search: String::new(),
+            explorer_filter: String::new(),
+            properties_filter: String::new(),
+            focus_filter: None,
             show_prints: true,
             show_warnings: true,
             show_errors: true,

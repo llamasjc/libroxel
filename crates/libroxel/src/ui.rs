@@ -334,6 +334,15 @@ pub fn editor_ui(
                 if editor.show_explorer {
                     let explorer = |ui: &mut egui::Ui, editor: &mut Editor, actions: &mut Vec<Action>| {
                         theme::panel_title(ui, icon::TREE_STRUCTURE, "Explorer");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut editor.explorer_filter)
+                                .hint_text(format!(
+                                    "{} Filter workspace (Ctrl+Shift+X)",
+                                    icon::MAGNIFYING_GLASS
+                                ))
+                                .id(egui::Id::new("explorer-filter"))
+                                .desired_width(f32::INFINITY),
+                        );
                         egui::ScrollArea::vertical().id_salt("explorer").auto_shrink([false, false]).show(
                             ui,
                             |ui| {
@@ -341,7 +350,11 @@ pub fn editor_ui(
                                 ui.spacing_mut().item_spacing.y = 0.0;
                                 ui.spacing_mut().interact_size.y = 22.0;
                                 let tree = tree_rc.borrow();
-                                explorer_node(ui, &tree, tree.root(), editor, actions, 0);
+                                let filter = ExplorerFilter::new(&tree, &editor.explorer_filter);
+                                if filter.as_ref().is_some_and(|f| f.shown.is_empty()) {
+                                    ui.label(RichText::new("Nothing matches the filter.").weak());
+                                }
+                                explorer_node(ui, &tree, tree.root(), editor, actions, 0, filter.as_ref());
                                 editor.reveal_selection = false;
                             },
                         );
@@ -773,6 +786,9 @@ fn text_field(
 }
 
 fn shortcuts(ctx: &egui::Context, editor: &mut Editor, playing: bool, actions: &mut Vec<Action>) {
+    if let Some(id) = editor.focus_filter.take() {
+        ctx.memory_mut(|m| m.request_focus(id));
+    }
     let typing = ctx.egui_wants_keyboard_input();
     ctx.input_mut(|i| {
         let cmd = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
@@ -789,6 +805,15 @@ fn shortcuts(ctx: &egui::Context, editor: &mut Editor, playing: bool, actions: &
         }
         if i.consume_shortcut(&cmd(Key::Z)) {
             actions.push(Action::Undo);
+        }
+        // As in Studio: Ctrl+Shift+X filters the Explorer, Ctrl+Shift+P the Properties.
+        if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::X)) {
+            editor.show_explorer = true;
+            editor.focus_filter = Some(egui::Id::new("explorer-filter"));
+        }
+        if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::P)) {
+            editor.show_properties = true;
+            editor.focus_filter = Some(egui::Id::new("properties-filter"));
         }
         // As in Studio: F5 plays, Shift+F5 stops.
         if i.consume_key(Modifiers::SHIFT, Key::F5) {
@@ -1048,6 +1073,58 @@ fn terrain_bar(ui: &mut egui::Ui, editor: &mut Editor, actions: &mut Vec<Action>
     });
 }
 
+/// The services in the order Studio lists them; anything else under the
+/// game comes after, in its own order.
+const SERVICE_ORDER: &[&str] = &[
+    "Workspace",
+    "Players",
+    "Lighting",
+    "MaterialService",
+    "ReplicatedFirst",
+    "ReplicatedStorage",
+    "ServerScriptService",
+    "ServerStorage",
+    "StarterGui",
+    "StarterPack",
+    "StarterPlayer",
+    "Teams",
+    "SoundService",
+    "TextChatService",
+];
+
+/// What the Explorer shows while its filter has text: the instances whose
+/// name or class contains it, and their ancestors so the tree still reads.
+struct ExplorerFilter {
+    matched: std::collections::HashSet<InstanceId>,
+    shown: std::collections::HashSet<InstanceId>,
+}
+
+impl ExplorerFilter {
+    fn new(tree: &InstanceTree, text: &str) -> Option<Self> {
+        let needle = text.trim().to_lowercase();
+        if needle.is_empty() {
+            return None;
+        }
+        let mut matched = std::collections::HashSet::new();
+        let mut shown = std::collections::HashSet::new();
+        for id in tree.descendants(tree.root()).unwrap_or_default() {
+            let name = tree.name(id).unwrap_or("").to_lowercase();
+            let class = tree.class(id).map(names::class_name).unwrap_or("").to_lowercase();
+            if name.contains(&needle) || class.contains(&needle) {
+                matched.insert(id);
+                let mut at = Some(id);
+                while let Some(a) = at {
+                    if !shown.insert(a) {
+                        break;
+                    }
+                    at = tree.parent(a).ok().flatten();
+                }
+            }
+        }
+        Some(Self { matched, shown })
+    }
+}
+
 fn explorer_node(
     ui: &mut egui::Ui,
     tree: &InstanceTree,
@@ -1055,11 +1132,23 @@ fn explorer_node(
     editor: &mut Editor,
     actions: &mut Vec<Action>,
     depth: usize,
+    filter: Option<&ExplorerFilter>,
 ) {
     let Ok(class) = tree.class(id) else { return };
     let name = tree.name(id).unwrap_or("?");
-    let children = tree.children(id).map(|c| c.to_vec()).unwrap_or_default();
+    let mut children = tree.children(id).map(|c| c.to_vec()).unwrap_or_default();
+    if let Some(f) = filter {
+        children.retain(|c| f.shown.contains(c));
+    }
+    if id == tree.root() {
+        let rank = |c: &InstanceId| {
+            let n = tree.class(*c).map(names::class_name).unwrap_or("");
+            SERVICE_ORDER.iter().position(|s| *s == n).unwrap_or(SERVICE_ORDER.len())
+        };
+        children.sort_by_key(rank);
+    }
     let selected = editor.selection == Some(id);
+    let dim = filter.is_some_and(|f| !f.matched.contains(&id));
 
     let mut label = |ui: &mut egui::Ui| {
         if let Some((rid, text)) = editor.renaming.as_mut()
@@ -1072,7 +1161,12 @@ fn explorer_node(
             }
             return;
         }
-        let text = crate::theme::class_label(class, name);
+        let mut text = crate::theme::class_label(class, name);
+        if dim {
+            for section in &mut text.sections {
+                section.format.color = section.format.color.gamma_multiply(0.45);
+            }
+        }
         let inner = ui.add(
             egui::Button::selectable(selected, text)
                 .frame_when_inactive(false)
@@ -1132,8 +1226,10 @@ fn explorer_node(
     } else {
         let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
             ui.ctx(),
-            egui::Id::new(("explorer-open", id)),
-            depth < 2,
+            // Filtering opens the way to every match, without forgetting
+            // what was open before.
+            egui::Id::new(("explorer-open", id, filter.is_some())),
+            depth < 2 || filter.is_some(),
         );
         if editor.reveal_selection
             && editor.selection.is_some_and(|sel| tree.is_descendant_of(sel, id).unwrap_or(false))
@@ -1142,7 +1238,7 @@ fn explorer_node(
         }
         state.show_header(ui, |ui| label(ui)).body(|ui| {
             for child in children {
-                explorer_node(ui, tree, child, editor, actions, depth + 1);
+                explorer_node(ui, tree, child, editor, actions, depth + 1, filter);
             }
         });
     }
@@ -1165,41 +1261,71 @@ fn properties(
     ui.label(RichText::new(format!("{} {}", icon(class), names::class_name(class))).strong());
     ui.add_space(4.0);
 
-    let mut edited: Option<(Property, PropertyValue)> = None;
-    egui::Grid::new("props").num_columns(2).striped(true).spacing([8.0, 6.0]).show(ui, |ui| {
-        for &property in class.properties() {
-            let Ok(value) = tree.get(id, property) else { continue };
-            ui.label(names::property_name(property));
-            if let PropertyValue::Ref(target) = &value {
-                if matches!(
-                    property,
-                    Property::Part0
-                        | Property::Part1
-                        | Property::Attachment0
-                        | Property::Attachment1
-                        | Property::ObjectValue
-                        | Property::Adornee
-                ) {
-                    if let Some(new) = part_picker(ui, tree, id, property, *target) {
-                        edited = Some((property, PropertyValue::Ref(new)));
-                    }
-                } else {
-                    let name = target.and_then(|t| tree.name(t).ok()).unwrap_or("(none)");
-                    ui.label(RichText::new(name).weak());
-                }
-                ui.end_row();
-                continue;
-            }
-            let locked =
-                (property == Property::Name && !class.is_user_creatable()) || property == Property::Character;
-            ui.add_enabled_ui(!locked, |ui| {
-                if let Some(new) = property_editor(ui, property, value, id, actions) {
-                    edited = Some((property, new));
-                }
-            });
-            ui.end_row();
+    ui.add(
+        egui::TextEdit::singleline(&mut editor.properties_filter)
+            .hint_text(format!("{} Filter Properties (Ctrl+Shift+P)", icon::MAGNIFYING_GLASS))
+            .id(egui::Id::new("properties-filter"))
+            .desired_width(f32::INFINITY),
+    );
+    ui.add_space(2.0);
+    let needle = editor.properties_filter.trim().to_lowercase();
+    let mut groups: Vec<(&'static str, Vec<Property>)> = Vec::new();
+    for &property in class.properties() {
+        if !needle.is_empty() && !names::property_name(property).to_lowercase().contains(&needle) {
+            continue;
         }
-    });
+        let category = property_category(class, property);
+        match groups.iter_mut().find(|(c, _)| *c == category) {
+            Some((_, list)) => list.push(property),
+            None => groups.push((category, vec![property])),
+        }
+    }
+    groups.sort_by_key(|(c, _)| CATEGORY_ORDER.iter().position(|o| o == c).unwrap_or(CATEGORY_ORDER.len()));
+    let mut edited: Option<(Property, PropertyValue)> = None;
+    for (category, list) in groups {
+        egui::CollapsingHeader::new(RichText::new(category).strong())
+            .id_salt(("prop-category", category))
+            .default_open(true)
+            .show(ui, |ui| {
+                egui::Grid::new(("props", category)).num_columns(2).striped(true).spacing([8.0, 6.0]).show(
+                    ui,
+                    |ui| {
+                        for property in list {
+                            let Ok(value) = tree.get(id, property) else { continue };
+                            ui.label(names::property_name(property));
+                            if let PropertyValue::Ref(target) = &value {
+                                if matches!(
+                                    property,
+                                    Property::Part0
+                                        | Property::Part1
+                                        | Property::Attachment0
+                                        | Property::Attachment1
+                                        | Property::ObjectValue
+                                        | Property::Adornee
+                                ) {
+                                    if let Some(new) = part_picker(ui, tree, id, property, *target) {
+                                        edited = Some((property, PropertyValue::Ref(new)));
+                                    }
+                                } else {
+                                    let name = target.and_then(|t| tree.name(t).ok()).unwrap_or("(none)");
+                                    ui.label(RichText::new(name).weak());
+                                }
+                                ui.end_row();
+                                continue;
+                            }
+                            let locked = (property == Property::Name && !class.is_user_creatable())
+                                || property == Property::Character;
+                            ui.add_enabled_ui(!locked, |ui| {
+                                if let Some(new) = property_editor(ui, property, value, id, actions) {
+                                    edited = Some((property, new));
+                                }
+                            });
+                            ui.end_row();
+                        }
+                    },
+                );
+            });
+    }
     if let Some((property, value)) = edited {
         if !playing {
             editor.history.begin_edit(tree, now);
@@ -1512,6 +1638,51 @@ fn properties(
 }
 
 /// The kinds of value a new attribute can start as, with their first value.
+/// Studio's property categories, in the order it shows them.
+const CATEGORY_ORDER: &[&str] =
+    &["Appearance", "Data", "Text", "Image", "Behavior", "Collision", "Part", "Transform", "Pivot", "Other"];
+
+/// Which of Studio's categories a property is listed under.
+fn property_category(class: ClassKind, property: Property) -> &'static str {
+    let name = names::property_name(property);
+    let gui = class.is_a(ClassKind::GuiObject);
+    match name {
+        "Name" | "Source" | "Value" | "ClassName" | "Parent" | "Archivable" => "Data",
+        "Color"
+        | "BrickColor"
+        | "Material"
+        | "Transparency"
+        | "Reflectance"
+        | "CastShadow"
+        | "BackgroundColor3"
+        | "BackgroundTransparency"
+        | "BorderColor3"
+        | "BorderSizePixel"
+        | "Visible"
+        | "ZIndex"
+        | "Brightness"
+        | "Range"
+        | "Shadows"
+        | "Texture"
+        | "Face"
+        | "LightEmission"
+        | "LightInfluence"
+        | "TextureID"
+        | "TextureId" => "Appearance",
+        "CanCollide" | "CanTouch" | "CanQuery" | "CollisionGroup" => "Collision",
+        "Anchored" | "Massless" | "Shape" | "CustomPhysicalProperties" | "RootPriority" => "Part",
+        "Position" | "Orientation" | "Rotation" | "AnchorPoint" | "CFrame" => "Transform",
+        "Size" if gui || class.is_physical() => "Transform",
+        "PivotOffset" | "WorldPivot" => "Pivot",
+        "Disabled" | "Enabled" | "Locked" | "Active" | "Selectable" | "Interactable" | "AutoButtonColor"
+        | "Modal" | "ResetOnSpawn" | "RunContext" => "Behavior",
+        n if n.starts_with("Text") || n.starts_with("Font") || n == "RichText" || n == "LineHeight" => "Text",
+        n if n.starts_with("Image") || n == "ScaleType" || n == "SliceCenter" || n == "TileSize" => "Image",
+        n if n.ends_with("Color") || n.ends_with("Color3") || n.ends_with("Transparency") => "Appearance",
+        _ => "Data",
+    }
+}
+
 fn attribute_kinds() -> [(&'static str, PropertyValue); 5] {
     [
         ("number", PropertyValue::Number(0.0)),

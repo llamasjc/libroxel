@@ -45,6 +45,10 @@ const EPS: f32 = 1e-4;
 const BROADPHASE_MIN: usize = 64;
 /// The size of a broadphase grid cell, in studs.
 const CELL: f32 = 8.0;
+/// Below this many parts, every part is simulated.
+const NEAR_MOVERS_MIN: usize = 2000;
+/// Anchored parts within about this far (in studs) of a moving part take part in a step.
+const MOVER_CELL: f32 = 32.0;
 /// Boxes covering more cells than this are compared with everything.
 const MAX_CELLS: i64 = 64;
 /// Moving boxes climb onto anything whose top is at most this far above their bottom.
@@ -619,8 +623,52 @@ impl Physics {
         bodies.extend(found);
     }
 
+    /// The parts worth simulating: everything that moves, and the anchored
+    /// parts near something that moves. A big map's thousands of anchored
+    /// parts far from every mover can't touch anything this step.
+    fn parts_near_movers(&self, tree: &InstanceTree) -> Vec<InstanceId> {
+        let parts = tree.descendants_of_class(tree.workspace(), ClassKind::Part);
+        if parts.len() < NEAR_MOVERS_MIN {
+            return parts;
+        }
+        let cell = |v: f32| (v / MOVER_CELL).floor() as i32;
+        let reach = |id: InstanceId| tree.get_vec3(id, Property::Size).map_or(0.0, |s| s.length() * 0.5);
+        let anchored = |id: InstanceId| {
+            tree.get_bool(id, Property::Anchored) != Some(false) || self.carried.contains(&id)
+        };
+        let mut near: HashSet<(i32, i32)> = HashSet::new();
+        for &id in &parts {
+            if anchored(id) && !self.held.contains(&id) {
+                continue;
+            }
+            let Some(pos) = tree.get_vec3(id, Property::Position) else { continue };
+            let r = reach(id) + MOVER_CELL;
+            for x in cell(pos.x - r)..=cell(pos.x + r) {
+                for z in cell(pos.z - r)..=cell(pos.z + r) {
+                    near.insert((x, z));
+                }
+            }
+        }
+        parts
+            .into_iter()
+            .filter(|&id| {
+                if !anchored(id) || self.held.contains(&id) {
+                    return true;
+                }
+                let Some(pos) = tree.get_vec3(id, Property::Position) else { return false };
+                let r = reach(id);
+                let (x0, x1, z0, z1) = (cell(pos.x - r), cell(pos.x + r), cell(pos.z - r), cell(pos.z + r));
+                // A huge part (a baseplate) is kept: checking its cells costs more.
+                if (i64::from(x1) - i64::from(x0) + 1) * (i64::from(z1) - i64::from(z0) + 1) > 256 {
+                    return true;
+                }
+                (x0..=x1).any(|x| (z0..=z1).any(|z| near.contains(&(x, z))))
+            })
+            .collect()
+    }
+
     fn part_bodies(&self, tree: &InstanceTree) -> Vec<Body> {
-        tree.descendants_of_class(tree.workspace(), ClassKind::Part)
+        self.parts_near_movers(tree)
             .into_iter()
             .flat_map(|id| -> Vec<Body> {
                 let one = |b: Option<Body>| b.into_iter().collect::<Vec<_>>();
