@@ -1339,6 +1339,7 @@ struct TweenService;
 
 impl UserData for TweenService {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        crate::lenient::add_service_members(methods, "TweenService");
         methods.add_method(names::methods::CREATE, |lua, _, (target, info, goals): (Value, Value, Table)| {
             create_tween(lua, target, info, goals)
         });

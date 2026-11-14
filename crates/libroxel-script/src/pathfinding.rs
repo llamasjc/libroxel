@@ -16,6 +16,7 @@ pub(crate) struct PathfindingService;
 
 impl UserData for PathfindingService {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        crate::lenient::add_service_members(methods, "PathfindingService");
         methods.add_method(names::CREATE_PATH, |_, _, params: Option<Table>| {
             let mut agent = Agent::default();
             if let Some(params) = params {

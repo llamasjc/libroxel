@@ -50,14 +50,50 @@ fn attribute_from_lua(value: &Value) -> mlua::Result<Option<PropertyValue>> {
                 PropertyValue::Vec2(v)
             } else if let Some(u) = as_udim2(value) {
                 PropertyValue::UDim2(u)
+            } else if ud.is::<LuaInstance>() {
+                return Err(runtime_err("attributes can't hold an Instance"));
             } else {
-                return Err(runtime_err(
-                    "attributes can hold booleans, numbers, strings, Vector3, Color3, Vector2 and UDim2",
-                ));
+                // CFrames, BrickColors, NumberRanges, enum items, Rects,
+                // sequences and fonts: see `rich_attribute`.
+                return Ok(None);
             }
         }
+        // Rects and fonts are made in Lua.
+        Value::Table(t) if t.metatable().is_some() => return Ok(None),
         other => return Err(runtime_err(format!("attributes can't hold a {}", other.type_name()))),
     }))
+}
+
+/// Marks an attribute whose value is kept with the scripts rather than in
+/// the tree (kinds the tree has no value for). The text after it numbers
+/// the value, by instance and name; copies of the instance share it.
+const RICH: &str = "\u{1}libroxel-attribute:";
+const RICH_KEY: &str = "libroxel.rich_attributes";
+
+fn rich_values(lua: &Lua) -> mlua::Result<mlua::Table> {
+    if let Ok(t) = lua.named_registry_value::<mlua::Table>(RICH_KEY) {
+        return Ok(t);
+    }
+    let t = lua.create_table()?;
+    lua.set_named_registry_value(RICH_KEY, &t)?;
+    Ok(t)
+}
+
+/// The tree's stand-in for a value only scripts keep.
+fn rich_attribute(lua: &Lua, id: InstanceId, name: &str, value: Value) -> mlua::Result<PropertyValue> {
+    let key = format!("{}:{name}", id.to_bits());
+    rich_values(lua)?.raw_set(key.as_str(), value)?;
+    Ok(PropertyValue::String(format!("{RICH}{key}")))
+}
+
+/// An attribute's value for scripts.
+fn attribute_to_lua(lua: &Lua, value: PropertyValue) -> mlua::Result<Value> {
+    if let PropertyValue::String(text) = &value
+        && let Some(n) = text.strip_prefix(RICH)
+    {
+        return rich_values(lua)?.raw_get(n);
+    }
+    property_to_lua(lua, value)
 }
 
 // ---------------------------------------------------------------------------
@@ -88,6 +124,7 @@ fn get_tags(lua: &Lua, id: InstanceId) -> mlua::Result<Vec<String>> {
 
 impl UserData for CollectionService {
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
+        crate::lenient::add_service_members(m, "CollectionService");
         m.add_method(methods::ADD_TAG, |lua, _, (inst, tag): (Value, String)| {
             add_tag(lua, instance_arg(&inst, methods::ADD_TAG)?, &tag)
         });
@@ -246,18 +283,21 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
     });
     m.add_method(methods::SET_ATTRIBUTE, |lua, this, (name, value): (String, Value)| {
         check_attribute_name(&name)?;
-        let value = attribute_from_lua(&value)?;
+        let value = match attribute_from_lua(&value)? {
+            None if !value.is_nil() => Some(rich_attribute(lua, this.0, &name, value)?),
+            other => other,
+        };
         host(lua).tree.borrow_mut().set_attribute(this.0, &name, value).map_err(tree_err)
     });
     m.add_method(methods::GET_ATTRIBUTE, |lua, this, name: String| {
         let value = host(lua).tree.borrow().get_attribute(this.0, &name).map_err(tree_err)?;
-        value.map(|v| property_to_lua(lua, v)).transpose().map(|v| v.unwrap_or(Value::Nil))
+        value.map(|v| attribute_to_lua(lua, v)).transpose().map(|v| v.unwrap_or(Value::Nil))
     });
     m.add_method(methods::GET_ATTRIBUTES, |lua, this, ()| {
         let all = host(lua).tree.borrow().attributes(this.0).map_err(tree_err)?.clone();
         let table = lua.create_table()?;
         for (name, value) in all {
-            table.raw_set(name, property_to_lua(lua, value)?)?;
+            table.raw_set(name, attribute_to_lua(lua, value)?)?;
         }
         Ok(table)
     });
