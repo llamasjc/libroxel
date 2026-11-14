@@ -1897,7 +1897,13 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     };
     let deadline: Rc<Cell<Option<Instant>>> = Rc::new(Cell::new(None));
     let check = deadline.clone();
+    // Luau asks very often; reading the clock each time cost real frame time.
+    let ticks = Cell::new(0u32);
     lua.set_interrupt(move |_| {
+        ticks.set(ticks.get().wrapping_add(1));
+        if !ticks.get().is_multiple_of(64) {
+            return Ok(mlua::VmState::Continue);
+        }
         if check.get().is_some_and(|d| Instant::now() > d) {
             check.set(None);
             return Err(mlua::Error::runtime(format!(
@@ -2164,6 +2170,12 @@ fn script_env(lua: &Lua, script_instance: Option<InstanceId>) -> mlua::Result<Ta
     if let Some(id) = script_instance {
         env.raw_set(globals::SCRIPT, push_instance(lua, id)?)?;
     }
+    // Marked safe, as Roblox does for each script: Luau then looks built-in
+    // globals (math.floor, Vector3.new, ...) up once when the script loads
+    // instead of on every use, and the JIT can inline them. Without it every
+    // global read went through the fallback metatable, several times slower.
+    // (getfenv/setfenv in a script turn this back off by themselves.)
+    env.set_safeenv(true);
     Ok(env)
 }
 

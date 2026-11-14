@@ -152,6 +152,8 @@ pub struct Editor {
     /// What the Output panel shows, and how it's filtered.
     pub output_view: ui::OutputView,
     pub output_search: String,
+    /// What the Output shows, worked out again only for new lines.
+    pub output_cache: ui::OutputCache,
     /// The Explorer's filter: only what matches (and what leads to it) shows.
     pub explorer_filter: String,
     /// The Properties panel's filter.
@@ -218,6 +220,7 @@ impl Default for Editor {
             log_file: Default::default(),
             output_view: ui::OutputView::Log,
             output_search: String::new(),
+            output_cache: Default::default(),
             explorer_filter: String::new(),
             properties_filter: String::new(),
             focus_filter: None,

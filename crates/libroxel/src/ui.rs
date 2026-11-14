@@ -2055,16 +2055,21 @@ fn output(
     playing: bool,
     actions: &mut Vec<Action>,
 ) {
-    let problems = crate::debugging::problems(&engine.log);
-    let missing = crate::debugging::missing(&engine.log);
-    let count = |level: LogLevel| engine.log.iter().filter(|e| e.level == level).count();
-    let (prints, warnings, errors) = (count(LogLevel::Info), count(LogLevel::Warn), count(LogLevel::Error));
+    editor.output_cache.refresh(
+        &engine.log,
+        &editor.output_search,
+        editor.group_repeats,
+        [editor.show_prints, editor.show_warnings, editor.show_errors],
+    );
+    let cache = std::mem::take(&mut editor.output_cache);
+    let (problems, missing) = (&cache.problems, &cache.missing);
+    let [prints, warnings, errors] = cache.counts;
     ui.horizontal(|ui| {
         theme::panel_name(ui, icon::TERMINAL_WINDOW, "Output");
         let views = [
             (OutputView::Log, "Log".to_owned()),
             (OutputView::Problems, format!("Problems ({})", problems.len())),
-            (OutputView::Missing, format!("Missing ({})", missing.len())),
+            (OutputView::Missing, format!("Errors ({})", missing.len())),
         ];
         for (view, label) in views {
             if ui.selectable_label(editor.output_view == view, label).clicked() {
@@ -2149,41 +2154,29 @@ fn output(
     ui.separator();
     match editor.output_view {
         OutputView::Log => {
-            let search = editor.output_search.to_lowercase();
-            let shown = |e: &&LogEntry| {
-                let level_on = match e.level {
-                    LogLevel::Error => editor.show_errors,
-                    LogLevel::Warn => editor.show_warnings,
-                    _ => editor.show_prints,
-                };
-                level_on && (search.is_empty() || e.text.to_lowercase().contains(&search))
-            };
-            let mut lines: Vec<&LogEntry> = engine.log.iter().filter(shown).collect();
-            // Errors and warnings that repeat: the first one stands for all.
-            let mut repeats: std::collections::HashMap<&str, (usize, f64)> = Default::default();
-            if editor.group_repeats {
-                for e in &lines {
-                    if e.level != LogLevel::Info {
-                        let seen = repeats.entry(e.text.as_str()).or_insert((0, e.time));
-                        seen.0 += 1;
-                        seen.1 = e.time;
+            let row = ui.text_style_height(&egui::TextStyle::Monospace) + ui.spacing().item_spacing.y;
+            egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show_rows(
+                ui,
+                row,
+                cache.lines.len(),
+                |ui, range| {
+                    for &(i, l) in &cache.lines[range] {
+                        let Some(entry) = engine.log.get(i) else { continue };
+                        let line = entry.text.lines().nth(l).unwrap_or_default();
+                        let text = if l > 0 {
+                            format!("           {line}")
+                        } else {
+                            match cache.repeats.get(entry.text.as_str()) {
+                                Some(&(n, last)) if n > 1 && entry.level != LogLevel::Info => {
+                                    format!("[{:>6.1}s] (×{n}, last at {last:.1}s) {line}", entry.time)
+                                }
+                                _ => format!("[{:>6.1}s] {line}", entry.time),
+                            }
+                        };
+                        ui.label(RichText::new(text).monospace().color(level_color(entry.level)));
                     }
-                }
-                let mut first = std::collections::HashSet::new();
-                lines.retain(|e| e.level == LogLevel::Info || first.insert(e.text.as_str()));
-            }
-            let start = lines.len().saturating_sub(2000);
-            egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
-                for entry in &lines[start..] {
-                    let text = match repeats.get(entry.text.as_str()) {
-                        Some(&(n, last)) if n > 1 => {
-                            format!("[{:>6.1}s] (×{n}, last at {last:.1}s) {}", entry.time, entry.text)
-                        }
-                        _ => format!("[{:>6.1}s] {}", entry.time, entry.text),
-                    };
-                    ui.label(RichText::new(text).monospace().color(level_color(entry.level)));
-                }
-            });
+                },
+            );
         }
         OutputView::Problems => {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -2229,10 +2222,72 @@ fn output(
                          this list in your clipboard.",
                     );
                 }
-                for (m, n) in &missing {
+                for (m, n) in missing {
                     ui.label(RichText::new(format!("{}.{}   ×{n}", m.on, m.member)).monospace());
                 }
             });
+        }
+    }
+    editor.output_cache = cache;
+}
+
+/// What the Output panel shows, kept between frames: a big game prints
+/// thousands of lines, and going over all of them every frame made the
+/// editor crawl. Only lines added since the last frame are looked at.
+#[derive(Default)]
+pub struct OutputCache {
+    /// How many log entries have been looked at.
+    seen: usize,
+    /// The filters the lines were picked with.
+    key: (String, bool, [bool; 3]),
+    /// The rows shown: (log entry, line of its text).
+    lines: Vec<(usize, usize)>,
+    /// Each repeating error or warning: how often, and when last.
+    repeats: std::collections::HashMap<String, (usize, f64)>,
+    counts: [usize; 3],
+    problems: Vec<crate::debugging::Problem>,
+    missing: std::collections::BTreeMap<crate::debugging::Missing, usize>,
+    /// When the Problems and Errors lists were last worked out, and how long the log was.
+    summed: (Option<std::time::Instant>, usize),
+}
+
+impl OutputCache {
+    fn refresh(&mut self, log: &[LogEntry], search: &str, group: bool, levels: [bool; 3]) {
+        let search = search.to_lowercase();
+        let key = (search.clone(), group, levels);
+        if key != self.key || log.len() < self.seen {
+            let summed = self.summed;
+            *self = OutputCache { key, summed, ..Default::default() };
+        }
+        let level_index = |l: LogLevel| match l {
+            LogLevel::Error => 2,
+            LogLevel::Warn => 1,
+            _ => 0,
+        };
+        for (i, e) in log.iter().enumerate().skip(self.seen) {
+            let level = level_index(e.level);
+            self.counts[level] += 1;
+            if !levels[level] || !(search.is_empty() || e.text.to_lowercase().contains(&search)) {
+                continue;
+            }
+            if group && e.level != LogLevel::Info {
+                // The first one stands for all of them.
+                if let Some(seen) = self.repeats.get_mut(e.text.as_str()) {
+                    seen.0 += 1;
+                    seen.1 = e.time;
+                    continue;
+                }
+                self.repeats.insert(e.text.clone(), (1, e.time));
+            }
+            self.lines.extend((0..e.text.lines().count().max(1)).map(|l| (i, l)));
+        }
+        self.seen = log.len();
+        // The lists of problems go over the whole log: at most twice a second.
+        let stale = self.summed.0.is_none_or(|t| t.elapsed().as_secs_f32() > 0.5);
+        if self.summed.1 != log.len() && stale {
+            self.problems = crate::debugging::problems(log);
+            self.missing = crate::debugging::missing(log);
+            self.summed = (Some(std::time::Instant::now()), log.len());
         }
     }
 }

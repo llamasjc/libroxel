@@ -266,7 +266,7 @@ pub fn report(log: &[LogEntry], game: &str, log_path: Option<&Path>) -> String {
     out.push_str(&format!("{errors} errors, {warnings} warnings, {} kinds\n", problems.len()));
     let missing = missing(log);
     if !missing.is_empty() {
-        out.push_str("\n== Missing in Libroxel ==\n");
+        out.push_str("\n== Errors: Roblox members Libroxel doesn't have yet ==\n");
         for (m, n) in &missing {
             out.push_str(&format!("{}.{}  (x{n})\n", m.on, m.member));
         }
@@ -341,7 +341,7 @@ mod tests {
             ]
         );
         let text = report(&log, "Test", None);
-        assert!(text.contains("== Missing in Libroxel =="), "{text}");
+        assert!(text.contains("== Errors: Roblox members Libroxel doesn't have yet =="), "{text}");
     }
 
     #[test]

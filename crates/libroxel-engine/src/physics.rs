@@ -60,6 +60,46 @@ pub const TERRAIN_STEP: f32 = 1.05;
 const SHOVE_REACH: f32 = 0.15;
 
 /// Turns an orientation in degrees (Y, then X, then Z) into a rotation.
+/// How far a humanoid's legs reach below its root part: Roblox's
+/// `HipHeight` for an R15 rig, else the lowest of the rig's other parts.
+fn hip_height(tree: &InstanceTree, root: InstanceId) -> f32 {
+    let Some(model) = tree.parent(root).ok().flatten() else { return 0.0 };
+    let Some(humanoid) = tree.find_first_child_of_class(model, ClassKind::Humanoid).ok().flatten() else {
+        return 0.0;
+    };
+    let number = |name: &str| match tree.get_extra(humanoid, name) {
+        Ok(Some(PropertyValue::Number(n))) => Some(n as f32),
+        _ => None,
+    };
+    let (Some(pos), Some(size)) =
+        (tree.get_vec3(root, Property::Position), tree.get_vec3(root, Property::Size))
+    else {
+        return 0.0;
+    };
+    let bottom = pos.y - size.y * 0.5;
+    if number("RigType") == Some(1.0)
+        && let Some(hip) = number("HipHeight").filter(|h| *h > 0.0)
+    {
+        return hip.min(64.0);
+    }
+    let mut lowest = bottom;
+    for &part in tree.children(model).unwrap_or_default() {
+        if part == root || !tree.class(part).is_ok_and(|c| c.is_physical()) {
+            continue;
+        }
+        let (Some(p), Some(s)) =
+            (tree.get_vec3(part, Property::Position), tree.get_vec3(part, Property::Size))
+        else {
+            continue;
+        };
+        let rot =
+            Mat3::from_quat(orientation_quat(tree.get_vec3(part, Property::Orientation).unwrap_or_default()));
+        let reach = rot.row(1).abs().dot(GVec3::new(s.x, s.y, s.z)) * 0.5;
+        lowest = lowest.min(p.y - reach);
+    }
+    (bottom - lowest).clamp(0.0, 64.0)
+}
+
 pub fn orientation_quat(degrees: Vec3) -> Quat {
     Quat::from_euler(EulerRot::YXZ, degrees.y.to_radians(), degrees.x.to_radians(), degrees.z.to_radians())
 }
@@ -122,6 +162,10 @@ struct Body {
     /// A loose part the rigid-body simulation moves (characters don't
     /// move it themselves; it is in their way like a wall, though they shove it).
     sim: bool,
+    /// For a humanoid's root that doesn't collide itself (as in most Roblox
+    /// rigs): how far its legs reach below it. The body is stretched down by
+    /// this much so the humanoid stands on its feet, like Roblox's hip height.
+    hip: f32,
 }
 
 impl Body {
@@ -375,6 +419,12 @@ pub struct Physics {
     contacts: HashSet<(InstanceId, InstanceId)>,
     /// Parts moved by something else (a weld) that stand still in a step.
     carried: HashSet<InstanceId>,
+    /// Each standing humanoid's hip height, measured when first seen (so
+    /// swinging legs don't make it bob).
+    hips: HashMap<InstanceId, f32>,
+    /// Where the world's parts are, so a big map's far-off parts are skipped
+    /// without looking at each of them every step.
+    index: std::cell::RefCell<libroxel_instance::geometry::PartIndex>,
     /// Parts placed from outside for the next step (a character another
     /// computer moves): they stay put but still touch things.
     held: HashSet<InstanceId>,
@@ -616,6 +666,7 @@ impl Physics {
                         climb: TERRAIN_STEP,
                         water: None,
                         sim: false,
+                        hip: 0.0,
                     });
                 }
             }
@@ -627,44 +678,35 @@ impl Physics {
     /// parts near something that moves. A big map's thousands of anchored
     /// parts far from every mover can't touch anything this step.
     fn parts_near_movers(&self, tree: &InstanceTree) -> Vec<InstanceId> {
-        let parts = tree.descendants_of_class(tree.workspace(), ClassKind::Part);
-        if parts.len() < NEAR_MOVERS_MIN {
-            return parts;
+        let mut index = self.index.borrow_mut();
+        index.refresh(tree);
+        if index.len() < NEAR_MOVERS_MIN {
+            return tree.descendants_of_class(tree.workspace(), ClassKind::Part);
         }
-        let cell = |v: f32| (v / MOVER_CELL).floor() as i32;
         let reach = |id: InstanceId| tree.get_vec3(id, Property::Size).map_or(0.0, |s| s.length() * 0.5);
-        let anchored = |id: InstanceId| {
-            tree.get_bool(id, Property::Anchored) != Some(false) || self.carried.contains(&id)
-        };
-        let mut near: HashSet<(i32, i32)> = HashSet::new();
-        for &id in &parts {
-            if anchored(id) && !self.held.contains(&id) {
-                continue;
-            }
+        let movers: Vec<InstanceId> =
+            index.loose().filter(|id| !self.carried.contains(id)).chain(self.held.iter().copied()).collect();
+        let mut out: HashSet<InstanceId> = index.loose().collect();
+        out.extend(self.held.iter().copied());
+        // Movers close together share their cells' parts: look each cell up once.
+        let mut looked: HashSet<(i32, i32, i32)> = HashSet::new();
+        for id in movers {
             let Some(pos) = tree.get_vec3(id, Property::Position) else { continue };
             let r = reach(id) + MOVER_CELL;
-            for x in cell(pos.x - r)..=cell(pos.x + r) {
-                for z in cell(pos.z - r)..=cell(pos.z + r) {
-                    near.insert((x, z));
-                }
+            let cell = |v: f32| (v / MOVER_CELL).floor() as i32;
+            let key = (cell(pos.x), cell(pos.y), cell(pos.z));
+            if r <= MOVER_CELL * 1.5 && !looked.insert(key) {
+                continue;
             }
+            let r = if r <= MOVER_CELL * 1.5 { MOVER_CELL * 2.5 } else { r };
+            let lo = Vec3::new(pos.x - r, pos.y - r, pos.z - r);
+            let hi = Vec3::new(pos.x + r, pos.y + r, pos.z + r);
+            out.extend(index.near_box(lo, hi));
         }
-        parts
-            .into_iter()
-            .filter(|&id| {
-                if !anchored(id) || self.held.contains(&id) {
-                    return true;
-                }
-                let Some(pos) = tree.get_vec3(id, Property::Position) else { return false };
-                let r = reach(id);
-                let (x0, x1, z0, z1) = (cell(pos.x - r), cell(pos.x + r), cell(pos.z - r), cell(pos.z + r));
-                // A huge part (a baseplate) is kept: checking its cells costs more.
-                if (i64::from(x1) - i64::from(x0) + 1) * (i64::from(z1) - i64::from(z0) + 1) > 256 {
-                    return true;
-                }
-                (x0..=x1).any(|x| (z0..=z1).any(|z| near.contains(&(x, z))))
-            })
-            .collect()
+        // In tree order, so steps don't depend on hashing.
+        let mut out: Vec<InstanceId> = out.into_iter().collect();
+        out.sort_by_key(|id| id.to_bits());
+        out
     }
 
     fn part_bodies(&self, tree: &InstanceTree) -> Vec<Body> {
@@ -701,27 +743,41 @@ impl Physics {
                                 climb: STEP_HEIGHT,
                                 water: None,
                                 sim,
+                                hip: 0.0,
                             })
                             .collect();
                     }
                 }
-                let (half, collider) = if character && !anchored {
+                let (mut half, collider) = if character && !anchored {
                     // Characters stay upright, whichever way they face.
                     (size * 0.5, Collider::Aabb)
                 } else {
                     collider_for(size, shape, orientation)
                 };
+                // A humanoid stands on its legs even when its root doesn't
+                // collide (Roblox floats it at its hip height).
+                let hip = if character && !anchored && !can_collide && !held {
+                    self.hips.get(&id).copied().unwrap_or_else(|| hip_height(tree, id))
+                } else {
+                    0.0
+                };
+                let mut pos = pos;
+                if hip > 0.0 {
+                    pos.y -= hip * 0.5;
+                    half.y += hip * 0.5;
+                }
                 one(Some(Body {
                     id,
                     pos,
                     half,
                     anchored,
                     held,
-                    can_collide,
+                    can_collide: can_collide || hip > 0.0,
                     collider,
                     climb: STEP_HEIGHT,
                     water: None,
                     sim,
+                    hip,
                 }))
             })
             .collect()
@@ -765,8 +821,12 @@ impl Physics {
                 rigid::Role::Kinematic
             };
             // Characters reach a little further sideways, to shove what they walk into.
-            let size =
-                if character { size + Vec3::new(2.0 * SHOVE_REACH, 0.0, 2.0 * SHOVE_REACH) } else { size };
+            let size = if character {
+                let size = Vec3::new(size.x, body.half.y * 2.0, size.z);
+                size + Vec3::new(2.0 * SHOVE_REACH, 0.0, 2.0 * SHOVE_REACH)
+            } else {
+                size
+            };
             specs.push(rigid::Spec {
                 id,
                 role,
@@ -801,6 +861,10 @@ impl Physics {
         let live: HashSet<InstanceId> = bodies.iter().map(|b| b.id).collect();
         self.velocities.retain(|id, _| live.contains(id));
         self.spins.retain(|id, _| live.contains(id));
+        self.hips.retain(|id, _| live.contains(id));
+        for body in bodies.iter().filter(|b| b.hip > 0.0) {
+            self.hips.entry(body.id).or_insert(body.hip);
+        }
         self.grounded.clear();
         self.wet = bodies.iter().filter(|b| b.water.is_some()).map(|b| b.id).collect();
 
@@ -832,10 +896,11 @@ impl Physics {
             if body.anchored || body.held || body.sim {
                 continue;
             }
-            if tree.get_vec3(body.id, Property::Position) != Some(body.pos) {
-                let _ = tree.set(body.id, Property::Position, PropertyValue::Vec3(body.pos));
+            let pos = Vec3::new(body.pos.x, body.pos.y + body.hip * 0.5, body.pos.z);
+            if tree.get_vec3(body.id, Property::Position) != Some(pos) {
+                let _ = tree.set(body.id, Property::Position, PropertyValue::Vec3(pos));
             }
-            if body.pos.y < fallen_height {
+            if pos.y < fallen_height {
                 result.fell.push(body.id);
             }
         }

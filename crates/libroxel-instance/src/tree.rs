@@ -167,6 +167,9 @@ pub struct InstanceTree {
     /// many times the log was restarted.
     moved: Vec<InstanceId>,
     moved_epoch: u64,
+    /// Each tag and the instances that carry it (some may have been
+    /// destroyed since), so finding tagged instances doesn't walk the game.
+    tag_index: std::collections::HashMap<String, std::collections::HashSet<InstanceId>>,
 }
 
 impl Default for InstanceTree {
@@ -188,6 +191,7 @@ impl InstanceTree {
             moved: Vec::new(),
             moved_epoch: 0,
             changes: Vec::new(),
+            tag_index: Default::default(),
         };
         tree.root = tree.alloc(InstanceData::new(ClassKind::DataModel, "Game".into()));
         tree.data_mut(tree.root).expect("root exists").parent_locked = true;
@@ -247,7 +251,8 @@ impl InstanceTree {
     }
 
     fn alloc(&mut self, data: InstanceData) -> InstanceId {
-        if let Some(index) = self.free.pop() {
+        let tags = (!data.tags.is_empty()).then(|| data.tags.clone());
+        let id = if let Some(index) = self.free.pop() {
             let slot = &mut self.slots[index as usize];
             slot.data = Some(data);
             InstanceId { index, generation: slot.generation }
@@ -255,7 +260,11 @@ impl InstanceTree {
             let index = u32::try_from(self.slots.len()).expect("fewer than 2^32 instances");
             self.slots.push(Slot { generation: 0, data: Some(data) });
             InstanceId { index, generation: 0 }
+        };
+        for tag in tags.into_iter().flatten() {
+            self.tag_index.entry(tag).or_default().insert(id);
         }
+        id
     }
 
     fn data(&self, id: InstanceId) -> Result<&InstanceData> {
@@ -417,6 +426,12 @@ impl InstanceTree {
         let mut purged = 0;
         for (index, slot) in self.slots.iter_mut().enumerate() {
             if slot.data.as_ref().is_some_and(|d| d.destroyed) {
+                let id = InstanceId { index: index as u32, generation: slot.generation };
+                for tag in slot.data.as_ref().map(|d| d.tags.as_slice()).unwrap_or_default() {
+                    if let Some(set) = self.tag_index.get_mut(tag) {
+                        set.remove(&id);
+                    }
+                }
                 slot.data = None;
                 slot.generation = slot.generation.wrapping_add(1);
                 self.free.push(index as u32);
@@ -536,7 +551,11 @@ impl InstanceTree {
             self.changes.push(Change::PropertyChanged { id, property });
             if matches!(
                 property,
-                Property::Position | Property::Size | Property::Orientation | Property::Shape
+                Property::Position
+                    | Property::Size
+                    | Property::Orientation
+                    | Property::Shape
+                    | Property::Anchored
             ) {
                 self.note_moved(id);
             }
@@ -656,6 +675,7 @@ impl InstanceTree {
         let tags = &mut self.data_mut(id)?.tags;
         if let Err(at) = tags.binary_search_by(|t| t.as_str().cmp(tag)) {
             tags.insert(at, tag.to_owned());
+            self.tag_index.entry(tag.to_owned()).or_default().insert(id);
             self.data_mut(id)?.revision = next_revision();
             self.changes.push(Change::TagAdded { id, tag: tag.to_owned() });
         }
@@ -666,6 +686,9 @@ impl InstanceTree {
         let tags = &mut self.data_mut(id)?.tags;
         if let Ok(at) = tags.binary_search_by(|t| t.as_str().cmp(tag)) {
             tags.remove(at);
+            if let Some(set) = self.tag_index.get_mut(tag) {
+                set.remove(&id);
+            }
             self.data_mut(id)?.revision = next_revision();
             self.changes.push(Change::TagRemoved { id, tag: tag.to_owned() });
         }
@@ -674,11 +697,42 @@ impl InstanceTree {
 
     /// Every live instance in the game (under the root) with `tag`, in tree order.
     pub fn tagged(&self, tag: &str) -> Vec<InstanceId> {
-        self.descendants(self.root)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|id| self.has_tag(*id, tag).unwrap_or(false))
-            .collect()
+        let Some(set) = self.tag_index.get(tag) else { return Vec::new() };
+        let mut found: Vec<(Vec<usize>, InstanceId)> = Vec::new();
+        let mut places: std::collections::HashMap<InstanceId, usize> = Default::default();
+        for &id in set {
+            if !self.has_tag(id, tag).unwrap_or(false) || self.data(id).is_ok_and(|d| d.destroyed) {
+                continue;
+            }
+            // Where it is in the tree: its place among its siblings, all the way up.
+            let mut path = Vec::new();
+            let mut at = id;
+            let mut under_root = false;
+            while let Ok(Some(parent)) = self.parent(at) {
+                let place = match places.get(&at) {
+                    Some(&p) => p,
+                    None => {
+                        let siblings = self.children(parent).unwrap_or_default();
+                        for (i, s) in siblings.iter().enumerate() {
+                            places.insert(*s, i);
+                        }
+                        places.get(&at).copied().unwrap_or(usize::MAX)
+                    }
+                };
+                path.push(place);
+                if parent == self.root {
+                    under_root = true;
+                    break;
+                }
+                at = parent;
+            }
+            if under_root {
+                path.reverse();
+                found.push((path, id));
+            }
+        }
+        found.sort();
+        found.into_iter().map(|(_, id)| id).collect()
     }
 
     /// Typed read of a `Vec3` property.

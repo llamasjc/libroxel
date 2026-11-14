@@ -440,6 +440,8 @@ pub struct PartIndex {
     huge: std::collections::HashSet<InstanceId>,
     /// The cells each part was put in (none for a huge part).
     placed: std::collections::HashMap<InstanceId, Option<CellRange>>,
+    /// The parts that aren't anchored (the ones that can move by themselves).
+    loose: std::collections::HashSet<InstanceId>,
 }
 
 /// A box of grid cells: its lowest and highest corners.
@@ -466,6 +468,7 @@ impl PartIndex {
             self.cells.clear();
             self.huge.clear();
             self.placed.clear();
+            self.loose.clear();
             for part in tree.descendants_of_class(tree.workspace(), ClassKind::Part) {
                 self.place(tree, part);
             }
@@ -508,6 +511,7 @@ impl PartIndex {
     }
 
     fn remove(&mut self, id: InstanceId) {
+        self.loose.remove(&id);
         match self.placed.remove(&id) {
             Some(Some((lo, hi))) => {
                 for x in lo.0..=hi.0 {
@@ -536,6 +540,9 @@ impl PartIndex {
         else {
             return;
         };
+        if tree.get_bool(part, Property::Anchored) == Some(false) {
+            self.loose.insert(part);
+        }
         let r = size.length() * 0.5;
         if !(pos.x.is_finite() && pos.y.is_finite() && pos.z.is_finite() && r.is_finite()) {
             self.huge.insert(part);
@@ -560,6 +567,20 @@ impl PartIndex {
             }
         }
         self.placed.insert(part, Some((lo, hi)));
+    }
+
+    /// How many parts the index holds.
+    pub fn len(&self) -> usize {
+        self.placed.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.placed.is_empty()
+    }
+
+    /// The parts that aren't anchored.
+    pub fn loose(&self) -> impl Iterator<Item = InstanceId> + '_ {
+        self.loose.iter().copied()
     }
 
     /// The parts that might be in the box from `lo` to `hi`.

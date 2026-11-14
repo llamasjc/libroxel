@@ -117,6 +117,26 @@ pub fn part_shape(tree: &InstanceTree, id: InstanceId) -> PartShape {
     }
 }
 
+/// How many parts are brought into view in one frame, nearest first.
+const SPAWN_BUDGET: usize = 1500;
+
+/// How far from the camera parts are drawn while playing: the workspace's
+/// `StreamingTargetRadius` (Roblox's default is 1024 studs), or everything
+/// when its `StreamingEnabled` is off.
+fn streaming_radius(tree: &libroxel_instance::InstanceTree) -> f32 {
+    let ws = tree.workspace();
+    if matches!(
+        tree.get_extra(ws, "StreamingEnabled"),
+        Ok(Some(libroxel_instance::PropertyValue::Bool(false)))
+    ) {
+        return f32::INFINITY;
+    }
+    match tree.get_extra(ws, "StreamingTargetRadius") {
+        Ok(Some(libroxel_instance::PropertyValue::Number(r))) if r > 0.0 => (r as f32).max(64.0),
+        _ => 1024.0,
+    }
+}
+
 /// Each part's entity, and the revision of the part it last showed.
 #[derive(Resource, Default)]
 struct PartEntities(HashMap<InstanceId, Entity>, HashMap<InstanceId, u64>);
@@ -179,6 +199,7 @@ fn sync_parts(
     mut entities: ResMut<PartEntities>,
     mut commands: Commands,
     mut parts: Query<PartPieces, With<PartLink>>,
+    cameras: Query<&GlobalTransform, (With<Camera3d>, Without<PartLink>)>,
 ) {
     let mut tree = engine.tree.borrow_mut();
     // While playing, the session reads the change journal (for Changed events).
@@ -189,22 +210,56 @@ fn sync_parts(
     let live: Vec<InstanceId> = tree.descendants_of_class(tree.workspace(), ClassKind::Part);
     let live_set: std::collections::HashSet<_> = live.iter().copied().collect();
 
+    // Like Roblox's streaming: while playing, only parts within the
+    // workspace's streaming radius of the camera are drawn, and new parts
+    // come in nearest first, a batch a frame, so a big map opens at once
+    // instead of building every part before the first frame.
+    let eye = cameras.iter().next().map(|t| t.translation());
+    let radius = if engine.is_playing() { streaming_radius(&tree) } else { f32::INFINITY };
+    let reach = |id: InstanceId| -> f32 {
+        let Some(eye) = eye else { return 0.0 };
+        let (Some(pos), Some(size)) =
+            (tree.get_vec3(id, Property::Position), tree.get_vec3(id, Property::Size))
+        else {
+            return 0.0;
+        };
+        (Vec3::new(pos.x, pos.y, pos.z).distance(eye) - size.length() * 0.5).max(0.0)
+    };
+
     let PartEntities(spawned, seen) = &mut *entities;
     spawned.retain(|id, entity| {
-        let keep = live_set.contains(id);
+        // Gone, or well out of range (a little past it, so edges don't flicker).
+        let keep = live_set.contains(id) && (radius.is_infinite() || reach(*id) <= radius * 1.1);
         if !keep {
             commands.entity(*entity).despawn();
         }
         keep
     });
-    seen.retain(|id, _| live_set.contains(id));
+    seen.retain(|id, _| spawned.contains_key(id));
 
+    let mut fresh: Vec<(f32, InstanceId)> = Vec::new();
+    let mut work: Vec<InstanceId> = Vec::new();
     for id in live {
-        // Unchanged since last frame: nothing to copy.
-        let revision = tree.revision(id).unwrap_or(0);
-        if spawned.contains_key(&id) && seen.get(&id) == Some(&revision) {
+        if spawned.contains_key(&id) {
+            // Unchanged since last frame: nothing to copy.
+            if seen.get(&id) != Some(&tree.revision(id).unwrap_or(0)) {
+                work.push(id);
+            }
             continue;
         }
+        let d = reach(id);
+        if d <= radius {
+            fresh.push((d, id));
+        }
+    }
+    if fresh.len() > SPAWN_BUDGET {
+        fresh.select_nth_unstable_by(SPAWN_BUDGET, |a, b| a.0.total_cmp(&b.0));
+        fresh.truncate(SPAWN_BUDGET);
+    }
+    work.extend(fresh.into_iter().map(|(_, id)| id));
+
+    for id in work {
+        let revision = tree.revision(id).unwrap_or(0);
         let (Some(pos), Some(size)) =
             (tree.get_vec3(id, Property::Position), tree.get_vec3(id, Property::Size))
         else {
@@ -248,6 +303,7 @@ fn sync_parts(
                     .spawn((PartLink(id), name, transform, appearance, geometry, mesh_file, mesh_texture))
                     .id();
                 spawned.insert(id, entity);
+                seen.insert(id, revision);
             }
             None => {} // spawned this frame; commands not applied yet
         }

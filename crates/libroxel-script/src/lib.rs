@@ -140,7 +140,20 @@ impl ScriptRuntime {
         let lua = Lua::new();
         // As Roblox runs live games: optimised, with inlining, and turned
         // into machine code where the computer allows it.
-        lua.set_compiler(mlua::chunk::Compiler::new().set_optimization_level(2).set_debug_level(1));
+        // Like Roblox: these globals are instances whose members change, so
+        // reads through them (`workspace.CurrentCamera`) are never cached.
+        lua.set_compiler(
+            mlua::chunk::Compiler::new().set_optimization_level(2).set_debug_level(1).set_mutable_globals([
+                "game",
+                "Game",
+                "workspace",
+                "Workspace",
+                "script",
+                "shared",
+                "plugin",
+                "_G",
+            ]),
+        );
         lua.enable_jit(true);
         bindings::install(&lua, tree.clone())?;
         // Freeze the standard library and our globals; each script gets its
