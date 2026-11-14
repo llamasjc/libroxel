@@ -5056,6 +5056,9 @@ version = "0.0.1"
 dependencies = [
  "libroxel-instance",
  "mlua",
+ "rbx_reflection",
+ "rbx_reflection_database",
+ "rbx_types",
  "serde_json",
  "thiserror 2.0.21",
 ]

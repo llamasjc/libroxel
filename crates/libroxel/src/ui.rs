@@ -1830,6 +1830,22 @@ fn output(
         if ui.small_button("Clear").clicked() {
             actions.push(Action::ClearOutput);
         }
+        // The whole log in one click, for pasting somewhere else.
+        let copied_at = egui::Id::new("output-copied-at");
+        let now = ui.input(|i| i.time);
+        let recently = ui.data(|d| d.get_temp::<f64>(copied_at)).is_some_and(|t| now - t < 1.5);
+        let label =
+            if recently { format!("{} Copied", icon::CHECK) } else { format!("{} Copy all", icon::COPY) };
+        let copy = ui
+            .add_enabled(!engine.log.is_empty(), egui::Button::new(label).small())
+            .on_hover_text("Copy everything in the output, to paste into a message or a file");
+        if copy.clicked() {
+            ui.ctx().copy_text(output_text(&engine.log));
+            ui.data_mut(|d| d.insert_temp(copied_at, now));
+        }
+        if recently {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        }
         ui.separator();
         let hint =
             if playing { "Run Luau in the running game…" } else { "Press Play to run Luau commands" };
@@ -1856,6 +1872,15 @@ fn output(
             );
         }
     });
+}
+
+/// The output log as plain text, one line per entry, as it's shown.
+fn output_text<'a>(log: impl IntoIterator<Item = &'a LogEntry>) -> String {
+    let mut text = String::new();
+    for entry in log {
+        text.push_str(&format!("[{:>6.1}s] {}\n", entry.time, entry.text));
+    }
+    text
 }
 
 fn hud(ui: &mut egui::Ui, playing: bool) {

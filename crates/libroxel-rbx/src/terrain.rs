@@ -51,20 +51,33 @@ pub const MATERIALS: &[&str] = &[
     "Pavement",
 ];
 
-/// The Libroxel terrain material closest to a file's material number.
+/// The Libroxel terrain material for a file's material number.
 pub fn material(id: u8) -> Option<Material> {
     Some(match MATERIALS.get(id as usize).copied()? {
         "Air" => return None,
         "Water" => Material::Water,
-        "Grass" | "LeafyGrass" => Material::Grass,
-        "Sand" | "Sandstone" | "Salt" => Material::Sand,
-        "Snow" | "Glacier" => Material::Snow,
+        "Grass" => Material::Grass,
+        "Slate" => Material::Slate,
+        "Concrete" => Material::Concrete,
         "Brick" => Material::Brick,
-        "WoodPlanks" | "Mud" | "Ground" => Material::Wood,
-        "Ice" => Material::Glass,
-        "Concrete" | "Asphalt" | "Pavement" => Material::SmoothPlastic,
-        // Slate, Rock, Basalt, Limestone, Cobblestone, CrackedLava.
-        _ => Material::Rock,
+        "Sand" => Material::Sand,
+        "WoodPlanks" => Material::WoodPlanks,
+        "Rock" => Material::Rock,
+        "Glacier" => Material::Glacier,
+        "Snow" => Material::Snow,
+        "Sandstone" => Material::Sandstone,
+        "Mud" => Material::Mud,
+        "Basalt" => Material::Basalt,
+        "Ground" => Material::Ground,
+        "CrackedLava" => Material::CrackedLava,
+        "Asphalt" => Material::Asphalt,
+        "Cobblestone" => Material::Cobblestone,
+        "Ice" => Material::Ice,
+        "LeafyGrass" => Material::LeafyGrass,
+        "Salt" => Material::Salt,
+        "Limestone" => Material::Limestone,
+        "Pavement" => Material::Pavement,
+        _ => return None,
     })
 }
 
@@ -302,6 +315,6 @@ mod tests {
             assert!(material(id).is_some(), "{}", MATERIALS[id as usize]);
         }
         assert_eq!(material(1), Some(Material::Water));
-        assert_eq!(material(19), Some(Material::Grass));
+        assert_eq!(material(19), Some(Material::LeafyGrass));
     }
 }

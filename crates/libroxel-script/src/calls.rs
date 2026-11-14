@@ -284,24 +284,18 @@ fn from_hex(text: &str) -> Option<libroxel_instance::Color3> {
 // Instance lookups
 // ---------------------------------------------------------------------------
 
-fn class_named(name: &str) -> Option<ClassKind> {
-    names::class_from_name(name)
-}
-
-/// The first ancestor of `id` that passes `test`.
-fn find_ancestor(
+/// The first ancestor of `id` that passes `test`, as a script value.
+fn find_ancestor_by(
     lua: &Lua,
     id: InstanceId,
-    test: impl Fn(ClassKind) -> bool,
-) -> mlua::Result<Option<InstanceId>> {
-    let host = host(lua);
-    let tree = host.tree.borrow();
-    let mut current = tree.parent(id).map_err(tree_err)?;
+    test: impl Fn(&Lua, InstanceId) -> mlua::Result<bool>,
+) -> mlua::Result<Option<mlua::AnyUserData>> {
+    let mut current = host(lua).tree.borrow().parent(id).map_err(tree_err)?;
     while let Some(p) = current {
-        if tree.class(p).is_ok_and(&test) {
-            return Ok(Some(p));
+        if test(lua, p)? {
+            return push_instance(lua, p).map(Some);
         }
-        current = tree.parent(p).map_err(tree_err)?;
+        current = host(lua).tree.borrow().parent(p).map_err(tree_err)?;
     }
     Ok(None)
 }
@@ -309,22 +303,19 @@ fn find_ancestor(
 pub(crate) fn add_instance_methods<M: UserDataMethods<crate::bindings::LuaInstance>>(m: &mut M) {
     use names::instance::*;
     m.add_method(FIND_FIRST_CHILD_WHICH_IS_A, |lua, this, class: String| {
-        let Some(class) = class_named(&class) else { return Ok(None) };
-        let found = {
-            let host = host(lua);
-            let tree = host.tree.borrow();
-            let children = tree.children(this.0).map_err(tree_err)?;
-            children.iter().copied().find(|c| tree.class(*c).is_ok_and(|k| k.is_a(class)))
-        };
-        found.map(|id| push_instance(lua, id)).transpose()
+        let children = host(lua).tree.borrow().children(this.0).map_err(tree_err)?.to_vec();
+        for child in children {
+            if crate::bindings::is_a(lua, child, &class)? {
+                return push_instance(lua, child).map(Some);
+            }
+        }
+        Ok(None)
     });
     m.add_method(FIND_FIRST_ANCESTOR_OF_CLASS, |lua, this, class: String| {
-        let Some(class) = class_named(&class) else { return Ok(None) };
-        find_ancestor(lua, this.0, |k| k == class)?.map(|id| push_instance(lua, id)).transpose()
+        find_ancestor_by(lua, this.0, |lua, id| crate::bindings::is_class(lua, id, &class))
     });
     m.add_method(FIND_FIRST_ANCESTOR_WHICH_IS_A, |lua, this, class: String| {
-        let Some(class) = class_named(&class) else { return Ok(None) };
-        find_ancestor(lua, this.0, |k| k.is_a(class))?.map(|id| push_instance(lua, id)).transpose()
+        find_ancestor_by(lua, this.0, |lua, id| crate::bindings::is_a(lua, id, &class))
     });
     m.add_method(IS_ANCESTOR_OF, |lua, this, other: Value| {
         let other = as_instance(&other).ok_or_else(|| runtime_err("IsAncestorOf expects an Instance"))?;

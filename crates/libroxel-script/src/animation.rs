@@ -110,6 +110,16 @@ impl UserData for LuaTrack {
         });
         fields
             .add_field_method_get(names::STOPPED, |_, this| Ok(Signal(SignalKind::AnimationStopped(this.0))));
+        // Fires as it finishes; libroxel's tracks are done once stopped.
+        fields.add_field_method_get("Ended", |_, this| Ok(Signal(SignalKind::AnimationStopped(this.0))));
+        fields.add_field_method_get("Priority", |lua, this| extra_member(lua, this.0, "Priority"));
+        fields.add_field_method_set("Priority", |lua, this, priority: Value| {
+            extra(lua, this.0)?.raw_set("Priority", priority)
+        });
+        fields.add_field_method_get("KeyframeReached", |lua, this| {
+            extra_member(lua, this.0, "KeyframeReached")
+        });
+        fields.add_field_method_get("DidLoop", |lua, this| extra_member(lua, this.0, "DidLoop"));
         fields.add_meta_field(MetaMethod::Type, names::TRACK_TYPE_NAME);
     }
 
@@ -159,10 +169,69 @@ impl UserData for LuaTrack {
                 t.speed = speed.unwrap_or(1.0);
             })
         });
+        methods.add_method("GetMarkerReachedSignal", |lua, this, name: String| {
+            let key = format!("marker:{name}");
+            let t = extra(lua, this.0)?;
+            if let Value::Nil = t.raw_get::<Value>(key.as_str())? {
+                t.raw_set(key.as_str(), crate::lenient::new_signal(lua)?)?;
+            }
+            t.raw_get::<Value>(key.as_str())
+        });
+        methods.add_method("GetTimeOfKeyframe", |_, _, _: Value| Ok(0.0));
         methods.add_method(names::ADJUST_WEIGHT, |lua, this, weight: Option<f32>| {
             with_track(lua, this.0, |t, _| t.weight = weight.unwrap_or(1.0))
         });
     }
+}
+
+/// What a track plays when its animation is one libroxel can't fetch,
+/// such as an `rbxassetid://` one kept online: nothing, for a second, so
+/// scripts that play, wait for and stop it still run.
+static SILENT: Clip = Clip { name: "Animation", length: 1.0, looped: false, legs: false, keys: &[] };
+
+const EXTRA_KEY: &str = "libroxel.animation.extra";
+
+/// A track's other members (its priority and events), kept in Lua.
+fn extra(lua: &Lua, id: u64) -> mlua::Result<mlua::Table> {
+    let all: mlua::Table = match lua.named_registry_value::<Value>(EXTRA_KEY)? {
+        Value::Table(t) => t,
+        _ => {
+            let t = lua.create_table()?;
+            lua.set_named_registry_value(EXTRA_KEY, t.clone())?;
+            t
+        }
+    };
+    if let Value::Table(t) = all.raw_get::<Value>(id)? {
+        return Ok(t);
+    }
+    let t = lua.create_table()?;
+    all.raw_set(id, t.clone())?;
+    Ok(t)
+}
+
+/// A member of a track kept in Lua: its priority, or an event that fires
+/// when markers or keyframes are reached (never, for libroxel's clips).
+fn extra_member(lua: &Lua, id: u64, key: &str) -> mlua::Result<Value> {
+    let t = extra(lua, id)?;
+    let v: Value = t.raw_get(key)?;
+    if !v.is_nil() {
+        return Ok(v);
+    }
+    let made = match key {
+        "Priority" => {
+            let e: mlua::Table = lua.globals().get("Enum")?;
+            let p: Value = e.get("AnimationPriority")?;
+            match p {
+                Value::Table(p) => p.get("Core")?,
+                Value::UserData(p) => mlua::ObjectLike::get(&p, "Core")?,
+                _ => Value::Nil,
+            }
+        }
+        "KeyframeReached" | "DidLoop" => crate::lenient::new_signal(lua)?,
+        _ => return Err(runtime_err(format!("{key} is not a valid member of AnimationTrack"))),
+    };
+    t.raw_set(key, made.clone())?;
+    Ok(made)
 }
 
 const LOAD_KEY: &str = "libroxel.animation.load";
@@ -174,19 +243,31 @@ fn humanoid_of(lua: &Lua, id: InstanceId) -> mlua::Result<InstanceId> {
     let tree = host.tree.borrow();
     match tree.class(id) {
         Ok(ClassKind::Humanoid) => Ok(id),
+        Ok(ClassKind::Animator)
+            if tree.parent(id).ok().flatten().is_some_and(|p| tree.class(p) == Ok(ClassKind::Humanoid)) =>
+        {
+            Ok(tree.parent(id).ok().flatten().unwrap_or(id))
+        }
+        // An animation controller animates a model without a humanoid.
+        Ok(ClassKind::Other) if is_controller(&tree, id) => Ok(id),
         Ok(ClassKind::Animator) => tree
             .parent(id)
             .ok()
             .flatten()
-            .filter(|p| tree.class(*p) == Ok(ClassKind::Humanoid))
+            .filter(|p| is_controller(&tree, *p))
             .ok_or_else(|| runtime_err("an Animator plays animations when it's inside a Humanoid")),
         _ => Err(runtime_err("LoadAnimation is for an Animator or a Humanoid")),
     }
 }
 
+fn is_controller(tree: &libroxel_instance::InstanceTree, id: InstanceId) -> bool {
+    matches!(tree.get(id, Property::OtherClass), Ok(PropertyValue::String(c)) if c == "AnimationController")
+}
+
 pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     let load = lua.create_function(|lua, (this, animation): (Value, Value)| {
-        let this = as_instance(&this).ok_or_else(|| runtime_err("call it with a colon, like animator:LoadAnimation(a)"))?;
+        let this = as_instance(&this)
+            .ok_or_else(|| runtime_err("call it with a colon, like animator:LoadAnimation(a)"))?;
         let humanoid = humanoid_of(lua, this)?;
         let animation =
             as_instance(&animation).ok_or_else(|| runtime_err("LoadAnimation expects an Animation"))?;
@@ -195,9 +276,16 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(PropertyValue::String(s)) => s,
             _ => String::new(),
         };
-        let clip = clip(&id).ok_or_else(|| {
-            runtime_err(format!("there is no animation {id:?}; built-in ones are libroxel://wave, cheer, point, nod, shake, jacks and dance"))
-        })?;
+        let clip = match clip(&id) {
+            Some(clip) => clip,
+            // A built-in name that isn't one is a mistake worth saying.
+            None if id.starts_with(libroxel_instance::animation::BUILT_IN) => {
+                return Err(runtime_err(format!(
+                    "there is no animation {id:?}; built-in ones are libroxel://wave, cheer, point, nod, shake, jacks and dance"
+                )));
+            }
+            None => &SILENT,
+        };
         let host = host(lua);
         let now = host.clock.get();
         let mut tracks = host.animations.borrow_mut();
@@ -239,8 +327,13 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
 }
 
 /// An animator's (or humanoid's) animation methods.
-pub(crate) fn index(lua: &Lua, class: ClassKind, key: &str) -> mlua::Result<Option<Value>> {
-    if !matches!(class, ClassKind::Animator | ClassKind::Humanoid) {
+pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> mlua::Result<Option<Value>> {
+    let animates = match class {
+        ClassKind::Animator | ClassKind::Humanoid => true,
+        ClassKind::Other => is_controller(&host(lua).tree.borrow(), id),
+        _ => false,
+    };
+    if !animates {
         return Ok(None);
     }
     match key {
@@ -291,7 +384,7 @@ pub(crate) fn pose_for(lua: &Lua, humanoid: InstanceId) -> Option<(Pose, bool)> 
     let mut pose: Option<(Pose, bool)> = None;
     for t in tracks.tracks.iter().filter(|t| t.humanoid == humanoid) {
         let strength = t.strength(now);
-        if strength <= 0.0 {
+        if strength <= 0.0 || t.clip.keys.is_empty() {
             continue;
         }
         let sampled = t.clip.sample(if t.looped { t.time(now) } else { t.time(now).min(t.clip.length) });

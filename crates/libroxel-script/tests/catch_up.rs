@@ -212,7 +212,7 @@ fn more_ways_to_find_instances() {
     );
     assert_eq!(
         printed(&rt),
-        ["true Seat", "true true", "true false false", "Player1 nil", "0 true", "ServerStorage 16"]
+        ["true nil", "true true", "true false false", "Player1 nil", "0 true", "ServerStorage 16"]
     );
 }
 

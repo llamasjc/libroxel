@@ -193,6 +193,11 @@ fn node_to_json(tree: &InstanceTree, id: InstanceId, refs: &RefIds) -> Result<Va
             attributes.iter().map(|(k, v)| (k.clone(), attribute_to_json(v))).collect();
         node.insert("attributes".into(), Value::Object(map));
     }
+    let extras = tree.extras(id)?;
+    if !extras.is_empty() {
+        let map: Map<String, Value> = extras.iter().map(|(k, v)| (k.clone(), attribute_to_json(v))).collect();
+        node.insert("extras".into(), Value::Object(map));
+    }
     let tags = tree.tags(id)?;
     if !tags.is_empty() {
         node.insert("tags".into(), json!(tags));
@@ -292,6 +297,14 @@ fn load_node(
             match attribute_from_json(raw) {
                 Some(value) => tree.set_attribute(id, key, Some(value))?,
                 None => report.warnings.push(format!("{name}: ignored bad attribute `{key}`")),
+            }
+        }
+    }
+    if let Some(extras) = obj.get("extras").and_then(Value::as_object) {
+        for (key, raw) in extras {
+            match attribute_from_json(raw) {
+                Some(value) => tree.set_extra(id, key, Some(value))?,
+                None => report.warnings.push(format!("{name}: ignored bad value for `{key}`")),
             }
         }
     }

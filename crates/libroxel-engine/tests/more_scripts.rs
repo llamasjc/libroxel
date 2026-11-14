@@ -151,7 +151,7 @@ fn families_of_classes_and_parts_that_stand_in_for_others() {
         model.PrimaryPart = b
         print(model.PrimaryPart == b, model:GetPivot().Position.X)
     "#);
-    assert_eq!(printed, vec!["Part true true", "true true true", "true true", "false Sky", "true 10"]);
+    assert_eq!(printed, vec!["WedgePart true true", "true true true", "true true", "false Sky", "true 10"]);
 }
 
 #[test]

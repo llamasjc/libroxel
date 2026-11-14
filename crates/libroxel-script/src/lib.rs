@@ -30,6 +30,7 @@ mod lenient;
 pub mod names;
 mod net;
 mod pathfinding;
+mod reflection;
 mod services;
 mod sound;
 mod terrain;

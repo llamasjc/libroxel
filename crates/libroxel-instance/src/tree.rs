@@ -98,6 +98,9 @@ struct InstanceData {
     props: Vec<(Property, PropertyValue)>,
     /// Values scripts and the editor attach by name.
     attributes: std::collections::BTreeMap<String, PropertyValue>,
+    /// Properties of the Roblox-style class that libroxel has no setting
+    /// for, kept by their script name so files and scripts don't lose them.
+    extras: std::collections::BTreeMap<String, PropertyValue>,
     /// Labels for grouping instances, kept sorted.
     tags: Vec<String>,
     /// A terrain's cells (empty for everything else).
@@ -131,6 +134,7 @@ impl InstanceData {
             destroyed: false,
             props,
             attributes: Default::default(),
+            extras: Default::default(),
             tags: Vec::new(),
             voxels: Default::default(),
             revision: next_revision(),
@@ -556,6 +560,31 @@ impl InstanceTree {
         if changed {
             self.data_mut(id)?.revision = next_revision();
             self.changes.push(Change::AttributeChanged { id, name: name.to_owned() });
+        }
+        Ok(())
+    }
+
+    /// Every kept property libroxel has no setting for (see
+    /// [`set_extra`](Self::set_extra)), sorted by name.
+    pub fn extras(&self, id: InstanceId) -> Result<&std::collections::BTreeMap<String, PropertyValue>> {
+        Ok(&self.data(id)?.extras)
+    }
+
+    pub fn get_extra(&self, id: InstanceId, name: &str) -> Result<Option<PropertyValue>> {
+        Ok(self.data(id)?.extras.get(name).cloned())
+    }
+
+    /// Keeps a property libroxel has no setting for, such as a dialog's
+    /// prompt, by its script name; `None` forgets it. Enumeration items and
+    /// brick colours are kept as their numbers.
+    pub fn set_extra(&mut self, id: InstanceId, name: &str, value: Option<PropertyValue>) -> Result<()> {
+        let data = self.data_mut(id)?;
+        let changed = match value {
+            Some(v) => data.extras.insert(name.to_owned(), v.clone()).as_ref() != Some(&v),
+            None => data.extras.remove(name).is_some(),
+        };
+        if changed {
+            data.revision = next_revision();
         }
         Ok(())
     }
