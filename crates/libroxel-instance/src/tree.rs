@@ -162,6 +162,11 @@ pub struct InstanceTree {
     /// One per [`ClassKind::SERVICES`], in the same order.
     services: Vec<InstanceId>,
     changes: Vec<Change>,
+    /// Instances whose place in the world may have changed (moved, resized,
+    /// reparented, destroyed), for spatial indexes to catch up on; and how
+    /// many times the log was restarted.
+    moved: Vec<InstanceId>,
+    moved_epoch: u64,
 }
 
 impl Default for InstanceTree {
@@ -180,6 +185,8 @@ impl InstanceTree {
             root: InstanceId { index: 0, generation: 0 },
             workspace: InstanceId { index: 0, generation: 0 },
             services: Vec::new(),
+            moved: Vec::new(),
+            moved_epoch: 0,
             changes: Vec::new(),
         };
         tree.root = tree.alloc(InstanceData::new(ClassKind::DataModel, "Game".into()));
@@ -367,6 +374,7 @@ impl InstanceTree {
         }
         self.data_mut(id)?.parent = new_parent;
         self.changes.push(Change::Reparented { id, old_parent, new_parent });
+        self.note_moved(id);
         Ok(())
     }
 
@@ -396,6 +404,7 @@ impl InstanceTree {
             data.parent_locked = true;
             data.destroyed = true;
             self.changes.push(Change::Destroyed(victim));
+            self.note_moved(victim);
         }
         Ok(())
     }
@@ -525,6 +534,12 @@ impl InstanceTree {
         if changed {
             self.data_mut(id)?.revision = next_revision();
             self.changes.push(Change::PropertyChanged { id, property });
+            if matches!(
+                property,
+                Property::Position | Property::Size | Property::Orientation | Property::Shape
+            ) {
+                self.note_moved(id);
+            }
         }
         Ok(())
     }
@@ -783,6 +798,27 @@ impl InstanceTree {
             .into_iter()
             .filter(|id| self.class(*id).is_ok_and(|c| c.is_a(class)))
             .collect()
+    }
+
+    fn note_moved(&mut self, id: InstanceId) {
+        // A long log is cheaper to start over (indexes rebuild) than to keep.
+        if self.moved.len() >= 1 << 18 {
+            self.moved.clear();
+            self.moved_epoch += 1;
+        }
+        self.moved.push(id);
+    }
+
+    /// The log of instances that may have moved: its epoch (which changes
+    /// when the log starts over, so everything must be looked at again) and
+    /// the entries from `from` on.
+    pub fn moved_since(&self, from: usize) -> (u64, &[InstanceId]) {
+        (self.moved_epoch, self.moved.get(from..).unwrap_or(&[]))
+    }
+
+    /// How long the moved log is now (where to read from next time).
+    pub fn moved_len(&self) -> usize {
+        self.moved.len()
     }
 
     /// Convenience for renaming.

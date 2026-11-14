@@ -56,6 +56,25 @@ fn child_of_class(tree: &InstanceTree, id: InstanceId, class: ClassKind) -> Opti
     tree.find_first_child_of_class(id, class).ok().flatten()
 }
 
+/// An enumeration kept in an instance's extras, by its number.
+fn extra_enum(tree: &InstanceTree, id: InstanceId, name: &str) -> Option<i64> {
+    match tree.get_extra(id, name) {
+        Ok(Some(PropertyValue::Number(n))) => Some(n as i64),
+        _ => None,
+    }
+}
+
+/// The space Roblox's top bar takes at the top of the screen, in pixels.
+/// Screen GUIs start below it unless they ignore the inset.
+pub const GUI_INSET: f32 = libroxel_script::GUI_INSET;
+
+/// Whether a screen GUI covers the top bar too (IgnoreGuiInset, or
+/// ScreenInsets set to None or DeviceSafeInsets).
+pub fn ignores_inset(tree: &InstanceTree, screen: InstanceId) -> bool {
+    matches!(tree.get_extra(screen, "IgnoreGuiInset"), Ok(Some(PropertyValue::Bool(true))))
+        || matches!(extra_enum(tree, screen, "ScreenInsets"), Some(0 | 1))
+}
+
 /// `u` resolved against `span`, with its offset (in pixels) times `k`, the
 /// UI scale it is under.
 fn res1(u: UDim, span: f32, k: f32) -> f32 {
@@ -185,16 +204,32 @@ fn arrange_unsorted(
     let gap = res1(udim(tree, list, Property::Padding), along, k);
     by_layout_order(tree, &mut items);
     let parent_size = Vec2::new(rect.width(), rect.height());
-    let mut cursor = 0.0;
-    items
+    let sized: Vec<(InstanceId, ClassKind, egui::Vec2)> = items
         .into_iter()
         .map(|(c, class)| {
             let size = constrained(tree, c, size_in(tree, c, parent_size, k), k);
-            let size = egui::vec2(size.x.max(0.0), size.y.max(0.0));
+            (c, class, egui::vec2(size.x.max(0.0), size.y.max(0.0)))
+        })
+        .collect();
+    // Alignment, as Roblox numbers it: Center = 0, Left/Top = 1, Right/Bottom = 2.
+    let h_align = extra_enum(tree, list, "HorizontalAlignment").unwrap_or(1);
+    let v_align = extra_enum(tree, list, "VerticalAlignment").unwrap_or(1);
+    let place = |align: i64, free: f32| match align {
+        0 => free / 2.0,
+        2 => free,
+        _ => 0.0,
+    };
+    let total: f32 = sized.iter().map(|(_, _, s)| if horizontal { s.x } else { s.y }).sum::<f32>()
+        + gap * sized.len().saturating_sub(1) as f32;
+    let mut cursor =
+        if horizontal { place(h_align, rect.width() - total) } else { place(v_align, rect.height() - total) };
+    sized
+        .into_iter()
+        .map(|(c, class, size)| {
             let min = if horizontal {
-                Pos2::new(rect.min.x + cursor, rect.min.y)
+                Pos2::new(rect.min.x + cursor, rect.min.y + place(v_align, rect.height() - size.y))
             } else {
-                Pos2::new(rect.min.x, rect.min.y + cursor)
+                Pos2::new(rect.min.x + place(h_align, rect.width() - size.x), rect.min.y + cursor)
             };
             cursor += if horizontal { size.x } else { size.y } + gap;
             (c, class, Rect::from_min_size(min, size))
@@ -205,7 +240,7 @@ fn arrange_unsorted(
 /// A GUI object's size after its UI scale, size constraint and aspect
 /// ratio constraint.
 fn constrained(tree: &InstanceTree, id: InstanceId, size: Vec2, k: f32) -> Vec2 {
-    let mut size = size;
+    let mut size = automatic(tree, id, size, k);
     if let Some(limits) = child_of_class(tree, id, ClassKind::UISizeConstraint) {
         let lo = vec2(tree, limits, Property::MinSize);
         let hi = vec2(tree, limits, Property::MaxSize);
@@ -224,6 +259,38 @@ fn constrained(tree: &InstanceTree, id: InstanceId, size: Vec2, k: f32) -> Vec2 
         }
     }
     size
+}
+
+/// A GUI object's size grown to fit what's inside it, along the axes its
+/// AutomaticSize names (X = 1, Y = 2, XY = 3): its children, and its text.
+fn automatic(tree: &InstanceTree, id: InstanceId, size: Vec2, k: f32) -> Vec2 {
+    let axes = extra_enum(tree, id, "AutomaticSize").unwrap_or(0);
+    if axes == 0 {
+        return size;
+    }
+    let (grow_x, grow_y) = (axes & 1 != 0, axes & 2 != 0);
+    let origin = Rect::from_min_size(Pos2::ZERO, egui::vec2(size.x.max(0.0), size.y.max(0.0)));
+    let inner = padded(tree, id, origin, k);
+    let (pad_right, pad_bottom) = (origin.max.x - inner.max.x, origin.max.y - inner.max.y);
+    let mut extent = Vec2::new(0.0, 0.0);
+    for (_, _, r) in arrange_unsorted(tree, id, origin, k) {
+        extent.x = extent.x.max(r.max.x + pad_right);
+        extent.y = extent.y.max(r.max.y + pad_bottom);
+    }
+    if let Ok(class) = tree.class(id)
+        && is_text(class)
+    {
+        let text = tree.get_string(id, Property::Text).unwrap_or_default();
+        let text_size = tree.get_number(id, Property::TextSize).unwrap_or(14.0) as f32 * k;
+        let lines = text.lines().count().max(1) as f32;
+        let widest = text.lines().map(|l| l.chars().count()).max().unwrap_or(0) as f32;
+        extent.x = extent.x.max(inner.min.x + widest * text_size * 0.55 + pad_right);
+        extent.y = extent.y.max(inner.min.y + lines * text_size * 1.2 + pad_bottom);
+    }
+    Vec2::new(
+        if grow_x { size.x.max(extent.x) } else { size.x },
+        if grow_y { size.y.max(extent.y) } else { size.y },
+    )
 }
 
 /// Where a GUI object sits inside its parent's rectangle.
@@ -267,10 +334,16 @@ pub fn draw(
     boxes.rects.clear();
     for screen in screens {
         let k = own_scale(tree, screen);
-        draw_children(&painter, tree, screen, area, k, pointer, selected, &mut hit, boxes);
+        let mut screen_area = area;
+        if !ignores_inset(tree, screen) {
+            screen_area.min.y = (area.min.y + GUI_INSET).min(area.max.y);
+        }
+        draw_children(&painter, tree, screen, screen_area, k, pointer, selected, &mut hit, boxes);
     }
+    // Roblox measures AbsolutePosition from just below the top bar.
+    let origin = area.min.to_vec2() + egui::vec2(0.0, GUI_INSET);
     for (_, r) in &mut boxes.rects {
-        *r = r.translate(-area.min.to_vec2());
+        *r = r.translate(-origin);
     }
     hit
 }
@@ -970,6 +1043,34 @@ mod tests {
         let rect = |name: &str| placed.iter().find(|(c, _, _)| tree.name(*c) == Ok(name)).unwrap().2;
         assert_eq!(rect("Square").size(), egui::vec2(100.0, 100.0));
         assert_eq!(rect("Big").size(), egui::vec2(200.0, 200.0));
+    }
+
+    #[test]
+    fn automatic_size_and_list_alignment_work_like_roblox() {
+        let mut tree = InstanceTree::new();
+        let root = tree.root();
+        let screen = gui(&mut tree, ClassKind::ScreenGui, root, "Screen");
+        // A stack that grows to fit its rows, centred on the screen.
+        let stack = gui(&mut tree, ClassKind::Frame, screen, "Stack");
+        set(&mut tree, stack, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 200.0, 0.0, 0.0)));
+        set(&mut tree, stack, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.5, 0.0, 0.5, 0.0)));
+        set(&mut tree, stack, Property::AnchorPoint, PropertyValue::Vec2(Vec2::new(0.5, 0.5)));
+        tree.set_extra(stack, "AutomaticSize", Some(PropertyValue::Number(2.0))).unwrap();
+        let list = gui(&mut tree, ClassKind::UIListLayout, stack, "UIListLayout");
+        tree.set_extra(list, "HorizontalAlignment", Some(PropertyValue::Number(0.0))).unwrap();
+        let rows: Vec<_> =
+            (0..3).map(|i| gui(&mut tree, ClassKind::Frame, stack, &format!("Row{i}"))).collect();
+        for r in &rows {
+            set(&mut tree, *r, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 100.0, 0.0, 50.0)));
+        }
+        let area = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let placed = arrange(&tree, screen, area);
+        let stack_rect = placed.iter().find(|(c, _, _)| *c == stack).unwrap().2;
+        assert_eq!(stack_rect, Rect::from_min_size(Pos2::new(300.0, 225.0), egui::vec2(200.0, 150.0)));
+        let inside = arrange(&tree, stack, stack_rect);
+        let at = |id| inside.iter().find(|(c, _, _)| *c == id).unwrap().2;
+        assert_eq!(at(rows[0]).min, Pos2::new(350.0, 225.0));
+        assert_eq!(at(rows[2]).min, Pos2::new(350.0, 325.0));
     }
 
     #[test]

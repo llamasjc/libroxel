@@ -265,6 +265,18 @@ pub(crate) struct Host {
     to_start: RefCell<Vec<InstanceId>>,
     /// How long each script has run, and how many times it was resumed.
     pub(crate) script_time: RefCell<std::collections::HashMap<String, (f64, u64)>>,
+    /// Where the workspace's parts are, for raycasts and part queries.
+    pub(crate) part_index: RefCell<libroxel_instance::geometry::PartIndex>,
+}
+
+/// The part index, caught up with the tree.
+pub(crate) fn part_index<'a>(
+    host: &'a Host,
+    tree: &libroxel_instance::InstanceTree,
+) -> std::cell::RefMut<'a, libroxel_instance::geometry::PartIndex> {
+    let mut index = host.part_index.borrow_mut();
+    index.refresh(tree);
+    index
 }
 
 /// The number for `name`, giving it one if it has none yet.
@@ -1909,6 +1921,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         running_scripts: RefCell::new(std::collections::HashSet::new()),
         to_start: RefCell::new(Vec::new()),
         script_time: RefCell::new(std::collections::HashMap::new()),
+        part_index: RefCell::new(libroxel_instance::geometry::PartIndex::new()),
         tweens: RefCell::new(Vec::new()),
         next_tween: Cell::new(1),
         inputs_down: RefCell::new(Default::default()),

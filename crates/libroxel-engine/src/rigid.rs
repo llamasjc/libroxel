@@ -133,12 +133,20 @@ struct Entry {
     velocity: (RVec, RVec),
 }
 
+/// A terrain chunk's position, in chunks.
+type Chunk = (i32, i32, i32);
+
 /// The simulated world.
 #[derive(Default)]
 pub(crate) struct Rigid {
     world: PhysicsWorld,
     parts: HashMap<InstanceId, Entry>,
-    terrain: Option<(u64, RigidBodyHandle)>,
+    /// Terrain's fixed body, and a collider for each chunk of cells near
+    /// something loose (with the chunk's fingerprint when it was made).
+    terrain: Option<RigidBodyHandle>,
+    terrain_chunks: HashMap<(i32, i32, i32), (u64, Option<ColliderHandle>)>,
+    /// The terrain version and the chunks wanted when they were last brought in line.
+    terrain_seen: Option<(u64, Vec<Chunk>)>,
     grounded: HashSet<InstanceId>,
     ready: bool,
     /// Each joint, the spec it was made from, and the bodies it joins.
@@ -312,31 +320,66 @@ impl Rigid {
         }
     }
 
-    /// Keeps terrain's solid cells as one fixed body, remade when they change.
-    fn sync_terrain(&mut self, voxels: Option<&Voxels>) {
-        let version = voxels.filter(|v| !v.is_empty()).map(|v| v.version());
-        if self.terrain.map(|t| t.0) == version {
-            return;
-        }
-        if let Some((_, body)) = self.terrain.take() {
-            self.world.remove_body_with_colliders(body, true);
-        }
-        let (Some(version), Some(voxels)) = (version, voxels) else { return };
-        let mut cells = Vec::new();
-        for chunk in voxels.chunks() {
-            for ((x, y, z), material) in voxels.cells_in_chunk(chunk) {
-                if material != libroxel_instance::Material::Water {
-                    cells.push(rapier3d::math::IVector::new(x, y, z));
+    /// Keeps terrain's solid cells near loose parts as colliders on one
+    /// fixed body, one collider per chunk, remade when that chunk changes.
+    /// Terrain far from anything loose can't be hit this step, and a big
+    /// world's terrain changes too often to rebuild all of it each time.
+    fn sync_terrain(&mut self, voxels: Option<&Voxels>, specs: &[Spec]) {
+        use libroxel_instance::voxels::CHUNK;
+        const REACH: i32 = 2;
+        let voxels = voxels.filter(|v| !v.is_empty());
+        let mut wanted: HashSet<(i32, i32, i32)> = HashSet::new();
+        if voxels.is_some() {
+            for spec in specs.iter().filter(|s| matches!(s.role, Role::Dynamic | Role::Member { .. })) {
+                let reach = spec.size.length() as i32 / CHUNK + REACH;
+                let c = |v: f32| (v.floor() as i32).div_euclid(CHUNK);
+                let (cx, cy, cz) = (c(spec.pos.x), c(spec.pos.y), c(spec.pos.z));
+                for x in cx - reach..=cx + reach {
+                    for y in cy - reach..=cy + reach {
+                        for z in cz - reach..=cz + reach {
+                            wanted.insert((x, y, z));
+                        }
+                    }
                 }
             }
         }
-        let body = self.world.insert_body(RigidBodyBuilder::fixed());
-        if !cells.is_empty() {
-            let collider = ColliderBuilder::voxels(RVec::ONE, &cells).friction(0.5).user_data(u128::MAX);
-            let bodies = &mut self.world.bodies;
-            self.world.colliders.insert_with_parent(collider, body, bodies);
+        let mut wanted_list: Vec<_> = wanted.iter().copied().collect();
+        wanted_list.sort_unstable();
+        let seen = (voxels.map_or(0, |v| v.version()), wanted_list);
+        if self.terrain_seen.as_ref() == Some(&seen) {
+            return;
         }
-        self.terrain = Some((version, body));
+        self.terrain_seen = Some(seen);
+        // Chunks no longer near anything loose go.
+        let gone: Vec<_> = self.terrain_chunks.keys().filter(|k| !wanted.contains(k)).copied().collect();
+        for key in gone {
+            if let Some((_, Some(collider))) = self.terrain_chunks.remove(&key) {
+                self.world.remove_collider(collider);
+            }
+        }
+        let Some(voxels) = voxels else { return };
+        let body = *self.terrain.get_or_insert_with(|| self.world.insert_body(RigidBodyBuilder::fixed()));
+        for key in wanted {
+            let print = voxels.chunk_fingerprint(key);
+            if self.terrain_chunks.get(&key).is_some_and(|(p, _)| *p == print) {
+                continue;
+            }
+            if let Some((_, Some(old))) = self.terrain_chunks.remove(&key) {
+                self.world.remove_collider(old);
+            }
+            let cells: Vec<_> = voxels
+                .cells_in_chunk(key)
+                .into_iter()
+                .filter(|(_, m)| *m != libroxel_instance::Material::Water)
+                .map(|((x, y, z), _)| rapier3d::math::IVector::new(x, y, z))
+                .collect();
+            let collider = (!cells.is_empty()).then(|| {
+                let collider = ColliderBuilder::voxels(RVec::ONE, &cells).friction(0.5).user_data(u128::MAX);
+                let bodies = &mut self.world.bodies;
+                self.world.colliders.insert_with_parent(collider, body, bodies)
+            });
+            self.terrain_chunks.insert(key, (print, collider));
+        }
     }
 
     /// Brings the world in line with `specs`, runs it for `dt` seconds,
@@ -357,7 +400,7 @@ impl Rigid {
         dt: f32,
     ) -> Vec<Moved> {
         self.setup();
-        self.sync_terrain(voxels);
+        self.sync_terrain(voxels, specs);
         let live: HashSet<InstanceId> = specs.iter().map(|s| s.id).collect();
         let gone: Vec<InstanceId> = self.parts.keys().filter(|id| !live.contains(id)).copied().collect();
         for id in gone {

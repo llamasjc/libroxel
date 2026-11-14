@@ -31,9 +31,12 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 
-# Bevy is slow in debug builds; optimize dependencies but keep our own crates fast to compile.
+# `cargo run` should play big games smoothly, so our own crates are fully
+# optimised too (debug assertions stay on). Line tables keep backtraces
+# readable without the slow links of full debug info.
 [profile.dev]
-opt-level = 1
+opt-level = 3
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3

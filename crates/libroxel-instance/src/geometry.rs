@@ -313,6 +313,70 @@ mod tests {
     }
 
     #[test]
+    fn the_part_index_finds_what_a_full_search_finds_as_parts_move() {
+        let mut tree = InstanceTree::new();
+        let mut parts = Vec::new();
+        for i in 0..400 {
+            let f = i as f32;
+            let pos = Vec3::new((f * 37.0) % 300.0 - 150.0, (f * 13.0) % 60.0, (f * 71.0) % 300.0 - 150.0);
+            let size = Vec3::new(1.0 + f % 7.0, 1.0 + f % 3.0, 2.0 + f % 5.0);
+            parts.push(part(&mut tree, pos, size, PartShape::Block, Vec3::new(0.0, f % 90.0, 0.0)));
+        }
+        let floor = part(
+            &mut tree,
+            Vec3::new(0.0, -5.0, 0.0),
+            Vec3::new(5000.0, 2.0, 5000.0),
+            PartShape::Block,
+            Vec3::ZERO,
+        );
+        let mut index = PartIndex::new();
+        let check = |tree: &InstanceTree, index: &mut PartIndex| {
+            index.refresh(tree);
+            for i in 0..200 {
+                let f = i as f32;
+                let origin = Vec3::new((f * 17.0) % 320.0 - 160.0, 80.0, (f * 29.0) % 320.0 - 160.0);
+                let dir = Vec3::new((f * 0.37).sin() * 40.0, -100.0, (f * 0.53).cos() * 40.0);
+                let full = raycast(tree, origin, dir, |_| true).map(|h| h.part);
+                let fast = raycast_indexed(tree, index, origin, dir, |_| true).map(|h| h.part);
+                assert_eq!(full, fast, "ray {i}");
+                let region = Region::Ball { center: origin - Vec3::new(0.0, 60.0, 0.0), radius: 20.0 };
+                let mut a = parts_in(tree, region, usize::MAX, |_| true);
+                let mut b = parts_in_indexed(tree, index, region, usize::MAX, |_| true);
+                a.sort_by_key(|p| p.to_bits());
+                b.sort_by_key(|p| p.to_bits());
+                assert_eq!(a, b, "region {i}");
+            }
+        };
+        check(&tree, &mut index);
+        // Move half the parts, destroy some, and add a model of new ones.
+        for (i, p) in parts.iter().enumerate().step_by(2) {
+            let f = i as f32;
+            tree.set(
+                *p,
+                Property::Position,
+                PropertyValue::Vec3(Vec3::new(f % 200.0 - 100.0, 5.0, (f * 3.0) % 200.0 - 100.0)),
+            )
+            .unwrap();
+        }
+        for p in parts.iter().skip(1).step_by(5) {
+            tree.destroy(*p).unwrap();
+        }
+        let model = tree.create(ClassKind::Model, "M").unwrap();
+        for i in 0..20 {
+            let p = tree.create(ClassKind::Part, "Q").unwrap();
+            tree.set(p, Property::Position, PropertyValue::Vec3(Vec3::new(i as f32 * 9.0 - 90.0, 10.0, 0.0)))
+                .unwrap();
+            tree.set(p, Property::Size, PropertyValue::Vec3(Vec3::new(4.0, 4.0, 4.0))).unwrap();
+            tree.set_parent(p, Some(model)).unwrap();
+        }
+        tree.set_parent(model, Some(tree.workspace())).unwrap();
+        check(&tree, &mut index);
+        tree.set_parent(model, None).unwrap();
+        tree.destroy(floor).unwrap();
+        check(&tree, &mut index);
+    }
+
+    #[test]
     fn rays_hit_each_shape_with_the_right_normal() {
         let mut tree = InstanceTree::new();
         let floor = part(&mut tree, Vec3::ZERO, Vec3::new(10.0, 2.0, 10.0), PartShape::Block, Vec3::ZERO);
@@ -361,4 +425,281 @@ mod tests {
         assert!(near(hit.position, Vec3::new(60.0, 2.0, 0.0)), "{hit:?}");
         assert!(near(hit.normal, Vec3::new(0.0, 1.0, 0.0)), "{hit:?}");
     }
+}
+
+/// Where the workspace's parts are, in a grid of cells, so a ray or a box
+/// only looks at the parts near it instead of every part in a big world.
+/// It catches up with the tree's moved log each time it is used.
+#[derive(Debug, Default)]
+pub struct PartIndex {
+    built: bool,
+    epoch: u64,
+    read: usize,
+    cells: std::collections::HashMap<(i32, i32, i32), Vec<InstanceId>>,
+    /// Parts too big for the grid, checked by every query.
+    huge: std::collections::HashSet<InstanceId>,
+    /// The cells each part was put in (none for a huge part).
+    placed: std::collections::HashMap<InstanceId, Option<CellRange>>,
+}
+
+/// A box of grid cells: its lowest and highest corners.
+type CellRange = ((i32, i32, i32), (i32, i32, i32));
+
+const INDEX_CELL: f32 = 16.0;
+/// A part over more cells than this goes in the huge list instead.
+const INDEX_MAX_CELLS: i64 = 512;
+
+fn index_cell(v: Vec3) -> (i32, i32, i32) {
+    let c = |x: f32| (x / INDEX_CELL).floor().clamp(-1.0e9, 1.0e9) as i32;
+    (c(v.x), c(v.y), c(v.z))
+}
+
+impl PartIndex {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Brings the index in line with the tree.
+    pub fn refresh(&mut self, tree: &InstanceTree) {
+        let (epoch, _) = tree.moved_since(0);
+        if !self.built || epoch != self.epoch {
+            self.cells.clear();
+            self.huge.clear();
+            self.placed.clear();
+            for part in tree.descendants_of_class(tree.workspace(), ClassKind::Part) {
+                self.place(tree, part);
+            }
+            self.built = true;
+            self.epoch = epoch;
+            self.read = tree.moved_len();
+            return;
+        }
+        let (_, moved) = tree.moved_since(self.read);
+        let moved = moved.to_vec();
+        self.read = tree.moved_len();
+        let mut seen = std::collections::HashSet::new();
+        for id in moved {
+            if !seen.insert(id) {
+                continue;
+            }
+            self.update(tree, id);
+            // A model moved in or out of the world takes its parts along.
+            if tree.class(id).is_ok_and(|c| !c.is_a(ClassKind::Part))
+                || !tree.children(id).is_ok_and(|c| c.is_empty())
+            {
+                for d in tree.descendants(id).unwrap_or_default() {
+                    if seen.insert(d) {
+                        self.update(tree, d);
+                    }
+                }
+            }
+        }
+    }
+
+    fn update(&mut self, tree: &InstanceTree, id: InstanceId) {
+        self.remove(id);
+        let live = tree.exists(id) && !tree.is_destroyed(id).unwrap_or(true);
+        if live
+            && tree.class(id).is_ok_and(|c| c.is_a(ClassKind::Part))
+            && tree.is_descendant_of(id, tree.workspace()).unwrap_or(false)
+        {
+            self.place(tree, id);
+        }
+    }
+
+    fn remove(&mut self, id: InstanceId) {
+        match self.placed.remove(&id) {
+            Some(Some((lo, hi))) => {
+                for x in lo.0..=hi.0 {
+                    for y in lo.1..=hi.1 {
+                        for z in lo.2..=hi.2 {
+                            if let Some(list) = self.cells.get_mut(&(x, y, z)) {
+                                list.retain(|p| *p != id);
+                                if list.is_empty() {
+                                    self.cells.remove(&(x, y, z));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Some(None) => {
+                self.huge.remove(&id);
+            }
+            None => {}
+        }
+    }
+
+    fn place(&mut self, tree: &InstanceTree, part: InstanceId) {
+        let (Some(pos), Some(size)) =
+            (tree.get_vec3(part, Property::Position), tree.get_vec3(part, Property::Size))
+        else {
+            return;
+        };
+        let r = size.length() * 0.5;
+        if !(pos.x.is_finite() && pos.y.is_finite() && pos.z.is_finite() && r.is_finite()) {
+            self.huge.insert(part);
+            self.placed.insert(part, None);
+            return;
+        }
+        let reach = Vec3::new(r, r, r);
+        let (lo, hi) = (index_cell(pos - reach), index_cell(pos + reach));
+        let count = (i64::from(hi.0) - i64::from(lo.0) + 1)
+            * (i64::from(hi.1) - i64::from(lo.1) + 1)
+            * (i64::from(hi.2) - i64::from(lo.2) + 1);
+        if count > INDEX_MAX_CELLS {
+            self.huge.insert(part);
+            self.placed.insert(part, None);
+            return;
+        }
+        for x in lo.0..=hi.0 {
+            for y in lo.1..=hi.1 {
+                for z in lo.2..=hi.2 {
+                    self.cells.entry((x, y, z)).or_default().push(part);
+                }
+            }
+        }
+        self.placed.insert(part, Some((lo, hi)));
+    }
+
+    /// The parts that might be in the box from `lo` to `hi`.
+    pub fn near_box(&self, lo: Vec3, hi: Vec3) -> Vec<InstanceId> {
+        let (a, b) = (index_cell(lo), index_cell(hi));
+        let count = (i64::from(b.0) - i64::from(a.0) + 1)
+            * (i64::from(b.1) - i64::from(a.1) + 1)
+            * (i64::from(b.2) - i64::from(a.2) + 1);
+        let mut out: Vec<InstanceId> = self.huge.iter().copied().collect();
+        if count > 4096 {
+            // A very big box: every part is a candidate.
+            out.extend(self.placed.iter().filter(|(_, p)| p.is_some()).map(|(id, _)| *id));
+            return out;
+        }
+        let mut seen = std::collections::HashSet::new();
+        for x in a.0..=b.0 {
+            for y in a.1..=b.1 {
+                for z in a.2..=b.2 {
+                    if let Some(list) = self.cells.get(&(x, y, z)) {
+                        out.extend(list.iter().copied().filter(|p| seen.insert(*p)));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The parts that might be along the ray from `origin` along the unit
+    /// vector `dir` for `reach` studs, roughly nearest first.
+    pub fn along_ray(&self, origin: Vec3, dir: Vec3, reach: f32) -> Vec<InstanceId> {
+        let mut out: Vec<InstanceId> = self.huge.iter().copied().collect();
+        let mut seen = std::collections::HashSet::new();
+        let reach = reach.min(1.0e6);
+        // Walk the cells the ray passes through, in order (a voxel walk).
+        let mut cell = index_cell(origin);
+        let step = |d: f32| {
+            if d > 0.0 {
+                1
+            } else if d < 0.0 {
+                -1
+            } else {
+                0
+            }
+        };
+        let (sx, sy, sz) = (step(dir.x), step(dir.y), step(dir.z));
+        let next_edge = |c: i32, s: i32| (c + i32::from(s > 0)) as f32 * INDEX_CELL;
+        let first =
+            |o: f32, d: f32, c: i32, s: i32| if s == 0 { f32::INFINITY } else { (next_edge(c, s) - o) / d };
+        let delta = |d: f32| if d == 0.0 { f32::INFINITY } else { INDEX_CELL / d.abs() };
+        let (mut tx, mut ty, mut tz) = (
+            first(origin.x, dir.x, cell.0, sx),
+            first(origin.y, dir.y, cell.1, sy),
+            first(origin.z, dir.z, cell.2, sz),
+        );
+        let (dx, dy, dz) = (delta(dir.x), delta(dir.y), delta(dir.z));
+        let max_cells = (reach / INDEX_CELL) as usize * 3 + 4;
+        if max_cells > 60000 {
+            out.extend(self.placed.iter().filter(|(_, p)| p.is_some()).map(|(id, _)| *id));
+            return out;
+        }
+        for _ in 0..max_cells {
+            if let Some(list) = self.cells.get(&cell) {
+                out.extend(list.iter().copied().filter(|p| seen.insert(*p)));
+            }
+            let t = tx.min(ty).min(tz);
+            if t > reach {
+                break;
+            }
+            if t == tx {
+                cell.0 += sx;
+                tx += dx;
+            } else if t == ty {
+                cell.1 += sy;
+                ty += dy;
+            } else {
+                cell.2 += sz;
+                tz += dz;
+            }
+        }
+        out
+    }
+}
+
+/// [`raycast`] with an index of where the parts are.
+pub fn raycast_indexed(
+    tree: &InstanceTree,
+    index: &PartIndex,
+    origin: Vec3,
+    direction: Vec3,
+    keep: impl Fn(InstanceId) -> bool,
+) -> Option<RayHit> {
+    let reach = direction.length();
+    if reach <= 0.0 {
+        return None;
+    }
+    let dir = direction / reach;
+    let mut best: Option<RayHit> = None;
+    for part in index.along_ray(origin, dir, reach) {
+        if !tree.exists(part) || tree.is_destroyed(part).unwrap_or(true) || !keep(part) {
+            continue;
+        }
+        let Some((t, normal)) = ray_part(tree, part, origin, dir) else { continue };
+        if t > reach || best.is_some_and(|b| b.distance <= t) {
+            continue;
+        }
+        best = Some(RayHit { part, position: origin + dir * t, normal, distance: t });
+    }
+    if let Some(terrain) = tree.terrain().filter(|t| keep(*t))
+        && let Ok(voxels) = tree.voxels(terrain)
+        && let Some((t, normal, _)) = voxels.raycast(origin, dir, best.map_or(reach, |b| b.distance))
+    {
+        best = Some(RayHit { part: terrain, position: origin + dir * t, normal, distance: t });
+    }
+    best
+}
+
+/// [`parts_in`] with an index of where the parts are.
+pub fn parts_in_indexed(
+    tree: &InstanceTree,
+    index: &PartIndex,
+    region: Region,
+    limit: usize,
+    keep: impl Fn(InstanceId) -> bool,
+) -> Vec<InstanceId> {
+    let (lo, hi) = region.bounds();
+    let mut candidates = index.near_box(lo, hi);
+    // In the tree's order, as without the index.
+    candidates.sort_by_key(|id| id.to_bits() as u32);
+    let mut found = Vec::new();
+    for part in candidates {
+        if found.len() >= limit {
+            break;
+        }
+        if tree.exists(part)
+            && !tree.is_destroyed(part).unwrap_or(true)
+            && keep(part)
+            && Region::of_part(tree, part).is_some_and(|r| r.overlaps(region))
+        {
+            found.push(part);
+        }
+    }
+    found
 }
