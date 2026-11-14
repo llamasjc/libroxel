@@ -81,6 +81,10 @@ pub struct PartGeometry(pub PartShape);
 #[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
 pub struct PartMeshFile(pub String);
 
+/// The picture wrapped over a part's model (empty for none).
+#[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
+pub struct PartMeshTexture(pub String);
+
 /// The transform that draws a part of `shape` and `size` at `pos` with `orientation`.
 ///
 /// Meshes are unit-sized; balls use their smallest side and cylinders (which
@@ -156,6 +160,16 @@ pub(crate) fn to_bevy(v: libroxel_instance::Vec3) -> Vec3 {
     Vec3::new(v.x, v.y, v.z)
 }
 
+/// What [`sync_parts`] keeps up to date on each part's entity.
+type PartPieces = (
+    &'static mut Transform,
+    &'static mut PartAppearance,
+    &'static mut PartName,
+    &'static mut PartGeometry,
+    &'static mut PartMeshFile,
+    &'static mut PartMeshTexture,
+);
+
 /// Mirrors workspace parts onto entities.
 ///
 /// This does a full pass each frame, which is fine for hundreds of parts.
@@ -164,10 +178,7 @@ fn sync_parts(
     engine: NonSend<EngineState>,
     mut entities: ResMut<PartEntities>,
     mut commands: Commands,
-    mut parts: Query<
-        (&mut Transform, &mut PartAppearance, &mut PartName, &mut PartGeometry, &mut PartMeshFile),
-        With<PartLink>,
-    >,
+    mut parts: Query<PartPieces, With<PartLink>>,
 ) {
     let mut tree = engine.tree.borrow_mut();
     // While playing, the session reads the change journal (for Changed events).
@@ -208,6 +219,8 @@ fn sync_parts(
         };
         let mesh_file =
             PartMeshFile(tree.get_string(id, Property::MeshId).unwrap_or_default().trim().to_owned());
+        let mesh_texture =
+            PartMeshTexture(tree.get_string(id, Property::MeshTexture).unwrap_or_default().trim().to_owned());
         // A model is stretched over the part's whole box.
         let shape = if mesh_file.0.is_empty() { part_shape(&tree, id) } else { PartShape::Block };
         let orientation = tree.get_vec3(id, Property::Orientation).unwrap_or_default();
@@ -221,8 +234,9 @@ fn sync_parts(
         let geometry = PartGeometry(shape);
 
         match spawned.get(&id).and_then(|e| parts.get_mut(*e).ok()) {
-            Some((mut t, mut a, mut n, mut g, mut m)) => {
+            Some((mut t, mut a, mut n, mut g, mut m, mut mt)) => {
                 m.set_if_neq(mesh_file);
+                mt.set_if_neq(mesh_texture);
                 t.set_if_neq(transform);
                 a.set_if_neq(appearance);
                 n.set_if_neq(name);
@@ -230,8 +244,9 @@ fn sync_parts(
                 seen.insert(id, revision);
             }
             None if !spawned.contains_key(&id) => {
-                let entity =
-                    commands.spawn((PartLink(id), name, transform, appearance, geometry, mesh_file)).id();
+                let entity = commands
+                    .spawn((PartLink(id), name, transform, appearance, geometry, mesh_file, mesh_texture))
+                    .id();
                 spawned.insert(id, entity);
             }
             None => {} // spawned this frame; commands not applied yet
@@ -252,9 +267,10 @@ impl Plugin for RenderPlugin {
             .init_resource::<crate::devices::VirtualInput>()
             .add_systems(Update, (camera_controls, play_input, forward_keys).chain().in_set(EngineSet::Input))
             .init_resource::<crate::mesh_files::MeshFiles>()
+            .init_resource::<MeshTextures>()
             .add_systems(
                 PostUpdate,
-                (attach_visuals, update_materials, update_meshes, use_mesh_files).chain(),
+                (attach_visuals, update_materials, update_meshes, use_mesh_files, use_mesh_textures).chain(),
             )
             // The camera moves in Update, right after the world, and its global
             // transform is brought up to date at once, so GUIs and name tags
@@ -675,6 +691,60 @@ pub(crate) fn material_for(appearance: &PartAppearance, textures: &MaterialTextu
             material.reflectance = 0.7;
         }
         Material::Air => {}
+        // Stony: the rock surface, rough.
+        Material::Slate
+        | Material::Granite
+        | Material::Basalt
+        | Material::Limestone
+        | Material::Cobblestone
+        | Material::Pebble
+        | Material::CrackedLava => {
+            material.base_color_texture = Some(textures.rock.clone());
+            material.perceptual_roughness = 0.9;
+            if appearance.material == Material::CrackedLava {
+                material.emissive = appearance.color.to_linear() * 0.6;
+            }
+        }
+        Material::Marble => {
+            material.base_color_texture = Some(textures.rock.clone());
+            material.perceptual_roughness = 0.25;
+        }
+        // Grainy: the sand surface.
+        Material::Concrete
+        | Material::Asphalt
+        | Material::Pavement
+        | Material::Sandstone
+        | Material::Salt
+        | Material::Ground
+        | Material::Mud
+        | Material::Fabric => {
+            material.base_color_texture = Some(textures.sand.clone());
+            material.perceptual_roughness = 1.0;
+        }
+        Material::LeafyGrass => {
+            material.base_color_texture = Some(textures.grass.clone());
+            material.perceptual_roughness = 1.0;
+        }
+        Material::WoodPlanks => material.base_color_texture = Some(textures.wood.clone()),
+        Material::Ice | Material::Glacier => {
+            material.perceptual_roughness = 0.1;
+            material.reflectance = 0.8;
+        }
+        Material::Foil => {
+            material.metallic = 0.9;
+            material.perceptual_roughness = 0.2;
+        }
+        Material::DiamondPlate | Material::CorrodedMetal => {
+            material.base_color_texture = Some(textures.rock.clone());
+            material.metallic = 0.6;
+            material.perceptual_roughness = 0.5;
+        }
+        Material::ForceField => {
+            material.unlit = true;
+            material.emissive = appearance.color.to_linear();
+            material.base_color = appearance.color.with_alpha(alpha.min(0.5));
+            material.alpha_mode = AlphaMode::Add;
+        }
     }
     let shine = appearance.reflectance.clamp(0.0, 1.0);
     if shine > 0.0 {
@@ -771,6 +841,54 @@ fn use_mesh_files(
         };
         if mesh.0 != wanted {
             mesh.0 = wanted;
+        }
+    }
+}
+
+/// Pictures for parts' models, by name (None when one couldn't be read).
+#[derive(Resource, Default)]
+struct MeshTextures {
+    loaded: std::collections::HashMap<String, Option<Handle<Image>>>,
+    generation: u64,
+}
+
+/// Wraps a part's picture over its model, in place of its colour.
+fn use_mesh_textures(
+    textures: Res<MaterialTextures>,
+    mut cache: ResMut<MeshTextures>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    parts: Query<(Ref<PartMeshTexture>, Ref<PartAppearance>, &MeshMaterial3d<StandardMaterial>)>,
+) {
+    let generation = crate::pictures::generation();
+    if cache.generation != generation {
+        cache.loaded.clear();
+        cache.generation = generation;
+    }
+    for (texture, appearance, handle) in &parts {
+        if !texture.is_changed() && !appearance.is_changed() {
+            continue;
+        }
+        let Some(mut material) = materials.get_mut(&handle.0) else { continue };
+        if texture.0.is_empty() {
+            if texture.is_changed() {
+                *material = material_for(&appearance, &textures);
+            }
+            continue;
+        }
+        let picture = cache
+            .loaded
+            .entry(texture.0.clone())
+            .or_insert_with(|| {
+                let bytes = crate::pictures::bytes_for(&texture.0)?;
+                let image = crate::pictures::decode(&bytes, bevy::image::ImageSampler::linear())?;
+                Some(images.add(image))
+            })
+            .clone();
+        if let Some(picture) = picture {
+            let alpha = material.base_color.alpha();
+            material.base_color = Color::srgba(1.0, 1.0, 1.0, alpha);
+            material.base_color_texture = Some(picture);
         }
     }
 }

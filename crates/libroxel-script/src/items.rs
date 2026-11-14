@@ -195,6 +195,11 @@ impl UserData for Mouse {
         fields.add_field_method_get(names::events::BUTTON1_UP, |_, _| Ok(Signal(SignalKind::MouseButton1Up)));
         fields.add_meta_field(MetaMethod::Type, mouse::TYPE_NAME);
     }
+
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        // The rest of a mouse's members (TargetFilter, Icon, UnitRay…).
+        crate::lenient::add_service_members(methods, mouse::TYPE_NAME);
+    }
 }
 
 /// Puts every tool `character` holds into its player's backpack.
@@ -229,6 +234,16 @@ fn humanoid_character(lua: &Lua, humanoid: InstanceId) -> mlua::Result<InstanceI
 
 /// Attribute, tag, tool and player members, added to the instance userdata.
 pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
+    m.add_method("Activate", |lua, this, ()| {
+        crate::bindings::require_class(lua, this.0, ClassKind::Tool, "Activate")?;
+        activate(lua, this.0, true);
+        Ok(())
+    });
+    m.add_method("Deactivate", |lua, this, ()| {
+        crate::bindings::require_class(lua, this.0, ClassKind::Tool, "Deactivate")?;
+        activate(lua, this.0, false);
+        Ok(())
+    });
     m.add_method(methods::SET_ATTRIBUTE, |lua, this, (name, value): (String, Value)| {
         check_attribute_name(&name)?;
         let value = attribute_from_lua(&value)?;

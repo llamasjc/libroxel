@@ -8,6 +8,7 @@
 pub mod camera;
 pub mod character;
 pub mod coedit;
+pub mod collision_shapes;
 pub mod devices;
 pub mod effects;
 pub mod hinge;

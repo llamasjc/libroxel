@@ -303,12 +303,12 @@ as before: a mesh part as a box, a picture as nothing, a sound silent.
 
 | What's still different | |
 | --- | --- |
-| Shapes | Mesh parts, unions and corner wedges collide as their box. Truss parts look like plain blocks. A special mesh's file is stretched to its part's size, ignoring its `Scale`. |
-| Terrain | Terrain materials Libroxel doesn't have are shown as the nearest one (slate and basalt as rock, mud and ground as wood, concrete and asphalt as smooth plastic, ice as glass). Surfaces are blocky, not smoothed. Terrain saved in Studio's newer separate-asset format can't be read from the file and is left out. |
-| Mesh textures | A mesh part's own texture (`TextureID`) and surface appearances aren't shown. |
-| Other classes | Anything Libroxel doesn't have yet (for example animation controllers and dialog) is kept as a folder, so whatever is inside it survives. |
-| Other services | Services Libroxel doesn't have (such as Chat) are left out, and the Output panel names any that had something in them. |
-| Scripts | Scripts run, but any Roblox API Libroxel doesn't have yet raises an error in the Output panel when it's used. |
+| Shapes | Unions, mesh parts and trusses collide with their real shape (a union's own collision pieces, a model's separate pieces, a truss as a solid box). Union and subtraction made by a script while playing (`UnionAsync`, `SubtractAsync`) can't carve: a union becomes one part over all of them and a subtraction keeps the part. A special mesh's file is stretched to its part's size, ignoring its `Scale`. |
+| Terrain | Terrain saved in Studio's newer separate-asset format (expanded terrain) can't be read: the open-source readers leave that data out, so it's left out and the Output panel says so. Terrain is drawn in 1-stud cells, smoothed, rather than Roblox's 4-stud voxels; `ReadVoxels` and `WriteVoxels` work in Roblox's units. |
+| Animations | Animations kept online (`rbxassetid://`) can't be fetched, so their tracks play silently for a second (scripts that play, wait for and stop them still run). Libroxel's built-in `libroxel://` ones move the character. |
+| Other classes | Roblox classes Libroxel has no engine side for (animation controllers, handle adornments, localization tables and so on) keep their class name and every property, so scripts read and set them as on Roblox. Dialogs show a "Talk" prompt and their conversation. |
+| Online things | Purchases, badges, teleports, other players' avatars and `InsertService:LoadAsset` need Roblox's servers, so they answer as if nothing was bought or found. |
+| Sound | Sounds play from the `assets` folder; effects such as reverb and equalizers are kept but not heard. |
 
 ## Layout
 

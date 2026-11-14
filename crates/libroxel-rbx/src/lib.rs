@@ -260,11 +260,13 @@ impl<'a> Importer<'a> {
         {
             self.report.properties += 1;
         }
-        if class == ClassKind::Folder && !matches!(file_class, "Folder") {
-            // An unknown class: its properties have nowhere to go.
-        } else {
-            self.properties(tree, inst, id);
+        if class == ClassKind::Other {
+            let _ = tree.set(id, Property::OtherClass, PropertyValue::String(file_class.to_owned()));
         }
+        if names::stand_in(file_class).is_some() {
+            let _ = tree.set_extra(id, names::STAND_IN, Some(PropertyValue::String(file_class.to_owned())));
+        }
+        self.properties(tree, inst, id);
         if matches!(file_class, "SpecialMesh" | "BlockMesh" | "CylinderMesh") {
             self.special_mesh(tree, inst, parent);
         }
@@ -285,13 +287,32 @@ impl<'a> Importer<'a> {
                 match shape {
                     Some(shape) => {
                         let text = shape.to_obj();
-                        Some((meshes::file_name("union", &text), text))
+                        let name = meshes::file_name("union", &text);
+                        // What it bumps into: the union's own collision pieces.
+                        if let Some(collision) = data("PhysicsData").and_then(meshes::union_collision) {
+                            let file = format!("{}.collision.obj", name.trim_end_matches(".obj"));
+                            if !self.report.files.iter().any(|(n, _)| *n == file) {
+                                self.report.files.push((file, collision.into_bytes()));
+                            }
+                        }
+                        Some((name, text))
                     }
                     None => {
                         self.report.skip(inst.class.as_str(), "MeshData");
                         None
                     }
                 }
+            }
+            "TrussPart" => {
+                let size = tree.get_vec3(id, Property::Size).unwrap_or(Vec3::new(2.0, 2.0, 2.0));
+                let cells = [size.x, size.y, size.z].map(|s| (s / 2.0).round().max(1.0) as u32);
+                let (model, solid) = meshes::truss(cells);
+                let name = format!("truss-{}x{}x{}.obj", cells[0], cells[1], cells[2]);
+                let collision = format!("truss-{}x{}x{}.collision.obj", cells[0], cells[1], cells[2]);
+                if !self.report.files.iter().any(|(n, _)| *n == collision) {
+                    self.report.files.push((collision, solid.into_bytes()));
+                }
+                Some((name, model))
             }
             "CornerWedgePart" => {
                 let _ =
@@ -336,6 +357,16 @@ impl<'a> Importer<'a> {
                         Some(Variant::String(s)) => Some(s.clone()),
                         _ => None,
                     });
+                let texture = ["TextureId", "TextureContent"].iter().find_map(|k| {
+                    match inst.properties.get(&(*k).into()) {
+                        Some(Variant::ContentId(c)) => Some(c.as_str().to_owned()),
+                        Some(Variant::Content(c)) => c.as_uri().map(str::to_owned),
+                        _ => None,
+                    }
+                });
+                if let Some(texture) = texture.filter(|s| !s.is_empty()) {
+                    let _ = tree.set(part, Property::MeshTexture, PropertyValue::String(texture));
+                }
                 match id.filter(|s| !s.is_empty()) {
                     Some(id) => tree.set(part, Property::MeshId, PropertyValue::String(id)),
                     None => Ok(()),
@@ -379,18 +410,6 @@ impl<'a> Importer<'a> {
                         terrain::MAX_CELLS
                     ));
                 }
-                let approximated: std::collections::BTreeSet<&str> = voxels
-                    .values()
-                    .map(|v| terrain::MATERIALS[v.material as usize])
-                    .filter(|m| !matches!(*m, "Air" | "Water" | "Grass" | "Sand" | "Rock" | "Snow" | "Brick"))
-                    .collect();
-                if !approximated.is_empty() {
-                    let list: Vec<&str> = approximated.into_iter().collect();
-                    self.report.notes.push(format!(
-                        "Terrain materials shown as the nearest Libroxel one: {}.",
-                        list.join(", ")
-                    ));
-                }
             }
             // Newer terrain keeps only a header here; its voxels are elsewhere.
             Err(terrain::GridError::Header(version, _)) if content_map || version > 1 => {
@@ -418,6 +437,10 @@ impl<'a> Importer<'a> {
             return (class, shape);
         }
         *self.report.unknown_classes.entry(name.to_owned()).or_default() += 1;
+        if self.db.classes.contains_key(name) {
+            // Kept as itself: scripts see its class and properties.
+            return (ClassKind::Other, None);
+        }
         (ClassKind::Folder, None)
     }
 
@@ -435,6 +458,18 @@ impl<'a> Importer<'a> {
     fn enum_item_name(&self, roblox_enum: &str, value: u32) -> Option<&'static str> {
         let e = self.db.enums.get(roblox_enum)?;
         e.items.iter().find(|(_, v)| **v == value).map(|(k, _)| *k)
+    }
+
+    /// Whether scripts can use `class.property`, by the reflection database.
+    fn scriptable(&self, class: &str, property: &str) -> bool {
+        let mut current = self.db.classes.get(class);
+        while let Some(c) = current {
+            if let Some(p) = c.properties.get(property) {
+                return !matches!(p.scriptability, rbx_reflection::Scriptability::None);
+            }
+            current = c.superclass.and_then(|s| self.db.classes.get(s));
+        }
+        false
     }
 
     /// The Roblox enum a class's property holds, from the reflection database.
@@ -461,10 +496,25 @@ impl<'a> Importer<'a> {
             if self.special(tree, class, id, name, value) {
                 continue;
             }
-            let name = renamed(name);
+            // A mesh part's picture, newer files' name for it.
+            let name = if class == ClassKind::Part && name == "TextureContent" {
+                "TextureID"
+            } else {
+                renamed(name)
+            };
             let Some(property) = names::property_from_name(class, name) else {
                 if !ignored(name) && !self.is_default(file_class, name, value) {
-                    self.report.skip(file_class, name);
+                    // Kept by name, so scripts read the file's value.
+                    let kept = self
+                        .scriptable(file_class, name)
+                        .then(|| extra_value(value))
+                        .flatten()
+                        .is_some_and(|v| tree.set_extra(id, name, Some(v)).is_ok());
+                    if kept {
+                        self.report.properties += 1;
+                    } else {
+                        self.report.skip(file_class, name);
+                    }
                 }
                 continue;
             };
@@ -504,6 +554,20 @@ impl<'a> Importer<'a> {
                 self.report.properties += 1;
             }
         };
+        if let ("MaterialColors", Variant::MaterialColors(colours)) = (name, value) {
+            use std::str::FromStr;
+            for m in TERRAIN_COLOURED {
+                let Ok(material) = rbx_dom_weak::types::TerrainMaterials::from_str(m) else { continue };
+                let c = colours.get_color(material);
+                if c != material.default_color() {
+                    let colour = PropertyValue::Color3(Color3::from_rgb8(c.r, c.g, c.b));
+                    if tree.set_extra(id, &format!("MaterialColor.{m}"), Some(colour)).is_ok() {
+                        self.report.properties += 1;
+                    }
+                }
+            }
+            return true;
+        }
         match (name, value) {
             // Where a part, attachment or camera is and which way it faces.
             ("CFrame", Variant::CFrame(cf)) if class.has_property(Property::Orientation) => {
@@ -729,6 +793,57 @@ fn bytes_of(value: &Variant) -> Option<&[u8]> {
         Variant::SharedString(s) => Some(s.data()),
         _ => None,
     }
+}
+
+/// Terrain materials whose colour a place can change.
+const TERRAIN_COLOURED: [&str; 21] = [
+    "Grass",
+    "Slate",
+    "Concrete",
+    "Brick",
+    "Sand",
+    "WoodPlanks",
+    "Rock",
+    "Glacier",
+    "Snow",
+    "Sandstone",
+    "Mud",
+    "Basalt",
+    "Ground",
+    "CrackedLava",
+    "Asphalt",
+    "Cobblestone",
+    "Ice",
+    "LeafyGrass",
+    "Salt",
+    "Limestone",
+    "Pavement",
+];
+
+/// A property Libroxel has no setting for, as a value it can keep:
+/// enumeration items and brick colours as their numbers.
+fn extra_value(value: &Variant) -> Option<PropertyValue> {
+    Some(match value {
+        Variant::Bool(b) => PropertyValue::Bool(*b),
+        Variant::String(s) => PropertyValue::String(s.clone()),
+        Variant::ContentId(c) => PropertyValue::String(c.as_str().to_owned()),
+        Variant::Content(c) => PropertyValue::String(c.as_uri().unwrap_or_default().to_owned()),
+        Variant::Vector3(v) => PropertyValue::Vec3(Vec3::new(v.x, v.y, v.z)),
+        Variant::Vector3int16(v) => {
+            PropertyValue::Vec3(Vec3::new(f32::from(v.x), f32::from(v.y), f32::from(v.z)))
+        }
+        Variant::Color3(c) => PropertyValue::Color3(Color3::new(c.r, c.g, c.b)),
+        Variant::Color3uint8(c) => PropertyValue::Color3(Color3::from_rgb8(c.r, c.g, c.b)),
+        Variant::Vector2(v) => PropertyValue::Vec2(Vec2::new(v.x, v.y)),
+        Variant::UDim2(u) => PropertyValue::UDim2(udim2(u)),
+        Variant::UDim(u) => PropertyValue::UDim(UDim::new(u.scale, u.offset as f32)),
+        Variant::BrickColor(b) => PropertyValue::Number(f64::from(*b as u16)),
+        Variant::Enum(e) => PropertyValue::Number(f64::from(e.to_u32())),
+        Variant::Float32(_) | Variant::Float64(_) | Variant::Int32(_) | Variant::Int64(_) => {
+            PropertyValue::Number(number(value)?)
+        }
+        _ => return None,
+    })
 }
 
 fn number(value: &Variant) -> Option<f64> {

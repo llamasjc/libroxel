@@ -90,6 +90,32 @@ impl UserData for LuaCFrame {
             let axis = if s > 1e-6 { Vec3::new(x / s, y / s, z / s) } else { Vec3::new(1.0, 0.0, 0.0) };
             Ok((LuaVector3(axis), angle))
         });
+        methods.add_method("VectorToWorldSpace", |_, this, v: Value| {
+            let v = as_vector3(&v).ok_or_else(|| err("VectorToWorldSpace expects a Vector3"))?;
+            Ok(LuaVector3(this.0.rot.apply(v)))
+        });
+        methods.add_method("VectorToObjectSpace", |_, this, v: Value| {
+            let v = as_vector3(&v).ok_or_else(|| err("VectorToObjectSpace expects a Vector3"))?;
+            Ok(LuaVector3(this.0.rot.transpose().apply(v)))
+        });
+        methods.add_method("Orthonormalize", |_, this, ()| {
+            Ok(LuaCFrame(CFrame::new(this.0.pos, Rotation::from_quat(this.0.rot.to_quat()))))
+        });
+        methods.add_method("FuzzyEq", |_, this, (other, epsilon): (Value, Option<f32>)| {
+            let o = as_cframe(&other).ok_or_else(|| err("FuzzyEq expects a CFrame"))?;
+            let e = epsilon.unwrap_or(1e-5);
+            let (a, b) = (this.0, o);
+            let close = |p: Vec3, q: Vec3| (p - q).length() <= e.max(1e-5) * 10.0;
+            Ok(close(a.pos, b.pos)
+                && close(a.rot.x, b.rot.x)
+                && close(a.rot.y, b.rot.y)
+                && close(a.rot.z, b.rot.z))
+        });
+        methods.add_method("AngleBetween", |_, this, other: Value| {
+            let o = as_cframe(&other).ok_or_else(|| err("AngleBetween expects a CFrame"))?;
+            let [_, _, _, w] = (this.0.rot.transpose() * o.rot).to_quat();
+            Ok(2.0 * w.abs().clamp(0.0, 1.0).acos())
+        });
         methods.add_method(GET_COMPONENTS, |_, this, ()| {
             let (p, r) = (this.0.pos, this.0.rot);
             Ok(mlua::Variadic::from_iter([
@@ -165,6 +191,14 @@ fn rotation_rows(m: [f32; 9]) -> Rotation {
 
 fn cframe_lib(lua: &Lua) -> mlua::Result<Table> {
     let lib = lua.create_table()?;
+    lib.set(
+        "lookAlong",
+        lua.create_function(|_, (at, direction, _up): (Value, Value, Option<Value>)| {
+            let at = as_vector3(&at).ok_or_else(|| err("CFrame.lookAlong expects a Vector3"))?;
+            let d = as_vector3(&direction).ok_or_else(|| err("CFrame.lookAlong expects a direction"))?;
+            Ok(LuaCFrame(CFrame::look_at(at, at + d)))
+        })?,
+    )?;
     lib.set(
         constructors::NEW,
         lua.create_function(|_, args: mlua::Variadic<Value>| {

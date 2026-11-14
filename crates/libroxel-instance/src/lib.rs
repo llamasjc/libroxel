@@ -298,6 +298,10 @@ pub enum ClassKind {
     PlayerScripts,
     /// Inside a character: a shield that stops damage while it's there.
     ForceField,
+    /// A Roblox-style class libroxel has no behaviour for, such as a
+    /// Dialog or an AnimationController. Its real class name is kept in
+    /// [`Property::OtherClass`], and scripts see it as that class.
+    Other,
 }
 
 impl ClassKind {
@@ -424,6 +428,7 @@ impl ClassKind {
         ClassKind::StarterCharacterScripts,
         ClassKind::PlayerScripts,
         ClassKind::ForceField,
+        ClassKind::Other,
     ];
 
     /// The services every tree has under its root, in order. They can't be
@@ -537,6 +542,7 @@ impl ClassKind {
             Property::Locked,
             Property::CollisionGroup,
             Property::MeshId,
+            Property::MeshTexture,
         ];
         const SCRIPT: &[Property] = &[Property::Name, Property::Disabled, Property::Source];
         const MODULE: &[Property] = &[Property::Name, Property::Source];
@@ -565,6 +571,7 @@ impl ClassKind {
             Property::SpawnShield,
         ];
         const FORCE_FIELD: &[Property] = &[Property::Name, Property::Visible];
+        const OTHER: &[Property] = &[Property::Name, Property::OtherClass];
         const WORKSPACE: &[Property] =
             &[Property::Name, Property::Gravity, Property::FallenPartsDestroyHeight];
         const OBJECT: &[Property] = &[Property::Name, Property::ObjectValue];
@@ -1164,6 +1171,7 @@ impl ClassKind {
             ClassKind::Weld => JOINT,
             ClassKind::Motor6D => MOTOR,
             ClassKind::ForceField => FORCE_FIELD,
+            ClassKind::Other => OTHER,
             _ => COMMON,
         }
     }
@@ -1300,7 +1308,8 @@ impl ClassKind {
             | Property::GradientTransparency1
             | Property::GradientRotation => PropertyValue::Number(0.0),
             Property::GradientOffset => PropertyValue::Vec2(Vec2::ZERO),
-            Property::MeshId => PropertyValue::String(String::new()),
+            Property::MeshId | Property::MeshTexture => PropertyValue::String(String::new()),
+            Property::OtherClass => PropertyValue::String("Folder".to_owned()),
             Property::Padding => PropertyValue::UDim(UDim::default()),
             Property::BlastRadius => PropertyValue::Number(4.0),
             Property::BlastPressure => PropertyValue::Number(500_000.0),
@@ -1567,6 +1576,7 @@ impl ClassKind {
             ClassKind::StarterCharacterScripts => "starter_character_scripts",
             ClassKind::PlayerScripts => "player_scripts",
             ClassKind::ForceField => "force_field",
+            ClassKind::Other => "other",
         }
     }
 

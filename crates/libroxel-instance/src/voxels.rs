@@ -29,6 +29,22 @@ pub const TERRAIN_MATERIALS: &[Material] = &[
     Material::Glass,
     // New materials go at the end, so saved codes keep their meaning.
     Material::Water,
+    Material::Slate,
+    Material::Concrete,
+    Material::Cobblestone,
+    Material::Ice,
+    Material::WoodPlanks,
+    Material::Mud,
+    Material::Ground,
+    Material::Basalt,
+    Material::Asphalt,
+    Material::LeafyGrass,
+    Material::Salt,
+    Material::Limestone,
+    Material::Pavement,
+    Material::Sandstone,
+    Material::Glacier,
+    Material::CrackedLava,
 ];
 
 /// The code a material is stored as; 0 for air, or anything terrain can't be.
@@ -189,6 +205,29 @@ impl Voxels {
             let along = d.dot(axes[1]);
             let off = d - axes[1] * along;
             along.abs() <= height / 2.0 && off.length() <= radius
+        })
+    }
+
+    /// Fills a wedge the shape of a wedge part: `size` studs, turned by
+    /// `rotation` (its three axes), sloping from its top at the back (+Z)
+    /// down to its front (-Z). Air empties it.
+    pub fn fill_wedge(
+        &mut self,
+        centre: Vec3,
+        axes: [Vec3; 3],
+        size: Vec3,
+        material: Option<Material>,
+    ) -> usize {
+        let half = size * 0.5;
+        let reach = half.length();
+        let r = Vec3::new(reach, reach, reach);
+        let (min, max) = (cell_at(centre - r), cell_at(centre + r));
+        self.fill_where(min, max, material, |p| {
+            let d = p - centre;
+            let (x, y, z) = (d.dot(axes[0]), d.dot(axes[1]), d.dot(axes[2]));
+            let inside = x.abs() <= half.x && y.abs() <= half.y && z.abs() <= half.z;
+            // How high the slope is here, 0 at the front to 1 at the back.
+            inside && (y + half.y) / size.y.max(1e-3) <= (z + half.z) / size.z.max(1e-3)
         })
     }
 

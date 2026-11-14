@@ -75,6 +75,8 @@ pub(crate) struct Spec {
     pub orientation: Vec3,
     pub size: Vec3,
     pub shape: PartShape,
+    /// The collision shape of its model, if it has one (see [`crate::collision_shapes`]).
+    pub mesh: Option<u32>,
     pub can_collide: bool,
     /// In water: `Some(true)` floats up.
     pub floats: Option<bool>,
@@ -90,6 +92,7 @@ struct Key {
     root: Option<InstanceId>,
     size: [u32; 3],
     shape: PartShape,
+    mesh: Option<u32>,
     can_collide: bool,
     density: u32,
     elasticity: u32,
@@ -108,6 +111,7 @@ impl Key {
             root,
             size: [spec.size.x.to_bits(), spec.size.y.to_bits(), spec.size.z.to_bits()],
             shape: spec.shape,
+            mesh: spec.mesh,
             can_collide: spec.can_collide,
             density: spec.density.to_bits(),
             elasticity: spec.elasticity.to_bits(),
@@ -205,8 +209,29 @@ fn shape_for(size: Vec3, shape: PartShape) -> (SharedShape, Pose) {
     }
 }
 
+/// A part with a model: one convex shape per piece, stretched to its size.
+fn mesh_shape_for(size: Vec3, mesh: u32) -> Option<SharedShape> {
+    let found = crate::collision_shapes::shape(mesh)?;
+    let size = GVec3::new(size.x, size.y, size.z).max(GVec3::splat(0.02));
+    let hull = |piece: &crate::collision_shapes::Piece| {
+        let points: Vec<RVec> =
+            piece.points.iter().map(|p| *p * size).map(|p| RVec::new(p.x, p.y, p.z)).collect();
+        SharedShape::convex_hull(&points)
+    };
+    let parts: Vec<(Pose, SharedShape)> =
+        found.pieces.iter().filter_map(hull).map(|shape| (Pose::IDENTITY, shape)).collect();
+    match parts.len() {
+        0 => hull(&found.whole),
+        1 => parts.into_iter().next().map(|(_, s)| s),
+        _ => Some(SharedShape::compound(parts)),
+    }
+}
+
 fn collider_for(spec: &Spec, offset: Pose) -> Collider {
-    let (shape, local) = shape_for(spec.size, spec.shape);
+    let (shape, local) = match spec.mesh.and_then(|m| mesh_shape_for(spec.size, m)) {
+        Some(shape) => (shape, Pose::IDENTITY),
+        None => shape_for(spec.size, spec.shape),
+    };
     let mut builder = ColliderBuilder::new(shape)
         .position(offset * local)
         .density(spec.density.max(0.01))

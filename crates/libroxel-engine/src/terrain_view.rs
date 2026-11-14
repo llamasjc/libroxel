@@ -291,6 +291,22 @@ pub fn terrain_color(material: Material) -> Color {
         Material::Neon => (90, 200, 255),
         Material::Glass => (170, 210, 240),
         Material::Water => (50, 130, 210),
+        Material::Slate => (63, 127, 107),
+        Material::Concrete => (127, 102, 63),
+        Material::Cobblestone => (132, 123, 90),
+        Material::Ice => (129, 194, 224),
+        Material::WoodPlanks => (139, 109, 79),
+        Material::Mud => (58, 46, 36),
+        Material::Ground => (102, 92, 59),
+        Material::Basalt => (30, 30, 37),
+        Material::Asphalt => (115, 123, 107),
+        Material::LeafyGrass => (115, 132, 74),
+        Material::Salt => (198, 189, 181),
+        Material::Limestone => (206, 173, 148),
+        Material::Pavement => (148, 148, 140),
+        Material::Sandstone => (137, 90, 71),
+        Material::Glacier => (101, 176, 234),
+        Material::CrackedLava => (232, 156, 74),
         _ => (163, 162, 165),
     };
     Color::srgb_u8(r, g, b)
@@ -301,6 +317,8 @@ pub fn terrain_color(material: Material) -> Color {
 pub(crate) struct TerrainDrawn {
     terrain: Option<InstanceId>,
     version: u64,
+    /// The terrain's revision when its material colours were last applied.
+    revision: u64,
     /// Each drawn chunk's fingerprint and its entities.
     chunks: HashMap<(i32, i32, i32), (u64, Vec<Entity>)>,
     materials: HashMap<Material, Handle<StandardMaterial>>,
@@ -318,6 +336,22 @@ pub(crate) fn sync_terrain(
     let tree = engine.tree.borrow();
     let terrain = tree.terrain();
     let version = terrain.and_then(|t| tree.voxels(t).ok()).map_or(0, |v| v.version());
+    let revision = terrain.and_then(|t| tree.revision(t).ok()).unwrap_or(0);
+    // A place (or a script) can change what colour each material is.
+    let colour =
+        |m: Material| match terrain.and_then(|t| tree.get_extra(t, &format!("MaterialColor.{m:?}")).ok()) {
+            Some(Some(libroxel_instance::PropertyValue::Color3(c))) => Color::srgb(c.r, c.g, c.b),
+            _ => terrain_color(m),
+        };
+    if revision != drawn.revision {
+        drawn.revision = revision;
+        for (m, handle) in &drawn.materials {
+            if let Some(mut mat) = materials.get_mut(handle) {
+                let alpha = mat.base_color.alpha();
+                mat.base_color = colour(*m).with_alpha(alpha);
+            }
+        }
+    }
     if terrain == drawn.terrain && version == drawn.version {
         return;
     }
@@ -365,7 +399,7 @@ pub(crate) fn sync_terrain(
                 .entry(material)
                 .or_insert_with(|| {
                     let look = PartAppearance {
-                        color: terrain_color(material),
+                        color: colour(material),
                         transparency: if material == Material::Water { 0.45 } else { 0.0 },
                         material,
                         texture_repeat: 1.0,

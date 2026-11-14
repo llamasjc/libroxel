@@ -52,6 +52,16 @@ pub(crate) fn nearest_brick(c: Color3) -> usize {
     (0..BRICK_COLORS.len()).min_by(|a, b| distance(*a).total_cmp(&distance(*b))).unwrap_or(0)
 }
 
+/// The colour of a script's BrickColor value.
+pub(crate) fn brick_colour(value: &Value) -> Option<Color3> {
+    as_brick(value).map(brick_rgb)
+}
+
+/// The named colour nearest `c`, as a script value.
+pub(crate) fn brick_for(lua: &Lua, c: Color3) -> mlua::Result<Value> {
+    lua.create_userdata(LuaBrickColor(nearest_brick(c))).map(Value::UserData)
+}
+
 fn as_brick(value: &Value) -> Option<usize> {
     match value {
         Value::UserData(ud) => ud.borrow::<LuaBrickColor>().ok().map(|b| b.0),
@@ -110,15 +120,15 @@ fn brick_lib(lua: &Lua) -> mlua::Result<Table> {
             Ok(LuaBrickColor(found))
         })?,
     )?;
-    lib.set(
-        RANDOM,
-        lua.create_function(|_, ()| {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.subsec_nanos() as usize);
-            Ok(LuaBrickColor(nanos / 7 % BRICK_COLORS.len()))
-        })?,
-    )?;
+    let random = lua.create_function(|_, ()| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos() as usize);
+        Ok(LuaBrickColor(nanos / 7 % BRICK_COLORS.len()))
+    })?;
+    lib.set(RANDOM, random.clone())?;
+    // Both spellings are in use.
+    lib.set("Random", random)?;
     lib.set(PALETTE, lua.create_function(|_, i: usize| Ok(LuaBrickColor(i.min(BRICK_COLORS.len() - 1))))?)?;
     for &(shortcut, name) in SHORTCUTS {
         let i = BRICK_COLORS.iter().position(|b| b.0 == name).unwrap_or(0);
@@ -782,6 +792,16 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
                     warn(lua, format!("{MARKETPLACE_SERVICE}.{prompt} {NOT_AVAILABLE}"));
                     Ok(())
                 })?;
+            }
+            // Purchases never happen, so these never fire.
+            for event in [
+                "PromptGamePassPurchaseFinished",
+                "PromptProductPurchaseFinished",
+                "PromptPurchaseFinished",
+                "PromptBundlePurchaseFinished",
+                "PromptSubscriptionPurchaseFinished",
+            ] {
+                t.set(event, crate::lenient::new_signal(lua)?)?;
             }
             method(lua, &t, USER_OWNS_GAME_PASS_ASYNC, |_, _: MultiValue| Ok(false))?;
             method(lua, &t, PLAYER_OWNS_ASSET, |_, _: MultiValue| Ok(false))?;

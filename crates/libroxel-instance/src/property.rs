@@ -410,6 +410,11 @@ pub enum Property {
     GradientOffset,
     /// On a part: a 3D model (an .obj file) drawn in place of its shape, stretched to fit its Size.
     MeshId,
+    /// On a part with a model: a picture wrapped over the model.
+    MeshTexture,
+    /// On an [`Other`](crate::ClassKind::Other) instance: the name of the
+    /// class it stands for.
+    OtherClass,
 }
 
 /// The value of a property.
@@ -479,7 +484,7 @@ impl Property {
             Property::TextYAlignment => EnumKind::TextYAlignment.kind_name(),
             Property::CanvasSize | Property::CellSize | Property::CellPadding => "UDim2",
             Property::CanvasPosition => "Vec2",
-            Property::Image | Property::MeshId => "string",
+            Property::Image | Property::MeshId | Property::MeshTexture | Property::OtherClass => "string",
             Property::ImageColor => "Color3",
             Property::ImageTransparency => "number",
             Property::ScaleType => EnumKind::ScaleType.kind_name(),
@@ -879,6 +884,8 @@ impl Property {
         Property::GradientRotation,
         Property::GradientOffset,
         Property::MeshId,
+        Property::MeshTexture,
+        Property::OtherClass,
     ];
 
     /// A stable name for files. Never shown to scripts; never change these.
@@ -1101,6 +1108,8 @@ impl Property {
             Property::GradientRotation => "gradient_rotation",
             Property::GradientOffset => "gradient_offset",
             Property::MeshId => "mesh_id",
+            Property::MeshTexture => "mesh_texture",
+            Property::OtherClass => "other_class",
         }
     }
 

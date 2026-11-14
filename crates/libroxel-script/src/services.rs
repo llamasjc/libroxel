@@ -38,12 +38,7 @@ pub(crate) fn get_service(lua: &Lua, name: &str) -> mlua::Result<Option<Value>> 
 
 pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     let lib = lua.create_table()?;
-    lib.set(
-        names::constructors::NEW,
-        lua.create_function(|_, ()| {
-            Ok(RaycastParams { filter: Vec::new(), filter_type: RaycastFilterType::Exclude })
-        })?,
-    )?;
+    lib.set(names::constructors::NEW, lua.create_function(|_, ()| Ok(RaycastParams::default()))?)?;
     lib.set_readonly(true);
     lua.globals().set(names::globals::RAYCAST_PARAMS, lib)?;
     let lib = lua.create_table()?;
@@ -248,6 +243,19 @@ impl UserData for DataStore {
             this.set(lua, &key, Some(json_number(new)?));
             Ok(new)
         });
+        methods.add_method("ListKeysAsync", |lua, this, (prefix, _page): (Option<String>, Option<f64>)| {
+            let prefix = prefix.unwrap_or_default();
+            let keys: Vec<String> = host(lua)
+                .data
+                .borrow()
+                .get(&this.0)
+                .map(|s| s.keys().filter(|k| k.starts_with(&prefix)).cloned().collect())
+                .unwrap_or_default();
+            crate::lenient::pages(lua, keys)
+        });
+        methods.add_method("GetVersionAsync", |lua, this, key: String| {
+            this.get(lua, &key).map(|v| from_json(lua, &v)).transpose().map(|v| v.unwrap_or(Value::Nil))
+        });
         methods.add_method(data_store::REMOVE_ASYNC, |lua, this, key: String| {
             check_name("key", &key)?;
             match this.set(lua, &key, None) {
@@ -381,10 +389,64 @@ pub(crate) fn step_debris(lua: &Lua, now: f64) {
 // Raycasts
 // ---------------------------------------------------------------------------
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct RaycastParams {
     filter: Vec<InstanceId>,
     filter_type: RaycastFilterType,
+    more: QueryOptions,
+}
+
+/// The rest of a query's settings. Water is never hit (terrain water
+/// isn't solid), so `IgnoreWater` changes nothing.
+#[derive(Clone, Default)]
+struct QueryOptions {
+    ignore_water: bool,
+    respect_can_collide: bool,
+    brute_force: bool,
+    collision_group: Option<String>,
+}
+
+/// Adds the settings in [`QueryOptions`] to a query type's fields.
+macro_rules! query_options {
+    ($fields:expr) => {
+        $fields.add_field_method_get("IgnoreWater", |_, this| Ok(this.more.ignore_water));
+        $fields.add_field_method_set("IgnoreWater", |_, this, v: bool| {
+            this.more.ignore_water = v;
+            Ok(())
+        });
+        $fields.add_field_method_get("RespectCanCollide", |_, this| Ok(this.more.respect_can_collide));
+        $fields.add_field_method_set("RespectCanCollide", |_, this, v: bool| {
+            this.more.respect_can_collide = v;
+            Ok(())
+        });
+        $fields.add_field_method_get("BruteForceAllSlow", |_, this| Ok(this.more.brute_force));
+        $fields.add_field_method_set("BruteForceAllSlow", |_, this, v: bool| {
+            this.more.brute_force = v;
+            Ok(())
+        });
+        $fields.add_field_method_get("CollisionGroup", |_, this| {
+            Ok(this.more.collision_group.clone().unwrap_or_else(|| "Default".to_owned()))
+        });
+        $fields.add_field_method_set("CollisionGroup", |_, this, v: String| {
+            this.more.collision_group = Some(v);
+            Ok(())
+        });
+    };
+}
+
+/// Adds `AddToFilter` to a query type.
+macro_rules! add_to_filter {
+    ($methods:expr) => {
+        $methods.add_method_mut("AddToFilter", |_, this, value: Value| {
+            match &value {
+                Value::Table(list) => this.filter.extend(instance_list(list.clone())?),
+                other => this
+                    .filter
+                    .push(as_instance(other).ok_or_else(|| runtime_err("AddToFilter expects Instances"))?),
+            }
+            Ok(())
+        });
+    };
 }
 
 impl UserData for RaycastParams {
@@ -414,23 +476,23 @@ impl UserData for RaycastParams {
                 _ => Err(runtime_err("FilterType expects a RaycastFilterType")),
             }
         });
+        query_options!(fields);
         fields.add_meta_field(MetaMethod::Type, raycast::PARAMS_TYPE_NAME);
+    }
+
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        add_to_filter!(methods);
     }
 }
 
 /// What to look for in an overlap query: like raycast parameters, plus
 /// the most parts to return (0 for no limit).
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct OverlapParams {
     filter: Vec<InstanceId>,
     filter_type: RaycastFilterType,
     max_parts: usize,
-}
-
-impl Default for OverlapParams {
-    fn default() -> Self {
-        Self { filter: Vec::new(), filter_type: RaycastFilterType::Exclude, max_parts: 0 }
-    }
+    more: QueryOptions,
 }
 
 impl UserData for OverlapParams {
@@ -459,7 +521,12 @@ impl UserData for OverlapParams {
             this.max_parts = n.max(0.0) as usize;
             Ok(())
         });
+        query_options!(fields);
         fields.add_meta_field(MetaMethod::Type, names::overlap::PARAMS_TYPE_NAME);
+    }
+
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        add_to_filter!(methods);
     }
 }
 
@@ -485,6 +552,7 @@ fn overlap_params(params: Option<Value>, member: &str) -> mlua::Result<OverlapPa
                     filter: p.filter.clone(),
                     filter_type: p.filter_type,
                     max_parts: 0,
+                    more: p.more.clone(),
                 });
             }
             Err(runtime_err(format!("{member} expects OverlapParams")))
@@ -548,9 +616,7 @@ fn workspace_raycast(
     let direction =
         as_vector3(&direction).ok_or_else(|| runtime_err("Raycast expects a Vector3 direction"))?;
     let params = match &params {
-        None | Some(Value::Nil) => {
-            RaycastParams { filter: Vec::new(), filter_type: RaycastFilterType::Exclude }
-        }
+        None | Some(Value::Nil) => RaycastParams::default(),
         Some(Value::UserData(ud)) => {
             ud.borrow::<RaycastParams>().map_err(|_| runtime_err("Raycast expects RaycastParams"))?.clone()
         }
@@ -564,6 +630,8 @@ fn workspace_raycast(
         };
         let hit = geometry::raycast(&tree, origin, direction, |part| {
             tree.get_bool(part, Property::CanQuery) != Some(false)
+                && (!params.more.respect_can_collide
+                    || tree.get_bool(part, Property::CanCollide) != Some(false))
                 && match params.filter_type {
                     RaycastFilterType::Exclude => !listed(part),
                     RaycastFilterType::Include => listed(part),

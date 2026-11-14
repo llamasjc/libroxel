@@ -89,6 +89,15 @@ enum Collider {
     Sphere {
         radius: f32,
     },
+    /// One convex piece of a part with a model (see
+    /// [`crate::collision_shapes`]); `centre` is the part's middle.
+    Convex {
+        shape: u32,
+        piece: u32,
+        centre: GVec3,
+        rotation: Mat3,
+        size: GVec3,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -150,6 +159,16 @@ impl Body {
                     edges.push((rotation * GVec3::new(0.0, half.y, half.z)).normalize_or_zero());
                 }
                 Hull { points, normals, edges }
+            }
+            Collider::Convex { shape, piece, centre, rotation, size } => {
+                match crate::collision_shapes::shape(shape) {
+                    Some(found) => {
+                        let (points, normals, edges) =
+                            crate::collision_shapes::placed(found.get(piece), centre, rotation, size);
+                        Hull { points, normals, edges }
+                    }
+                    None => Hull { points: vec![c], normals: vec![GVec3::Y], edges: vec![GVec3::X] },
+                }
             }
             _ => {
                 let h = g(self.half);
@@ -268,6 +287,41 @@ fn set_axis(v: &mut Vec3, i: usize, value: f32) {
         1 => v.y = value,
         _ => v.z = value,
     }
+}
+
+/// The bodies a part with a model collides as: one per convex piece if it
+/// stays put, or one hull round it all if it moves.
+fn mesh_bodies(
+    pos: Vec3,
+    size: Vec3,
+    orientation: Vec3,
+    shape: u32,
+    whole: bool,
+) -> Vec<(Vec3, Vec3, Collider)> {
+    let Some(found) = crate::collision_shapes::shape(shape) else { return Vec::new() };
+    let rotation = Mat3::from_quat(orientation_quat(orientation));
+    let (centre, size) = (g(pos), g(size));
+    let pieces: Vec<u32> =
+        if whole { vec![crate::collision_shapes::WHOLE] } else { (0..found.pieces.len() as u32).collect() };
+    pieces
+        .into_iter()
+        .filter_map(|piece| {
+            let (points, ..) = crate::collision_shapes::placed(found.get(piece), centre, rotation, size);
+            let lo = points.iter().copied().reduce(GVec3::min)?;
+            let hi = points.iter().copied().reduce(GVec3::max)?;
+            let collider = Collider::Convex { shape, piece, centre, rotation, size };
+            Some((l((lo + hi) * 0.5), l((hi - lo) * 0.5), collider))
+        })
+        .collect()
+}
+
+/// The collision shape for a part's `MeshId`, if it has a model.
+fn mesh_shape(tree: &InstanceTree, id: InstanceId) -> Option<u32> {
+    let mesh = tree.get_string(id, Property::MeshId)?;
+    if mesh.trim().is_empty() {
+        return None;
+    }
+    crate::collision_shapes::for_mesh(&mesh)
 }
 
 /// Picks the cheapest exact collider for an anchored part.
@@ -568,9 +622,11 @@ impl Physics {
     fn part_bodies(&self, tree: &InstanceTree) -> Vec<Body> {
         tree.descendants_of_class(tree.workspace(), ClassKind::Part)
             .into_iter()
-            .filter_map(|id| {
-                let size = tree.get_vec3(id, Property::Size)?;
-                let anchored = tree.get_bool(id, Property::Anchored)? || self.carried.contains(&id);
+            .flat_map(|id| -> Vec<Body> {
+                let one = |b: Option<Body>| b.into_iter().collect::<Vec<_>>();
+                let Some(size) = tree.get_vec3(id, Property::Size) else { return Vec::new() };
+                let Some(anchored) = tree.get_bool(id, Property::Anchored) else { return Vec::new() };
+                let anchored = anchored || self.carried.contains(&id);
                 let shape = match tree.get_enum(id, Property::Shape) {
                     Some(EnumValue::Shape(shape)) => shape,
                     _ => PartShape::Block,
@@ -579,24 +635,46 @@ impl Physics {
                 let held = self.held.contains(&id);
                 let character = tree.name(id) == Ok(names::character::ROOT_PART);
                 let sim = !anchored && !held && !character;
+                let Some(pos) = tree.get_vec3(id, Property::Position) else { return Vec::new() };
+                let Some(can_collide) = tree.get_bool(id, Property::CanCollide) else { return Vec::new() };
+                if !character && let Some(mesh) = mesh_shape(tree, id) {
+                    let pieces = mesh_bodies(pos, size, orientation, mesh, sim || held);
+                    if !pieces.is_empty() {
+                        return pieces
+                            .into_iter()
+                            .map(|(pos, half, collider)| Body {
+                                id,
+                                pos,
+                                half,
+                                anchored,
+                                held,
+                                can_collide,
+                                collider,
+                                climb: STEP_HEIGHT,
+                                water: None,
+                                sim,
+                            })
+                            .collect();
+                    }
+                }
                 let (half, collider) = if character && !anchored {
                     // Characters stay upright, whichever way they face.
                     (size * 0.5, Collider::Aabb)
                 } else {
                     collider_for(size, shape, orientation)
                 };
-                Some(Body {
+                one(Some(Body {
                     id,
-                    pos: tree.get_vec3(id, Property::Position)?,
+                    pos,
                     half,
                     anchored,
                     held,
-                    can_collide: tree.get_bool(id, Property::CanCollide)?,
+                    can_collide,
                     collider,
                     climb: STEP_HEIGHT,
                     water: None,
                     sim,
-                })
+                }))
             })
             .collect()
     }
@@ -606,8 +684,13 @@ impl Physics {
         let dynamic: HashSet<InstanceId> =
             bodies.iter().filter(|b| b.sim && !self.carried.contains(&b.id)).map(|b| b.id).collect();
         let mut specs = Vec::with_capacity(bodies.len());
+        let mut seen = HashSet::new();
         for body in bodies {
             let id = body.id;
+            // A part with a model is several bodies here, but one part there.
+            if !seen.insert(id) {
+                continue;
+            }
             if Some(id) == tree.terrain() {
                 continue;
             }
@@ -639,11 +722,15 @@ impl Physics {
             specs.push(rigid::Spec {
                 id,
                 role,
-                pos: body.pos,
+                pos: match body.collider {
+                    Collider::Convex { centre, .. } => l(centre),
+                    _ => body.pos,
+                },
                 rot,
                 orientation,
                 size,
                 shape: if character { PartShape::Block } else { shape },
+                mesh: if character { None } else { mesh_shape(tree, id) },
                 can_collide: body.can_collide,
                 floats: body.water,
                 density: names::extras::DENSITY,

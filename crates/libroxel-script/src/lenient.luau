@@ -240,10 +240,64 @@ local ENUMS = {
 	TextureMode = { "Stretch", "Wrap", "Static" },
 }
 
-function L.add_enums(lib)
+local function item_list(t)
+	local list = {}
+	for k, v in pairs(t) do
+		if type(v) ~= "function" and (type(v) == "table" or type(v) == "userdata") then
+			table.insert(list, v)
+		end
+	end
+	return list
+end
+
+-- `database`: every enumeration Roblox has, as name -> { {item, number} }.
+function L.add_enums(lib, database)
 	for name, items in pairs(ENUMS) do
 		if rawget(lib, name) == nil then
 			rawset(lib, name, make_enum(name, items))
+		end
+	end
+	for name, items in pairs(database or {}) do
+		local existing = rawget(lib, name)
+		if existing == nil then
+			rawset(lib, name, make_enum(name, items))
+		elseif getmetatable(existing) == nil then
+			-- One of libroxel's: add the items it doesn't have, so scripts
+			-- naming them still run (they act like its first item).
+			local stand_for = setmetatable({}, {
+				__tostring = function()
+					return name
+				end,
+			})
+			for _, pair in ipairs(items) do
+				if rawget(existing, pair[1]) == nil then
+					rawset(existing, pair[1], setmetatable({ Name = pair[1], Value = pair[2], EnumType = stand_for }, ItemMeta))
+				end
+			end
+		end
+	end
+	-- Looking items up by name or number, on every enumeration.
+	for name, t in pairs(lib) do
+		if type(t) == "table" and getmetatable(t) == nil then
+			if rawget(t, "FromName") == nil then
+				rawset(t, "FromName", function(_, n)
+					local v = rawget(t, n)
+					if type(v) == "function" then
+						return nil
+					end
+					return v
+				end)
+			end
+			if rawget(t, "FromValue") == nil then
+				rawset(t, "FromValue", function(_, v)
+					for _, it in ipairs(item_list(t)) do
+						if it.Value == v then
+							return it
+						end
+					end
+					return nil
+				end)
+			end
 		end
 	end
 end
@@ -1925,6 +1979,19 @@ local SERVICES = {
 			OnIncomingMessage = NIL,
 		},
 		signals = { "MessageReceived", "SendingMessage", "BubbleDisplayed" },
+		getters = {
+			-- The usual channels, so scripts can send to RBXGeneral.
+			TextChannels = function()
+				local folder = Instance.new("Folder")
+				folder.Name = "TextChannels"
+				for _, n in ipairs({ "RBXGeneral", "RBXSystem" }) do
+					local c = Instance.new("TextChannel")
+					c.Name = n
+					c.Parent = folder
+				end
+				return folder
+			end,
+		},
 		methods = {
 			CanUsersChatAsync = function()
 				return true
@@ -2189,6 +2256,11 @@ function L.service(name)
 			if def.methods and def.methods[k] then
 				return def.methods[k]
 			end
+			if def.getters and def.getters[k] then
+				local v = def.getters[k]()
+				values[k] = v
+				return v
+			end
 			if sigs[k] then
 				return sigs[k]
 			end
@@ -2231,6 +2303,151 @@ function L.service(name)
 	})
 	made[name] = obj
 	return obj
+end
+
+
+-- More of Roblox's members ----------------------------------------------------
+
+local function cell(v)
+	return math.floor(v / 4)
+end
+add(methods, "Terrain", {
+	WorldToCell = function(_, p)
+		return Vector3.new(cell(p.X), cell(p.Y), cell(p.Z))
+	end,
+	WorldToCellPreferSolid = function(_, p)
+		return Vector3.new(cell(p.X), cell(p.Y), cell(p.Z))
+	end,
+	WorldToCellPreferEmpty = function(_, p)
+		return Vector3.new(cell(p.X), cell(p.Y), cell(p.Z))
+	end,
+	CellCenterToWorld = function(_, x, y, z)
+		return Vector3.new(x * 4 + 2, y * 4 + 2, z * 4 + 2)
+	end,
+	CellCornerToWorld = function(_, x, y, z)
+		return Vector3.new(x * 4, y * 4, z * 4)
+	end,
+	AutowedgeCell = function()
+		return false
+	end,
+	AutowedgeCells = function() end,
+	ConvertToSmooth = function() end,
+})
+add(getters, "Terrain", {
+	MaxExtents = function()
+		local big = 32000
+		return Region3.new(Vector3.new(-big, -big, -big), Vector3.new(big, big, big))
+	end,
+})
+
+add(methods, "Humanoid", {
+	GetAppliedDescription = function(self)
+		local d = Instance.new("HumanoidDescription")
+		local model = self.Parent
+		local colours = model and model:FindFirstChildOfClass("BodyColors")
+		if colours then
+			for _, limb in ipairs({ "Head", "Torso", "LeftArm", "RightArm", "LeftLeg", "RightLeg" }) do
+				pcall(function()
+					d[limb .. "Color"] = colours[limb .. "Color3"]
+				end)
+			end
+		end
+		return d
+	end,
+	ApplyDescription = function() end,
+	ApplyDescriptionReset = function() end,
+	ApplyDescriptionClientServer = function() end,
+})
+
+-- Making shapes from others while playing: libroxel can't carve parts, so
+-- a union is one part over all of them, and a subtraction keeps the part.
+local function bounds(parts)
+	local lo, hi
+	for _, p in ipairs(parts) do
+		local half = p.Size / 2
+		local c = p.Position
+		local a, b = c - half, c + half
+		lo = lo and Vector3.new(math.min(lo.X, a.X), math.min(lo.Y, a.Y), math.min(lo.Z, a.Z)) or a
+		hi = hi and Vector3.new(math.max(hi.X, b.X), math.max(hi.Y, b.Y), math.max(hi.Z, b.Z)) or b
+	end
+	return lo, hi
+end
+add(methods, "BasePart", {
+	UnionAsync = function(self, others)
+		local all = { self }
+		for _, o in ipairs(others or {}) do
+			table.insert(all, o)
+		end
+		local lo, hi = bounds(all)
+		local u = self:Clone()
+		u.Name = "Union"
+		u.Size = hi - lo
+		u.CFrame = CFrame.new((lo + hi) / 2)
+		return u
+	end,
+	SubtractAsync = function(self)
+		local u = self:Clone()
+		u.Name = "Union"
+		return u
+	end,
+	IntersectAsync = function(self)
+		local u = self:Clone()
+		u.Name = "Intersection"
+		return u
+	end,
+})
+
+plain_signals("Dialog", { "DialogChoiceSelected" })
+
+add(methods, "UIPageLayout", {
+	Next = function() end,
+	Previous = function() end,
+	JumpTo = function() end,
+	JumpToIndex = function() end,
+})
+plain_signals("UIPageLayout", { "PageEnter", "PageLeave", "Stopped" })
+
+add(methods, "RunService", {
+	IsRunning = function()
+		return true
+	end,
+	IsStudio = function()
+		return false
+	end,
+})
+
+add(props, "Mouse", {
+	TargetFilter = NIL,
+	Icon = "",
+	TargetSurface = "NormalId.Top",
+	ViewSizeX = 0,
+	ViewSizeY = 0,
+})
+add(getters, "Mouse", {
+	UnitRay = function(self)
+		local hit = self.Hit.Position
+		local cam = workspace.CurrentCamera
+		local origin = cam and cam.CFrame.Position or Vector3.zero
+		return Ray.new(origin, (hit - origin).Unit)
+	end,
+	Origin = function()
+		local cam = workspace.CurrentCamera
+		return cam and cam.CFrame or CFrame.new()
+	end,
+})
+plain_signals("Mouse", { "Button2Down", "Button2Up", "Move", "Idle", "WheelForward", "WheelBackward" })
+
+function L.key_pages(keys)
+	local list = {}
+	for _, k in ipairs(keys) do
+		table.insert(list, { KeyName = k })
+	end
+	local pages = { IsFinished = true }
+	function pages.GetCurrentPage()
+		return list
+	end
+	function pages.AdvanceToNextPageAsync() end
+	return pages
 end
 
 ------------------------------------------------------------------------------
@@ -2301,7 +2518,9 @@ function L.index(key_id, obj, key, groups)
 	return false
 end
 
-function L.new_index(key_id, obj, key, value, groups)
+-- `allowed`: the class database knows `key`, so it may be stored even
+-- when the layer has nothing for it.
+function L.new_index(key_id, obj, key, value, groups, allowed)
 	local s = slot(key_id)
 	for _, group in ipairs(groups) do
 		local set = setters[group] and setters[group][key]
@@ -2310,7 +2529,7 @@ function L.new_index(key_id, obj, key, value, groups)
 			return true
 		end
 	end
-	local known = s.values[key] ~= nil
+	local known = s.values[key] ~= nil or allowed
 	if not known then
 		for _, group in ipairs(groups) do
 			if (props[group] and props[group][key] ~= nil) or (getters[group] and getters[group][key]) then
@@ -2324,6 +2543,10 @@ function L.new_index(key_id, obj, key, value, groups)
 		return true
 	end
 	return false
+end
+
+function L.signal()
+	return new_signal()
 end
 
 function L.forget(key_id)

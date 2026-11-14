@@ -125,12 +125,17 @@ pub fn stand_in(name: &str) -> Option<(ClassKind, Option<PartShape>)> {
         "Actor" | "WorldModel" => (ClassKind::Model, None),
         "Hat" => (ClassKind::Accessory, None),
         "BodyThrust" => (ClassKind::BodyForce, None),
+        "UnreliableRemoteEvent" => (ClassKind::RemoteEvent, None),
         "IntConstrainedValue" => (ClassKind::IntValue, None),
         "DoubleConstrainedValue" => (ClassKind::NumberValue, None),
         "SoundGroup" => (ClassKind::Folder, None),
         _ => return None,
     })
 }
+
+/// The kept property (see `InstanceTree::set_extra`) that names the class
+/// a stand-in was made as, so scripts see that class.
+pub const STAND_IN: &str = "ClassName";
 
 /// Services that are another service under a second name.
 pub fn service_alias(name: &str) -> &str {
@@ -707,6 +712,30 @@ pub fn enum_item_name(value: EnumValue) -> &'static str {
             Material::Snow => "Snow",
             Material::Water => "Water",
             Material::Air => "Air",
+            Material::Slate => "Slate",
+            Material::Concrete => "Concrete",
+            Material::CorrodedMetal => "CorrodedMetal",
+            Material::DiamondPlate => "DiamondPlate",
+            Material::Foil => "Foil",
+            Material::Granite => "Granite",
+            Material::Marble => "Marble",
+            Material::Pebble => "Pebble",
+            Material::Cobblestone => "Cobblestone",
+            Material::Fabric => "Fabric",
+            Material::Ice => "Ice",
+            Material::ForceField => "ForceField",
+            Material::WoodPlanks => "WoodPlanks",
+            Material::Mud => "Mud",
+            Material::Ground => "Ground",
+            Material::Basalt => "Basalt",
+            Material::Asphalt => "Asphalt",
+            Material::LeafyGrass => "LeafyGrass",
+            Material::Salt => "Salt",
+            Material::Limestone => "Limestone",
+            Material::Pavement => "Pavement",
+            Material::Sandstone => "Sandstone",
+            Material::Glacier => "Glacier",
+            Material::CrackedLava => "CrackedLava",
         },
         EnumValue::EasingStyle(e) => match e {
             EasingStyle::Linear => "Linear",
@@ -1093,6 +1122,7 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::StarterCharacterScripts => "StarterCharacterScripts",
         ClassKind::PlayerScripts => "PlayerScripts",
         ClassKind::ForceField => "ForceField",
+        ClassKind::Other => "Instance",
     }
 }
 
@@ -1325,6 +1355,8 @@ pub fn property_name(property: Property) -> &'static str {
         Property::GradientRotation => "Rotation",
         Property::GradientOffset => "Offset",
         Property::MeshId => "MeshId",
+        Property::MeshTexture => "TextureID",
+        Property::OtherClass => "ClassName",
     }
 }
 

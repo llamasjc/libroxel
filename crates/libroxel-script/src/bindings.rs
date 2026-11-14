@@ -12,8 +12,8 @@ use libroxel_instance::{
 
 use crate::types::{LuaCFrame, LuaUDim2, LuaVector2, as_cframe, as_udim2, as_vector2};
 use mlua::{
-    AnyUserData, Function, Lua, MetaMethod, MultiValue, RegistryKey, Table, Thread, UserData, UserDataFields,
-    UserDataMethods, Value, Variadic,
+    AnyUserData, Function, Lua, MetaMethod, MultiValue, ObjectLike, RegistryKey, Table, Thread, UserData,
+    UserDataFields, UserDataMethods, Value, Variadic,
 };
 
 use crate::names::{self, constructors, globals};
@@ -261,6 +261,24 @@ fn resume(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Server,
+    Client,
+}
+
+/// Which side the running code belongs to, by the script that started it:
+/// a local script's code (and modules it requires) is the client's, a
+/// script's is the server's. None for code no script started.
+fn running_side(lua: &Lua) -> Option<Side> {
+    let owner = host(lua).current_owner.get()?;
+    match host(lua).tree.borrow().class(owner).ok()? {
+        ClassKind::LocalScript => Some(Side::Client),
+        ClassKind::Script => Some(Side::Server),
+        _ => None,
+    }
+}
+
 pub(crate) fn spawn(
     lua: &Lua,
     func: Function,
@@ -399,6 +417,11 @@ impl UserData for LuaVector3 {
             let (a, b) = vector_operands("divide", &a, &b)?;
             Ok(LuaVector3(a / b))
         });
+        methods.add_meta_function(MetaMethod::IDiv, |_, (a, b): (Value, Value)| {
+            let (a, b) = vector_operands("divide", &a, &b)?;
+            let q = a / b;
+            Ok(LuaVector3(Vec3::new(q.x.floor(), q.y.floor(), q.z.floor())))
+        });
         methods.add_meta_method(MetaMethod::Unm, |_, this, ()| Ok(LuaVector3(-this.0)));
         methods.add_meta_function(MetaMethod::Eq, |_, (a, b): (Value, Value)| {
             Ok(matches!((as_vector3(&a), as_vector3(&b)), (Some(a), Some(b)) if a == b))
@@ -481,6 +504,20 @@ pub(crate) fn as_enum(kind: EnumKind, value: &Value) -> Option<EnumValue> {
         Value::String(s) => names::enum_item_from_name(kind, &s.to_string_lossy()),
         Value::Integer(n) => usize::try_from(*n).ok().and_then(|i| kind.items().get(i).copied()),
         Value::Number(n) if n.fract() == 0.0 && *n >= 0.0 => kind.items().get(*n as usize).copied(),
+        // An item of this enumeration that libroxel doesn't draw differently
+        // (such as ScaleType.Slice): the closest it has, its first.
+        Value::Table(t) => {
+            let of_kind = t
+                .raw_get::<Value>("EnumType")
+                .ok()
+                .and_then(|e| e.to_string().ok())
+                .is_some_and(|e| e == names::enum_name(kind));
+            if !of_kind {
+                return None;
+            }
+            let name: String = t.raw_get("Name").ok()?;
+            names::enum_item_from_name(kind, &name).or_else(|| kind.items().first().copied())
+        }
         _ => None,
     }
 }
@@ -559,7 +596,8 @@ fn property_from_lua(property: Property, value: &Value) -> Option<PropertyValue>
             } else if let Ok(c) = ud.borrow::<LuaColor3>() {
                 PropertyValue::Color3(c.0)
             } else {
-                return None;
+                // A named colour where a colour goes, such as a team's.
+                PropertyValue::Color3(crate::compat::brick_colour(value)?)
             }
         }
         _ => return None,
@@ -571,6 +609,30 @@ pub(crate) fn not_a_member(lua: &Lua, id: InstanceId, key: &str) -> mlua::Error 
     let tree = host.tree.borrow();
     let name = tree.name(id).unwrap_or("?").to_owned();
     mlua::Error::runtime(format!("{key} is not a valid member of {name}"))
+}
+
+/// Whether instance `id` is a `name`, a class or family name, as
+/// `IsA` answers.
+pub(crate) fn is_a(lua: &Lua, id: InstanceId, name: &str) -> mlua::Result<bool> {
+    let class = class_of(lua, id)?;
+    let roblox = crate::lenient::roblox_class(lua, id, class);
+    if roblox != names::class_name(class) {
+        return Ok(name == "Instance" || crate::reflection::class_is_a(&roblox, name));
+    }
+    if let Some(answer) = names::is_a_family(class, name) {
+        return Ok(answer);
+    }
+    match names::class_from_name(name) {
+        Some(other) => Ok(class.is_a(other)),
+        // Families libroxel doesn't name, such as PVInstance's relatives.
+        None => Ok(crate::reflection::class_is_a(names::class_name(class), name)),
+    }
+}
+
+/// Whether instance `id`'s class is exactly `name`, as `FindFirstChildOfClass` asks.
+pub(crate) fn is_class(lua: &Lua, id: InstanceId, name: &str) -> mlua::Result<bool> {
+    let class = class_of(lua, id)?;
+    Ok(crate::lenient::roblox_class(lua, id, class) == name)
 }
 
 fn class_arg(name: &str) -> mlua::Result<ClassKind> {
@@ -679,9 +741,13 @@ impl UserData for LuaInstance {
             found.map(|id| push_instance(lua, id)).transpose()
         });
         methods.add_method(FIND_FIRST_CHILD_OF_CLASS, |lua, this, class: String| {
-            let class = class_arg(&class)?;
-            let found = host(lua).tree.borrow().find_first_child_of_class(this.0, class).map_err(tree_err)?;
-            found.map(|id| push_instance(lua, id)).transpose()
+            let children = host(lua).tree.borrow().children(this.0).map_err(tree_err)?.to_vec();
+            for child in children {
+                if is_class(lua, child, &class)? {
+                    return push_instance(lua, child).map(Some);
+                }
+            }
+            Ok(None)
         });
         methods.add_method(GET_CHILDREN, |lua, this, ()| {
             let children = host(lua).tree.borrow().children(this.0).map_err(tree_err)?.to_vec();
@@ -691,14 +757,7 @@ impl UserData for LuaInstance {
             let all = host(lua).tree.borrow().descendants(this.0).map_err(tree_err)?;
             all.into_iter().map(|id| push_instance(lua, id)).collect::<mlua::Result<Vec<_>>>()
         });
-        methods.add_method(IS_A, |lua, this, name: String| {
-            let class = class_of(lua, this.0)?;
-            if let Some(answer) = names::is_a_family(class, &name) {
-                return Ok(answer);
-            }
-            let Some(other) = names::class_from_name(&name) else { return Ok(false) };
-            Ok(class.is_a(other))
-        });
+        methods.add_method(IS_A, |lua, this, name: String| is_a(lua, this.0, &name));
         methods.add_method(IS_DESCENDANT_OF, |lua, this, other: Value| {
             let other = as_instance(&other)
                 .ok_or_else(|| mlua::Error::runtime("IsDescendantOf expects an Instance"))?;
@@ -879,7 +938,8 @@ impl UserData for LuaInstance {
             let id = this.0;
             if key == CLASS_NAME {
                 let class = host(lua).tree.borrow().class(id).map_err(tree_err)?;
-                return Ok(Value::String(lua.create_string(names::class_name(class))?));
+                let name = crate::lenient::roblox_class(lua, id, class);
+                return Ok(Value::String(lua.create_string(name)?));
             }
             if key == PARENT {
                 let parent = host(lua).tree.borrow().parent(id).map_err(tree_err)?;
@@ -907,7 +967,7 @@ impl UserData for LuaInstance {
             if let Some(value) = crate::sound::index(lua, class, &key)? {
                 return Ok(value);
             }
-            if let Some(value) = crate::animation::index(lua, class, &key)? {
+            if let Some(value) = crate::animation::index(lua, id, class, &key)? {
                 return Ok(value);
             }
             if key == names::methods::LOCAL_PLAYER && class == ClassKind::Players {
@@ -925,6 +985,12 @@ impl UserData for LuaInstance {
                     Ok(value) => {
                         if let Some(special) = crate::effects::to_lua(lua, property, &value)? {
                             return Ok(special);
+                        }
+                        // Team colours are named colours.
+                        if property == Property::TeamColor
+                            && let PropertyValue::Color3(c) = value
+                        {
+                            return crate::compat::brick_for(lua, c);
                         }
                         return property_to_lua(lua, value);
                     }
@@ -945,6 +1011,9 @@ impl UserData for LuaInstance {
 
         methods.add_meta_method(MetaMethod::NewIndex, |lua, this, (key, value): (String, Value)| {
             let id = this.0;
+            if key == CLASS_NAME {
+                return Err(mlua::Error::runtime("ClassName can't be changed"));
+            }
             if key == PARENT {
                 let parent = match &value {
                     Value::Nil => None,
@@ -1012,8 +1081,12 @@ impl UserData for RunService {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         use crate::net::NetRole;
         use names::services::*;
-        methods.add_method(IS_CLIENT, |lua, _, ()| Ok(crate::net::role(lua) != NetRole::Server));
-        methods.add_method(IS_SERVER, |lua, _, ()| Ok(crate::net::role(lua) != NetRole::Client));
+        methods.add_method(IS_CLIENT, |lua, _, ()| {
+            Ok(crate::net::role(lua) != NetRole::Server && running_side(lua) != Some(Side::Server))
+        });
+        methods.add_method(IS_SERVER, |lua, _, ()| {
+            Ok(crate::net::role(lua) != NetRole::Client && running_side(lua) != Some(Side::Client))
+        });
         methods.add_method(IS_STUDIO, |lua, _, ()| Ok(crate::net::role(lua) == NetRole::Solo));
         crate::lenient::add_service_members(methods, names::services::RUN_SERVICE);
     }
@@ -1129,6 +1202,63 @@ impl TweenValue {
 enum TweenTarget {
     Property(Property),
     PartCFrame,
+    /// A member libroxel keeps by name (such as a frame's Rotation), read
+    /// and set the way a script would.
+    Named(&'static str),
+}
+
+/// A member name kept for as long as the game runs, so tween targets stay
+/// small. The same name is kept once.
+fn member_name(name: &str) -> &'static str {
+    thread_local! {
+        static NAMES: RefCell<std::collections::HashSet<&'static str>> = RefCell::default();
+    }
+    NAMES.with(|names| {
+        let mut names = names.borrow_mut();
+        if let Some(n) = names.get(name) {
+            return *n;
+        }
+        let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
+        names.insert(leaked);
+        leaked
+    })
+}
+
+impl TweenValue {
+    fn from_lua(value: &Value) -> Option<TweenValue> {
+        Some(match value {
+            Value::Integer(n) => TweenValue::Number(*n as f64),
+            Value::Number(n) => TweenValue::Number(*n),
+            Value::UserData(ud) => {
+                if let Ok(v) = ud.borrow::<LuaVector3>() {
+                    TweenValue::Vec3(v.0)
+                } else if let Ok(c) = ud.borrow::<LuaColor3>() {
+                    TweenValue::Color(c.0)
+                } else if let Ok(c) = ud.borrow::<LuaCFrame>() {
+                    TweenValue::CFrame(c.0)
+                } else if let Some(v) = as_vector2(value) {
+                    TweenValue::Vec2(v)
+                } else if let Some(u) = as_udim2(value) {
+                    TweenValue::UDim2(u)
+                } else {
+                    TweenValue::UDim(crate::types::as_udim(value)?)
+                }
+            }
+            _ => return None,
+        })
+    }
+
+    fn to_lua(self, lua: &Lua) -> mlua::Result<Value> {
+        Ok(match self {
+            TweenValue::Number(n) => Value::Number(n),
+            TweenValue::Vec3(v) => Value::UserData(lua.create_userdata(LuaVector3(v))?),
+            TweenValue::Color(c) => Value::UserData(lua.create_userdata(LuaColor3(c))?),
+            TweenValue::CFrame(c) => Value::UserData(lua.create_userdata(LuaCFrame(c))?),
+            TweenValue::Vec2(v) => Value::UserData(lua.create_userdata(LuaVector2(v))?),
+            TweenValue::UDim2(u) => Value::UserData(lua.create_userdata(LuaUDim2(u))?),
+            TweenValue::UDim(u) => Value::UserData(lua.create_userdata(crate::types::LuaUDim(u))?),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1171,12 +1301,19 @@ fn read_tween_value(lua: &Lua, id: InstanceId, target: TweenTarget) -> mlua::Res
         TweenTarget::Property(p) => {
             host(lua).tree.borrow().get(id, p).ok().as_ref().and_then(TweenValue::from_property)
         }
+        TweenTarget::Named(name) => {
+            let obj = push_instance(lua, id)?;
+            TweenValue::from_lua(&obj.get::<Value>(name)?)
+        }
     })
 }
 
 fn write_tween_value(lua: &Lua, id: InstanceId, target: TweenTarget, value: TweenValue) {
     let _ = match (target, value) {
         (TweenTarget::PartCFrame, TweenValue::CFrame(cf)) => set_part_cframe(lua, id, cf),
+        (TweenTarget::Named(name), v) => {
+            v.to_lua(lua).and_then(|v| push_instance(lua, id).and_then(|obj| obj.set(name, v)))
+        }
         (TweenTarget::Property(p), v) => {
             let value = match v {
                 TweenValue::Number(n) => PropertyValue::Number(n),
@@ -1210,7 +1347,15 @@ fn create_tween(lua: &Lua, target: Value, info: Value, goals: Table) -> mlua::Re
             list.push((TweenTarget::PartCFrame, None, TweenValue::CFrame(cf)));
             continue;
         }
-        let property = names::property_from_name(class, &key).ok_or_else(|| not_a_member(lua, id, &key))?;
+        let Some(property) = names::property_from_name(class, &key) else {
+            // Anything else a script can read and set as a number, vector or colour.
+            let current: Value = push_instance(lua, id)?.get(key.as_str())?;
+            let goal = TweenValue::from_lua(&value)
+                .filter(|_| TweenValue::from_lua(&current).is_some())
+                .ok_or_else(|| mlua::Error::runtime(format!("{key} can't be tweened to that value")))?;
+            list.push((TweenTarget::Named(member_name(&key)), None, goal));
+            continue;
+        };
         let goal = property_from_lua(property, &value)
             .as_ref()
             .and_then(TweenValue::from_property)
@@ -1487,11 +1632,21 @@ fn prelude() -> String {
         local require = function(module)
             local done = results[module]
             if done then return done.value end
-            if loading[module] then
-                error("require loop: " .. tostring(module) .. " requires itself", 2)
+            local loader = loading[module]
+            if loader then
+                -- Only a module that (through others) requires itself is a
+                -- loop. Another script asking while it's still loading (it
+                -- waited) waits for it, as Roblox does.
+                if loader == coroutine.running() then
+                    error("require loop: " .. tostring(module) .. " requires itself", 2)
+                end
+                while loading[module] do wait() end
+                done = results[module]
+                if done then return done.value end
+                error("Requested module experienced an error while loading: " .. tostring(module), 2)
             end
             local run = load_module(module)
-            loading[module] = true
+            loading[module] = coroutine.running()
             local out = table.pack(pcall(run))
             loading[module] = nil
             if not out[1] then error(out[2], 0) end
@@ -1572,10 +1727,16 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     instance_lib.set(
         constructors::NEW,
         lua.create_function(|lua, (class, parent): (String, Option<Value>)| {
-            let (class, shape) = match names::stand_in(&class) {
+            let other = names::stand_in(&class).is_none()
+                && names::class_from_name(&class).is_none()
+                && crate::reflection::is_creatable(&class);
+            let (kind, shape) = match names::stand_in(&class) {
                 Some(stand_in) => stand_in,
+                None if other => (ClassKind::Other, None),
                 None => (class_arg(&class)?, None),
             };
+            let roblox = class;
+            let class = kind;
             if !class.is_user_creatable() {
                 return Err(tree_err(TreeError::NotCreatable(class)));
             }
@@ -1583,7 +1744,13 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
             let id = {
                 let host = host(lua);
                 let mut tree = host.tree.borrow_mut();
-                let id = tree.create(class, names::class_name(class)).map_err(tree_err)?;
+                let name = if other { roblox.as_str() } else { names::class_name(class) };
+                let id = tree.create(class, name).map_err(tree_err)?;
+                if other {
+                    let _ = tree.set(id, Property::OtherClass, PropertyValue::String(roblox.clone()));
+                } else if names::stand_in(&roblox).is_some() {
+                    let _ = tree.set_extra(id, names::STAND_IN, Some(PropertyValue::String(roblox.clone())));
+                }
                 if let Some(shape) = shape {
                     let _ = tree.set(id, Property::Shape, PropertyValue::Enum(EnumValue::Shape(shape)));
                 }
@@ -1712,7 +1879,6 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
             items.set(names::enum_item_name(item), LuaEnumItem(item))?;
         }
         crate::compat::add_enum_items(lua, &items, kind)?;
-        items.set_readonly(true);
         enum_lib.set(names::enum_name(kind), items)?;
     }
     g.set(globals::ENUM, enum_lib.clone())?;
@@ -1741,6 +1907,12 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         })?,
     )?;
     crate::lenient::install(lua, &enum_lib)?;
+    // Every enumeration's items are fixed once the layer has added its own.
+    for pair in enum_lib.pairs::<Value, Value>() {
+        if let (_, Value::Table(items)) = pair? {
+            items.set_readonly(true);
+        }
+    }
     enum_lib.set_readonly(true);
     Ok(())
 }
@@ -1793,7 +1965,13 @@ pub(crate) fn run_tree_scripts(lua: &Lua) -> Vec<ScriptError> {
             .filter_map(|c| tree.service(*c))
             .collect()
     };
-    roots.into_iter().flat_map(|root| run_scripts_under(lua, root, ClassKind::Script)).collect()
+    let mut errors: Vec<ScriptError> =
+        roots.into_iter().flat_map(|root| run_scripts_under(lua, root, ClassKind::Script)).collect();
+    // Talking to characters through their Dialogs.
+    if let Err(err) = run_chunk(lua, "Dialogs", include_str!("dialogs.luau"), None) {
+        errors.push(err);
+    }
+    errors
 }
 
 /// Runs every enabled script of `class` under `ancestor` (and `ancestor`
