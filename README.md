@@ -618,8 +618,11 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
 - **Vehicles:** while you sit in a `VehicleSeat`, W/S and A/D set its
   `Throttle` and `Steer` (scripts can set them too). It pushes the unanchored
   assembly it's welded into along its front at up to `MaxSpeed` (studs/s),
-  getting there as fast as its `Torque` allows, and turns at up to
-  `TurnSpeed` radians a second while moving.
+  getting there as fast as its `Torque` allows (backing up goes at half
+  speed), brakes hard when you press against the way it rolls, and turns
+  at up to `TurnSpeed` × 2.2 radians a second once it's moving. It stays
+  upright and doesn't spin off walls, and the camera swings round behind
+  it as it turns.
 - **Gravity:** `workspace.Gravity` (196.2 studs/s² unless changed).
 - **NPCs:** any `Model` in the workspace with a `Humanoid` and an unanchored
   `HumanoidRootPart` is a character. `Humanoid:MoveTo(position)` walks it

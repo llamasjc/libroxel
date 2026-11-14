@@ -1070,6 +1070,18 @@ struct Followed {
     model: Option<InstanceId>,
     position: libroxel_instance::Vec3,
     yaw: f32,
+    /// Which way the vehicle being driven faces (degrees), if any.
+    driving: Option<f32>,
+}
+
+/// How quickly the camera swings round behind a vehicle that turns.
+const CHASE_RATE: f32 = 3.0;
+
+/// The angle `from` eased round towards `to` (radians), the short way.
+fn ease_angle(from: f32, to: f32, rate: f32, dt: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    let gap = (to - from + PI).rem_euclid(TAU) - PI;
+    from + gap * (1.0 - (-rate * dt).exp())
 }
 
 /// Places a follow camera round `followed`: swung behind a newly followed
@@ -1091,6 +1103,11 @@ fn place_follow(
         rig.yaw = camera::behind(followed.yaw);
         rig.following = Some(followed.root);
         rig.shown = rig.distance;
+    }
+    // Driving: the camera keeps swinging round behind the vehicle, so
+    // forward on the keys is always forward on the screen.
+    if let Some(yaw) = followed.driving {
+        rig.yaw = ease_angle(rig.yaw, camera::behind(yaw), CHASE_RATE, dt);
     }
     rig.distance = camera::ease(rig.distance, rig.zoom, dt);
     let focus = to_bevy(followed.position) + Vec3::Y * camera::FOCUS_HEIGHT;
@@ -1127,8 +1144,16 @@ fn follow_camera(
         }
         let position = tree.get_vec3(root, Property::Position)?;
         let yaw = tree.get_vec3(root, Property::Orientation).unwrap_or_default().y;
-        let model = session.and_then(|s| s.character()).map(|c| c.model);
-        Some(Followed { root, model, position, yaw })
+        let character = session.and_then(|s| s.character());
+        let model = character.map(|c| c.model);
+        let driving = character.and_then(|c| {
+            tree.descendants_of_class(tree.workspace(), ClassKind::VehicleSeat)
+                .into_iter()
+                .find(|s| tree.get_ref(*s, Property::Occupant) == Some(c.humanoid))
+                .and_then(|s| tree.get_vec3(s, Property::Orientation))
+                .map(|o| o.y)
+        });
+        Some(Followed { root, model, position, yaw, driving })
     });
     // The workspace camera: scripts can take it over, or read where it is.
     let camera = session.and_then(|s| s.camera());

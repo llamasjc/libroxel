@@ -181,14 +181,23 @@ impl Seating {
     }
 }
 
+/// How sharply a vehicle turns at full steer and `TurnSpeed` 1, in
+/// radians a second once it's going at least [`FULL_TURN_SPEED`].
+pub const TURN_RATE: f32 = 2.2;
+/// From this speed (studs a second) up, steering turns at its full rate;
+/// slower, it turns less, so a parked vehicle doesn't spin on the spot.
+pub const FULL_TURN_SPEED: f32 = 5.0;
+
 /// Drives every vehicle seat's assembly by its `Throttle` and `Steer`:
 /// speeds it up along the seat's front toward `MaxSpeed` (as fast as its
-/// `Torque` allows), grips the ground so it doesn't slide sideways, and
-/// turns it at up to `TurnSpeed` radians a second while it moves.
+/// `Torque` allows), brakes hard when the throttle is against the way it
+/// rolls, grips the ground so it doesn't slide sideways, and turns it at up
+/// to `TurnSpeed` × [`TURN_RATE`] radians a second while it moves. It is
+/// kept upright and steady: knocks off walls don't set it spinning.
 pub fn drive_vehicles(tree: &mut InstanceTree, physics: &mut Physics, dt: f32) {
     for seat in tree.descendants_of_class(tree.workspace(), ClassKind::VehicleSeat) {
-        let throttle = tree.get_number(seat, Property::Throttle).unwrap_or(0.0) as f32;
-        let steer = tree.get_number(seat, Property::Steer).unwrap_or(0.0) as f32;
+        let throttle = (tree.get_number(seat, Property::Throttle).unwrap_or(0.0) as f32).clamp(-1.0, 1.0);
+        let steer = (tree.get_number(seat, Property::Steer).unwrap_or(0.0) as f32).clamp(-1.0, 1.0);
         let (root, _) = assembly(tree, seat);
         if tree.get_bool(root, Property::Anchored) != Some(false) || !physics.is_grounded(root) {
             continue;
@@ -201,26 +210,30 @@ pub fn drive_vehicles(tree: &mut InstanceTree, physics: &mut Physics, dt: f32) {
         let v = physics.velocity(root);
         let along = v.dot(f);
         let side = Vec3::new(v.x, 0.0, v.z) - f * along;
-        let target = throttle * max_speed;
+        // Backing up goes at half speed, which is easier to steer.
+        let target = throttle * max_speed * if throttle < 0.0 { 0.5 } else { 1.0 };
         let step = torque * 5.0 * dt;
         // It glides over the ground (see `Physics::glide`): the seat does
         // the speeding up, and slowing down when the throttle is let go.
-        let along = if throttle != 0.0 {
-            along + (target - along).clamp(-step, step)
+        let along = if throttle == 0.0 {
+            along * (1.0 - 1.5 * dt).max(0.0)
+        } else if throttle * along < 0.0 {
+            // Pressing against the way it rolls brakes, quickly.
+            let brake = step * 3.0;
+            if along.abs() <= brake { 0.0 } else { along - along.signum() * brake }
         } else {
-            along * (1.0 - 2.0 * dt).max(0.0)
+            along + (target - along).clamp(-step, step)
         };
-        let grip = (1.0 - 10.0 * dt).max(0.0);
+        let grip = (1.0 - 14.0 * dt).max(0.0);
         let new_v = f * along + side * grip + Vec3::new(0.0, v.y, 0.0);
         if new_v != v {
             physics.set_velocity(root, new_v);
         }
-        if steer != 0.0 && along.abs() > 0.1 {
-            let turn = -steer * turn_speed * (along / 8.0).clamp(-1.0, 1.0) * dt;
-            let o = tree.get_vec3(root, Property::Orientation).unwrap_or_default();
-            let turned = Vec3::new(o.x, o.y + turn.to_degrees(), o.z);
-            let _ = tree.set(root, Property::Orientation, PropertyValue::Vec3(turned));
-        }
+        // Turning is the seat's job too: a steady yaw while steering, and no
+        // spin at all otherwise, so it never wobbles or tips over.
+        let grip_turn = (along.abs() / FULL_TURN_SPEED).min(1.0) * along.signum();
+        let yaw_rate = -steer * turn_speed * TURN_RATE * grip_turn;
+        physics.drive_spin(root, Vec3::new(0.0, yaw_rate, 0.0));
     }
 }
 

@@ -2013,6 +2013,56 @@ mod tests {
     }
 
     #[test]
+    fn karts_turn_tightly_brake_hard_and_stay_upright() {
+        let frame = |s: &mut libroxel_engine::PlaySession, n: usize, input: CharacterInput| {
+            for _ in 0..n {
+                s.step(1.0 / 60.0, input);
+            }
+        };
+        let idle = CharacterInput::default();
+        let mut world = blank();
+        let ws = world.workspace();
+        kart(&mut world, ws, Vec3::new(30.0, 0.0, 0.0), 0.0, [200, 50, 50]);
+        let mut session = start_on(world, true).unwrap();
+        frame(&mut session, 30, idle);
+        let tree = session.runtime().tree().clone();
+        let (chassis, seat) = {
+            let t = tree.borrow();
+            let kart = t.find_first_child(t.workspace(), "Kart").unwrap().unwrap();
+            (
+                t.find_first_child(kart, "Chassis").unwrap().unwrap(),
+                t.find_first_child(kart, "VehicleSeat").unwrap().unwrap(),
+            )
+        };
+        let get = |id, p| tree.borrow().get_vec3(id, p).unwrap();
+        let above = get(seat, Property::Position) + Vec3::new(0.0, 3.0, 0.0);
+        let hop = format!(
+            "workspace.Player1.HumanoidRootPart.Position = Vector3.new({}, {}, {})",
+            above.x, above.y, above.z
+        );
+        session.runtime().run("hop", &hop).unwrap();
+        frame(&mut session, 30, idle);
+        frame(&mut session, 90, CharacterInput { throttle: 1.0, ..Default::default() });
+        // A half turn at full speed takes under a second and a half.
+        frame(&mut session, 85, CharacterInput { throttle: 1.0, steer: -1.0, ..Default::default() });
+        let o = get(chassis, Property::Orientation);
+        assert!(o.y.abs() > 150.0, "turned round: {o:?}");
+        assert!(o.x.abs() < 1.0 && o.z.abs() < 1.0, "upright: {o:?}");
+        // Pressing back stops it from full speed in well under a second.
+        let before = get(chassis, Property::Position);
+        frame(&mut session, 30, CharacterInput { throttle: -1.0, ..Default::default() });
+        let mid = get(chassis, Property::Position);
+        assert!((mid - before).length() < 8.0, "braked: {before:?} -> {mid:?}");
+        // Then it backs up, at half its top speed.
+        frame(&mut session, 60, CharacterInput { throttle: -1.0, ..Default::default() });
+        let a = get(chassis, Property::Position);
+        frame(&mut session, 30, CharacterInput { throttle: -1.0, ..Default::default() });
+        let b = get(chassis, Property::Position);
+        let speed = (b - a).length() * 2.0;
+        assert!((10.0..=13.0).contains(&speed), "backing up at {speed}");
+    }
+
+    #[test]
     fn the_kart_drives_and_the_bench_seats() {
         let frame = |s: &mut libroxel_engine::PlaySession, n: usize, input: CharacterInput| {
             for _ in 0..n {
