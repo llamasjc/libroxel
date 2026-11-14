@@ -879,6 +879,8 @@ pub fn sample_obby() -> InstanceTree {
     let spawn = add(&mut tree, start, ClassKind::SpawnLocation, "SpawnLocation");
     tree.set(spawn, Property::Position, PropertyValue::Vec3(Vec3::new(0.0, 0.5, 0.0))).unwrap();
     tree.set(spawn, Property::Size, PropertyValue::Vec3(Vec3::new(6.0, 1.0, 6.0))).unwrap();
+    // No spawn shield: the zombie and the lava should bite straight away.
+    tree.set(spawn, Property::SpawnShield, PropertyValue::Number(0.0)).unwrap();
 
     // A grassy hill with a snowy top behind the start, made of terrain.
     let terrain = tree.terrain_or_make().expect("the workspace can hold terrain");

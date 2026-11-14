@@ -432,10 +432,28 @@ fn sync_highlights(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
     mut transforms: Query<&mut Transform>,
+    time: Res<Time>,
 ) {
     let Some(part_meshes) = part_meshes else { return };
     let tree = engine.tree.borrow();
     let mut wanted: HashMap<InstanceId, (HighlightLook, Vec<InstanceId>)> = HashMap::new();
+    // A force field shows as a pale shimmer over its character, drawn like a highlight.
+    let shimmer = (time.elapsed_secs() * 5.0).sin() * 0.5 + 0.5;
+    for id in tree.descendants_of_class(tree.workspace(), ClassKind::ForceField) {
+        if tree.get_bool(id, Property::Visible) == Some(false) {
+            continue;
+        }
+        let Some(target) = tree.parent(id).ok().flatten() else { continue };
+        let mut parts = tree.descendants_of_class(target, ClassKind::Part);
+        parts.retain(|p| tree.get_number(*p, Property::Transparency).unwrap_or(0.0) < 0.99);
+        let look = (
+            Vec3::new(0.55, 0.8, 1.0),
+            0.62 + shimmer * 0.25,
+            Vec3::new(0.75, 0.92, 1.0),
+            0.1 + shimmer * 0.5,
+        );
+        wanted.insert(id, (look, parts));
+    }
     for id in tree.descendants_of_class(tree.root(), ClassKind::Highlight) {
         if tree.get_bool(id, Property::Enabled) != Some(true) {
             continue;

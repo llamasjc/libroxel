@@ -183,6 +183,14 @@ fn with_port_for_edits(address: &str) -> String {
     if full.len() == address.len() { full } else { format!("{address}:{EDIT_PORT}") }
 }
 
+/// The starter player's script folders, which every tree has, like the services.
+const STARTER_FOLDERS: &[ClassKind] = &[ClassKind::StarterPlayerScripts, ClassKind::StarterCharacterScripts];
+
+/// A service, or one of the [`STARTER_FOLDERS`].
+fn fixed(tree: &InstanceTree, class: ClassKind) -> Option<InstanceId> {
+    tree.service(class).or_else(|| tree.starter_scripts(class))
+}
+
 fn service_ids(tree: &InstanceTree) -> Vec<InstanceId> {
     ClassKind::SERVICES.iter().filter_map(|c| tree.service(*c)).collect()
 }
@@ -259,7 +267,8 @@ impl Sharing {
                 peer.theirs.clear();
                 let services: Map<String, Json> = ClassKind::SERVICES
                     .iter()
-                    .filter_map(|c| Some((c.file_name().to_owned(), bits(tree.service(*c)?))))
+                    .chain(STARTER_FOLDERS)
+                    .filter_map(|c| Some((c.file_name().to_owned(), bits(fixed(tree, *c)?))))
                     .collect();
                 peer.conn.send(&json!({ "t": "welcome", "services": services }));
                 let ops = peer.replicator.delta(tree);
@@ -363,10 +372,10 @@ impl Guest {
                     self.back.clear();
                     self.pending.clear();
                     let services = message.get("services").and_then(Json::as_object);
-                    for &class in ClassKind::SERVICES {
+                    for &class in ClassKind::SERVICES.iter().chain(STARTER_FOLDERS) {
                         if let (Some(theirs), Some(ours)) = (
                             services.and_then(|s| s.get(class.file_name())).and_then(Json::as_u64),
-                            tree.service(class),
+                            fixed(tree, class),
                         ) {
                             self.ids.insert(theirs, ours);
                             self.back.insert(ours, theirs);

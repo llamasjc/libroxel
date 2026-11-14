@@ -252,6 +252,10 @@ fn load_node(
     // Services already exist; merge into them instead of creating new ones.
     let id = if let Some(service) = tree.service(class).filter(|_| parent == tree.root()) {
         service
+    } else if let Some(folder) =
+        tree.starter_scripts(class).filter(|_| Some(parent) == tree.service(ClassKind::StarterPlayer))
+    {
+        folder
     } else if !class.is_user_creatable() {
         report.warnings.push(format!("skipped {name}: a {class_name} can't be saved in a place"));
         return Ok(());

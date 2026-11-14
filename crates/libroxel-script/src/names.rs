@@ -1076,6 +1076,10 @@ pub fn class_name(class: ClassKind) -> &'static str {
         ClassKind::SpecialMesh => "SpecialMesh",
         ClassKind::Shirt => "Shirt",
         ClassKind::Pants => "Pants",
+        ClassKind::StarterPlayerScripts => "StarterPlayerScripts",
+        ClassKind::StarterCharacterScripts => "StarterCharacterScripts",
+        ClassKind::PlayerScripts => "PlayerScripts",
+        ClassKind::ForceField => "ForceField",
     }
 }
 
@@ -1298,6 +1302,7 @@ pub fn property_name(property: Property) -> &'static str {
         Property::MoonAngularSize => "MoonAngularSize",
         Property::TrailLifetime => "Lifetime",
         Property::PixelsPerStud => "PixelsPerStud",
+        Property::SpawnShield => "Duration",
         Property::TorqueVector => "Torque",
         Property::TargetOrientation => "TargetOrientation",
         Property::GradientColor0 => "Color0",

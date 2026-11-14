@@ -200,6 +200,16 @@ impl InstanceTree {
             tree.services.push(id);
         }
         tree.workspace = tree.services[0];
+        // The starter player's two script folders come with it.
+        let starter = tree.service(ClassKind::StarterPlayer).expect("the starter player is a service");
+        for (class, name) in [
+            (ClassKind::StarterPlayerScripts, "StarterPlayerScripts"),
+            (ClassKind::StarterCharacterScripts, "StarterCharacterScripts"),
+        ] {
+            let id = tree.alloc(InstanceData::new(class, name.into()));
+            tree.set_parent(id, Some(starter)).expect("fresh folders can be parented");
+            tree.data_mut(id).expect("folder exists").parent_locked = true;
+        }
         tree.changes.clear();
         tree
     }
@@ -207,6 +217,14 @@ impl InstanceTree {
     /// The service of class `class`, if it is a service.
     pub fn service(&self, class: ClassKind) -> Option<InstanceId> {
         ClassKind::SERVICES.iter().position(|c| *c == class).map(|i| self.services[i])
+    }
+
+    /// One of the starter player's script folders
+    /// ([`StarterPlayerScripts`](ClassKind::StarterPlayerScripts) or
+    /// [`StarterCharacterScripts`](ClassKind::StarterCharacterScripts)).
+    pub fn starter_scripts(&self, class: ClassKind) -> Option<InstanceId> {
+        let starter = self.service(ClassKind::StarterPlayer)?;
+        self.find_first_child_of_class(starter, class).ok().flatten()
     }
 
     pub fn root(&self) -> InstanceId {

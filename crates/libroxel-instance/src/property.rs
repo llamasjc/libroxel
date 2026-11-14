@@ -389,6 +389,9 @@ pub enum Property {
     TrailLifetime,
     /// On a surface GUI: how many GUI pixels fit in one stud of its face.
     PixelsPerStud,
+    /// On a spawn location: how many seconds of force field a character
+    /// spawning there gets (scripts call it Duration).
+    SpawnShield,
     /// On a torque: how hard it turns its attachment's assembly, about the attachment's axes (scripts call it Torque).
     TorqueVector,
     /// On an align orientation or body gyro: the turn to hold (scripts set it as a CFrame).
@@ -508,6 +511,7 @@ impl Property {
             | Property::MoonAngularSize
             | Property::TrailLifetime
             | Property::PixelsPerStud
+            | Property::SpawnShield
             | Property::GradientTransparency0
             | Property::GradientTransparency1
             | Property::GradientRotation => "number",
@@ -865,6 +869,7 @@ impl Property {
         Property::MoonAngularSize,
         Property::TrailLifetime,
         Property::PixelsPerStud,
+        Property::SpawnShield,
         Property::TorqueVector,
         Property::TargetOrientation,
         Property::GradientColor0,
@@ -1086,6 +1091,7 @@ impl Property {
             Property::MoonAngularSize => "moon_angular_size",
             Property::TrailLifetime => "trail_lifetime",
             Property::PixelsPerStud => "pixels_per_stud",
+            Property::SpawnShield => "spawn_shield",
             Property::TorqueVector => "torque_vector",
             Property::TargetOrientation => "target_orientation",
             Property::GradientColor0 => "gradient_color0",

@@ -1157,20 +1157,21 @@ impl PlaySession {
                 }
             }
         }
-        // Start the local scripts of tools as they arrive.
+        // Start the local scripts of tools, of the player's scripts and of
+        // the character's scripts as they arrive.
         let avatar = &self.avatars[index];
-        let tools: Vec<InstanceId> = {
+        let arrived: Vec<InstanceId> = {
             let t = tree.borrow();
-            [avatar.backpack, avatar.character.map(|c| c.model)]
+            let scripts = t.find_first_child_of_class(player, ClassKind::PlayerScripts).ok().flatten();
+            [avatar.backpack, avatar.character.map(|c| c.model), scripts]
                 .into_iter()
                 .flatten()
                 .flat_map(|c| t.children(c).unwrap_or_default().to_vec())
-                .filter(|c| t.class(*c) == Ok(ClassKind::Tool))
                 .collect()
         };
-        for tool in tools {
-            if joined.started.insert(tool) {
-                let errors = self.runtime.run_local_scripts(tool);
+        for id in arrived {
+            if joined.started.insert(id) {
+                let errors = self.runtime.run_local_scripts(id);
                 self.collect(errors);
             }
         }

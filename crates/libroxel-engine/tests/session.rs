@@ -24,7 +24,14 @@ fn script(tree: &mut InstanceTree, name: &str, source: &str) {
 fn world() -> InstanceTree {
     let mut tree = InstanceTree::new();
     part(&mut tree, ClassKind::Part, "Floor", Vec3::new(0.0, -0.5, 0.0), Vec3::new(100.0, 1.0, 100.0));
-    part(&mut tree, ClassKind::SpawnLocation, "Spawn", Vec3::new(0.0, 0.5, 0.0), Vec3::new(6.0, 1.0, 6.0));
+    let spawn = part(
+        &mut tree,
+        ClassKind::SpawnLocation,
+        "Spawn",
+        Vec3::new(0.0, 0.5, 0.0),
+        Vec3::new(6.0, 1.0, 6.0),
+    );
+    tree.set(spawn, Property::SpawnShield, PropertyValue::Number(0.0)).unwrap();
     tree
 }
 

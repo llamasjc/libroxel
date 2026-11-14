@@ -863,6 +863,13 @@ impl UserData for LuaInstance {
             require_class(lua, this.0, ClassKind::Humanoid, names::methods::TAKE_DAMAGE)?;
             let host = host(lua);
             let mut tree = host.tree.borrow_mut();
+            // A force field on the character takes the hit instead.
+            let model = tree.parent(this.0).ok().flatten();
+            if model.is_some_and(|m| {
+                tree.find_first_child_of_class(m, ClassKind::ForceField).ok().flatten().is_some()
+            }) {
+                return Ok(());
+            }
             let health = tree.get_number(this.0, Property::Health).unwrap_or(0.0);
             let health = (health - amount.max(0.0)).max(0.0);
             tree.set(this.0, Property::Health, PropertyValue::Number(health)).map_err(tree_err)
@@ -1789,13 +1796,16 @@ pub(crate) fn run_tree_scripts(lua: &Lua) -> Vec<ScriptError> {
     roots.into_iter().flat_map(|root| run_scripts_under(lua, root, ClassKind::Script)).collect()
 }
 
-/// Runs every enabled script of `class` under `ancestor`, in tree order.
+/// Runs every enabled script of `class` under `ancestor` (and `ancestor`
+/// itself, if it is one), in tree order.
 pub(crate) fn run_scripts_under(lua: &Lua, ancestor: InstanceId, class: ClassKind) -> Vec<ScriptError> {
     let scripts: Vec<(InstanceId, String, String)> = {
         let host = host(lua);
         let tree = host.tree.borrow();
-        tree.descendants_of_class(ancestor, class)
+        let itself = (tree.class(ancestor) == Ok(class)).then_some(ancestor);
+        itself
             .into_iter()
+            .chain(tree.descendants_of_class(ancestor, class))
             .filter(|id| tree.get_bool(*id, Property::Disabled) != Some(true))
             .filter_map(|id| {
                 let source = match tree.get(id, Property::Source).ok()? {

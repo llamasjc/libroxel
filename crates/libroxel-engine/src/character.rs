@@ -718,25 +718,30 @@ fn same_color(a: Color3, b: Color3) -> bool {
 /// Where a character on a team of colour `team` should appear: the first
 /// spawn location for that team, else the first neutral one, else any.
 pub fn spawn_point_for(tree: &InstanceTree, team: Option<Color3>) -> Vec3 {
-    let spawns = tree.descendants_of_class(tree.workspace(), ClassKind::SpawnLocation);
-    let neutral = |id: InstanceId| tree.get_bool(id, Property::Neutral) != Some(false);
-    let for_team = |id: InstanceId| {
-        !neutral(id)
-            && team.zip(tree.get_color(id, Property::TeamColor)).is_some_and(|(t, c)| same_color(t, c))
-    };
-    let chosen = spawns
-        .iter()
-        .copied()
-        .find(|s| for_team(*s))
-        .or_else(|| spawns.iter().copied().find(|s| neutral(*s)))
-        .or_else(|| spawns.first().copied());
-    chosen
+    spawn_location_for(tree, team)
         .and_then(|id| {
             let pos = tree.get_vec3(id, Property::Position)?;
             let size = tree.get_vec3(id, Property::Size)?;
             Some(pos + Vec3::new(0.0, size.y / 2.0 + BODY_SIZE.y / 2.0 + 0.1, 0.0))
         })
         .unwrap_or(DEFAULT_SPAWN)
+}
+
+/// The spawn location a character on a team of colour `team` appears on,
+/// if the world has any (see [`spawn_point_for`]).
+pub fn spawn_location_for(tree: &InstanceTree, team: Option<Color3>) -> Option<InstanceId> {
+    let spawns = tree.descendants_of_class(tree.workspace(), ClassKind::SpawnLocation);
+    let neutral = |id: InstanceId| tree.get_bool(id, Property::Neutral) != Some(false);
+    let for_team = |id: InstanceId| {
+        !neutral(id)
+            && team.zip(tree.get_color(id, Property::TeamColor)).is_some_and(|(t, c)| same_color(t, c))
+    };
+    spawns
+        .iter()
+        .copied()
+        .find(|s| for_team(*s))
+        .or_else(|| spawns.iter().copied().find(|s| neutral(*s)))
+        .or_else(|| spawns.first().copied())
 }
 
 fn set(tree: &mut InstanceTree, id: InstanceId, property: Property, value: PropertyValue) {

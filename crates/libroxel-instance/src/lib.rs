@@ -288,6 +288,16 @@ pub enum ClassKind {
     Shirt,
     /// Inside a character: a pants picture (kept for scripts).
     Pants,
+    /// Inside the starter player: local scripts each player gets a copy of
+    /// once, when they join.
+    StarterPlayerScripts,
+    /// Inside the starter player: scripts and local scripts put in every
+    /// character as it spawns.
+    StarterCharacterScripts,
+    /// Inside a player: their copies of the starter player scripts.
+    PlayerScripts,
+    /// Inside a character: a shield that stops damage while it's there.
+    ForceField,
 }
 
 impl ClassKind {
@@ -410,6 +420,10 @@ impl ClassKind {
         ClassKind::SpecialMesh,
         ClassKind::Shirt,
         ClassKind::Pants,
+        ClassKind::StarterPlayerScripts,
+        ClassKind::StarterCharacterScripts,
+        ClassKind::PlayerScripts,
+        ClassKind::ForceField,
     ];
 
     /// The services every tree has under its root, in order. They can't be
@@ -440,7 +454,16 @@ impl ClassKind {
     /// Whether scripts and the editor may create this class. Players and
     /// their GUI containers are made by the engine when someone joins.
     pub fn is_user_creatable(self) -> bool {
-        self.is_creatable() && !matches!(self, ClassKind::Player | ClassKind::PlayerGui | ClassKind::Backpack)
+        self.is_creatable()
+            && !matches!(
+                self,
+                ClassKind::Player
+                    | ClassKind::PlayerGui
+                    | ClassKind::Backpack
+                    | ClassKind::PlayerScripts
+                    | ClassKind::StarterPlayerScripts
+                    | ClassKind::StarterCharacterScripts
+            )
     }
 
     /// Whether this class is drawn on screen as a rectangle.
@@ -539,7 +562,9 @@ impl ClassKind {
             Property::CollisionGroup,
             Property::TeamColor,
             Property::Neutral,
+            Property::SpawnShield,
         ];
+        const FORCE_FIELD: &[Property] = &[Property::Name, Property::Visible];
         const WORKSPACE: &[Property] =
             &[Property::Name, Property::Gravity, Property::FallenPartsDestroyHeight];
         const OBJECT: &[Property] = &[Property::Name, Property::ObjectValue];
@@ -1138,6 +1163,7 @@ impl ClassKind {
             ClassKind::UITextSizeConstraint => TEXT_SIZE_LIMITS,
             ClassKind::Weld => JOINT,
             ClassKind::Motor6D => MOTOR,
+            ClassKind::ForceField => FORCE_FIELD,
             _ => COMMON,
         }
     }
@@ -1267,6 +1293,7 @@ impl ClassKind {
             Property::MoonAngularSize => PropertyValue::Number(11.0),
             Property::TrailLifetime => PropertyValue::Number(2.0),
             Property::PixelsPerStud => PropertyValue::Number(50.0),
+            Property::SpawnShield => PropertyValue::Number(10.0),
             Property::TorqueVector | Property::TargetOrientation => PropertyValue::Vec3(Vec3::ZERO),
             Property::GradientColor0 | Property::GradientColor1 => PropertyValue::Color3(Color3::WHITE),
             Property::GradientTransparency0
@@ -1536,6 +1563,10 @@ impl ClassKind {
             ClassKind::SpecialMesh => "special_mesh",
             ClassKind::Shirt => "shirt",
             ClassKind::Pants => "pants",
+            ClassKind::StarterPlayerScripts => "starter_player_scripts",
+            ClassKind::StarterCharacterScripts => "starter_character_scripts",
+            ClassKind::PlayerScripts => "player_scripts",
+            ClassKind::ForceField => "force_field",
         }
     }
 

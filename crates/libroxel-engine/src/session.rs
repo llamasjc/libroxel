@@ -112,6 +112,9 @@ pub(crate) struct Avatar {
     /// For a player on another computer, which moves its own character:
     /// where it last said the character is.
     pub(crate) moved_to: Option<Vec3>,
+    /// The force field a spawn location gave their character, and the
+    /// seconds before it goes.
+    pub(crate) shield: Option<(InstanceId, f32)>,
     /// How many times the host has put that character somewhere itself
     /// (a teleport); moves sent before the latest one are ignored.
     pub(crate) teleports: u64,
@@ -138,6 +141,7 @@ impl Avatar {
             remote,
             input: CharacterInput::default(),
             moved_to: None,
+            shield: None,
             teleports: 0,
             look: None,
         }
@@ -293,6 +297,9 @@ impl PlaySession {
             let backpack = t.create(ClassKind::Backpack, "Backpack").expect("backpacks can be created");
             t.set_parent(backpack, Some(player)).expect("fresh backpacks can be parented");
             avatar.backpack = Some(backpack);
+            let scripts =
+                t.create(ClassKind::PlayerScripts, "PlayerScripts").expect("script folders can be created");
+            t.set_parent(scripts, Some(player)).expect("fresh folders can be parented");
         }
         self.avatars.push(avatar);
         let index = self.avatars.len() - 1;
@@ -300,6 +307,7 @@ impl PlaySession {
             self.runtime.set_local_player(Some(player));
         }
         self.copy_starter_gui(index, false);
+        self.copy_player_scripts(index);
         auto_assign_team(&mut tree.borrow_mut(), player);
         let errors = self.runtime.player_added(player);
         self.collect(errors);
@@ -353,9 +361,20 @@ impl PlaySession {
                 self.avatars[index].look.clone().unwrap_or_else(|| crate::character::Look::for_player(n));
             let character = Character::spawn_wearing(&mut t, &name, team, look);
             let _ = t.set(player, Property::Character, PropertyValue::Ref(Some(character.model)));
+            // A spawn location shields whoever appears on it for a while.
+            let shield = crate::character::spawn_location_for(&t, team)
+                .and_then(|s| t.get_number(s, Property::SpawnShield))
+                .unwrap_or(0.0);
+            if shield > 0.0
+                && let Ok(field) = t.create(ClassKind::ForceField, "ForceField")
+            {
+                let _ = t.set_parent(field, Some(character.model));
+                self.avatars[index].shield = Some((field, shield as f32));
+            }
             character
         };
         self.fill_backpack(index);
+        self.copy_character_scripts(index, character.model);
         let avatar = &mut self.avatars[index];
         avatar.character = Some(character);
         avatar.moved_to = None;
@@ -437,6 +456,50 @@ impl PlaySession {
         };
         for copy in copies {
             let errors = self.runtime.run_local_scripts(copy);
+            self.collect(errors);
+        }
+    }
+
+    /// Copies what's in `StarterPlayerScripts` into the player's
+    /// `PlayerScripts`, once, and starts the local scripts there for the
+    /// player on this computer. (Players on other computers start theirs
+    /// when the copy reaches them.)
+    fn copy_player_scripts(&mut self, index: usize) {
+        let tree = self.runtime.tree().clone();
+        let player = self.avatars[index].player;
+        let copies = {
+            let mut t = tree.borrow_mut();
+            let Some(into) = t.find_first_child_of_class(player, ClassKind::PlayerScripts).ok().flatten()
+            else {
+                return;
+            };
+            let from = t.starter_scripts(ClassKind::StarterPlayerScripts);
+            copy_children(&mut t, from, into)
+        };
+        if !self.avatars[index].remote {
+            for copy in copies {
+                let errors = self.runtime.run_local_scripts(copy);
+                self.collect(errors);
+            }
+        }
+    }
+
+    /// Puts a copy of what's in `StarterCharacterScripts` in a character
+    /// that just spawned, and starts its scripts (its local scripts only
+    /// for the player on this computer).
+    fn copy_character_scripts(&mut self, index: usize, model: InstanceId) {
+        let tree = self.runtime.tree().clone();
+        let copies = {
+            let mut t = tree.borrow_mut();
+            let from = t.starter_scripts(ClassKind::StarterCharacterScripts);
+            copy_children(&mut t, from, model)
+        };
+        let remote = self.avatars[index].remote;
+        for copy in copies {
+            let mut errors = self.runtime.run_scripts(copy);
+            if !remote {
+                errors.extend(self.runtime.run_local_scripts(copy));
+            }
             self.collect(errors);
         }
     }
@@ -1256,8 +1319,12 @@ impl PlaySession {
                 }
                 // Anything in a character's model takes the character with it.
                 let model = t.parent(part).ok().flatten();
-                if let Some(humanoid) =
-                    model.and_then(|m| t.find_first_child_of_class(m, ClassKind::Humanoid).ok().flatten())
+                let shielded = model.is_some_and(|m| {
+                    t.find_first_child_of_class(m, ClassKind::ForceField).ok().flatten().is_some()
+                });
+                if let Some(humanoid) = model
+                    .filter(|_| !shielded)
+                    .and_then(|m| t.find_first_child_of_class(m, ClassKind::Humanoid).ok().flatten())
                 {
                     let _ = t.set(humanoid, Property::Health, PropertyValue::Number(0.0));
                 }
@@ -1277,6 +1344,14 @@ impl PlaySession {
     fn handle_death(&mut self, index: usize, dt: f32) {
         let tree = self.runtime.tree().clone();
         let avatar = &mut self.avatars[index];
+        // The spawn shield wears off.
+        if let Some((field, left)) = avatar.shield.as_mut() {
+            *left -= dt;
+            if *left <= 0.0 {
+                let _ = tree.borrow_mut().destroy(*field);
+                avatar.shield = None;
+            }
+        }
         let Some(character) = avatar.character else { return };
         if let Some(remaining) = avatar.respawn_in.as_mut() {
             *remaining -= dt;
@@ -1333,6 +1408,20 @@ impl PlaySession {
         }
         self.spawn_character(index);
     }
+}
+
+/// Copies every child of `from` (if there is one) into `into`, returning the copies.
+fn copy_children(tree: &mut InstanceTree, from: Option<InstanceId>, into: InstanceId) -> Vec<InstanceId> {
+    let Some(from) = from else { return Vec::new() };
+    let children = tree.children(from).map(<[InstanceId]>::to_vec).unwrap_or_default();
+    children
+        .into_iter()
+        .filter_map(|child| {
+            let copy = tree.clone_subtree(child).ok()?;
+            tree.set_parent(copy, Some(into)).ok()?;
+            Some(copy)
+        })
+        .collect()
 }
 
 /// Puts a player who just joined on the auto-assignable team with the
