@@ -326,6 +326,41 @@ local function viewport()
 	return camera and camera.ViewportSize or Vector2.new(1280, 720)
 end
 
+-- Roblox's top bar: screen GUIs start below it unless they ignore the inset.
+local GUI_INSET = 58
+-- Where a screen GUI's area starts (measured from below the top bar) and how big it is.
+local function screen_rect(layer)
+	local vp = viewport()
+	local ignore = false
+	if layer then
+		local ok, v = pcall(function()
+			return layer.IgnoreGuiInset
+		end)
+		ignore = ok and v == true
+		local ok2, insets = pcall(function()
+			return layer.ScreenInsets
+		end)
+		if ok2 and insets ~= nil then
+			local n = typeof(insets) == "EnumItem" and insets.Name or tostring(insets)
+			if string.find(n, "None", 1, true) or string.find(n, "DeviceSafeInsets", 1, true) then
+				ignore = true
+			end
+		end
+	end
+	if ignore then
+		return Vector2.new(0, -GUI_INSET), vp
+	end
+	return Vector2.zero, Vector2.new(vp.X, math.max(0, vp.Y - GUI_INSET))
+end
+L.screen_rect = screen_rect
+local function layer_of(obj)
+	local at = obj
+	while at ~= nil and not at:IsA("LayerCollector") do
+		at = at.Parent
+	end
+	return at
+end
+
 -- A GUI object's size in pixels, worked out from its UDim2 and its parent's.
 local function abs_size(obj)
 	local ok, size = pcall(function()
@@ -336,7 +371,8 @@ local function abs_size(obj)
 	if parent and parent:IsA("GuiObject") then
 		within = abs_size(parent)
 	else
-		within = viewport()
+		local _, area = screen_rect(layer_of(obj))
+		within = area
 	end
 	if not ok or typeof(size) ~= "UDim2" then
 		return within
@@ -346,9 +382,11 @@ end
 
 local function abs_position(obj)
 	local parent = obj.Parent
-	local origin, within = Vector2.zero, viewport()
+	local origin, within
 	if parent and parent:IsA("GuiObject") then
 		origin, within = abs_position(parent), abs_size(parent)
+	else
+		origin, within = screen_rect(layer_of(obj))
 	end
 	local pos = obj.Position
 	local anchor = obj.AnchorPoint
@@ -1123,11 +1161,13 @@ add(props, "LayerCollector", {
 	MaxDistance = 0,
 })
 add(getters, "LayerCollector", {
-	AbsoluteSize = function()
-		return viewport()
+	AbsoluteSize = function(self)
+		local _, size = screen_rect(self)
+		return size
 	end,
-	AbsolutePosition = function()
-		return Vector2.zero
+	AbsolutePosition = function(self)
+		local origin = screen_rect(self)
+		return origin
 	end,
 })
 

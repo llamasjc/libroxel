@@ -198,9 +198,13 @@ fn mouse_hit(lua: &Lua) -> Option<(crate::MouseRay, Vec3, Option<InstanceId>)> {
     let character = local_character(lua);
     let host = host(lua);
     let tree = host.tree.borrow();
-    let hit = geometry::raycast(&tree, ray.origin, ray.direction * mouse::REACH, |part| {
-        character.is_none_or(|c| !tree.is_descendant_of(part, c).unwrap_or(false))
-    });
+    let hit = geometry::raycast_indexed(
+        &tree,
+        &crate::bindings::part_index(&host, &tree),
+        ray.origin,
+        ray.direction * mouse::REACH,
+        |part| character.is_none_or(|c| !tree.is_descendant_of(part, c).unwrap_or(false)),
+    );
     Some(match hit {
         Some(hit) => (ray, hit.position, Some(hit.part)),
         None => (ray, ray.origin + ray.direction * mouse::REACH, None),

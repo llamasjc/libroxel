@@ -105,6 +105,11 @@ pub struct MouseRay {
     pub y: f32,
 }
 
+/// The space Roblox's top bar takes at the top of the screen, in pixels:
+/// what `GuiService:GetGuiInset()` reports, and where screen GUIs that
+/// don't ignore the inset start.
+pub const GUI_INSET: f32 = 58.0;
+
 /// How much memory one game's scripts may use together. A script that
 /// tries to use more gets a "not enough memory" error instead of taking
 /// the whole computer (or server) down with it.

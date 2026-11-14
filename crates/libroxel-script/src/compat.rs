@@ -199,9 +199,13 @@ fn find_part_on_ray(lua: &Lua, ray: &Value, listed: Vec<InstanceId>, only: bool)
         let inside = |part: InstanceId| {
             listed.iter().any(|f| *f == part || tree.is_descendant_of(part, *f).unwrap_or(false))
         };
-        geometry::raycast(&tree, ray.origin, ray.direction, |part| {
-            inside(part) == only && tree.get_bool(part, Property::CanQuery) != Some(false)
-        })
+        geometry::raycast_indexed(
+            &tree,
+            &crate::bindings::part_index(&host, &tree),
+            ray.origin,
+            ray.direction,
+            |part| inside(part) == only && tree.get_bool(part, Property::CanQuery) != Some(false),
+        )
         .map(|hit| {
             let material = match tree.voxels(hit.part) {
                 Ok(v) if !v.is_empty() => {
@@ -980,7 +984,7 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
         GUI_SERVICE => {
             method(lua, &t, IS_TEN_FOOT_INTERFACE, |_, ()| Ok(false))?;
             method(lua, &t, GET_GUI_INSET, |_, ()| {
-                Ok((LuaVector2(Vec2::new(0.0, 0.0)), LuaVector2(Vec2::new(0.0, 0.0))))
+                Ok((LuaVector2(Vec2::new(0.0, crate::GUI_INSET)), LuaVector2(Vec2::new(0.0, 0.0))))
             })?;
         }
         TEXT_SERVICE => {
