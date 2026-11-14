@@ -350,3 +350,56 @@ fn attributes_hold_any_roblox_value() {
     );
     assert_eq!(printed(&rt), ["2 Bright red 5 Wood", "3 2"]);
 }
+
+#[test]
+fn enabling_a_script_starts_it_and_disabling_stops_it() {
+    let mut tree = tree_with_player().0;
+    let sss = tree.service(ClassKind::ServerScriptService).unwrap();
+    let make = |tree: &mut InstanceTree, name: &str, src: &str, disabled: bool| {
+        let s = tree.create(ClassKind::Script, name).unwrap();
+        tree.set(s, Property::Source, PropertyValue::String(src.into())).unwrap();
+        tree.set(s, Property::Disabled, PropertyValue::Bool(disabled)).unwrap();
+        tree.set_parent(s, Some(sss)).unwrap();
+    };
+    make(&mut tree, "Ticker", "while true do print('tick') task.wait(1) end", true);
+    make(
+        &mut tree,
+        "Boot",
+        r#"local t = script.Parent.Ticker
+        print("boot", t.Enabled)
+        t.Enabled = true
+        task.wait(1.5)
+        t.Enabled = false
+        print("off", t.Enabled)"#,
+        false,
+    );
+    let rt = ScriptRuntime::new_with_tree(tree).unwrap();
+    assert!(rt.run_tree_scripts().is_empty());
+    for _ in 0..40 {
+        assert!(rt.step(0.1).is_empty());
+    }
+    assert_eq!(printed(&rt), ["boot false", "tick", "tick", "off false"]);
+}
+
+#[test]
+fn modules_load_once_for_each_side() {
+    let (mut tree, player) = tree_with_player();
+    let rs = tree.service(ClassKind::ReplicatedStorage).unwrap();
+    let module = tree.create(ClassKind::ModuleScript, "Net").unwrap();
+    let src = r#"print("loading") return { server = game:GetService("RunService"):IsServer() }"#;
+    tree.set(module, Property::Source, PropertyValue::String(src.into())).unwrap();
+    tree.set_parent(module, Some(rs)).unwrap();
+    let sss = tree.service(ClassKind::ServerScriptService).unwrap();
+    let use_it = r#"local a = require(game.ReplicatedStorage.Net) local b = require(game.ReplicatedStorage.Net) print(script.ClassName, a.server, a == b)"#;
+    let server = tree.create(ClassKind::Script, "S").unwrap();
+    tree.set(server, Property::Source, PropertyValue::String(use_it.into())).unwrap();
+    tree.set_parent(server, Some(sss)).unwrap();
+    let gui = tree.find_first_child_of_class(player, ClassKind::PlayerGui).unwrap().unwrap();
+    let client = tree.create(ClassKind::LocalScript, "C").unwrap();
+    tree.set(client, Property::Source, PropertyValue::String(use_it.into())).unwrap();
+    tree.set_parent(client, Some(gui)).unwrap();
+    let rt = ScriptRuntime::new_with_tree(tree).unwrap();
+    assert!(rt.run_tree_scripts().is_empty());
+    assert!(rt.run_local_scripts(gui).is_empty());
+    assert_eq!(printed(&rt), ["loading", "Script true true", "loading", "LocalScript false true"]);
+}

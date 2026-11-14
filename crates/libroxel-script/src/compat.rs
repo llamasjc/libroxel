@@ -678,6 +678,9 @@ pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> m
         return Ok(Some(Value::UserData(lua.create_userdata(LuaCFrame(CFrame::new(pos, rot)))?)));
     }
     Ok(Some(match key {
+        "Enabled" if crate::bindings::is_script_class(class) || class == ClassKind::ModuleScript => {
+            Value::Boolean(host(lua).tree.borrow().get_bool(id, Property::Disabled) != Some(true))
+        }
         BRICK_COLOR_PROPERTY if class.is_physical() => {
             let color = host(lua).tree.borrow().get_color(id, Property::Color).unwrap_or(Color3::WHITE);
             Value::UserData(lua.create_userdata(LuaBrickColor(nearest_brick(color)))?)
@@ -743,6 +746,20 @@ pub(crate) fn new_index(
         return Ok(true);
     }
     match key {
+        "Enabled" if crate::bindings::is_script_class(class) || class == ClassKind::ModuleScript => {
+            let Value::Boolean(on) = value else {
+                return Err(runtime_err(format!("Enabled expects a boolean, got a {}", value.type_name())));
+            };
+            if class != ClassKind::ModuleScript {
+                host(lua)
+                    .tree
+                    .borrow_mut()
+                    .set(id, Property::Disabled, PropertyValue::Bool(!on))
+                    .map_err(tree_err)?;
+                crate::bindings::script_toggled(lua, id);
+            }
+            Ok(true)
+        }
         BRICK_COLOR_PROPERTY if class.is_physical() => {
             let brick = as_brick(value).ok_or_else(|| runtime_err("BrickColor expects a BrickColor"))?;
             let color = PropertyValue::Color3(brick_rgb(brick));

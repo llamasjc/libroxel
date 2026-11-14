@@ -1390,6 +1390,20 @@ add(methods, "Actor", {
 	end,
 })
 methods.Actor.BindToMessageParallel = methods.Actor.BindToMessage
+-- The Actor a script runs under, if any.
+local function get_actor(self)
+	local at = self.Parent
+	while at ~= nil do
+		if at.ClassName == "Actor" then
+			return at
+		end
+		at = at.Parent
+	end
+	return nil
+end
+for _, class in { "BaseScript", "Script", "LocalScript", "ModuleScript" } do
+	add(methods, class, { GetActor = get_actor })
+end
 add(methods, "Beam", { SetTextureOffset = function() end })
 add(props, "SelectionBox", { SurfaceColor3 = Color3.fromRGB(13, 105, 172), SurfaceTransparency = 1, Transparency = 0 })
 add(props, "Constraint", {
@@ -2022,6 +2036,154 @@ local function returns(...)
 		return table.unpack(v, 1, v.n)
 	end
 end
+
+-- Pictures scripts draw pixel by pixel. libroxel keeps the pixels (so
+-- reading them back works) but doesn't show them yet.
+local function editable_image(size)
+	size = size or Vector2.new(512, 512)
+	local w, h = math.max(1, math.floor(size.X)), math.max(1, math.floor(size.Y))
+	if w > 4096 or h > 4096 then
+		error("an EditableImage can be at most 4096 by 4096", 3)
+	end
+	local pixels = buffer.create(w * h * 4)
+	local gone = false
+	local function check()
+		if gone then
+			error("the EditableImage was destroyed", 3)
+		end
+	end
+	local function rect(pos, sz)
+		local x0, y0 = math.max(0, math.floor(pos.X)), math.max(0, math.floor(pos.Y))
+		local x1, y1 = math.min(w, x0 + math.floor(sz.X)), math.min(h, y0 + math.floor(sz.Y))
+		return x0, y0, x1, y1
+	end
+	local function rgba(color, transparency)
+		local a = math.floor((1 - (transparency or 0)) * 255 + 0.5)
+		return math.floor(color.R * 255 + 0.5) + math.floor(color.G * 255 + 0.5) * 256
+			+ math.floor(color.B * 255 + 0.5) * 65536 + a * 16777216
+	end
+	local img
+	img = L.stand_in("EditableImage", {
+		props = { Size = Vector2.new(w, h), Name = "EditableImage" },
+		methods = {
+			Destroy = function()
+				gone = true
+			end,
+			WritePixelsBuffer = function(_, pos, sz, buf)
+				check()
+				local x0, y0, x1, y1 = rect(pos, sz)
+				local sw = math.floor(sz.X)
+				for y = y0, y1 - 1 do
+					local from = ((y - y0) * sw) * 4
+					local n = (x1 - x0) * 4
+					if from + n <= buffer.len(buf) then
+						buffer.copy(pixels, (y * w + x0) * 4, buf, from, n)
+					end
+				end
+			end,
+			ReadPixelsBuffer = function(_, pos, sz)
+				check()
+				local x0, y0, x1, y1 = rect(pos, sz)
+				local sw = math.floor(sz.X)
+				local out = buffer.create(math.max(0, sw * math.floor(sz.Y) * 4))
+				for y = y0, y1 - 1 do
+					buffer.copy(out, ((y - y0) * sw) * 4, pixels, (y * w + x0) * 4, (x1 - x0) * 4)
+				end
+				return out
+			end,
+			WritePixels = function(_, pos, sz, list)
+				check()
+				local x0, y0, x1, y1 = rect(pos, sz)
+				local sw = math.floor(sz.X)
+				for y = y0, y1 - 1 do
+					for x = x0, x1 - 1 do
+						local i = ((y - y0) * sw + (x - x0)) * 4
+						for c = 0, 3 do
+							local v = list[i + c + 1] or 0
+							buffer.writeu8(pixels, (y * w + x) * 4 + c, math.clamp(math.floor(v * 255 + 0.5), 0, 255))
+						end
+					end
+				end
+			end,
+			ReadPixels = function(_, pos, sz)
+				check()
+				local x0, y0, x1, y1 = rect(pos, sz)
+				local out = {}
+				for y = y0, y1 - 1 do
+					for x = x0, x1 - 1 do
+						for c = 0, 3 do
+							table.insert(out, buffer.readu8(pixels, (y * w + x) * 4 + c) / 255)
+						end
+					end
+				end
+				return out
+			end,
+			DrawRectangle = function(_, pos, sz, color, transparency)
+				check()
+				local x0, y0, x1, y1 = rect(pos, sz)
+				local v = rgba(color, transparency)
+				for y = y0, y1 - 1 do
+					for x = x0, x1 - 1 do
+						buffer.writeu32(pixels, (y * w + x) * 4, v)
+					end
+				end
+			end,
+			DrawCircle = function(_, center, radius, color, transparency)
+				check()
+				local v = rgba(color, transparency)
+				local r2 = radius * radius
+				for y = math.max(0, math.floor(center.Y - radius)), math.min(h - 1, math.ceil(center.Y + radius)) do
+					for x = math.max(0, math.floor(center.X - radius)), math.min(w - 1, math.ceil(center.X + radius)) do
+						local dx, dy = x - center.X, y - center.Y
+						if dx * dx + dy * dy <= r2 then
+							buffer.writeu32(pixels, (y * w + x) * 4, v)
+						end
+					end
+				end
+			end,
+			DrawLine = function(_, a, b, color, transparency)
+				check()
+				local v = rgba(color, transparency)
+				local steps = math.max(math.abs(b.X - a.X), math.abs(b.Y - a.Y), 1)
+				for i = 0, steps do
+					local x = math.floor(a.X + (b.X - a.X) * i / steps + 0.5)
+					local y = math.floor(a.Y + (b.Y - a.Y) * i / steps + 0.5)
+					if x >= 0 and y >= 0 and x < w and y < h then
+						buffer.writeu32(pixels, (y * w + x) * 4, v)
+					end
+				end
+			end,
+			DrawImage = function() end,
+			DrawImageTransformed = function() end,
+			DrawImageProjected = function() end,
+			DrawTriangle = function() end,
+			Crop = function() end,
+			Resize = function() end,
+			Rotate = function() end,
+			Copy = function()
+				return img
+			end,
+			IsA = function(_, c)
+				return c == "EditableImage" or c == "Object"
+			end,
+		},
+	}, "editable:" .. tostring(math.random()))
+	return img
+end
+L.editable_image = editable_image
+local function editable_mesh()
+	return L.stand_in("EditableMesh", {
+		props = { Name = "EditableMesh", SkinningEnabled = false },
+		methods = {
+			Destroy = function() end,
+			AddVertex = function() return 1 end,
+			AddTriangle = function() return 1 end,
+			GetVertices = function() return {} end,
+			GetFaces = function() return {} end,
+		},
+	}, "editablemesh:" .. tostring(math.random()))
+end
+
 local SERVICES = {
 	GamepadService = {
 		props = { GamepadCursorEnabled = false },
@@ -2215,6 +2377,18 @@ local SERVICES = {
 	},
 	AssetService = {
 		methods = {
+			CreateEditableImage = function(_, options)
+				return editable_image(options and options.Size)
+			end,
+			CreateEditableImageAsync = function(_, _content, options)
+				return editable_image(options and options.Size)
+			end,
+			CreateEditableMesh = function()
+				return editable_mesh()
+			end,
+			CreateEditableMeshAsync = function()
+				return editable_mesh()
+			end,
 			GetGamePlacesAsync = function()
 				return empty_pages()
 			end,
@@ -3264,6 +3438,25 @@ function L.globals()
 		local n = typeof(axis) == "string" and axis or axis.Name
 		return n == "X" and Vector3.xAxis or n == "Y" and Vector3.yAxis or Vector3.zAxis
 	end
+	-- Content: a picture by address, or one a script draws (an EditableImage).
+	local function content(kind, uri, object)
+		return table.freeze({ SourceType = kind, Uri = uri, Object = object })
+	end
+	g.Content = table.freeze({
+		none = content("None", nil, nil),
+		fromUri = function(uri)
+			return content("Uri", tostring(uri), nil)
+		end,
+		fromAssetId = function(id)
+			return content("Uri", "rbxassetid://" .. tostring(id), nil)
+		end,
+		fromObject = function(obj)
+			if obj == nil then
+				error("Content.fromObject expects an EditableImage or EditableMesh", 2)
+			end
+			return content("Object", nil, obj)
+		end,
+	})
 	-- Tables shared between Actors: with one thread, a plain table is enough.
 	g.SharedTable = table.freeze({
 		new = function(t)

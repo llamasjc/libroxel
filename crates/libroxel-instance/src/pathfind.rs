@@ -56,6 +56,8 @@ struct World<'a> {
     parts: Vec<(InstanceId, Region, Vec3, Vec3)>,
     /// Which parts are over each 8 by 8 stud patch of ground.
     buckets: HashMap<(i32, i32), Vec<usize>>,
+    /// Parts too big to bucket (a map-sized floor), checked everywhere.
+    huge: Vec<usize>,
     terrain: Option<&'a crate::voxels::Voxels>,
 }
 
@@ -69,6 +71,7 @@ impl<'a> World<'a> {
     fn new(tree: &'a InstanceTree, keep: &impl Fn(InstanceId) -> bool) -> Self {
         let mut parts = Vec::new();
         let mut buckets: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+        let mut huge = Vec::new();
         for part in tree.descendants_of_class(tree.workspace(), ClassKind::Part) {
             if tree.get_bool(part, Property::CanCollide) == Some(false) || !keep(part) {
                 continue;
@@ -79,7 +82,13 @@ impl<'a> World<'a> {
             parts.push((part, region, low, high));
             let (x0, z0) = bucket_of(low.x, low.z);
             let (x1, z1) = bucket_of(high.x, high.z);
-            // Huge parts (a baseplate) go in a lot of buckets; that's fine.
+            // A part over more than a few thousand patches (a map-sized
+            // floor) is checked everywhere instead.
+            let patches = (i64::from(x1) - i64::from(x0) + 1) * (i64::from(z1) - i64::from(z0) + 1);
+            if patches > 4096 {
+                huge.push(index);
+                continue;
+            }
             for bx in x0..=x1 {
                 for bz in z0..=z1 {
                     buckets.entry((bx, bz)).or_default().push(index);
@@ -88,11 +97,11 @@ impl<'a> World<'a> {
         }
         let terrain =
             tree.terrain().filter(|t| keep(*t)).and_then(|t| tree.voxels(t).ok()).filter(|v| !v.is_empty());
-        Self { tree, parts, buckets, terrain }
+        Self { tree, parts, buckets, huge, terrain }
     }
 
-    fn near(&self, x: f32, z: f32) -> &[usize] {
-        self.buckets.get(&bucket_of(x, z)).map_or(&[], Vec::as_slice)
+    fn near(&self, x: f32, z: f32) -> impl Iterator<Item = &usize> {
+        self.buckets.get(&bucket_of(x, z)).map_or(&[][..], Vec::as_slice).iter().chain(&self.huge)
     }
 
     /// The height of the highest ground at (x, z) at or below `from`, no

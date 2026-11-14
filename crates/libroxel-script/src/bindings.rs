@@ -26,7 +26,7 @@ const SIGNAL_WAIT_FN: &str = "libroxel.signal_wait";
 pub(crate) const RUN_LIMIT: Duration = Duration::from_secs(5);
 
 /// The signals a script can connect to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SignalKind {
     Heartbeat,
     Touched(InstanceId),
@@ -113,6 +113,105 @@ struct Connection {
     once: bool,
 }
 
+/// Every connection, kept by signal so firing one doesn't look at the rest.
+#[derive(Default)]
+pub(crate) struct Connections {
+    by_signal: std::collections::HashMap<SignalKind, Vec<Connection>>,
+    signal_of: std::collections::HashMap<u64, SignalKind>,
+    /// How many connections follow each instance's changes.
+    watched: std::collections::HashMap<InstanceId, usize>,
+    tags: usize,
+    tools: usize,
+}
+
+impl Connections {
+    fn count(&mut self, signal: SignalKind, by: isize) {
+        let bump = |n: &mut usize| *n = n.saturating_add_signed(by);
+        if let Some(id) = signal.watched() {
+            let n = self.watched.entry(id).or_default();
+            bump(n);
+            if *n == 0 {
+                self.watched.remove(&id);
+            }
+        }
+        match signal {
+            SignalKind::TagAdded(_) | SignalKind::TagRemoved(_) => bump(&mut self.tags),
+            SignalKind::ToolEquipped(_) | SignalKind::ToolUnequipped(_) => bump(&mut self.tools),
+            _ => {}
+        }
+    }
+
+    fn push(&mut self, conn: Connection) {
+        self.count(conn.signal, 1);
+        self.signal_of.insert(conn.id, conn.signal);
+        self.by_signal.entry(conn.signal).or_default().push(conn);
+    }
+
+    fn contains(&self, id: u64) -> bool {
+        self.signal_of.contains_key(&id)
+    }
+
+    fn remove(&mut self, id: u64) -> Option<Connection> {
+        let signal = self.signal_of.remove(&id)?;
+        let list = self.by_signal.get_mut(&signal)?;
+        let at = list.iter().position(|c| c.id == id)?;
+        let conn = list.remove(at);
+        if list.is_empty() {
+            self.by_signal.remove(&signal);
+        }
+        self.count(signal, -1);
+        Some(conn)
+    }
+
+    fn of(&self, signal: SignalKind) -> &[Connection] {
+        self.by_signal.get(&signal).map_or(&[], Vec::as_slice)
+    }
+
+    /// Takes out the connections `keep` says no to.
+    fn take_where(&mut self, mut gone: impl FnMut(&Connection) -> bool) -> Vec<Connection> {
+        let mut out = Vec::new();
+        for list in self.by_signal.values_mut() {
+            if list.iter().any(&mut gone) {
+                let (g, kept): (Vec<_>, Vec<_>) = std::mem::take(list).into_iter().partition(&mut gone);
+                *list = kept;
+                out.extend(g);
+            }
+        }
+        self.by_signal.retain(|_, l| !l.is_empty());
+        for c in &out {
+            self.signal_of.remove(&c.id);
+            self.count(c.signal, -1);
+        }
+        out
+    }
+
+    /// Takes out a signal's one-shot connections.
+    fn take_once(&mut self, signal: SignalKind) -> Vec<Connection> {
+        let Some(list) = self.by_signal.get_mut(&signal) else { return Vec::new() };
+        if !list.iter().any(|c| c.once) {
+            return Vec::new();
+        }
+        let (once, kept): (Vec<_>, Vec<_>) = std::mem::take(list).into_iter().partition(|c| c.once);
+        *list = kept;
+        if list.is_empty() {
+            self.by_signal.remove(&signal);
+        }
+        for c in &once {
+            self.signal_of.remove(&c.id);
+            self.count(c.signal, -1);
+        }
+        once
+    }
+
+    fn len(&self) -> usize {
+        self.signal_of.len()
+    }
+
+    fn is_watched(&self, id: &InstanceId) -> bool {
+        self.watched.contains_key(id)
+    }
+}
+
 /// A thread paused by `task.wait` or scheduled by `task.delay`.
 struct Waiting {
     thread: Thread,
@@ -127,7 +226,7 @@ struct Waiting {
 /// Host state stored in the VM's app data.
 pub(crate) struct Host {
     pub(crate) tree: SharedTree,
-    connections: RefCell<Vec<Connection>>,
+    connections: RefCell<Connections>,
     next_connection: Cell<u64>,
     pub(crate) output: RefCell<Vec<OutputLine>>,
     pub(crate) errors: RefCell<Vec<ScriptError>>,
@@ -160,6 +259,12 @@ pub(crate) struct Host {
     /// Collision groups scripts registered, and the pairs that pass
     /// through each other (each pair in name order).
     pub(crate) groups: RefCell<crate::compat::CollisionGroups>,
+    /// Scripts that have been started, so none starts twice.
+    running_scripts: RefCell<std::collections::HashSet<InstanceId>>,
+    /// Scripts enabled while the game runs, started on the next step.
+    to_start: RefCell<Vec<InstanceId>>,
+    /// How long each script has run, and how many times it was resumed.
+    pub(crate) script_time: RefCell<std::collections::HashMap<String, (f64, u64)>>,
 }
 
 /// The number for `name`, giving it one if it has none yet.
@@ -232,8 +337,18 @@ fn resume(
     let previous_owner = host(lua).current_owner.replace(owner);
     let deadline = host(lua).deadline.clone();
     let previous_deadline = deadline.replace(Some(Instant::now() + RUN_LIMIT));
+    let began = Instant::now();
     let result = thread.resume::<MultiValue>(args);
+    let took = began.elapsed().as_secs_f64();
     deadline.set(previous_deadline);
+    {
+        let host = host(lua);
+        let mut times = host.script_time.borrow_mut();
+        // A nested resume's time is counted in its caller's too.
+        let entry = times.entry(script.to_owned()).or_insert((0.0, 0));
+        entry.0 += took;
+        entry.1 += 1;
+    }
     *host(lua).current_script.borrow_mut() = previous;
     host(lua).current_owner.set(previous_owner);
     match result {
@@ -622,6 +737,40 @@ fn stand_in_parents(lua: &Lua) -> mlua::Result<Table> {
     let t = lua.create_table()?;
     lua.set_named_registry_value(KEY, &t)?;
     Ok(t)
+}
+
+/// See [`crate::ScriptRuntime::waiting_report`].
+pub(crate) fn waiting_report(lua: &Lua) -> Vec<crate::WaitingThread> {
+    let host = host(lua);
+    let now = host.clock.get();
+    let traceback: Option<Function> =
+        lua.globals().get::<Table>("debug").ok().and_then(|d| d.get::<Function>("traceback").ok());
+    let mut out: Vec<crate::WaitingThread> = Vec::new();
+    for w in host.waiting.borrow().iter() {
+        let trace =
+            traceback.as_ref().and_then(|tb| tb.call::<String>((w.thread.clone(),)).ok()).unwrap_or_default();
+        let trace = trace
+            .lines()
+            .map(str::trim)
+            .filter(|l| {
+                !l.is_empty()
+                    && *l != "[C]: in ?"
+                    && !l.starts_with("__mlua")
+                    && !l.starts_with("stack traceback")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let seconds = now - w.since;
+        match out.iter_mut().find(|o| o.script == w.script && o.trace == trace) {
+            Some(o) => {
+                o.count += 1;
+                o.seconds = o.seconds.max(seconds);
+            }
+            None => out.push(crate::WaitingThread { script: w.script.clone(), trace, count: 1, seconds }),
+        }
+    }
+    out.sort_by(|a, b| b.seconds.total_cmp(&a.seconds));
+    out
 }
 
 pub(crate) fn not_a_member(lua: &Lua, id: InstanceId, key: &str) -> mlua::Error {
@@ -1107,7 +1256,11 @@ impl UserData for LuaInstance {
                     value.type_name()
                 ))
             })?;
-            host(lua).tree.borrow_mut().set(id, property, value).map_err(tree_err)
+            host(lua).tree.borrow_mut().set(id, property, value).map_err(tree_err)?;
+            if property == Property::Disabled && is_script_class(class) {
+                script_toggled(lua, id);
+            }
+            Ok(())
         });
 
         methods.add_meta_function(MetaMethod::Eq, |_, (a, b): (Value, Value)| {
@@ -1604,20 +1757,14 @@ struct ConnectionHandle(u64);
 impl UserData for ConnectionHandle {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         fields.add_field_method_get(names::signal::CONNECTED, |lua, this| {
-            Ok(host(lua).connections.borrow().iter().any(|c| c.id == this.0))
+            Ok(host(lua).connections.borrow().contains(this.0))
         });
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method(names::signal::DISCONNECT, |lua, this, ()| {
-            let removed: Vec<Connection> = {
-                let host = host(lua);
-                let mut conns = host.connections.borrow_mut();
-                let (gone, kept) = std::mem::take(&mut *conns).into_iter().partition(|c| c.id == this.0);
-                *conns = kept;
-                gone
-            };
-            for conn in removed {
+            let removed = host(lua).connections.borrow_mut().remove(this.0);
+            if let Some(conn) = removed {
                 lua.remove_registry_value(conn.handler)?;
             }
             Ok(())
@@ -1632,20 +1779,14 @@ pub(crate) fn fire(lua: &Lua, signal: SignalKind, args: impl Fn() -> mlua::Resul
         let tree = host.tree.borrow();
         host.connections
             .borrow()
+            .of(signal)
             .iter()
-            .filter(|c| c.signal == signal && owner_alive(&tree, c.owner))
+            .filter(|c| owner_alive(&tree, c.owner))
             .map(|c| (c.script.clone(), c.owner, lua.registry_value::<Function>(&c.handler)))
             .collect()
     };
     // One-shot connections are gone once they have fired.
-    let spent: Vec<Connection> = {
-        let host = host(lua);
-        let mut conns = host.connections.borrow_mut();
-        let (spent, kept) =
-            std::mem::take(&mut *conns).into_iter().partition(|c| c.once && c.signal == signal);
-        *conns = kept;
-        spent
-    };
+    let spent = host(lua).connections.borrow_mut().take_once(signal);
     for conn in spent {
         let _ = lua.remove_registry_value(conn.handler);
     }
@@ -1672,7 +1813,7 @@ fn prelude() -> String {
     format!(
         r#"
         local yield = coroutine.yield
-        local lib, load_module = ...
+        local lib, load_module, side = ...
         lib["{wait}"] = function(seconds) return yield(seconds or 0) end
         local wait = lib["{wait}"]
         local wait_for_child = function(self, name, timeout)
@@ -1684,9 +1825,19 @@ fn prelude() -> String {
                 waited += wait()
             end
         end
-        -- Each module runs once; later requires get the same value back.
-        local results, loading = {{}}, {{}}
+        -- Each module runs once per side (the server's scripts and the
+        -- player's local scripts each get their own copy, as on Roblox, where
+        -- they run on different computers); later requires get the same
+        -- value back.
+        local by_side = {{}}
         local require = function(module)
+            local key = side()
+            local mine = by_side[key]
+            if not mine then
+                mine = {{ results = {{}}, loading = {{}} }}
+                by_side[key] = mine
+            end
+            local results, loading = mine.results, mine.loading
             local done = results[module]
             if done then return done.value end
             local loader = loading[module]
@@ -1747,7 +1898,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     lua.set_app_data(Host {
         deadline,
         tree,
-        connections: RefCell::new(Vec::new()),
+        connections: RefCell::new(Connections::default()),
         next_connection: Cell::new(1),
         output: RefCell::new(Vec::new()),
         errors: RefCell::new(Vec::new()),
@@ -1755,6 +1906,9 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         current_owner: Cell::new(None),
         clock: Cell::new(0.0),
         waiting: RefCell::new(Vec::new()),
+        running_scripts: RefCell::new(std::collections::HashSet::new()),
+        to_start: RefCell::new(Vec::new()),
+        script_time: RefCell::new(std::collections::HashMap::new()),
         tweens: RefCell::new(Vec::new()),
         next_tween: Cell::new(1),
         inputs_down: RefCell::new(Default::default()),
@@ -1923,7 +2077,16 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         lua.load(source.unwrap_or_default()).set_name(format!("={name}")).set_environment(env).into_function()
     })?;
     let (wait, wait_for_child, require, signal_wait): (Function, Function, Function, Function) =
-        lua.load(prelude()).set_name("=libroxel").call((task_lib.clone(), load_module))?;
+        lua.load(prelude()).set_name("=libroxel").call((
+            task_lib.clone(),
+            load_module,
+            lua.create_function(|lua, ()| {
+                Ok(match running_side(lua) {
+                    Some(Side::Client) => "client",
+                    _ => "server",
+                })
+            })?,
+        ))?;
     lua.set_named_registry_value(SIGNAL_WAIT_FN, signal_wait)?;
     crate::types::install(lua)?;
     install_tween_info(lua)?;
@@ -2008,6 +2171,9 @@ pub(crate) fn run_chunk(
         .into_function()
         .map_err(fail)?;
     let thread = lua.create_thread(func).map_err(fail)?;
+    if let Some(id) = script_instance {
+        host(lua).running_scripts.borrow_mut().insert(id);
+    }
     match resume(lua, thread, MultiValue::new(), script_name, script_instance) {
         Some(err) => Err(err),
         None => Ok(()),
@@ -2046,6 +2212,7 @@ pub(crate) fn run_scripts_under(lua: &Lua, ancestor: InstanceId, class: ClassKin
             .into_iter()
             .chain(tree.descendants_of_class(ancestor, class))
             .filter(|id| tree.get_bool(*id, Property::Disabled) != Some(true))
+            .filter(|id| !host.running_scripts.borrow().contains(id))
             .filter_map(|id| {
                 let source = match tree.get(id, Property::Source).ok()? {
                     PropertyValue::String(s) => s,
@@ -2061,6 +2228,106 @@ pub(crate) fn run_scripts_under(lua: &Lua, ancestor: InstanceId, class: ClassKin
         .collect()
 }
 
+/// A script (not a module), which `Enabled` starts and stops.
+pub(crate) fn is_script_class(class: ClassKind) -> bool {
+    matches!(class, ClassKind::Script | ClassKind::LocalScript)
+}
+
+/// Starts or stops a script whose `Enabled` (or `Disabled`) a script set,
+/// as Roblox does: an enabled script where scripts of its kind run starts
+/// on the next step, and a disabled one stops where it is.
+pub(crate) fn script_toggled(lua: &Lua, id: InstanceId) {
+    let host = host(lua);
+    let disabled = host.tree.borrow().get_bool(id, Property::Disabled) == Some(true);
+    if disabled {
+        if host.running_scripts.borrow_mut().remove(&id) {
+            stop_script(lua, id);
+        }
+        host.to_start.borrow_mut().retain(|s| *s != id);
+    } else if !host.running_scripts.borrow().contains(&id) {
+        let mut queue = host.to_start.borrow_mut();
+        if !queue.contains(&id) {
+            queue.push(id);
+        }
+    }
+}
+
+/// Disconnects a script's connections and drops its waiting threads.
+fn stop_script(lua: &Lua, id: InstanceId) {
+    let gone: Vec<Connection> = {
+        let host = host(lua);
+        let gone = host.connections.borrow_mut().take_where(|c| c.owner == Some(id));
+        host.waiting.borrow_mut().retain(|w| w.owner != Some(id));
+        gone
+    };
+    for conn in gone {
+        let _ = lua.remove_registry_value(conn.handler);
+    }
+}
+
+/// Whether a script sits where scripts of its kind run: a `Script` in the
+/// workspace or the server script service, a `LocalScript` in a player's
+/// scripts, GUI, backpack or character.
+fn runs_where_it_is(tree: &libroxel_instance::InstanceTree, id: InstanceId) -> bool {
+    let Ok(class) = tree.class(id) else { return false };
+    let mut at = tree.parent(id).ok().flatten();
+    while let Some(a) = at {
+        let Ok(c) = tree.class(a) else { return false };
+        match class {
+            ClassKind::Script if matches!(c, ClassKind::Workspace | ClassKind::ServerScriptService) => {
+                return true;
+            }
+            ClassKind::LocalScript
+                if matches!(c, ClassKind::PlayerScripts | ClassKind::PlayerGui | ClassKind::Backpack) =>
+            {
+                return true;
+            }
+            ClassKind::LocalScript if c == ClassKind::Model => {
+                let players = tree.service(ClassKind::Players);
+                let is_character = players.is_some_and(|ps| {
+                    tree.children(ps)
+                        .map(|cs| cs.iter().any(|p| tree.get_ref(*p, Property::Character) == Some(a)))
+                        .unwrap_or(false)
+                });
+                if is_character {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        at = tree.parent(a).ok().flatten();
+    }
+    false
+}
+
+/// Starts the scripts enabled since the last step.
+fn start_enabled_scripts(lua: &Lua) -> Vec<ScriptError> {
+    let queued = std::mem::take(&mut *host(lua).to_start.borrow_mut());
+    let mut errors = Vec::new();
+    for id in queued {
+        let source = {
+            let host = host(lua);
+            let tree = host.tree.borrow();
+            let alive = tree.exists(id) && !tree.is_destroyed(id).unwrap_or(true);
+            if !alive
+                || tree.get_bool(id, Property::Disabled) == Some(true)
+                || host.running_scripts.borrow().contains(&id)
+                || !runs_where_it_is(&tree, id)
+            {
+                continue;
+            }
+            match (tree.get(id, Property::Source), tree.name(id)) {
+                (Ok(PropertyValue::String(s)), Ok(name)) => (s, name.to_owned()),
+                _ => continue,
+            }
+        };
+        if let Err(err) = run_chunk(lua, &source.1, &source.0, Some(id)) {
+            errors.push(err);
+        }
+    }
+    errors
+}
+
 /// Whether the script that owns a thread or connection still exists.
 fn owner_alive(tree: &libroxel_instance::InstanceTree, owner: Option<InstanceId>) -> bool {
     owner.is_none_or(|id| tree.exists(id) && !tree.is_destroyed(id).unwrap_or(true))
@@ -2072,10 +2339,7 @@ fn stop_destroyed_scripts(lua: &Lua) {
     let gone: Vec<Connection> = {
         let host = host(lua);
         let tree = host.tree.borrow();
-        let mut conns = host.connections.borrow_mut();
-        let (gone, kept) =
-            std::mem::take(&mut *conns).into_iter().partition(|c| !owner_alive(&tree, c.owner));
-        *conns = kept;
+        let gone = host.connections.borrow_mut().take_where(|c| !owner_alive(&tree, c.owner));
         host.waiting.borrow_mut().retain(|w| owner_alive(&tree, w.owner));
         gone
     };
@@ -2101,6 +2365,8 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
     };
     due.sort_by(|a, b| a.resume_at.total_cmp(&b.resume_at));
     stop_destroyed_scripts(lua);
+    let started = start_enabled_scripts(lua);
+    host(lua).errors.borrow_mut().extend(started);
     for w in due {
         // A destroyed script's threads stop where they are.
         if !owner_alive(&host(lua).tree.borrow(), w.owner) {
@@ -2137,27 +2403,21 @@ pub(crate) fn fire_plain(lua: &Lua, signal: SignalKind) -> Vec<ScriptError> {
 
 /// Fires change events for everything in `changes` that a script is listening to.
 pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
-    let (watched, tags_heard, tools_heard) = {
+    let (any_watched, tags_heard, tools_heard) = {
         let host = host(lua);
         let conns = host.connections.borrow();
-        let watched: std::collections::HashSet<InstanceId> =
-            conns.iter().filter_map(|c| c.signal.watched()).collect();
-        let tags =
-            conns.iter().any(|c| matches!(c.signal, SignalKind::TagAdded(_) | SignalKind::TagRemoved(_)));
-        let tools = conns
-            .iter()
-            .any(|c| matches!(c.signal, SignalKind::ToolEquipped(_) | SignalKind::ToolUnequipped(_)));
-        (watched, tags, tools)
+        (!conns.watched.is_empty(), conns.tags > 0, conns.tools > 0)
     };
-    if watched.is_empty() && !tags_heard && !tools_heard {
+    if !any_watched && !tags_heard && !tools_heard {
         return Vec::new();
     }
+    let watched = |id: &InstanceId| host(lua).connections.borrow().is_watched(id);
     let with_instance = |signal: SignalKind, id: InstanceId| {
         fire(lua, signal, || Ok(std::iter::once(Value::UserData(push_instance(lua, id)?)).collect()));
     };
     for change in changes {
         match change {
-            Change::PropertyChanged { id, property } if watched.contains(id) => {
+            Change::PropertyChanged { id, property } if watched(id) => {
                 let name = names::property_name(*property);
                 fire(lua, SignalKind::Changed(*id), || {
                     Ok(std::iter::once(Value::String(lua.create_string(name)?)).collect())
@@ -2174,12 +2434,12 @@ pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
             }
             Change::Reparented { id, old_parent, new_parent } => {
                 if let Some(parent) = old_parent
-                    && watched.contains(parent)
+                    && watched(parent)
                 {
                     with_instance(SignalKind::ChildRemoved(*parent), *id);
                 }
                 if let Some(parent) = new_parent
-                    && watched.contains(parent)
+                    && watched(parent)
                 {
                     with_instance(SignalKind::ChildAdded(*parent), *id);
                 }
@@ -2192,7 +2452,7 @@ pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
                         let mut chain = Vec::new();
                         let mut at = *from;
                         while let Some(a) = at {
-                            if watched.contains(&a) {
+                            if watched(&a) {
                                 chain.push(a);
                             }
                             at = tree.parent(a).ok().flatten();
@@ -2214,7 +2474,7 @@ pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
                     let tree = host.tree.borrow();
                     std::iter::once(*id)
                         .chain(tree.descendants(*id).unwrap_or_default())
-                        .filter(|i| watched.contains(i))
+                        .filter(|i| watched(i))
                         .collect()
                 };
                 for item in listening {
@@ -2254,7 +2514,7 @@ pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
                     }
                 }
             }
-            Change::AttributeChanged { id, name } if watched.contains(id) => {
+            Change::AttributeChanged { id, name } if watched(id) => {
                 fire(lua, SignalKind::AttributeChanged(*id), || {
                     Ok(std::iter::once(Value::String(lua.create_string(name)?)).collect())
                 });
@@ -2272,8 +2532,8 @@ pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
                     with_instance(SignalKind::TagRemoved(n), *id);
                 }
             }
-            Change::Destroyed(id) if watched.contains(id) || tags_heard => {
-                if watched.contains(id) {
+            Change::Destroyed(id) if watched(id) || tags_heard => {
+                if watched(id) {
                     fire(lua, SignalKind::Destroying(*id), || Ok(MultiValue::new()));
                 }
                 if !tags_heard {
