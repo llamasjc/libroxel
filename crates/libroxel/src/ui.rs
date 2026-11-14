@@ -62,6 +62,8 @@ enum Action {
     Select(Option<InstanceId>),
     /// While playing: the player clicked a GUI button.
     ClickButton(InstanceId),
+    /// While playing: the left mouse button went down (or up) on a GUI button.
+    PressButton(InstanceId, bool),
     /// The pointer is over this GUI object (or none), for MouseEnter and MouseLeave.
     GuiHover(Option<InstanceId>),
     /// The mouse wheel moved over a scrolling frame by this much; it can scroll this far.
@@ -589,6 +591,26 @@ pub fn editor_ui(
     }
     let on_hotbar = hotbar_hit.iter().copied().find(|(_, r)| pointer.is_some_and(|p| r.contains(p)));
 
+    // GUI buttons: down when pressed on one, then up and a click when let go
+    // over the same one, however long it was held (hold-to-confirm buttons).
+    let button_under = gui_hit.filter(|(_, class)| class.is_button()).map(|(id, _)| id).filter(|_| over_view);
+    if playing && on_hotbar.is_none() {
+        let (pressed, released) = ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_released()));
+        if pressed && let Some(id) = button_under {
+            editor.pressed_button = Some(id);
+            actions.push(Action::PressButton(id, true));
+        }
+        if released
+            && let Some(id) = editor.pressed_button.take()
+            && button_under == Some(id)
+        {
+            actions.push(Action::PressButton(id, false));
+            actions.push(Action::ClickButton(id));
+        }
+    } else {
+        editor.pressed_button = None;
+    }
+
     // Mouse buttons for the input service, while playing.
     if playing && over_view {
         let on_ui = gui_hit.is_some()
@@ -670,7 +692,6 @@ pub fn editor_ui(
                     actions.push(Action::TriggerPrompt(prompt));
                 }
             }
-            Some((id, class)) if playing && class.is_button() => actions.push(Action::ClickButton(id)),
             Some((id, ClassKind::TextBox)) if playing => {
                 if editor.typing != Some(id) {
                     actions.push(Action::FocusTextBox(Some(id), false));
@@ -2321,11 +2342,11 @@ fn output_text<'a>(log: impl IntoIterator<Item = &'a LogEntry>) -> String {
 }
 
 fn hud(ui: &mut egui::Ui, playing: bool) {
-    let text = if playing {
-        "WASD walk · Space jump · right mouse turn · scroll zoom · Esc stop"
-    } else {
-        "Right mouse + WASD fly · click to select · F5 play"
-    };
+    // The game's own screen belongs to the game while it plays.
+    if playing {
+        return;
+    }
+    let text = "Right mouse + WASD fly · click to select · F5 play";
     let rect = ui.max_rect();
     ui.painter().text(
         rect.right_bottom() + egui::vec2(-8.0, -8.0),
@@ -3582,6 +3603,11 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                 if next != at {
                     let _ = tree.set(frame, Property::CanvasPosition, PropertyValue::Vec2(next));
                 }
+            }
+        }
+        Action::PressButton(id, down) => {
+            if let Some(session) = engine.session.as_mut() {
+                session.press_button(id, down);
             }
         }
         Action::ClickButton(id) => {

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+exclude = ["vendor"]
 # A plain `cargo run` opens the Libroxel app.
 default-members = ["crates/libroxel"]
 
@@ -49,3 +50,7 @@ inherits = "release"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# mlua with a cheap interrupt check (see vendor/mlua/Cargo.toml).
+[patch.crates-io]
+mlua = { path = "vendor/mlua" }

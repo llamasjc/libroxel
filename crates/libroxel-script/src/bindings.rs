@@ -223,6 +223,49 @@ struct Waiting {
     owner: Option<InstanceId>,
 }
 
+/// Watches the running script's deadline from another thread, and raises a
+/// flag once it has passed so that Luau's interrupt asks whether to stop it.
+pub(crate) struct Watchdog {
+    start: Instant,
+    /// Milliseconds after `start` the running script must stop by; 0: none.
+    deadline_ms: std::sync::atomic::AtomicU64,
+    overdue: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Watchdog {
+    /// A watchdog with its own thread, which ends when the watchdog is dropped.
+    fn start() -> std::sync::Arc<Self> {
+        let dog = std::sync::Arc::new(Self {
+            start: Instant::now(),
+            deadline_ms: std::sync::atomic::AtomicU64::new(0),
+            overdue: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        });
+        let weak = std::sync::Arc::downgrade(&dog);
+        let _ = std::thread::Builder::new().name("script watchdog".into()).spawn(move || {
+            while let Some(dog) = weak.upgrade() {
+                let due = dog.deadline_ms.load(std::sync::atomic::Ordering::Relaxed);
+                if due != 0 && dog.start.elapsed().as_millis() as u64 > due {
+                    dog.overdue.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                drop(dog);
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        dog
+    }
+
+    fn overdue_flag(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        self.overdue.clone()
+    }
+
+    /// The running script must stop by `due` (or `None`: nothing is running).
+    fn set_deadline(&self, due: Option<Instant>) {
+        let ms = due.map_or(0, |d| d.saturating_duration_since(self.start).as_millis().max(1) as u64);
+        self.deadline_ms.store(ms, std::sync::atomic::Ordering::Relaxed);
+        self.overdue.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Host state stored in the VM's app data.
 pub(crate) struct Host {
     pub(crate) tree: SharedTree,
@@ -237,6 +280,7 @@ pub(crate) struct Host {
     waiting: RefCell<Vec<Waiting>>,
     /// When the running thread must have yielded by. Checked by the VM's interrupt.
     deadline: Rc<Cell<Option<Instant>>>,
+    watchdog: std::sync::Arc<Watchdog>,
     tweens: RefCell<Vec<TweenState>>,
     next_tween: Cell<u64>,
     /// Keys and mouse buttons held down right now.
@@ -267,6 +311,9 @@ pub(crate) struct Host {
     pub(crate) script_time: RefCell<std::collections::HashMap<String, (f64, u64)>>,
     /// Finished threads kept to run the next handler in.
     pub(crate) spare_threads: RefCell<Vec<Thread>>,
+    /// How long each waiting thread ran the last time it was resumed from a
+    /// wait (by its pointer), to tell heavy background work from the rest.
+    thread_cost: RefCell<std::collections::HashMap<usize, Duration>>,
     /// Where the workspace's parts are, for raycasts and part queries.
     pub(crate) part_index: RefCell<libroxel_instance::geometry::PartIndex>,
 }
@@ -350,11 +397,14 @@ fn resume(
     let previous = host(lua).current_script.replace(script.to_owned());
     let previous_owner = host(lua).current_owner.replace(owner);
     let deadline = host(lua).deadline.clone();
-    let previous_deadline = deadline.replace(Some(Instant::now() + RUN_LIMIT));
+    let due = Instant::now() + RUN_LIMIT;
+    let previous_deadline = deadline.replace(Some(due));
+    host(lua).watchdog.set_deadline(Some(due));
     let began = Instant::now();
     let result = thread.resume::<MultiValue>(args);
     let took = began.elapsed().as_secs_f64();
     deadline.set(previous_deadline);
+    host(lua).watchdog.set_deadline(previous_deadline);
     {
         let host = host(lua);
         let mut times = host.script_time.borrow_mut();
@@ -1931,23 +1981,26 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     };
     let deadline: Rc<Cell<Option<Instant>>> = Rc::new(Cell::new(None));
     let check = deadline.clone();
-    // Luau asks very often; reading the clock each time cost real frame time.
-    let ticks = Cell::new(0u32);
+    // Luau asks at every loop turn. Asking Rust each time would cost more
+    // than most loops, so the question only reaches here once a watchdog
+    // thread has seen a script run past its deadline.
+    let watchdog = Watchdog::start();
+    lua.set_interrupt_flag(Some(watchdog.overdue_flag()));
+    let watched = watchdog.clone();
     lua.set_interrupt(move |_| {
-        ticks.set(ticks.get().wrapping_add(1));
-        if !ticks.get().is_multiple_of(64) {
-            return Ok(mlua::VmState::Continue);
-        }
         if check.get().is_some_and(|d| Instant::now() > d) {
             check.set(None);
+            watched.set_deadline(None);
             return Err(mlua::Error::runtime(format!(
                 "script ran for more than {} seconds without waiting; add task.wait() inside long loops",
                 RUN_LIMIT.as_secs()
             )));
         }
+        watched.set_deadline(check.get());
         Ok(mlua::VmState::Continue)
     });
     lua.set_app_data(Host {
+        watchdog,
         deadline,
         tree,
         connections: RefCell::new(Connections::default()),
@@ -1962,6 +2015,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         to_start: RefCell::new(Vec::new()),
         script_time: RefCell::new(std::collections::HashMap::new()),
         spare_threads: RefCell::new(Vec::new()),
+        thread_cost: RefCell::new(std::collections::HashMap::new()),
         part_index: RefCell::new(libroxel_instance::geometry::PartIndex::new()),
         tweens: RefCell::new(Vec::new()),
         next_tween: Cell::new(1),
@@ -2409,6 +2463,13 @@ fn stop_destroyed_scripts(lua: &Lua) {
 }
 
 /// Advances the clock, resumes due threads, then fires the frame signal.
+/// How long threads resumed from waits may run in one step before the rest
+/// are left for the next one.
+const RESUME_BUDGET: Duration = Duration::from_millis(5);
+
+/// A resume this long marks its thread as heavy background work.
+const HEAVY_RESUME: Duration = Duration::from_micros(400);
+
 pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
     let now = {
         let host = host(lua);
@@ -2427,17 +2488,37 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
     stop_destroyed_scripts(lua);
     let started = start_enabled_scripts(lua);
     host(lua).errors.borrow_mut().extend(started);
+    // Waiting threads get a share of each frame, so that long background work
+    // can't stall it: once the share is used up, threads that ran long last
+    // time wait one more frame (first in line then). Quick ones always run.
+    let budget_start = Instant::now();
+    if host(lua).thread_cost.borrow().len() > 20_000 {
+        host(lua).thread_cost.borrow_mut().clear();
+    }
     for w in due {
+        let key = w.thread.to_pointer() as usize;
+        let heavy = host(lua).thread_cost.borrow().get(&key).is_some_and(|c| *c > HEAVY_RESUME);
+        if heavy && budget_start.elapsed() > RESUME_BUDGET {
+            host(lua).waiting.borrow_mut().push(w);
+            continue;
+        }
         // A destroyed script's threads stop where they are.
         if !owner_alive(&host(lua).tree.borrow(), w.owner) {
             continue;
         }
+        let resumed = Instant::now();
+        let thread = w.thread.clone();
         let args: MultiValue = match w.args {
             Some(args) => args.into_iter().collect(),
             None => std::iter::once(Value::Number(now - w.since)).collect(),
         };
         if let Some(err) = resume(lua, w.thread, args, &w.script, w.owner) {
             host(lua).errors.borrow_mut().push(err);
+        }
+        if thread.is_resumable() {
+            host(lua).thread_cost.borrow_mut().insert(key, resumed.elapsed());
+        } else {
+            host(lua).thread_cost.borrow_mut().remove(&key);
         }
     }
     step_tweens(lua, dt);
@@ -2614,6 +2695,13 @@ pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
 pub(crate) fn mouse_over(lua: &Lua, object: InstanceId, entered: bool) -> Vec<ScriptError> {
     let signal = if entered { SignalKind::MouseEnter(object) } else { SignalKind::MouseLeave(object) };
     fire(lua, signal, || Ok(MultiValue::new()));
+    take_errors(lua)
+}
+
+/// The left mouse button went down (or up) on a GUI button.
+pub(crate) fn press_button(lua: &Lua, button: InstanceId, down: bool) -> Vec<ScriptError> {
+    let key = if down { "MouseButton1Down" } else { "MouseButton1Up" };
+    let _ = crate::lenient::fire_mouse(lua, button, key);
     take_errors(lua)
 }
 

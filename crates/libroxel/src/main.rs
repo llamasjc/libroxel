@@ -156,6 +156,8 @@ pub struct Editor {
     pub output_cache: ui::OutputCache,
     /// Shift+F1's frame stats.
     pub stats: ui::Stats,
+    /// While playing: the GUI button the left mouse button went down on.
+    pub pressed_button: Option<InstanceId>,
     /// The Explorer's filter: only what matches (and what leads to it) shows.
     pub explorer_filter: String,
     /// The Properties panel's filter.
@@ -224,6 +226,7 @@ impl Default for Editor {
             output_search: String::new(),
             output_cache: Default::default(),
             stats: Default::default(),
+            pressed_button: None,
             explorer_filter: String::new(),
             properties_filter: String::new(),
             focus_filter: None,

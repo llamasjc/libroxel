@@ -275,6 +275,12 @@ pub(crate) fn fire_changed(lua: &Lua, id: InstanceId, key: &str) -> mlua::Result
     layer(lua)?.get::<Function>("fire_changed")?.call((instance_key(id), key))
 }
 
+/// Fires an object's mouse event `key` (such as `MouseButton1Down`) with
+/// the mouse position, if a script asked for it.
+pub(crate) fn fire_mouse(lua: &Lua, id: InstanceId, key: &str) -> mlua::Result<()> {
+    layer(lua)?.get::<Function>("fire_mouse")?.call((instance_key(id), key))
+}
+
 /// Gives a service made as a plain table (see compat.rs) the rest of its
 /// members: the layer's extras for it, what every instance has, and the
 /// class database's properties. Anything else is "not a valid member".

@@ -1147,22 +1147,9 @@ plain_signals("GuiObject", {
 	"TouchTap", "TouchLongPress", "TouchPan", "TouchPinch", "TouchRotate", "TouchSwipe", "SelectionGained",
 	"SelectionLost", "SelectionChanged", "ReturnPressedFromOnScreenKeyboard",
 })
--- A press on a button: libroxel knows about whole clicks, so the down and
--- up halves arrive together, just before the click.
-local function click_half(self, sig)
-	self.MouseButton1Click:Connect(function()
-		local mouse = game:GetService("Players").LocalPlayer
-		local x, y = 0, 0
-		if mouse then
-			local m = mouse:GetMouse()
-			x, y = m.X, m.Y
-		end
-		sig:Fire(x, y)
-	end)
-end
 add(signals, "GuiButton", {
-	MouseButton1Down = click_half,
-	MouseButton1Up = click_half,
+	MouseButton1Down = true,
+	MouseButton1Up = true,
 	MouseButton2Click = true,
 	MouseButton2Down = true,
 	MouseButton2Up = true,
@@ -3358,6 +3345,22 @@ end
 
 function L.signal()
 	return new_signal()
+end
+
+-- Fires an object's event `key` with where the mouse is, if a script made it.
+function L.fire_mouse(key_id, key)
+	local s = store[key_id]
+	local sig = s and s.signals[key]
+	if not sig then
+		return
+	end
+	local player = game:GetService("Players").LocalPlayer
+	local x, y = 0, 0
+	if player then
+		local m = player:GetMouse()
+		x, y = m.X, m.Y
+	end
+	sig:Fire(x, y)
 end
 
 -- The event for changes to member `key` of an object, made when first asked.
