@@ -1345,6 +1345,43 @@ local strip = {
 add(props, "Beam", strip)
 add(props, "Trail", strip)
 add(methods, "Trail", { Clear = function() end })
+add(methods, "ParticleEmitter", { Clear = function() end, FastForward = function() end })
+-- Things that load first: everything is loaded up front, so these have
+-- nothing to wait for.
+add(methods, "ReplicatedStorage", {
+	RemoveDefaultLoadingScreen = function() end,
+	SetDefaultLoadingGuiScreen = function() end,
+	IsFinishedReplicating = function()
+		return true
+	end,
+})
+plain_signals("ReplicatedStorage", { "FinishedReplicating" })
+-- Actors: messages go to the handlers bound for the topic, each in its own thread.
+add(methods, "Actor", {
+	BindToMessage = function(_, topic, fn)
+		local s = CURRENT
+		s.topics = s.topics or {}
+		s.topics[topic] = s.topics[topic] or {}
+		local list = s.topics[topic]
+		table.insert(list, fn)
+		local conn = { Connected = true }
+		conn.Disconnect = function()
+			conn.Connected = false
+			local i = table.find(list, fn)
+			if i then
+				table.remove(list, i)
+			end
+		end
+		return conn
+	end,
+	SendMessage = function(_, topic, ...)
+		local list = CURRENT.topics and CURRENT.topics[topic]
+		for _, fn in ipairs(list and table.clone(list) or {}) do
+			task.defer(fn, ...)
+		end
+	end,
+})
+methods.Actor.BindToMessageParallel = methods.Actor.BindToMessage
 add(methods, "Beam", { SetTextureOffset = function() end })
 add(props, "SelectionBox", { SurfaceColor3 = Color3.fromRGB(13, 105, 172), SurfaceTransparency = 1, Transparency = 0 })
 add(props, "Constraint", {
@@ -1970,7 +2007,66 @@ local function memory_queue(name)
 	return q
 end
 
+local NOOP = function() end
+local function returns(...)
+	local v = table.pack(...)
+	return function()
+		return table.unpack(v, 1, v.n)
+	end
+end
 local SERVICES = {
+	GamepadService = {
+		props = { GamepadCursorEnabled = false },
+		signals = { "GamepadThumbstick1Changed" },
+		methods = {
+			EnableGamepadCursor = NOOP,
+			DisableGamepadCursor = NOOP,
+		},
+	},
+	-- Roblox's own menus live here; scripts can't put things in it there
+	-- either, so it only needs to exist.
+	CoreGui = { props = { SelectionImageObject = NIL } },
+	AnimationClipProvider = {
+		methods = {
+			GetAnimationClipAsync = NOOP,
+			RegisterAnimationClip = returns(""),
+		},
+	},
+	ScriptContext = {
+		signals = { "Error" },
+		methods = { SetTimeout = NOOP },
+	},
+	ExperienceService = {},
+	AvatarEditorService = {
+		signals = { "PromptSaveAvatarCompleted", "PromptAllowInventoryReadAccessCompleted" },
+		methods = {
+			PromptSaveAvatar = NOOP,
+			PromptAllowInventoryReadAccess = NOOP,
+			GetItemDetails = function()
+				return {}
+			end,
+		},
+	},
+	ChangeHistoryService = {
+		signals = { "OnUndo", "OnRedo" },
+		methods = {
+			SetWaypoint = NOOP,
+			TryBeginRecording = returns(""),
+			FinishRecording = NOOP,
+			ResetWaypoints = NOOP,
+		},
+	},
+	Selection = {
+		signals = { "SelectionChanged" },
+		methods = {
+			Get = function()
+				return {}
+			end,
+			Set = NOOP,
+			Add = NOOP,
+			Remove = NOOP,
+		},
+	},
 	TextChatService = {
 		props = {
 			ChatVersion = "ChatVersion.TextChatService",
@@ -2237,20 +2333,205 @@ local function resolve(v)
 	end
 	return v
 end
-local made = {}
-function L.service(name)
-	if made[name] then
-		return made[name]
+-- More members for the services made in compat.rs.
+local SERVICE_EXTRAS = {
+	GuiService = {
+		props = {
+			MenuIsOpen = false,
+			SelectedObject = NIL,
+			AutoSelectGuiEnabled = true,
+			GuiNavigationEnabled = true,
+			CoreGuiNavigationEnabled = true,
+			ReducedMotionEnabled = false,
+			TouchControlsEnabled = true,
+			PreferredTransparency = 1,
+			PreferredTextSize = "PreferredTextSize.Medium",
+		},
+		getters = {
+			TopbarInset = function()
+				return Rect.new(0, 0, 0, 0)
+			end,
+		},
+		signals = { "MenuOpened", "MenuClosed", "ErrorMessageChanged", "UiMessageChanged", "NativeClose" },
+		methods = {
+			IsWindows = returns(false),
+			SetMenuIsOpen = NOOP,
+			InspectPlayerFromUserId = NOOP,
+			InspectPlayerFromHumanoidDescription = NOOP,
+			CloseInspectMenu = NOOP,
+			Select = NOOP,
+			AddSelectionParent = NOOP,
+			RemoveSelectionGroup = NOOP,
+			GetEmotesMenuOpen = returns(false),
+			SetEmotesMenuOpen = NOOP,
+			GetInspectMenuEnabled = returns(false),
+			SetInspectMenuEnabled = NOOP,
+			OpenBrowserWindow = NOOP,
+		},
+	},
+	ContextActionService = {
+		signals = { "LocalToolEquipped", "LocalToolUnequipped" },
+		methods = {
+			SetTitle = NOOP,
+			SetImage = NOOP,
+			SetDescription = NOOP,
+			SetPosition = NOOP,
+			GetAllBoundActionInfo = function()
+				return {}
+			end,
+			GetBoundActionInfo = function()
+				return {}
+			end,
+			GetCurrentLocalToolIcon = returns(""),
+			BindActivate = NOOP,
+			UnbindActivate = NOOP,
+		},
+	},
+	SoundService = {
+		props = {
+			AmbientReverb = "ReverbType.NoReverb",
+			DistanceFactor = 3.33,
+			DopplerScale = 1,
+			RolloffScale = 1,
+			RespectFilteringEnabled = true,
+		},
+		methods = {
+			SetListener = NOOP,
+			GetListener = function()
+				return Enum.ListenerType.Camera, nil
+			end,
+		},
+	},
+	MarketplaceService = {
+		signals = { "PromptPremiumPurchaseFinished", "ProcessReceiptFinished" },
+		methods = {
+			PromptPremiumPurchase = NOOP,
+			PromptSubscriptionPurchase = NOOP,
+			PromptBundlePurchase = NOOP,
+			UserOwnsGamePassAsync = returns(false),
+			GetDeveloperProductsAsync = function()
+				return L.key_pages({})
+			end,
+			GetSubscriptionProductInfoAsync = function()
+				return {}
+			end,
+		},
+	},
+	TeleportService = {
+		signals = { "TeleportInitFailed", "LocalPlayerArrivedFromTeleport" },
+		methods = {
+			GetLocalPlayerTeleportData = NOOP,
+			GetArrivingTeleportGui = NOOP,
+			SetTeleportGui = NOOP,
+			GetTeleportSetting = NOOP,
+			SetTeleportSetting = NOOP,
+			ReserveServer = returns("", ""),
+			TeleportPartyAsync = NOOP,
+		},
+	},
+	ContentProvider = {
+		props = { RequestQueueSize = 0, BaseUrl = "" },
+		methods = {
+			GetAssetFetchStatus = function()
+				return Enum.AssetFetchStatus.Success
+			end,
+		},
+	},
+	VRService = {
+		props = { VREnabled = false, GuiInputUserCFrame = "UserCFrame.Head", AutomaticScaling = "VRScaling.World" },
+		signals = { "UserCFrameChanged", "UserCFrameEnabled", "NavigationRequested" },
+		methods = {
+			GetUserCFrame = function()
+				return CFrame.new()
+			end,
+			GetUserCFrameEnabled = returns(false),
+			RecenterUserHeadCFrame = NOOP,
+		},
+	},
+	HapticService = {
+		methods = {
+			SetMotor = NOOP,
+			IsMotorSupported = returns(false),
+			GetMotor = returns(0),
+		},
+	},
+	TextService = {
+		methods = {
+			GetFamilyInfoAsync = function()
+				return { Name = "", Faces = {} }
+			end,
+		},
+	},
+	PolicyService = {
+		methods = {
+			CanViewBrandProjectAsync = returns(false),
+		},
+	},
+}
+
+-- (found, value) for member `key` of a compat.rs service called `name`.
+function L.service_extra(name, key)
+	local def = SERVICE_EXTRAS[name]
+	local key_id = "service:" .. name
+	if def then
+		if def.methods and def.methods[key] then
+			return true, def.methods[key]
+		end
+		if def.getters and def.getters[key] then
+			return true, def.getters[key]()
+		end
+		local s = slot(key_id)
+		local v = s.values[key]
+		if v ~= nil then
+			if v == NIL then
+				return true, nil
+			end
+			return true, v
+		end
+		local p = def.props and def.props[key]
+		if p ~= nil then
+			if p == NIL then
+				return true, nil
+			end
+			return true, resolve(p)
+		end
+		if def.signals and table.find(def.signals, key) then
+			local sig = s.signals[key]
+			if not sig then
+				sig = new_signal()
+				s.signals[key] = sig
+			end
+			return true, sig
+		end
 	end
-	local def = SERVICES[name]
-	if not def then
-		return nil
+	return L.common(key_id, name, key)
+end
+
+-- Sets member `key` of a compat.rs service: true if it's one it has.
+function L.service_extra_set(name, key, value)
+	local def = SERVICE_EXTRAS[name]
+	local key_id = "service:" .. name
+	local s = slot(key_id)
+	if (def and def.props and def.props[key] ~= nil) or s.values[key] ~= nil then
+		local stored = value == nil and NIL or value
+		if s.values[key] ~= stored then
+			s.values[key] = stored
+			L.fire_changed(key_id, key)
+		end
+		return true
 	end
+	return false
+end
+
+-- An object that stands in for an instance libroxel has no class for:
+-- `def` lists its props (defaults), getters, signals and methods. Setting a
+-- prop fires its GetPropertyChangedSignal event.
+local function stand_in(name, def, key_id)
 	local values, sigs = {}, {}
 	for _, n in ipairs(def.signals or {}) do
 		sigs[n] = new_signal()
 	end
-	local obj = { Name = name, ClassName = name }
+	local obj = {}
 	setmetatable(obj, {
 		__index = function(_, k)
 			if def.methods and def.methods[k] then
@@ -2266,6 +2547,9 @@ function L.service(name)
 			end
 			local v = values[k]
 			if v ~= nil then
+				if v == NIL then
+					return nil
+				end
 				return v
 			end
 			local p = def.props and def.props[k]
@@ -2275,24 +2559,19 @@ function L.service(name)
 				end
 				return resolve(p)
 			end
-			if k == "IsA" then
-				return function(_, n)
-					return n == name or n == "Instance"
-				end
-			end
-			if k == "GetFullName" then
-				return function()
-					return name
-				end
-			end
-			if k == "Parent" then
-				return game
+			local found, common = L.common(key_id, name, k)
+			if found then
+				return common
 			end
 			error(tostring(k) .. " is not a valid member of " .. name, 0)
 		end,
 		__newindex = function(_, k, v)
 			if (def.props and def.props[k] ~= nil) or values[k] ~= nil then
-				values[k] = v
+				local stored = v == nil and NIL or v
+				if values[k] ~= stored then
+					values[k] = stored
+					L.fire_changed(key_id, k)
+				end
 				return
 			end
 			error(tostring(k) .. " is not a valid member of " .. name, 0)
@@ -2300,7 +2579,22 @@ function L.service(name)
 		__tostring = function()
 			return name
 		end,
+		__type = name,
 	})
+	return obj
+end
+L.stand_in = stand_in
+
+local made = {}
+function L.service(name)
+	if made[name] then
+		return made[name]
+	end
+	local def = SERVICES[name]
+	if not def then
+		return nil
+	end
+	local obj = stand_in(name, def, "service:" .. name)
 	made[name] = obj
 	return obj
 end
@@ -2526,6 +2820,7 @@ function L.new_index(key_id, obj, key, value, groups, allowed)
 		local set = setters[group] and setters[group][key]
 		if set then
 			set(obj, value, s)
+			L.fire_changed(key_id, key)
 			return true
 		end
 	end
@@ -2539,7 +2834,11 @@ function L.new_index(key_id, obj, key, value, groups, allowed)
 		end
 	end
 	if known then
+		local before = s.values[key]
 		s.values[key] = value == nil and NIL or value
+		if before ~= s.values[key] then
+			L.fire_changed(key_id, key)
+		end
 		return true
 	end
 	return false
@@ -2547,6 +2846,122 @@ end
 
 function L.signal()
 	return new_signal()
+end
+
+-- The event for changes to member `key` of an object, made when first asked.
+function L.changed_signal(key_id, key)
+	local s = slot(key_id)
+	s.changed = s.changed or {}
+	local sig = s.changed[key]
+	if not sig then
+		sig = new_signal()
+		s.changed[key] = sig
+	end
+	return sig
+end
+
+function L.fire_changed(key_id, key)
+	local s = store[key_id]
+	local sig = s and s.changed and s.changed[key]
+	if sig then
+		sig:Fire()
+	end
+	local any = s and s.signals.Changed
+	if any then
+		any:Fire(key)
+	end
+end
+
+-- Members every instance has, for objects that only stand in for one
+-- (services and settings libroxel makes in Lua): (found, value).
+local COMMON = {
+	GetPropertyChangedSignal = function(key_id, _, _, key)
+		return L.changed_signal(key_id, key)
+	end,
+	GetAttribute = function(key_id, _, _, key)
+		local a = slot(key_id).attributes
+		return a and a[key]
+	end,
+	SetAttribute = function(key_id, _, _, key, value)
+		local s = slot(key_id)
+		s.attributes = s.attributes or {}
+		s.attributes[key] = value
+		L.fire_changed(key_id, "@" .. key)
+		local sig = s.signals.AttributeChanged
+		if sig then
+			sig:Fire(key)
+		end
+	end,
+	GetAttributes = function(key_id)
+		return table.clone(slot(key_id).attributes or {})
+	end,
+	GetAttributeChangedSignal = function(key_id, _, _, key)
+		return L.changed_signal(key_id, "@" .. key)
+	end,
+	IsA = function(_, name, _, other)
+		return other == name or other == "Instance"
+	end,
+	GetFullName = function(_, name)
+		return name
+	end,
+	FindFirstChild = function() end,
+	FindFirstChildOfClass = function() end,
+	FindFirstChildWhichIsA = function() end,
+	FindFirstAncestor = function() end,
+	FindFirstAncestorOfClass = function() end,
+	FindFirstAncestorWhichIsA = function() end,
+	FindFirstDescendant = function() end,
+	WaitForChild = function() end,
+	GetChildren = function()
+		return {}
+	end,
+	GetDescendants = function()
+		return {}
+	end,
+	IsDescendantOf = function(_, _, _, other)
+		return other == game
+	end,
+	IsAncestorOf = function()
+		return false
+	end,
+	Destroy = function() end,
+	ClearAllChildren = function() end,
+	GetTags = function()
+		return {}
+	end,
+	HasTag = function()
+		return false
+	end,
+	AddTag = function() end,
+	RemoveTag = function() end,
+}
+local COMMON_SIGNALS =
+	{ "Changed", "AttributeChanged", "ChildAdded", "ChildRemoved", "DescendantAdded", "DescendantRemoving", "AncestryChanged", "Destroying" }
+
+function L.common(key_id, name, key)
+	local m = COMMON[key]
+	if m then
+		return true, function(_, ...)
+			return m(key_id, name, nil, ...)
+		end
+	end
+	if table.find(COMMON_SIGNALS, key) then
+		local s = slot(key_id)
+		local sig = s.signals[key]
+		if not sig then
+			sig = new_signal()
+			s.signals[key] = sig
+		end
+		return true, sig
+	end
+	if key == "Parent" then
+		return true, game
+	elseif key == "Archivable" then
+		return true, true
+	elseif key == "ClassName" or key == "Name" then
+		return true, name
+	end
+	return false
 end
 
 function L.forget(key_id)
@@ -2559,6 +2974,60 @@ end
 
 function L.globals()
 	State = Enum.HumanoidStateType
+	-- Parallel Luau: libroxel runs every script on one thread, so these
+	-- have nothing to switch.
+	g.task.synchronize = function() end
+	g.task.desynchronize = function() end
+	-- Profiler labels and memory categories: nothing to record them in.
+	local dbg = g.debug
+	dbg.profilebegin = function() end
+	dbg.profileend = function() end
+	dbg.setmemorycategory = function() end
+	dbg.resetmemorycategory = function() end
+	dbg.dumpcodesize = function() end
+	local NORMALS = {
+		Top = Vector3.new(0, 1, 0),
+		Bottom = Vector3.new(0, -1, 0),
+		Right = Vector3.new(1, 0, 0),
+		Left = Vector3.new(-1, 0, 0),
+		Back = Vector3.new(0, 0, 1),
+		Front = Vector3.new(0, 0, -1),
+	}
+	g.Vector3.FromNormalId = function(id)
+		return NORMALS[typeof(id) == "string" and id or id.Name] or Vector3.zero
+	end
+	g.Vector3.FromAxis = function(axis)
+		local n = typeof(axis) == "string" and axis or axis.Name
+		return n == "X" and Vector3.xAxis or n == "Y" and Vector3.yAxis or Vector3.zAxis
+	end
+	-- Tables shared between Actors: with one thread, a plain table is enough.
+	g.SharedTable = table.freeze({
+		new = function(t)
+			return t and table.clone(t) or {}
+		end,
+		clone = function(t, deep)
+			return table.clone(t)
+		end,
+		cloneAndFreeze = function(t)
+			return table.freeze(table.clone(t))
+		end,
+		isFrozen = table.isfrozen,
+		size = function(t)
+			local n = 0
+			for _ in pairs(t) do
+				n += 1
+			end
+			return n
+		end,
+		update = function(t, key, f)
+			t[key] = f(t[key])
+		end,
+		increment = function(t, key, by)
+			local old = t[key] or 0
+			t[key] = old + by
+			return old
+		end,
+	})
 	local shared_table = {}
 	g.shared = shared_table
 	g._G = shared_table
@@ -2677,46 +3146,62 @@ function L.globals()
 		end,
 	})
 
+	local function section(name, props)
+		return stand_in(name, { props = props }, "settings:" .. name)
+	end
 	local settings_tree = {
-		Rendering = { QualityLevel = 21, MeshPartDetailLevel = NIL, EditQualityLevel = 21 },
-		Physics = { AllowSleep = true, PhysicsEnvironmentalThrottle = NIL, AreOwnersShown = false },
-		Network = { IncomingReplicationLag = 0 },
-		Diagnostics = {},
+		Rendering = section(
+			"RenderSettings",
+			{ QualityLevel = "QualityLevel.Automatic", MeshPartDetailLevel = "MeshPartDetailLevel.DistanceBased", EditQualityLevel = "QualityLevel.Automatic" }
+		),
+		Physics = section("PhysicsSettings", { AllowSleep = true, PhysicsEnvironmentalThrottle = NIL, AreOwnersShown = false }),
+		Network = section("NetworkSettings", { IncomingReplicationLag = 0 }),
+		Diagnostics = section("DebugSettings", {}),
 	}
 	g.settings = function()
 		return settings_tree
 	end
-	local user_game_settings = {
-		MasterVolume = 1,
-		SavedQualityLevel = NIL,
-		ComputerMovementMode = NIL,
-		ComputerCameraMovementMode = NIL,
-		MouseSensitivity = 1,
-		RotationType = NIL,
-		GamepadCameraSensitivity = 1,
-		Fullscreen = false,
-	}
-	user_game_settings.GetCameraYInvertValue = function()
-		return 1
-	end
-	user_game_settings.InFullScreen = function()
-		return false
-	end
-	user_game_settings.InStudioMode = function()
-		return false
-	end
-	user_game_settings.FullscreenChanged = new_signal()
-	local user_settings = {
-		GetService = function(_, name)
-			if name == "UserGameSettings" then
-				return user_game_settings
-			end
-			error(tostring(name) .. " is not a valid service name", 0)
-		end,
-		IsUserFeatureEnabled = function()
-			return false
-		end,
-	}
+	local user_game_settings = stand_in("UserGameSettings", {
+		props = {
+			MasterVolume = 1,
+			SavedQualityLevel = "SavedQualitySetting.Automatic",
+			ComputerMovementMode = "ComputerMovementMode.UserChoice",
+			ComputerCameraMovementMode = "ComputerCameraMovementMode.UserChoice",
+			TouchMovementMode = "TouchMovementMode.UserChoice",
+			MouseSensitivity = 1,
+			RotationType = "RotationType.MovementRelative",
+			GamepadCameraSensitivity = 1,
+			Fullscreen = false,
+			GraphicsQualityLevel = 0,
+		},
+		signals = { "FullscreenChanged", "StudioModeChanged" },
+		methods = {
+			GetCameraYInvertValue = function()
+				return 1
+			end,
+			SetCameraYInvertVisible = function() end,
+			InFullScreen = function()
+				return false
+			end,
+			InStudioMode = function()
+				return false
+			end,
+		},
+	}, "settings:UserGameSettings")
+	local user_settings = stand_in("UserSettings", {
+		props = { GameSettings = user_game_settings },
+		methods = {
+			GetService = function(_, name)
+				if name == "UserGameSettings" then
+					return user_game_settings
+				end
+				error(tostring(name) .. " is not a valid service name", 0)
+			end,
+			IsUserFeatureEnabled = function()
+				return false
+			end,
+		},
+	}, "settings:UserSettings")
 	g.UserSettings = function()
 		return user_settings
 	end

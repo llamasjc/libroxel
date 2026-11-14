@@ -1039,7 +1039,7 @@ impl PlaySession {
             self.log.push(LogEntry { level, time, text: line.text });
         }
         for err in errors {
-            self.log.push(LogEntry { level: LogLevel::Error, time, text: err.to_string() });
+            self.log.push(LogEntry { level: LogLevel::Error, time, text: tidy_trace(&err.to_string()) });
         }
     }
 
@@ -1453,4 +1453,16 @@ fn auto_assign_team(tree: &mut InstanceTree, player: InstanceId) {
 /// Convenience for tests and tools: a session over a fresh copy of `tree`.
 pub fn start_on(tree: InstanceTree, with_character: bool) -> Result<PlaySession, String> {
     PlaySession::start(std::rc::Rc::new(std::cell::RefCell::new(tree)), with_character)
+}
+
+/// An error's text without the stack frames that are Libroxel's own
+/// machinery rather than the game's scripts.
+fn tidy_trace(text: &str) -> String {
+    text.lines()
+        .filter(|l| {
+            let l = l.trim();
+            l != "[C]: in ?" && !l.starts_with("__mlua")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

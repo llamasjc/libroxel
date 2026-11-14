@@ -604,11 +604,41 @@ fn property_from_lua(property: Property, value: &Value) -> Option<PropertyValue>
     })
 }
 
+/// Roblox's error for a member an instance doesn't have, naming its class
+/// and where it is: `Foo is not a valid member of Part "Workspace.Crate"`.
+/// Where a part's pivot is, from its centre (its PivotOffset).
+fn pivot_offset(lua: &Lua, id: InstanceId) -> mlua::Result<CFrame> {
+    let offset = push_instance(lua, id)?.get::<Value>("PivotOffset").ok();
+    Ok(offset.as_ref().and_then(as_cframe).unwrap_or(CFrame::IDENTITY))
+}
+
+/// Instances parented to an object libroxel only stands in for (one made
+/// in Lua), by instance.
+fn stand_in_parents(lua: &Lua) -> mlua::Result<Table> {
+    const KEY: &str = "libroxel.stand_in_parents";
+    if let Ok(t) = lua.named_registry_value::<Table>(KEY) {
+        return Ok(t);
+    }
+    let t = lua.create_table()?;
+    lua.set_named_registry_value(KEY, &t)?;
+    Ok(t)
+}
+
 pub(crate) fn not_a_member(lua: &Lua, id: InstanceId, key: &str) -> mlua::Error {
+    let class = class_of(lua, id).map(|c| crate::lenient::roblox_class(lua, id, c)).unwrap_or_default();
     let host = host(lua);
     let tree = host.tree.borrow();
-    let name = tree.name(id).unwrap_or("?").to_owned();
-    mlua::Error::runtime(format!("{key} is not a valid member of {name}"))
+    let mut parts = Vec::new();
+    let mut current = Some(id);
+    while let Some(at) = current {
+        if at == tree.root() {
+            break;
+        }
+        parts.push(tree.name(at).unwrap_or("?").to_owned());
+        current = tree.parent(at).ok().flatten();
+    }
+    parts.reverse();
+    mlua::Error::runtime(format!("{key} is not a valid member of {class} \"{}\"", parts.join(".")))
 }
 
 /// Whether instance `id` is a `name`, a class or family name, as
@@ -851,9 +881,21 @@ impl UserData for LuaInstance {
         });
         methods.add_method(names::methods::GET_PROPERTY_CHANGED_SIGNAL, |lua, this, name: String| {
             let class = class_of(lua, this.0)?;
-            let property =
-                names::property_from_name(class, &name).ok_or_else(|| not_a_member(lua, this.0, &name))?;
-            Ok(Signal(SignalKind::PropertyChanged(this.0, property)))
+            if let Some(property) = names::property_from_name(class, &name) {
+                return Ok(Value::UserData(
+                    lua.create_userdata(Signal(SignalKind::PropertyChanged(this.0, property)))?,
+                ));
+            }
+            // Members kept beyond the saved properties (CurrentCamera,
+            // ViewportSize, AbsoluteSize, values the class database knows):
+            // an event that fires when a script or libroxel changes them.
+            let roblox = crate::lenient::roblox_class(lua, this.0, class);
+            let known = crate::reflection::has_property(&roblox, &name)
+                || push_instance(lua, this.0)?.get::<Value>(name.as_str()).is_ok();
+            if !known {
+                return Err(not_a_member(lua, this.0, &name));
+            }
+            crate::lenient::changed_signal(lua, this.0, &name)
         });
         methods.add_method(names::methods::CLEAR_ALL_CHILDREN, |lua, this, ()| {
             let host = host(lua);
@@ -891,6 +933,9 @@ impl UserData for LuaInstance {
             found.map(|id| push_instance(lua, id)).transpose()
         });
         methods.add_method(names::methods::GET_PIVOT, |lua, this, ()| {
+            if class_of(lua, this.0)?.is_physical() {
+                return Ok(LuaCFrame(part_cframe(lua, this.0)? * pivot_offset(lua, this.0)?));
+            }
             require_class(lua, this.0, ClassKind::Model, names::methods::GET_PIVOT)?;
             match model_pivot_part(lua, this.0)? {
                 Some(part) => Ok(LuaCFrame(part_cframe(lua, part)?)),
@@ -898,9 +943,12 @@ impl UserData for LuaInstance {
             }
         });
         methods.add_method(names::methods::PIVOT_TO, |lua, this, target: Value| {
-            require_class(lua, this.0, ClassKind::Model, names::methods::PIVOT_TO)?;
             let target =
                 as_cframe(&target).ok_or_else(|| mlua::Error::runtime("PivotTo expects a CFrame"))?;
+            if class_of(lua, this.0)?.is_physical() {
+                return set_part_cframe(lua, this.0, target * pivot_offset(lua, this.0)?.inverse());
+            }
+            require_class(lua, this.0, ClassKind::Model, names::methods::PIVOT_TO)?;
             let Some(pivot) = model_pivot_part(lua, this.0)? else { return Ok(()) };
             // Move every part by the same rigid motion that takes the pivot to the target.
             let delta = target * part_cframe(lua, pivot)?.inverse();
@@ -945,7 +993,7 @@ impl UserData for LuaInstance {
                 let parent = host(lua).tree.borrow().parent(id).map_err(tree_err)?;
                 return match parent {
                     Some(p) => Ok(Value::UserData(push_instance(lua, p)?)),
-                    None => Ok(Value::Nil),
+                    None => stand_in_parents(lua)?.raw_get(id.to_bits().to_string()),
                 };
             }
             if key == WAIT_FOR_CHILD {
@@ -1017,11 +1065,19 @@ impl UserData for LuaInstance {
             if key == PARENT {
                 let parent = match &value {
                     Value::Nil => None,
+                    // A service or settings object libroxel only stands in
+                    // for: the instance goes out of the tree, but reads
+                    // back as being in it.
+                    Value::Table(_) => {
+                        host(lua).tree.borrow_mut().set_parent(id, None).map_err(tree_err)?;
+                        return stand_in_parents(lua)?.raw_set(id.to_bits().to_string(), value);
+                    }
                     other => Some(
                         as_instance(other)
                             .ok_or_else(|| mlua::Error::runtime("Parent must be an Instance or nil"))?,
                     ),
                 };
+                stand_in_parents(lua)?.raw_set(id.to_bits().to_string(), Value::Nil)?;
                 return host(lua).tree.borrow_mut().set_parent(id, parent).map_err(tree_err);
             }
             let class = class_of(lua, id)?;
@@ -1744,7 +1800,11 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
             let id = {
                 let host = host(lua);
                 let mut tree = host.tree.borrow_mut();
-                let name = if other { roblox.as_str() } else { names::class_name(class) };
+                let name = if other || shape.is_none() && names::stand_in(&roblox).is_some() {
+                    roblox.as_str()
+                } else {
+                    names::class_name(class)
+                };
                 let id = tree.create(class, name).map_err(tree_err)?;
                 if other {
                     let _ = tree.set(id, Property::OtherClass, PropertyValue::String(roblox.clone()));

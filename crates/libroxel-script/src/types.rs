@@ -326,10 +326,78 @@ impl UserData for LuaVector2 {
         fields.add_field_method_get(gui_values::X, |_, this| Ok(this.0.x));
         fields.add_field_method_get(gui_values::Y, |_, this| Ok(this.0.y));
         fields.add_field_method_get(names::vector3::MAGNITUDE, |_, this| Ok(this.0.x.hypot(this.0.y)));
+        fields.add_field_method_get(names::vector3::UNIT, |_, this| {
+            let length = this.0.x.hypot(this.0.y);
+            Ok(LuaVector2(if length > 0.0 {
+                Vec2::new(this.0.x / length, this.0.y / length)
+            } else {
+                Vec2::ZERO
+            }))
+        });
         fields.add_meta_field(MetaMethod::Type, gui_values::VECTOR2_TYPE_NAME);
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        use names::vector3::{ABS, ANGLE, CEIL, CROSS, DOT, FLOOR, FUZZY_EQ, LERP, MAX, MIN, SIGN};
+        fn other(name: &str, value: &Value) -> mlua::Result<Vec2> {
+            as_vector2(value).ok_or_else(|| mlua::Error::runtime(format!("{name} expects a Vector2")))
+        }
+        methods.add_method(DOT, |_, this, v: Value| {
+            let v = other(DOT, &v)?;
+            Ok(this.0.x * v.x + this.0.y * v.y)
+        });
+        methods.add_method(CROSS, |_, this, v: Value| {
+            let v = other(CROSS, &v)?;
+            Ok(this.0.x * v.y - this.0.y * v.x)
+        });
+        methods.add_method(LERP, |_, this, (v, t): (Value, f32)| {
+            let v = other(LERP, &v)?;
+            Ok(LuaVector2(Vec2::new(this.0.x + (v.x - this.0.x) * t, this.0.y + (v.y - this.0.y) * t)))
+        });
+        for (name, pick) in [(MIN, f32::min as fn(f32, f32) -> f32), (MAX, f32::max)] {
+            methods.add_method(name, move |_, this, others: mlua::Variadic<Value>| {
+                let mut out = this.0;
+                for v in others.iter() {
+                    let v = other(name, v)?;
+                    out = Vec2::new(pick(out.x, v.x), pick(out.y, v.y));
+                }
+                Ok(LuaVector2(out))
+            });
+        }
+        for (name, each) in [
+            (ABS, f32::abs as fn(f32) -> f32),
+            (FLOOR, f32::floor),
+            (CEIL, f32::ceil),
+            (SIGN, |v: f32| {
+                if v > 0.0 {
+                    1.0
+                } else if v < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                }
+            }),
+        ] {
+            methods.add_method(name, move |_, this, ()| {
+                Ok(LuaVector2(Vec2::new(each(this.0.x), each(this.0.y))))
+            });
+        }
+        methods.add_method(FUZZY_EQ, |_, this, (v, epsilon): (Value, Option<f32>)| {
+            let v = other(FUZZY_EQ, &v)?;
+            let eps = epsilon.unwrap_or(1e-5);
+            Ok((this.0.x - v.x).abs() <= eps && (this.0.y - v.y).abs() <= eps)
+        });
+        methods.add_method(ANGLE, |_, this, (v, signed): (Value, Option<bool>)| {
+            let v = other(ANGLE, &v)?;
+            let cross = this.0.x * v.y - this.0.y * v.x;
+            let dot = this.0.x * v.x + this.0.y * v.y;
+            let angle = cross.atan2(dot);
+            Ok(if signed.unwrap_or(false) { angle } else { angle.abs() })
+        });
+        methods.add_meta_function(MetaMethod::IDiv, |_, (a, b): (Value, Value)| {
+            let (a, b) = vector2_operands(&a, &b)?;
+            Ok(LuaVector2(Vec2::new((a.x / b.x).floor(), (a.y / b.y).floor())))
+        });
         methods.add_meta_function(MetaMethod::Add, |_, (a, b): (Value, Value)| {
             let (a, b) = vector2_operands(&a, &b)?;
             Ok(LuaVector2(Vec2::new(a.x + b.x, a.y + b.y)))
@@ -467,6 +535,8 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     vector2.set(constructors::ZERO, LuaVector2(Vec2::ZERO))?;
     vector2.set(constructors::ONE, LuaVector2(Vec2::new(1.0, 1.0)))?;
+    vector2.set(names::vector3::X_AXIS, LuaVector2(Vec2::new(1.0, 0.0)))?;
+    vector2.set(names::vector3::Y_AXIS, LuaVector2(Vec2::new(0.0, 1.0)))?;
     g.set(names::globals::VECTOR2, vector2)?;
 
     let udim2 = lua.create_table()?;

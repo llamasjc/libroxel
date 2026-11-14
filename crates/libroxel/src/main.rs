@@ -14,6 +14,7 @@
 //! ```
 
 mod browse;
+mod debugging;
 mod file_picker;
 mod gui;
 mod history;
@@ -146,6 +147,16 @@ pub struct Editor {
     pub show_toolbox: bool,
     /// What's typed in the toolbox's search box.
     pub toolbox_search: String,
+    /// The Output, saved to a file as it grows.
+    pub log_file: debugging::LogFile,
+    /// What the Output panel shows, and how it's filtered.
+    pub output_view: ui::OutputView,
+    pub output_search: String,
+    pub show_prints: bool,
+    pub show_warnings: bool,
+    pub show_errors: bool,
+    /// Show an error or warning that repeats once, with how many times.
+    pub group_repeats: bool,
 }
 
 /// A game carried over the internet with a join code.
@@ -198,6 +209,13 @@ impl Default for Editor {
             show_output: true,
             show_toolbox: true,
             toolbox_search: String::new(),
+            log_file: Default::default(),
+            output_view: ui::OutputView::Log,
+            output_search: String::new(),
+            show_prints: true,
+            show_warnings: true,
+            show_errors: true,
+            group_repeats: true,
         }
     }
 }

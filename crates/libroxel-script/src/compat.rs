@@ -301,8 +301,109 @@ impl UserData for LuaDateTime {
                 Ok(t)
             });
         }
+        // Local time is taken as universal time.
+        for name in ["FormatUniversalTime", "FormatLocalTime"] {
+            methods.add_method(name, |_, this, (format, _locale): (String, Option<String>)| {
+                Ok(format_date(*this, &format))
+            });
+        }
         methods.add_meta_method(MetaMethod::ToString, |_, this, ()| Ok(this.0.to_string()));
     }
+}
+
+/// Days from 1970-01-01 to a date (the inverse of [`civil`]).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// Formats a date with the usual tokens (YYYY, MMMM, DD, dddd, HH, hh, mm,
+/// ss, A...) and the short forms LT, LTS, L, LL, LLL and LLLL, in English.
+fn format_date(date: LuaDateTime, format: &str) -> String {
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    const DAYS: [&str; 7] = ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"];
+    let (y, mo, d, h, mi, s, ms) = date.parts();
+    let weekday = DAYS[date.0.div_euclid(86_400_000).rem_euclid(7) as usize];
+    let month = MONTHS[(mo as usize).saturating_sub(1).min(11)];
+    let h12 = if h % 12 == 0 { 12 } else { h % 12 };
+    let ampm = if h < 12 { "AM" } else { "PM" };
+    let expanded = |token: &str| -> Option<String> {
+        Some(match token {
+            "LTS" => format!("{h12}:{mi:02}:{s:02} {ampm}"),
+            "LT" => format!("{h12}:{mi:02} {ampm}"),
+            "LLLL" => format!("{weekday}, {month} {d}, {y} {h12}:{mi:02} {ampm}"),
+            "LLL" => format!("{month} {d}, {y} {h12}:{mi:02} {ampm}"),
+            "LL" => format!("{month} {d}, {y}"),
+            "L" => format!("{mo:02}/{d:02}/{y:04}"),
+            "YYYY" => format!("{y:04}"),
+            "YY" => format!("{:02}", y.rem_euclid(100)),
+            "MMMM" => month.to_owned(),
+            "MMM" => month[..3].to_owned(),
+            "MM" => format!("{mo:02}"),
+            "M" => mo.to_string(),
+            "dddd" => weekday.to_owned(),
+            "ddd" => weekday[..3].to_owned(),
+            "DD" => format!("{d:02}"),
+            "D" => d.to_string(),
+            "HH" => format!("{h:02}"),
+            "H" => h.to_string(),
+            "hh" => format!("{h12:02}"),
+            "h" => h12.to_string(),
+            "mm" => format!("{mi:02}"),
+            "m" => mi.to_string(),
+            "ss" => format!("{s:02}"),
+            "s" => s.to_string(),
+            "SSS" => format!("{ms:03}"),
+            "A" => ampm.to_owned(),
+            "a" => ampm.to_lowercase(),
+            _ => return None,
+        })
+    };
+    const TOKENS: [&str; 28] = [
+        "LTS", "LT", "LLLL", "LLL", "LL", "L", "YYYY", "YY", "MMMM", "MMM", "MM", "M", "dddd", "ddd", "DD",
+        "D", "HH", "H", "hh", "h", "mm", "m", "ss", "s", "SSS", "A", "a", "",
+    ];
+    let mut out = String::new();
+    let mut rest = format;
+    while let Some(c) = rest.chars().next() {
+        // [text] is kept as it is.
+        if c == '['
+            && let Some(end) = rest.find(']')
+        {
+            out.push_str(&rest[1..end]);
+            rest = &rest[end + 1..];
+            continue;
+        }
+        match TOKENS.iter().filter(|t| !t.is_empty()).find(|t| rest.starts_with(**t)) {
+            Some(token) => {
+                out.push_str(&expanded(token).unwrap_or_default());
+                rest = &rest[token.len()..];
+            }
+            None => {
+                out.push(c);
+                rest = &rest[c.len_utf8()..];
+            }
+        }
+    }
+    out
 }
 
 fn now_millis() -> i64 {
@@ -314,6 +415,33 @@ fn date_lib(lua: &Lua) -> mlua::Result<Table> {
     lib.set(NOW, lua.create_function(|_, ()| Ok(LuaDateTime(now_millis())))?)?;
     lib.set(FROM_UNIX_TIMESTAMP, lua.create_function(|_, s: f64| Ok(LuaDateTime((s * 1000.0) as i64)))?)?;
     lib.set(FROM_UNIX_TIMESTAMP_MILLIS, lua.create_function(|_, ms: f64| Ok(LuaDateTime(ms as i64)))?)?;
+    for name in ["fromUniversalTime", "fromLocalTime"] {
+        lib.set(
+            name,
+            lua.create_function(|_, parts: mlua::Variadic<Option<i64>>| {
+                let part = |i: usize, default: i64| parts.get(i).copied().flatten().unwrap_or(default);
+                let days = days_from_civil(part(0, 1970), part(1, 1), part(2, 1));
+                let secs = days * 86_400 + part(3, 0) * 3600 + part(4, 0) * 60 + part(5, 0);
+                Ok(LuaDateTime(secs * 1000 + part(6, 0)))
+            })?,
+        )?;
+    }
+    lib.set(
+        "fromIsoDate",
+        lua.create_function(|_, text: String| {
+            let digits: Vec<i64> = text
+                .split(|c: char| !c.is_ascii_digit())
+                .filter(|p| !p.is_empty())
+                .filter_map(|p| p.parse().ok())
+                .collect();
+            if digits.len() < 3 {
+                return Ok(None);
+            }
+            let part = |i: usize| digits.get(i).copied().unwrap_or(0);
+            let days = days_from_civil(part(0), part(1), part(2));
+            Ok(Some(LuaDateTime((days * 86_400 + part(3) * 3600 + part(4) * 60 + part(5)) * 1000)))
+        })?,
+    )?;
     lib.set_readonly(true);
     Ok(lib)
 }
@@ -880,6 +1008,7 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
         CONTEXT_ACTION_SERVICE => actions(lua, &t)?,
         _ => {}
     }
+    crate::lenient::dress_service(lua, &t, name)?;
     Ok(t)
 }
 

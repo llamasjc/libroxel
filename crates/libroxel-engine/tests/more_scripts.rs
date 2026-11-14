@@ -185,9 +185,9 @@ fn members_libroxel_lacks_remember_what_scripts_set() {
         part.Rotation = Vector3.new(0, 90, 0)
         print(part.Orientation.Y)
         local ok, err = pcall(function() return part.Bogus end)
-        print(ok, string.match(tostring(err), "Bogus is not a valid member of Crate") ~= nil)
+        print(ok, string.match(tostring(err), "Bogus is not a valid member of Part \"Workspace.Crate\"") ~= nil)
         ok, err = pcall(function() part.Bogus = 1 end)
-        print(ok, string.match(tostring(err), "Bogus is not a valid member of Crate") ~= nil)
+        print(ok, string.match(tostring(err), "Bogus is not a valid member of Part \"Workspace.Crate\"") ~= nil)
     "#);
     assert_eq!(
         printed,

@@ -182,6 +182,7 @@ pub(crate) fn new_index(
                 let _ = host.tree.borrow_mut().set_extra(id, key, None);
             } else {
                 let _ = host.tree.borrow_mut().set_extra(id, key, plain);
+                fire_changed(lua, id, key)?;
             }
             return Ok(true);
         }
@@ -194,13 +195,23 @@ pub(crate) fn new_index(
 /// instance), or a "not a valid member" error.
 pub(crate) fn service_index(lua: &Lua, service: &str, obj: AnyUserData, key: &str) -> mlua::Result<Value> {
     let groups = lua.create_sequence_from([service])?;
-    match lookup(lua, format!("service:{service}"), Value::UserData(obj), key, groups)? {
+    let key_id = format!("service:{service}");
+    match lookup(lua, key_id.clone(), Value::UserData(obj), key, groups)? {
         Some(value) => Ok(value),
+        None if let Some(value) = common(lua, &key_id, service, key)? => Ok(value),
         None if crate::reflection::has_property(service, key) => {
             Ok(crate::reflection::default_value(lua, service, key)?.unwrap_or(Value::Nil))
         }
         None => Err(mlua::Error::runtime(format!("{key} is not a valid member of {service}"))),
     }
+}
+
+/// Members every instance has (GetPropertyChangedSignal, attributes,
+/// IsA, FindFirstChild...), for service objects that aren't instances.
+fn common(lua: &Lua, key_id: &str, service: &str, key: &str) -> mlua::Result<Option<Value>> {
+    let (found, value): (bool, Value) =
+        layer(lua)?.get::<Function>("common")?.call((key_id, service, key))?;
+    Ok(found.then_some(value))
 }
 
 /// Sets `key` on a service object through the layer.
@@ -241,6 +252,55 @@ pub(crate) fn service(lua: &Lua, name: &str) -> mlua::Result<Option<Value>> {
     let make: Function = layer(lua)?.get("service")?;
     let made: Value = make.call(name)?;
     Ok(if made.is_nil() { None } else { Some(made) })
+}
+
+/// The event that fires when member `key` of an instance changes, for
+/// members that aren't saved properties.
+pub(crate) fn changed_signal(lua: &Lua, id: InstanceId, key: &str) -> mlua::Result<Value> {
+    layer(lua)?.get::<Function>("changed_signal")?.call((instance_key(id), key))
+}
+
+/// Fires [`changed_signal`] for `key`, if a script asked for it.
+pub(crate) fn fire_changed(lua: &Lua, id: InstanceId, key: &str) -> mlua::Result<()> {
+    layer(lua)?.get::<Function>("fire_changed")?.call((instance_key(id), key))
+}
+
+/// Gives a service made as a plain table (see compat.rs) the rest of its
+/// members: the layer's extras for it, what every instance has, and the
+/// class database's properties. Anything else is "not a valid member".
+pub(crate) fn dress_service(lua: &Lua, t: &Table, name: &'static str) -> mlua::Result<()> {
+    let meta = lua.create_table()?;
+    meta.set(
+        "__index",
+        lua.create_function(move |lua, (_t, key): (Value, String)| {
+            let (found, value): (bool, Value) =
+                layer(lua)?.get::<Function>("service_extra")?.call((name, key.as_str()))?;
+            if found {
+                return Ok(value);
+            }
+            if crate::reflection::has_property(name, &key) {
+                return Ok(crate::reflection::default_value(lua, name, &key)?.unwrap_or(Value::Nil));
+            }
+            Err(mlua::Error::runtime(format!("{key} is not a valid member of {name}")))
+        })?,
+    )?;
+    meta.set(
+        "__newindex",
+        lua.create_function(move |lua, (t, key, value): (Table, String, Value)| {
+            let known: bool = layer(lua)?.get::<Function>("service_extra_set")?.call((
+                name,
+                key.as_str(),
+                value.clone(),
+            ))?;
+            if !known {
+                t.raw_set(key, value)?;
+            }
+            Ok(())
+        })?,
+    )?;
+    meta.set("__tostring", lua.create_function(move |_, _: Value| Ok(name))?)?;
+    t.set_metatable(Some(meta))?;
+    Ok(())
 }
 
 /// A new event made in Lua, which fires when a script fires it.

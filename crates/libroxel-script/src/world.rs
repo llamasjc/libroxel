@@ -283,6 +283,22 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
         request(lua, this.0, VelocityRequest::Add(impulse / m));
         Ok(())
     });
+    m.add_method("ApplyImpulseAtPosition", |lua, this, (impulse, at): (Value, Value)| {
+        require_class(lua, this.0, ClassKind::Part, "ApplyImpulseAtPosition")?;
+        let impulse =
+            as_vector3(&impulse).ok_or_else(|| runtime_err("ApplyImpulseAtPosition expects a Vector3"))?;
+        let at = as_vector3(&at).ok_or_else(|| runtime_err("ApplyImpulseAtPosition expects a position"))?;
+        let m = mass(lua, this.0);
+        request(lua, this.0, VelocityRequest::Add(impulse / m));
+        // Off-centre pushes spin the part too (as if it were a solid ball).
+        let centre = part_cframe(lua, this.0)?.pos;
+        let size = host(lua).tree.borrow().get_vec3(this.0, Property::Size).unwrap_or(Vec3::ONE);
+        let radius = (size.length() * 0.5).max(0.1);
+        let inertia = 0.4 * m * radius * radius;
+        let spin = spin(lua, this.0) + (at - centre).cross(impulse) / inertia;
+        request(lua, this.0, VelocityRequest::Spin(spin));
+        Ok(())
+    });
     for name in [methods::WORLD_TO_VIEWPORT_POINT, methods::WORLD_TO_SCREEN_POINT] {
         m.add_method(name, move |lua, this, point: Value| {
             require_class(lua, this.0, ClassKind::Camera, name)?;
@@ -383,6 +399,24 @@ impl UserData for LuaRandom {
             let span = (max - min + 1) as f64;
             Ok(min + ((this.next() * span).floor() as i64).min(max - min))
         });
+        m.add_method("NextUnitVector", |_, this, ()| {
+            // A point on the sphere, picked evenly.
+            let z = this.next() * 2.0 - 1.0;
+            let angle = this.next() * std::f64::consts::TAU;
+            let r = (1.0 - z * z).max(0.0).sqrt();
+            Ok(LuaVector3(Vec3::new((r * angle.cos()) as f32, (r * angle.sin()) as f32, z as f32)))
+        });
+        m.add_method("Shuffle", |_, this, list: mlua::Table| {
+            let n = list.raw_len();
+            for i in (2..=n).rev() {
+                let j = 1 + ((this.next() * i as f64).floor() as usize).min(i - 1);
+                let (a, b): (Value, Value) = (list.raw_get(i)?, list.raw_get(j)?);
+                list.raw_set(i, b)?;
+                list.raw_set(j, a)?;
+            }
+            Ok(())
+        });
+        m.add_method("Clone", |_, this, ()| Ok(LuaRandom(std::cell::Cell::new(this.0.get()))));
     }
 }
 
@@ -470,7 +504,18 @@ pub(crate) fn set_devices(lua: &Lua, devices: crate::Devices) {
 }
 
 pub(crate) fn set_viewport(lua: &Lua, size: Vec2) {
-    host(lua).world.borrow_mut().viewport = size;
+    let old = std::mem::replace(&mut host(lua).world.borrow_mut().viewport, size);
+    if old != size {
+        // Scripts laying out their GUI listen for this.
+        let camera = {
+            let host = host(lua);
+            let tree = host.tree.borrow();
+            tree.find_first_child_of_class(tree.workspace(), ClassKind::Camera).ok().flatten()
+        };
+        if let Some(camera) = camera {
+            let _ = crate::lenient::fire_changed(lua, camera, extras::VIEWPORT_SIZE);
+        }
+    }
 }
 
 pub(crate) fn set_velocities(lua: &Lua, velocities: HashMap<InstanceId, Vec3>) {
