@@ -191,7 +191,7 @@ impl TouchPad {
         painter.text(
             jump,
             egui::Align2::CENTER_CENTER,
-            "⬆",
+            crate::theme::icon::ARROW_FAT_UP,
             egui::FontId::proportional(30.0),
             Color32::WHITE,
         );

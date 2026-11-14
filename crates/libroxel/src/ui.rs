@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use crate::theme::{self, icon};
 use bevy::camera::Viewport;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -194,109 +195,7 @@ const SHAPES: &[(PartShape, &str)] = &[
 ];
 
 fn icon(class: ClassKind) -> &'static str {
-    match class {
-        ClassKind::DataModel => "🎮",
-        ClassKind::Workspace => "🌐",
-        ClassKind::Folder => "📁",
-        ClassKind::Model => "📦",
-        ClassKind::Part => "⬛",
-        ClassKind::SpawnLocation => "🏁",
-        ClassKind::Script => "📜",
-        ClassKind::ModuleScript => "📘",
-        ClassKind::Humanoid => "👤",
-        ClassKind::Players => "👥",
-        ClassKind::Player => "🙂",
-        ClassKind::ReplicatedStorage => "🗄",
-        ClassKind::IntValue | ClassKind::NumberValue => "🔢",
-        ClassKind::StringValue => "🔤",
-        ClassKind::BoolValue => "☑",
-        ClassKind::LocalScript => "📄",
-        ClassKind::StarterGui | ClassKind::PlayerGui => "🖼",
-        ClassKind::ScreenGui => "🖥",
-        ClassKind::GuiObject | ClassKind::Frame => "▭",
-        ClassKind::TextLabel => "🏷",
-        ClassKind::TextButton => "🔘",
-        ClassKind::ClickDetector => "👆",
-        ClassKind::Lighting => "☀",
-        ClassKind::ServerScriptService => "⚙",
-        ClassKind::ProximityPrompt => "💬",
-        ClassKind::RemoteEvent => "📡",
-        ClassKind::BindableEvent => "🔔",
-        ClassKind::Tool => "🔧",
-        ClassKind::StarterPack | ClassKind::Backpack => "🎒",
-        ClassKind::BillboardGui => "🪧",
-        ClassKind::SurfaceGui => "🖼",
-        ClassKind::Camera => "🎥",
-        ClassKind::PointLight | ClassKind::SpotLight => "💡",
-        ClassKind::TextBox => "⌨",
-        ClassKind::UICorner => "◜",
-        ClassKind::UIListLayout => "☰",
-        ClassKind::Explosion => "💥",
-        ClassKind::WeldConstraint => "🔗",
-        ClassKind::Seat => "🪑",
-        ClassKind::VehicleSeat => "🏎",
-        ClassKind::RemoteFunction => "📞",
-        ClassKind::BindableFunction => "🔔",
-        ClassKind::ObjectValue => "🔗",
-        ClassKind::Vector3Value => "📐",
-        ClassKind::Color3Value => "🎨",
-        ClassKind::ServerStorage => "🗄",
-        ClassKind::StarterPlayer => "👤",
-        ClassKind::Attachment => "📍",
-        ClassKind::LinearVelocity | ClassKind::BodyVelocity => "➡",
-        ClassKind::VectorForce | ClassKind::BodyForce => "💨",
-        ClassKind::AlignPosition | ClassKind::BodyPosition => "🎯",
-        ClassKind::RopeConstraint => "➰",
-        ClassKind::RodConstraint => "📏",
-        ClassKind::AlignOrientation | ClassKind::BodyGyro => "🧭",
-        ClassKind::Torque => "🌀",
-        ClassKind::NoCollisionConstraint => "👻",
-        ClassKind::SpringConstraint => "🌀",
-        ClassKind::HingeConstraint => "🚪",
-        ClassKind::PrismaticConstraint => "↔",
-        ClassKind::BallSocketConstraint => "⚪",
-        ClassKind::AngularVelocity | ClassKind::BodyAngularVelocity => "🔄",
-        ClassKind::Terrain => "🗻",
-        ClassKind::Decal => "🏷",
-        ClassKind::Sound => "🔊",
-        ClassKind::Texture => "🏁",
-        ClassKind::ParticleEmitter | ClassKind::Sparkles => "✨",
-        ClassKind::Fire => "🔥",
-        ClassKind::Smoke => "☁",
-        ClassKind::Highlight => "🔆",
-        ClassKind::ScrollingFrame => "📜",
-        ClassKind::ImageLabel => "🖼",
-        ClassKind::ImageButton => "🖲",
-        ClassKind::UIStroke => "▢",
-        ClassKind::UIPadding => "⬚",
-        ClassKind::UIGridLayout => "▦",
-        ClassKind::BodyColors => "🎨",
-        ClassKind::Accessory => "🎩",
-        ClassKind::Animation | ClassKind::Animator => "💃",
-        ClassKind::UIAspectRatioConstraint => "⬌",
-        ClassKind::UIScale => "🔍",
-        ClassKind::UIGradient => "🌈",
-        ClassKind::Teams | ClassKind::Team => "🚩",
-        ClassKind::Weld | ClassKind::Motor6D => "🔗",
-        ClassKind::Beam => "〰",
-        ClassKind::Trail => "☄",
-        ClassKind::Sky => "🌙",
-        ClassKind::SelectionBox => "⬚",
-        ClassKind::Atmosphere => "🌫",
-        ClassKind::BloomEffect | ClassKind::ColorCorrectionEffect => "✨",
-        ClassKind::UISizeConstraint | ClassKind::UITextSizeConstraint => "⬌",
-        ClassKind::Configuration => "⚙",
-        ClassKind::CFrameValue
-        | ClassKind::BrickColorValue
-        | ClassKind::BlurEffect
-        | ClassKind::SunRaysEffect
-        | ClassKind::DepthOfFieldEffect
-        | ClassKind::SurfaceLight
-        | ClassKind::CylindricalConstraint
-        | ClassKind::SpecialMesh
-        | ClassKind::Shirt
-        | ClassKind::Pants => "▫",
-    }
+    crate::theme::class_glyph(class).0
 }
 
 /// Classes that hold Luau source and open in the script editor.
@@ -306,9 +205,9 @@ fn is_code(class: ClassKind) -> bool {
 
 fn level_color(level: LogLevel) -> Color32 {
     match level {
-        LogLevel::Info => Color32::from_gray(220),
-        LogLevel::Warn => Color32::from_rgb(240, 190, 60),
-        LogLevel::Error => Color32::from_rgb(255, 110, 100),
+        LogLevel::Info => theme::CHALK,
+        LogLevel::Warn => theme::SUN,
+        LogLevel::Error => theme::BRICK,
     }
 }
 
@@ -334,6 +233,10 @@ pub fn editor_ui(
     mut touch_input: ResMut<libroxel_engine::devices::VirtualInput>,
 ) -> Result {
     let ctx = contexts.ctx_mut()?.clone();
+    if !crate::theme::install(&ctx) {
+        ctx.request_repaint();
+        return Ok(());
+    }
     let now = time.elapsed_secs_f64();
     let engine = &mut *engine;
     let editor = &mut *editor;
@@ -406,17 +309,18 @@ pub fn editor_ui(
     });
     if !editor.player_mode {
         egui::Panel::left("explorer").resizable(true).default_size(260.0).show(&mut root, |ui| {
-            ui.heading("Explorer");
-            ui.separator();
+            theme::panel_title(ui, icon::TREE_STRUCTURE, "Explorer");
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                // A tree reads best packed close.
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.spacing_mut().interact_size.y = 22.0;
                 let tree = tree_rc.borrow();
                 explorer_node(ui, &tree, tree.root(), editor, &mut actions, 0);
                 editor.reveal_selection = false;
             });
         });
         egui::Panel::right("properties").resizable(true).default_size(300.0).show(&mut root, |ui| {
-            ui.heading("Properties");
-            ui.separator();
+            theme::panel_title(ui, icon::SLIDERS_HORIZONTAL, "Properties");
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 properties(ui, editor, &mut tree_rc.borrow_mut(), now, playing, &mut actions);
             });
@@ -898,7 +802,7 @@ fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
             }
             ui.separator();
             if ui
-                .add_enabled(!playing, egui::Button::new("🌍 Publish…"))
+                .add_enabled(!playing, egui::Button::new(format!("{}  Publish…", icon::GLOBE_HEMISPHERE_WEST)))
                 .on_hover_text("Put this game on the Hub, so anyone can find it Online and play it")
                 .clicked()
             {
@@ -967,10 +871,10 @@ fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
                 }
             }
             ui.separator();
-            if ui.button("👤 Character (NPC)").clicked() {
+            if ui.button(format!("{}  Character (NPC)", icon::PERSON_SIMPLE)).clicked() {
                 actions.push(Action::InsertNpc);
             }
-            if ui.button("🏎 Go-kart").clicked() {
+            if ui.button(format!("{}  Go-kart", icon::STEERING_WHEEL)).clicked() {
                 actions.push(Action::InsertKart);
             }
         });
@@ -982,7 +886,7 @@ fn menu_bar(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
         ui.menu_button("Together", |ui| {
             if editor.coedit.is_none() {
                 if ui
-                    .add_enabled(!playing, egui::Button::new("👥 Edit together…"))
+                    .add_enabled(!playing, egui::Button::new(format!("{}  Edit together…", icon::USERS_THREE)))
                     .on_hover_text("Share this game so others can edit it with you, or join someone's")
                     .clicked()
                 {
@@ -1008,35 +912,43 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
     let playing = session.is_some();
     ui.horizontal(|ui| {
         if playing {
-            let stop = if editor.player_mode { "⏹ Leave game" } else { "⏹ Stop" };
-            if ui.button(RichText::new(stop).strong().color(Color32::from_rgb(255, 120, 110))).clicked() {
+            let stop = if editor.player_mode { "Leave game" } else { "Stop" };
+            if theme::block_button(ui, theme::Kind::Danger, icon::STOP, stop, 30.0).clicked() {
                 actions.push(Action::Stop);
             }
         } else {
-            if ui.button(RichText::new("▶ Play").strong().color(Color32::from_rgb(120, 220, 120))).clicked()
-            {
+            if theme::block_button(ui, theme::Kind::Go, icon::PLAY, "Play", 30.0).clicked() {
                 actions.push(Action::Play);
             }
-            if ui.button("🌐 Host").on_hover_text("Play, and let other computers join").clicked() {
+            if theme::tool_button(ui, icon::BROADCAST, "Host", false)
+                .on_hover_text("Play, and let other computers join")
+                .clicked()
+            {
                 actions.push(Action::Host);
             }
-            if ui.button("🔗 Join").on_hover_text("Join a game another computer hosts").clicked() {
+            if theme::tool_button(ui, icon::SIGN_IN, "Join", false)
+                .on_hover_text("Join a game another computer hosts")
+                .clicked()
+            {
                 editor.dialog = Some(Dialog::Join { address: "127.0.0.1".into(), name: "Player".into() });
             }
-            if ui.button("🌍 Browse").on_hover_text("Find games being hosted right now").clicked() {
+            if theme::tool_button(ui, icon::GLOBE_HEMISPHERE_WEST, "Browse", false)
+                .on_hover_text("Find games being hosted right now")
+                .clicked()
+            {
                 editor.platform.open = true;
             }
         }
         if let Some(session) = session {
-            let red = Color32::from_rgb(255, 120, 110);
+            let red = theme::BRICK;
             if let Some(address) = session.host_address() {
                 let joined = session.joined_count();
                 let who = if joined == 1 { "1 joined".to_owned() } else { format!("{joined} joined") };
-                ui.label(format!("🌐 Hosting on port {} · {who}", address.port()))
+                theme::status(ui, theme::MINT, &format!("Hosting on port {} · {who}", address.port()))
                     .on_hover_text("Others on your network join with this computer's address and this port");
                 let players = session.joined_players();
                 if !players.is_empty() {
-                    ui.menu_button("👥 Players", |ui| {
+                    ui.menu_button(format!("{}  Players", icon::USERS_THREE), |ui| {
                         for (player, name) in players {
                             ui.horizontal(|ui| {
                                 ui.label(name);
@@ -1055,7 +967,7 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
                 if let Some(Tunnel::Host(tunnel)) = &editor.tunnel {
                     if let Some(code) = tunnel.code() {
                         let copy = ui
-                            .button("📋 Copy join code")
+                            .button(format!("{}  Copy join code", icon::COPY))
                             .on_hover_text(format!("Friends anywhere paste this into Join:\n{code}"));
                         if copy.clicked() {
                             ui.ctx().copy_text(code);
@@ -1063,7 +975,7 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
                     } else if let Some(error) = tunnel.error() {
                         ui.colored_label(red, "No join code").on_hover_text(error);
                     } else {
-                        ui.label("⏳ Getting a join code…");
+                        theme::status(ui, theme::SUN, "Getting a join code…");
                     }
                 }
             } else if session.is_joined() {
@@ -1072,13 +984,13 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
                     _ => None,
                 };
                 if let Some(error) = tunnel.and_then(|t| t.error()) {
-                    ui.colored_label(red, "🔗 Could not reach the host").on_hover_text(error);
+                    theme::status(ui, theme::BRICK, "Could not reach the host").on_hover_text(error);
                 } else if session.disconnected() {
-                    ui.colored_label(red, "🔗 Disconnected");
+                    theme::status(ui, theme::BRICK, "Disconnected");
                 } else if tunnel.is_some_and(|t| !t.connected()) {
-                    ui.label("⏳ Connecting…");
+                    theme::status(ui, theme::SUN, "Connecting…");
                 } else {
-                    ui.label("🔗 Joined");
+                    theme::status(ui, theme::MINT, "Joined");
                 }
             }
         }
@@ -1090,13 +1002,22 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
             together_status(ui, coedit, editor.edit_tunnel.as_ref());
         }
         ui.separator();
-        ui.selectable_value(&mut editor.tool, Tool::Select, "🖱 Select");
-        ui.selectable_value(&mut editor.tool, Tool::Move, "✥ Move");
-        ui.selectable_value(&mut editor.tool, Tool::Scale, "⤢ Resize");
-        ui.selectable_value(&mut editor.tool, Tool::Rotate, "⟳ Rotate");
+        for (tool, glyph, label) in [
+            (Tool::Select, icon::CURSOR, "Select"),
+            (Tool::Move, icon::ARROWS_OUT_CARDINAL, "Move"),
+            (Tool::Scale, icon::ARROWS_OUT, "Resize"),
+            (Tool::Rotate, icon::ARROW_CLOCKWISE, "Rotate"),
+        ] {
+            if theme::tool_button(ui, glyph, label, editor.tool == tool).clicked() {
+                editor.tool = tool;
+            }
+        }
         if !playing {
-            ui.selectable_value(&mut editor.tool, Tool::Terrain, "🗻 Terrain")
-                .on_hover_text("Add, dig or paint terrain by clicking and dragging in the view");
+            let terrain = theme::tool_button(ui, icon::MOUNTAINS, "Terrain", editor.tool == Tool::Terrain);
+            if terrain.clicked() {
+                editor.tool = Tool::Terrain;
+            }
+            terrain.on_hover_text("Add, dig or paint terrain by clicking and dragging in the view");
         }
         ui.separator();
         ui.label("Snap");
@@ -1122,7 +1043,7 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
             });
         ui.separator();
         ui.add_enabled_ui(!playing, |ui| {
-            ui.menu_button("+ Part", |ui| {
+            ui.menu_button(format!("{}  Part", icon::CUBE), |ui| {
                 for &(shape, label) in SHAPES {
                     if ui.button(label).clicked() {
                         actions.push(Action::InsertShape(shape));
@@ -1130,7 +1051,7 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
                     }
                 }
             });
-            if ui.button("+ Script").clicked() {
+            if ui.button(format!("{}  Script", icon::CODE)).clicked() {
                 actions.push(Action::Insert(ClassKind::Script));
             }
         });
@@ -1148,7 +1069,7 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
 fn terrain_bar(ui: &mut egui::Ui, editor: &mut Editor, actions: &mut Vec<Action>) {
     use crate::terrain_tools::BrushMode;
     ui.horizontal(|ui| {
-        ui.label("🗻 Terrain:");
+        theme::label_caps(ui, "Terrain");
         let brush = &mut editor.brush;
         ui.selectable_value(&mut brush.mode, BrushMode::Add, "Add");
         ui.selectable_value(&mut brush.mode, BrushMode::Dig, "Dig");
@@ -1200,7 +1121,7 @@ fn explorer_node(
             }
             return;
         }
-        let text = format!("{} {}", icon(class), name);
+        let text = crate::theme::class_label(class, name);
         let inner = ui.add(
             egui::Button::selectable(selected, text)
                 .frame_when_inactive(false)
@@ -1677,7 +1598,7 @@ fn attributes_and_tags(
                     edits.push(Edit::Set(name.clone(), Some(new)));
                 }
             });
-            if ui.small_button("✖").on_hover_text("Remove this attribute").clicked() {
+            if ui.small_button(icon::X).on_hover_text("Remove this attribute").clicked() {
                 edits.push(Edit::Set(name, None));
             }
             ui.end_row();
@@ -1703,7 +1624,7 @@ fn attributes_and_tags(
     let tags = tree.tags(id).map(|t| t.to_vec()).unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
         for tag in tags {
-            if ui.button(format!("{tag}  ✖")).on_hover_text("Remove this tag").clicked() {
+            if ui.button(format!("{tag}  {}", icon::X)).on_hover_text("Remove this tag").clicked() {
                 edits.push(Edit::RemoveTag(tag));
             }
         }
@@ -1746,7 +1667,7 @@ fn property_editor(
         PropertyValue::String(mut s) => {
             if property == Property::Source {
                 let lines = s.lines().count();
-                if ui.button(format!("📝 Edit ({lines} lines)")).clicked() {
+                if ui.button(format!("{}  Edit ({lines} lines)", icon::PENCIL_SIMPLE)).clicked() {
                     actions.push(Action::OpenScript(id));
                 }
                 None
@@ -1913,7 +1834,7 @@ fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree) {
         .fixed_pos(egui::pos2(rect.right() - 12.0, rect.top() + 12.0))
         .pivot(egui::Align2::RIGHT_TOP)
         .show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).fill(Color32::from_black_alpha(170)).show(ui, |ui| {
+            egui::Frame::popup(ui.style()).fill(theme::INK1.gamma_multiply(0.94)).show(ui, |ui| {
                 egui::Grid::new("leaderboard-grid").spacing([16.0, 4.0]).show(ui, |ui| {
                     ui.label(RichText::new("Player").strong().color(Color32::WHITE));
                     for c in &columns {
@@ -1935,7 +1856,7 @@ fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree) {
                                         Color32::from_rgb(byte(c.r), byte(c.g), byte(c.b)),
                                     )
                                 }
-                                None => ("Neutral".to_owned(), Color32::from_gray(200)),
+                                None => ("Neutral".to_owned(), theme::DUST),
                             };
                             ui.label(RichText::new(label).strong().color(color));
                             ui.end_row();
@@ -1944,7 +1865,7 @@ fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree) {
                         for c in &columns {
                             let v =
                                 stats.iter().find(|(n, _)| n == c).map(|(_, v)| v.as_str()).unwrap_or("-");
-                            ui.label(RichText::new(v).color(Color32::from_rgb(255, 220, 120)));
+                            ui.label(RichText::new(v).color(theme::SUN));
                         }
                         ui.end_row();
                     }
@@ -1961,7 +1882,7 @@ fn output(
     actions: &mut Vec<Action>,
 ) {
     ui.horizontal(|ui| {
-        ui.heading("Output");
+        theme::panel_name(ui, icon::TERMINAL_WINDOW, "Output");
         if ui.small_button("Clear").clicked() {
             actions.push(Action::ClearOutput);
         }
@@ -2004,8 +1925,8 @@ fn hud(ui: &mut egui::Ui, playing: bool) {
         rect.right_bottom() + egui::vec2(-8.0, -8.0),
         egui::Align2::RIGHT_BOTTOM,
         text,
-        egui::FontId::proportional(13.0),
-        Color32::from_white_alpha(170),
+        theme::display(12.5),
+        theme::CHALK.gamma_multiply(0.75),
     );
 }
 
@@ -2018,7 +1939,7 @@ fn script_editor(ctx: &egui::Context, editor: &mut Editor, tree: &mut InstanceTr
     let name = tree.name(id).unwrap_or("Script").to_owned();
     let mut open = true;
     let mut changed = false;
-    egui::Window::new(format!("📜 {name}"))
+    egui::Window::new(format!("{}  {name}", icon::CODE))
         .id(egui::Id::new("script-editor"))
         .open(&mut open)
         .default_size([620.0, 460.0])
@@ -2129,19 +2050,22 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
                 });
                 match &editor.platform.publish_status {
                     _ if busy => {
-                        ui.label("⏳ Publishing…");
+                        theme::status(ui, theme::SUN, "Publishing…");
                     }
                     Some(Ok(said)) => {
-                        ui.colored_label(Color32::from_rgb(120, 220, 120), said);
+                        ui.colored_label(theme::MINT, said);
                     }
                     Some(Err(why)) => {
-                        ui.colored_label(Color32::from_rgb(255, 120, 110), why);
+                        ui.colored_label(theme::BRICK, why);
                     }
                     None => {}
                 }
                 ui.horizontal(|ui| {
                     if ui
-                        .add_enabled(!busy && !title.trim().is_empty(), egui::Button::new("🌍 Publish"))
+                        .add_enabled(
+                            !busy && !title.trim().is_empty(),
+                            egui::Button::new(format!("{}  Publish", icon::GLOBE_HEMISPHERE_WEST)),
+                        )
                         .clicked()
                     {
                         actions.push(Action::Publish {
@@ -2166,7 +2090,7 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
             ctx,
             |ui| {
                 ui.label("Share the game you have open, and others can change it with you as you work.");
-                if ui.button("👥 Share this game").clicked() {
+                if ui.button(format!("{}  Share this game", icon::USERS_THREE)).clicked() {
                     actions.push(Action::ShareEdits);
                     close = true;
                 }
@@ -2308,16 +2232,16 @@ fn edit_together(engine: &mut EngineState, editor: &mut Editor) {
 
 /// The toolbar's word on editing together.
 fn together_status(ui: &mut egui::Ui, coedit: &libroxel_engine::coedit::CoEdit, tunnel: Option<&Tunnel>) {
-    let red = Color32::from_rgb(255, 120, 110);
+    let red = theme::BRICK;
     if let Some(address) = coedit.local_addr() {
         let people = coedit.people();
         let who = if people.is_empty() { "no one yet".to_owned() } else { people.join(", ") };
-        ui.label(format!("👥 Sharing on port {} · {who}", address.port()))
+        theme::status(ui, theme::MINT, &format!("Sharing on port {} · {who}", address.port()))
             .on_hover_text("Others on your network join with this computer's address and this port");
         if let Some(Tunnel::Host(tunnel)) = tunnel {
             if let Some(code) = tunnel.code() {
                 let copy = ui
-                    .button("📋 Copy edit code")
+                    .button(format!("{}  Copy edit code", icon::COPY))
                     .on_hover_text(format!("Friends anywhere paste this into Edit together:\n{code}"));
                 if copy.clicked() {
                     ui.ctx().copy_text(code);
@@ -2325,20 +2249,20 @@ fn together_status(ui: &mut egui::Ui, coedit: &libroxel_engine::coedit::CoEdit, 
             } else if let Some(error) = tunnel.error() {
                 ui.colored_label(red, "No edit code").on_hover_text(error);
             } else {
-                ui.label("⏳ Getting an edit code…");
+                theme::status(ui, theme::SUN, "Getting an edit code…");
             }
         }
     } else if let Some(error) = match tunnel {
         Some(Tunnel::Join(tunnel)) => tunnel.error(),
         _ => None,
     } {
-        ui.colored_label(red, "👥 Could not reach the shared game").on_hover_text(error);
+        theme::status(ui, theme::BRICK, "Could not reach the shared game").on_hover_text(error);
     } else if coedit.disconnected() {
-        ui.colored_label(red, "👥 Disconnected");
+        theme::status(ui, theme::BRICK, "Disconnected");
     } else if !coedit.ready() {
-        ui.label("⏳ Getting the shared game…");
+        theme::status(ui, theme::SUN, "Getting the shared game…");
     } else {
-        ui.label("👥 Editing together");
+        theme::status(ui, theme::MINT, "Editing together");
     }
 }
 
@@ -2660,7 +2584,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                         saved.as_deref(),
                         true,
                     ),
-                    "🌐 Hosting".to_owned(),
+                    "Hosting".to_owned(),
                 ),
                 Action::Join { address, name } if libroxel_net::is_join_code(address) => {
                     let name = if name.is_empty() { "Player" } else { name.as_str() };
@@ -2673,7 +2597,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                             editor.tunnel = Some(Tunnel::Join(tunnel));
                             (
                                 PlaySession::join(engine.tree.clone(), &local, name),
-                                "🔗 Joining with a code".to_owned(),
+                                "Joining with a code".to_owned(),
                             )
                         }
                         Err(e) => (Err(e), String::new()),
@@ -2689,7 +2613,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                         Some(json) => PlaySession::start_with_data(engine.tree.clone(), &json),
                         None => PlaySession::start(engine.tree.clone(), true),
                     },
-                    "▶ Playing".to_owned(),
+                    "Playing".to_owned(),
                 ),
             };
             match started {
@@ -2746,14 +2670,14 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                 if editor.selection.is_some_and(|id| !engine.tree.borrow().exists(id)) {
                     editor.selection = None;
                 }
-                log(engine, LogLevel::Info, "⏹ Stopped");
+                log(engine, LogLevel::Info, "Stopped");
             }
         }
         Action::ShareEdits => {
             match libroxel_engine::coedit::CoEdit::host(libroxel_engine::coedit::EDIT_PORT) {
                 Ok(coedit) => {
                     let port = coedit.local_addr().map_or(0, |a| a.port());
-                    log(engine, LogLevel::Info, format!("👥 Sharing this game for editing on port {port}"));
+                    log(engine, LogLevel::Info, format!("Sharing this game for editing on port {port}"));
                     match crate::identity().and_then(|me| {
                         libroxel_net::HostTunnel::start(&me, libroxel_net::Network::Internet, port)
                     }) {

@@ -540,45 +540,48 @@ pub fn draw_prompt(
     progress: f32,
     at: Pos2,
 ) -> Rect {
+    use crate::theme;
     let action = tree.get_string(prompt, Property::ActionText).unwrap_or_default();
     let object = tree.get_string(prompt, Property::ObjectText).unwrap_or_default();
-    let rect = Rect::from_center_size(at, egui::vec2(200.0, 56.0));
+    let rect = Rect::from_center_size(at, egui::vec2(210.0, 56.0));
     let painter = ui.painter();
-    painter.rect_filled(rect, 8.0, Color32::from_black_alpha(170));
-    let key_box = Rect::from_center_size(rect.left_center() + egui::vec2(30.0, 0.0), egui::vec2(36.0, 36.0));
-    painter.rect_filled(key_box, 6.0, Color32::from_gray(235));
-    painter.text(
-        key_box.center(),
-        Align2::CENTER_CENTER,
-        key,
-        FontId::proportional(18.0),
-        Color32::from_gray(20),
-    );
+    // A hard offset shadow, then the slab, with an accent strip down the left.
+    painter.rect_filled(rect.translate(egui::vec2(4.0, 4.0)), theme::CORNER, Color32::from_black_alpha(150));
+    painter.rect_filled(rect, theme::CORNER, theme::INK1);
+    painter.rect_stroke(rect, theme::CORNER, Stroke::new(1.0, theme::LINE), StrokeKind::Inside);
+    // The key, as a keycap standing on its edge.
+    let key_box = Rect::from_center_size(rect.left_center() + egui::vec2(30.0, -2.0), egui::vec2(34.0, 32.0));
+    painter.rect_filled(key_box.translate(egui::vec2(0.0, 4.0)), theme::CORNER, theme::EMBER);
+    painter.rect_filled(key_box, theme::CORNER, theme::TANGERINE);
+    painter.text(key_box.center(), Align2::CENTER_CENTER, key, theme::display_bold(17.0), theme::INK0);
     if progress > 0.0 && progress < 1.0 {
         // A bar along the bottom of the bubble fills up while the key is held.
         let bar = Rect::from_min_size(
-            rect.left_bottom() + egui::vec2(8.0, -6.0),
-            egui::vec2((rect.width() - 16.0) * progress, 4.0),
+            rect.left_bottom() + egui::vec2(0.0, -4.0),
+            egui::vec2(rect.width() * progress, 4.0),
         );
-        painter.rect_filled(bar, 1.0, Color32::from_rgb(255, 215, 60));
+        painter.rect_filled(bar, 0.0, theme::SUN);
     }
     let text_x = key_box.right() + 12.0;
+    let width = rect.right() - text_x - 8.0;
     if !object.is_empty() {
-        painter.text(
-            egui::pos2(text_x, rect.center().y - 9.0),
-            Align2::LEFT_CENTER,
-            &object,
-            FontId::proportional(12.0),
-            Color32::from_gray(200),
+        theme::text_line(
+            painter,
+            egui::pos2(text_x, rect.center().y - 17.0),
+            &object.to_uppercase(),
+            theme::display(11.0),
+            theme::DUST,
+            width,
         );
     }
-    let action_y = if object.is_empty() { 0.0 } else { 8.0 };
-    painter.text(
+    let action_y = if object.is_empty() { -9.0 } else { -2.0 };
+    theme::text_line(
+        painter,
         egui::pos2(text_x, rect.center().y + action_y),
-        Align2::LEFT_CENTER,
-        action,
-        FontId::proportional(17.0),
-        Color32::WHITE,
+        &action,
+        theme::display(17.0),
+        theme::CHALK,
+        width,
     );
     rect
 }
@@ -782,42 +785,53 @@ pub fn surfaces(
 /// Draws the player's tool slots along the bottom of the view. Returns each
 /// slot's rectangle, so clicks can pick a tool.
 pub fn hotbar(ui: &egui::Ui, tree: &InstanceTree, tools: &[(InstanceId, bool)]) -> Vec<(usize, Rect)> {
+    use crate::theme;
     let area = ui.max_rect();
-    let (slot, gap) = (64.0, 8.0);
+    let (slot, gap) = (64.0, 6.0);
     let count = tools.len().min(9);
     let width = count as f32 * slot + count.saturating_sub(1) as f32 * gap;
     let mut x = area.center().x - width / 2.0;
-    let y = area.bottom() - slot - 20.0;
+    let y = area.bottom() - slot - 22.0;
     let painter = ui.painter();
     let mut rects = Vec::new();
     for (i, (tool, held)) in tools.iter().take(9).enumerate() {
         let rect = Rect::from_min_size(Pos2::new(x, y), egui::vec2(slot, slot));
         x += slot + gap;
-        painter.rect_filled(rect, 6.0, Color32::from_black_alpha(if *held { 210 } else { 150 }));
+        // The held tool lifts out of the row on its accent edge.
+        let face = if *held { rect.translate(egui::vec2(0.0, -6.0)) } else { rect };
+        painter.rect_filled(
+            rect.translate(egui::vec2(0.0, 4.0)),
+            theme::CORNER,
+            Color32::from_black_alpha(140),
+        );
         if *held {
-            painter.rect_stroke(
-                rect,
-                6.0,
-                Stroke::new(2.0, Color32::from_rgb(255, 215, 60)),
-                StrokeKind::Inside,
-            );
+            painter.rect_filled(face.translate(egui::vec2(0.0, 4.0)), theme::CORNER, theme::EMBER);
         }
+        painter.rect_filled(
+            face,
+            theme::CORNER,
+            if *held { theme::INK2 } else { theme::INK1.gamma_multiply(0.92) },
+        );
+        let line = if *held { Stroke::new(2.0, theme::TANGERINE) } else { Stroke::new(1.0, theme::LINE) };
+        painter.rect_stroke(face, theme::CORNER, line, StrokeKind::Inside);
+        // The slot's number in a corner tab.
+        let tab = Rect::from_min_size(face.left_top(), egui::vec2(16.0, 15.0));
+        painter.rect_filled(tab, 0.0, if *held { theme::TANGERINE } else { theme::INK3 });
         painter.text(
-            rect.left_top() + egui::vec2(6.0, 4.0),
-            Align2::LEFT_TOP,
+            tab.center(),
+            Align2::CENTER_CENTER,
             (i + 1).to_string(),
-            FontId::proportional(12.0),
-            Color32::from_gray(200),
+            theme::display_bold(11.0),
+            if *held { theme::INK0 } else { theme::DUST },
         );
         let name = tree.name(*tool).unwrap_or("?");
-        painter.with_clip_rect(rect.shrink(3.0)).text(
-            rect.center() + egui::vec2(0.0, 6.0),
-            Align2::CENTER_CENTER,
-            name,
-            FontId::proportional(13.0),
-            Color32::WHITE,
+        let galley = painter.layout(name.to_owned(), theme::display(12.5), theme::CHALK, slot - 8.0);
+        painter.with_clip_rect(face.shrink(3.0)).galley(
+            face.center() + egui::vec2(-galley.size().x / 2.0, 6.0 - galley.size().y / 2.0),
+            galley,
+            theme::CHALK,
         );
-        rects.push((i, rect));
+        rects.push((i, face));
     }
     rects
 }

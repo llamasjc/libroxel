@@ -23,6 +23,7 @@ mod server;
 mod starter_games;
 mod templates;
 mod terrain_tools;
+mod theme;
 mod touch;
 mod ui;
 mod viewport;

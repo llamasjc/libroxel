@@ -711,3 +711,15 @@ Unless you explicitly state otherwise, any contribution intentionally
 submitted for inclusion in the work by you, as defined in the Apache-2.0
 license, shall be dual licensed as above, without any additional terms or
 conditions.
+
+### Fonts and icons
+
+Libroxel's interface uses fonts and icons under their own open licences,
+included with the program:
+
+- [Chakra Petch](https://fonts.google.com/specimen/Chakra+Petch) for headings,
+  [Atkinson Hyperlegible](https://fonts.google.com/specimen/Atkinson+Hyperlegible)
+  for text and [IBM Plex Mono](https://github.com/IBM/plex) for code, all under
+  the SIL Open Font License 1.1 (see `crates/libroxel/assets/fonts/`).
+- [Phosphor](https://phosphoricons.com) icons, under the MIT License, through the
+  `egui-phosphor` crate.

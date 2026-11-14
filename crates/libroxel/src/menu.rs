@@ -12,7 +12,7 @@ use libroxel_instance::place;
 use crate::browse::Platform;
 use crate::server::{BackgroundServer, HubUse, ServerSettings, data_dir};
 use crate::starter_games::{self, STARTER_GAMES};
-use crate::{games_dir, templates};
+use crate::{games_dir, templates, theme};
 use libroxel_engine::character::{BodyColors, Hat, Look};
 use libroxel_instance::Color3;
 
@@ -140,70 +140,140 @@ pub fn saved_games() -> Vec<PathBuf> {
     found.into_iter().map(|(_, p)| p).collect()
 }
 
-const BACKGROUND: Color32 = Color32::from_rgb(20, 23, 32);
-const PANEL: Color32 = Color32::from_rgb(31, 36, 50);
-const ACCENT: Color32 = Color32::from_rgb(255, 196, 72);
-const SOFT: Color32 = Color32::from_rgb(160, 168, 190);
+const ACCENT: Color32 = theme::TANGERINE;
+const SOFT: Color32 = theme::DUST;
 
-fn big(text: &str) -> egui::Button<'_> {
-    egui::Button::new(RichText::new(text).size(18.0).strong()).min_size(egui::vec2(200.0, 44.0))
+/// A secondary block button.
+fn big(ui: &mut egui::Ui, glyph: &str, text: &str) -> egui::Response {
+    theme::block_button(ui, theme::Kind::Plain, glyph, text, 42.0)
 }
 
-fn play_button(text: &str) -> egui::Button<'_> {
-    egui::Button::new(RichText::new(text).size(20.0).strong().color(Color32::from_rgb(20, 23, 32)))
-        .fill(ACCENT)
-        .min_size(egui::vec2(200.0, 48.0))
+/// The block button for the main thing to do on a page.
+fn play_button(ui: &mut egui::Ui, kind: theme::Kind, glyph: &str, text: &str) -> egui::Response {
+    theme::block_button(ui, kind, glyph, text, 46.0)
 }
 
-/// A colour for a game's picture, the same every time for the same name.
+/// A section's title inside a page.
+fn subheading(ui: &mut egui::Ui, text: &str) {
+    ui.label(RichText::new(text).font(theme::display(17.0)).color(theme::CHALK));
+}
+
+/// A colour for a game's picture, the same every time for the same name,
+/// picked from a few that sit well on the graphite.
 fn tint(name: &str) -> Color32 {
+    const TINTS: [Color32; 6] = [
+        theme::TANGERINE,
+        theme::MINT,
+        theme::SKY,
+        theme::SUN,
+        Color32::from_rgb(178, 146, 255),
+        theme::BRICK,
+    ];
     let hash = name.bytes().fold(2166136261u32, |h, b| (h ^ b as u32).wrapping_mul(16777619));
-    let hue = (hash % 360) as f32 / 360.0;
-    egui::ecolor::Hsva::new(hue, 0.55, 0.75, 1.0).into()
+    TINTS[(hash % TINTS.len() as u32) as usize]
 }
 
-/// A game's tile: a picture with a big symbol, its name and a line under it.
-fn card(ui: &mut egui::Ui, symbol: &str, title: &str, note: &str, selected: bool) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(184.0, 150.0), egui::Sense::click());
-    let painter = ui.painter_at(rect.expand(3.0));
-    let lift = if response.hovered() { 6 } else { 0 };
-    painter.rect_filled(rect, 10.0, Color32::from_rgb(38 + lift, 44 + lift, 60 + lift));
-    let picture = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), 100.0));
-    let colour = tint(title);
-    painter.rect_filled(picture, egui::CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 }, colour);
-    // A few blocks along the bottom of the picture, for a bit of world.
-    for i in 0..6 {
-        let x = picture.min.x + 8.0 + i as f32 * 29.0;
-        let h = 10.0 + ((title.len() * 7 + i * 13) % 22) as f32;
-        let block =
-            egui::Rect::from_min_max(egui::pos2(x, picture.max.y - h), egui::pos2(x + 26.0, picture.max.y));
-        painter.rect_filled(block, 2.0, colour.gamma_multiply(0.6));
+/// A little stack of cubes seen from above a corner, made up from `seed`,
+/// standing on a ground tile: each game's tile gets its own.
+fn paint_diorama(painter: &egui::Painter, centre: egui::Pos2, unit: f32, seed: &str, colour: Color32) {
+    let hash = seed.bytes().fold(2166136261u32, |h, b| (h ^ b as u32).wrapping_mul(16777619));
+    let (dx, dy) = (unit * 0.866, unit * 0.5);
+    let at = |x: f32, y: f32, z: f32| egui::pos2(centre.x + (x - y) * dx, centre.y + (x + y) * dy - z * unit);
+    let cube = |x: f32, y: f32, z: f32, c: Color32| {
+        let top = [
+            at(x, y, z + 1.0),
+            at(x + 1.0, y, z + 1.0),
+            at(x + 1.0, y + 1.0, z + 1.0),
+            at(x, y + 1.0, z + 1.0),
+        ];
+        let left = [
+            at(x, y + 1.0, z + 1.0),
+            at(x + 1.0, y + 1.0, z + 1.0),
+            at(x + 1.0, y + 1.0, z),
+            at(x, y + 1.0, z),
+        ];
+        let right = [
+            at(x + 1.0, y, z + 1.0),
+            at(x + 1.0, y + 1.0, z + 1.0),
+            at(x + 1.0, y + 1.0, z),
+            at(x + 1.0, y, z),
+        ];
+        for (face, shade) in [(left, 0.78), (right, 0.55), (top, 1.0)] {
+            let fill = c.gamma_multiply(shade);
+            painter.add(egui::Shape::convex_polygon(face.to_vec(), fill.to_opaque(), egui::Stroke::NONE));
+        }
+    };
+    // The ground: a flat slab.
+    let ground = |x: f32, y: f32| at(x, y, 0.6);
+    let slab = [ground(-1.7, -1.7), ground(1.7, -1.7), ground(1.7, 1.7), ground(-1.7, 1.7)];
+    painter.add(egui::Shape::convex_polygon(slab.to_vec(), theme::INK3, egui::Stroke::new(1.0, theme::LINE)));
+    // Columns of cubes drawn back to front, their heights from the seed.
+    let mut cells: Vec<(i32, i32)> = (0..3).flat_map(|x| (0..3).map(move |y| (x, y))).collect();
+    cells.sort_by_key(|(x, y)| x + y);
+    for (gx, gy) in cells {
+        {
+            let bits = (hash >> ((gx * 3 + gy) * 2) as u32) & 3;
+            let high = if gx == 1 && gy == 1 { 2 } else { bits.saturating_sub(1) };
+            for z in 0..high {
+                let shade = if z + 1 == high { colour } else { colour.lerp_to_gamma(theme::INK2, 0.35) };
+                cube(gx as f32 - 1.5, gy as f32 - 1.5, 0.6 + z as f32, shade);
+            }
+        }
     }
+}
+
+/// A game's tile: a little scene, its name and a line under it.
+fn card(ui: &mut egui::Ui, symbol: &str, title: &str, note: &str, selected: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(196.0, 176.0), egui::Sense::click());
+    let painter = ui.painter_at(rect.expand(6.0));
+    let hovered = response.hovered();
+    let lift = if hovered { -3.0 } else { 0.0 };
+    // A hard shadow under the tile, which grows as it lifts.
+    let face = rect.translate(egui::vec2(0.0, lift));
+    painter.rect_filled(rect.translate(egui::vec2(4.0, 4.0)), theme::CORNER, Color32::from_black_alpha(120));
+    painter.rect_filled(face, theme::CORNER, theme::INK2);
+    let colour = tint(title);
+    let picture = egui::Rect::from_min_size(face.min, egui::vec2(face.width(), 112.0));
+    painter.rect_filled(
+        picture,
+        egui::CornerRadius { nw: theme::CORNER, ne: theme::CORNER, sw: 0, se: 0 },
+        theme::INK1,
+    );
+    theme::paint_dot_grid(&painter.with_clip_rect(picture), picture);
+    paint_diorama(&painter, picture.center() + egui::vec2(0.0, 8.0), 13.0, title, colour);
+    // The game's own icon in a corner chip.
+    let chip = egui::Rect::from_min_size(picture.min + egui::vec2(8.0, 8.0), egui::vec2(26.0, 26.0));
+    painter.rect_filled(chip, theme::CORNER, colour);
     painter.text(
-        picture.center(),
+        chip.center(),
         egui::Align2::CENTER_CENTER,
         symbol,
-        egui::FontId::proportional(40.0),
-        Color32::WHITE,
+        egui::FontId::proportional(16.0),
+        theme::INK0,
     );
-    painter.text(
-        egui::pos2(rect.min.x + 10.0, picture.max.y + 8.0),
-        egui::Align2::LEFT_TOP,
-        title,
-        egui::FontId::proportional(15.0),
-        Color32::WHITE,
+    // An accent edge between picture and words.
+    painter.rect_filled(
+        egui::Rect::from_min_size(egui::pos2(face.min.x, picture.max.y), egui::vec2(face.width(), 3.0)),
+        0.0,
+        colour,
     );
-    painter.text(
-        egui::pos2(rect.min.x + 10.0, picture.max.y + 28.0),
-        egui::Align2::LEFT_TOP,
-        note,
-        egui::FontId::proportional(11.0),
-        SOFT,
-    );
-    if selected || response.hovered() {
+    let width = face.width() - 24.0;
+    let line = |y: f32, text: &str, font: egui::FontId, colour: Color32| {
+        theme::text_line(
+            &painter,
+            egui::pos2(face.min.x + 12.0, picture.max.y + y),
+            text,
+            font,
+            colour,
+            width,
+        );
+    };
+    line(12.0, title, theme::display(16.0), theme::CHALK);
+    line(34.0, note, egui::FontId::proportional(12.0), SOFT);
+    if selected || hovered {
         let stroke =
-            egui::Stroke::new(if selected { 3.0 } else { 1.5 }, if selected { ACCENT } else { SOFT });
-        painter.rect_stroke(rect, 10.0, stroke, egui::StrokeKind::Outside);
+            egui::Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { ACCENT } else { theme::DUST });
+        painter.rect_stroke(face, theme::CORNER, stroke, egui::StrokeKind::Outside);
     }
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -229,36 +299,44 @@ impl Menu {
             "home".into(),
             egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(screen),
         );
-        ui.painter().rect_filled(screen, 0.0, BACKGROUND);
+        ui.painter().rect_filled(screen, 0.0, theme::INK0);
+        theme::paint_dot_grid(ui.painter(), screen);
         // The top bar: the name, the tabs and who you play as.
-        let bar = egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), 64.0));
-        ui.painter().rect_filled(bar, 0.0, PANEL);
-        ui.scope_builder(egui::UiBuilder::new().max_rect(bar.shrink2(egui::vec2(24.0, 12.0))), |ui| {
+        let bar = egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), 68.0));
+        ui.painter().rect_filled(bar, 0.0, theme::INK1);
+        ui.painter().hline(bar.x_range(), bar.max.y, egui::Stroke::new(1.0, theme::LINE));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(bar.shrink2(egui::vec2(28.0, 14.0))), |ui| {
             ui.horizontal_centered(|ui| {
-                ui.label(RichText::new("▣ Libroxel").size(28.0).strong().color(ACCENT));
-                ui.add_space(28.0);
-                for (tab, label) in [
-                    (Tab::Play, "▶ Play"),
-                    (Tab::Online, "🌍 Online"),
-                    (Tab::Create, "✏ Create"),
-                    (Tab::Host, "🌐 Host"),
-                    (Tab::Avatar, "👤 Avatar"),
+                theme::wordmark(ui, 30.0);
+                ui.add_space(36.0);
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for (tab, glyph, label) in [
+                    (Tab::Play, theme::icon::PLAY, "Play"),
+                    (Tab::Online, theme::icon::GLOBE_HEMISPHERE_WEST, "Online"),
+                    (Tab::Create, theme::icon::HAMMER, "Create"),
+                    (Tab::Host, theme::icon::BROADCAST, "Host"),
+                    (Tab::Avatar, theme::icon::T_SHIRT, "Avatar"),
                 ] {
-                    let on = self.tab == tab;
-                    let text =
-                        RichText::new(label).size(17.0).color(if on { ACCENT } else { Color32::WHITE });
-                    if ui.add(egui::Button::new(text).frame(on).min_size(egui::vec2(96.0, 36.0))).clicked() {
+                    if theme::tab(ui, glyph, label, self.tab == tab).clicked() {
                         self.tab = tab;
                         self.error = None;
                     }
                 }
                 // Who you play as, at the right of the bar.
-                ui.add_space((ui.available_width() - 200.0).max(12.0));
-                ui.label(RichText::new("Playing as").color(SOFT));
-                ui.add(egui::TextEdit::singleline(&mut self.name).char_limit(20).desired_width(120.0));
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.add_space((ui.available_width() - 236.0).max(12.0));
+                theme::label_caps(ui, "Playing as");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.name)
+                        .char_limit(20)
+                        .desired_width(130.0)
+                        .font(theme::display(15.0))
+                        .margin(egui::vec2(8.0, 5.0)),
+                );
             });
         });
-        let page = egui::Rect::from_min_max(egui::pos2(screen.min.x, bar.max.y), screen.max).shrink(28.0);
+        let page = egui::Rect::from_min_max(egui::pos2(screen.min.x, bar.max.y), screen.max)
+            .shrink2(egui::vec2(36.0, 30.0));
         let mut pick = None;
         ui.scope_builder(egui::UiBuilder::new().max_rect(page), |ui| {
             egui::ScrollArea::vertical().id_salt("home-page").auto_shrink([false, false]).show(ui, |ui| {
@@ -276,7 +354,7 @@ impl Menu {
                 };
                 if let Some(error) = &self.error {
                     ui.add_space(8.0);
-                    ui.colored_label(Color32::from_rgb(255, 120, 110), error);
+                    theme::status(ui, theme::BRICK, error);
                 }
             });
         });
@@ -302,14 +380,14 @@ impl Menu {
 
     fn avatar_tab(&mut self, ui: &mut egui::Ui, platform: &mut Platform) {
         let mut look = self.look();
-        ui.label(RichText::new("Your avatar").size(22.0).strong());
+        theme::heading(ui, "Your avatar");
         ui.label(
             RichText::new("How you look in every game you play or join. Other players see it too.")
                 .color(SOFT),
         );
         ui.add_space(12.0);
         ui.horizontal_top(|ui| {
-            egui::Frame::new().fill(PANEL).corner_radius(10.0).inner_margin(12.0).show(ui, |ui| {
+            theme::panel().show(ui, |ui| {
                 draw_avatar(ui, &look);
             });
             ui.add_space(20.0);
@@ -319,11 +397,11 @@ impl Menu {
                     ("Shirt", &mut look.colors.shirt),
                     ("Trousers", &mut look.colors.pants),
                 ] {
-                    ui.label(RichText::new(label).strong());
+                    theme::label_caps(ui, label);
                     swatches(ui, color, label);
                     ui.add_space(8.0);
                 }
-                ui.label(RichText::new("Hat").strong());
+                theme::label_caps(ui, "Hat");
                 ui.horizontal_wrapped(|ui| {
                     for hat in Hat::ALL {
                         let on = look.hat == hat && look.item.is_none();
@@ -366,10 +444,10 @@ impl Menu {
         let mut tiles: Vec<_> =
             STARTER_GAMES.iter().map(|g| (Game::Starter(g.name), g.symbol, g.about.to_owned())).collect();
         if with_blank {
-            tiles.insert(0, (Game::Blank, "➕", "Start from an empty baseplate".to_owned()));
+            tiles.insert(0, (Game::Blank, theme::icon::PLUS, "Start from an empty baseplate".to_owned()));
         }
         for path in &self.games {
-            tiles.push((Game::File(path.clone()), "🎮", "Saved on this computer".into()));
+            tiles.push((Game::File(path.clone()), theme::icon::FLOPPY_DISK, "Saved on this computer".into()));
         }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(16.0, 16.0);
@@ -389,7 +467,7 @@ impl Menu {
 
     fn play_tab(&mut self, ui: &mut egui::Ui) -> Option<Pick> {
         let mut pick = None;
-        ui.label(RichText::new("Your games").size(22.0).strong());
+        theme::heading(ui, "Your games");
         ui.label(RichText::new("Pick one and press Play. Double-click to jump straight in.").color(SOFT));
         ui.add_space(12.0);
         if let Some(game) = self.game_tiles(ui, false) {
@@ -405,12 +483,12 @@ impl Menu {
         }
         ui.add_space(20.0);
         ui.horizontal(|ui| {
-            if ui.add(play_button(&format!("▶  Play {}", self.game.label()))).clicked() {
+            let label = format!("Play {}", self.game.label());
+            if play_button(ui, theme::Kind::Go, theme::icon::PLAY, &label).clicked() {
                 pick = Some(Pick::Play(self.game.clone()));
             }
             ui.add_space(12.0);
-            if ui
-                .add(big("🌐 Play with friends"))
+            if big(ui, theme::icon::USERS_THREE, "Play with friends")
                 .on_hover_text("Host it, so friends can join with a code or find it Online")
                 .clicked()
             {
@@ -430,27 +508,27 @@ impl Menu {
             let game = Game::File(done.path);
             pick = Some(if done.host { Pick::Host(game) } else { Pick::Play(game) });
         }
-        ui.label(RichText::new("Published games").size(22.0).strong());
+        theme::heading(ui, "Published games");
         ui.label(
             RichText::new("Games people have published. They play without anyone hosting; press With friends to host one yourself.")
                 .color(SOFT),
         );
         ui.add_space(10.0);
-        egui::Frame::new().fill(PANEL).corner_radius(10.0).inner_margin(14.0).show(ui, |ui| {
+        theme::panel().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             platform.published_list(ui);
         });
         ui.add_space(20.0);
-        ui.label(RichText::new("Games being played right now").size(22.0).strong());
+        theme::heading(ui, "Games being played right now");
         ui.label(RichText::new("Hosted games appear here. Press Join to play in one.").color(SOFT));
         ui.add_space(10.0);
-        egui::Frame::new().fill(PANEL).corner_radius(10.0).inner_margin(14.0).show(ui, |ui| {
+        theme::panel().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             if let Some((code, _)) = platform.list(ui) {
                 pick = Some(Pick::Join { code, name: self.name.trim().to_owned() });
             }
             ui.horizontal(|ui| {
-                if ui.button("⟳ Refresh").clicked() {
+                if theme::tool_button(ui, theme::icon::ARROW_CLOCKWISE, "Refresh", false).clicked() {
                     platform.refresh();
                 }
                 ui.label(RichText::new("Listing from the Hub at").color(SOFT));
@@ -458,7 +536,7 @@ impl Menu {
             });
         });
         ui.add_space(20.0);
-        ui.label(RichText::new("Join with a code").size(18.0).strong());
+        subheading(ui, "Join with a code");
         ui.label(RichText::new("A friend who hosts can send you their join code. On your own network an address like 192.168.1.5:7420 works too.").color(SOFT));
         ui.add_space(6.0);
         ui.add(
@@ -468,7 +546,12 @@ impl Menu {
                 .desired_width(f32::INFINITY),
         );
         ui.add_space(6.0);
-        if ui.add_enabled(!self.code.trim().is_empty(), play_button("🔗  Join")).clicked() {
+        let ready = !self.code.trim().is_empty();
+        if ui
+            .add_enabled_ui(ready, |ui| play_button(ui, theme::Kind::Primary, theme::icon::SIGN_IN, "Join"))
+            .inner
+            .clicked()
+        {
             pick = Some(Pick::Join { code: self.code.trim().to_owned(), name: self.name.trim().to_owned() });
         }
         pick
@@ -476,7 +559,7 @@ impl Menu {
 
     fn create_tab(&mut self, ui: &mut egui::Ui) -> Option<Pick> {
         let mut pick = None;
-        ui.label(RichText::new("Make a game").size(22.0).strong());
+        theme::heading(ui, "Make a game");
         ui.label(RichText::new("Opens the editor: build with parts, scripts and terrain, press Play to test, and save it to play from Play.").color(SOFT));
         ui.add_space(12.0);
         if let Some(game) = self.game_tiles(ui, true) {
@@ -494,7 +577,10 @@ impl Menu {
             if (ui.button("Open").clicked() || enter) && !self.path.trim().is_empty() {
                 pick = Some(Pick::Edit(Game::File(PathBuf::from(self.path.trim()))));
             }
-            if ui.button("⟳").on_hover_text("Look for saved games again").clicked() {
+            if theme::tool_button(ui, theme::icon::ARROW_CLOCKWISE, "", false)
+                .on_hover_text("Look for saved games again")
+                .clicked()
+            {
                 self.scanned = false;
             }
         });
@@ -503,7 +589,7 @@ impl Menu {
 
     fn host_tab(&mut self, ui: &mut egui::Ui, platform: &mut Platform) -> Option<Pick> {
         let mut pick = None;
-        ui.label(RichText::new("Share a game").size(22.0).strong());
+        theme::heading(ui, "Share a game");
         ui.horizontal(|ui| {
             ui.label("Game");
             egui::ComboBox::from_id_salt("host-game").selected_text(self.game.label()).show_ui(ui, |ui| {
@@ -518,25 +604,25 @@ impl Menu {
             });
         });
         ui.add_space(10.0);
-        egui::Frame::new().fill(PANEL).corner_radius(10.0).inner_margin(14.0).show(ui, |ui| {
+        theme::panel().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new("Host and play").size(17.0).strong());
+            subheading(ui, "Host and play");
             ui.label(
                 RichText::new("You play it and friends join you, with a join code or from Online.")
                     .color(SOFT),
             );
             ui.add_space(6.0);
-            if ui.add(play_button("🌐  Host and play")).clicked() {
+            if play_button(ui, theme::Kind::Primary, theme::icon::BROADCAST, "Host and play").clicked() {
                 pick = Some(Pick::Host(self.game.clone()));
             }
         });
         ui.add_space(12.0);
-        egui::Frame::new().fill(PANEL).corner_radius(10.0).inner_margin(14.0).show(ui, |ui| {
+        theme::panel().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             self.server_section(ui);
         });
         ui.add_space(12.0);
-        egui::Frame::new().fill(PANEL).corner_radius(10.0).inner_margin(14.0).show(ui, |ui| {
+        theme::panel().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             hub_section(ui, platform);
         });
@@ -544,7 +630,7 @@ impl Menu {
     }
 
     fn server_section(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Run a server").size(17.0).strong());
+        subheading(ui, "Run a server");
         ui.label(
             RichText::new("Runs the game in the background with no player of your own, so others can join while you play something else.")
                 .color(SOFT),
@@ -552,7 +638,7 @@ impl Menu {
         ui.horizontal(|ui| {
             ui.label("Port");
             ui.add(egui::TextEdit::singleline(&mut self.server_port).desired_width(60.0));
-            if ui.add(big("🖥 Start server")).clicked() {
+            if big(ui, theme::icon::HARD_DRIVES, "Start server").clicked() {
                 match self.start_server() {
                     Ok(server) => self.servers.push(server),
                     Err(e) => self.error = Some(e),
@@ -622,7 +708,7 @@ impl Menu {
 }
 
 fn hub_section(ui: &mut egui::Ui, platform: &mut Platform) {
-    ui.label(RichText::new("This computer's Hub").size(17.0).strong());
+    subheading(ui, "This computer's Hub");
     ui.label(
         RichText::new("The Hub is the list Online shows. Friends on your network can point their Online tab at this computer's address to see the games hosted here.")
             .color(SOFT),
@@ -631,7 +717,7 @@ fn hub_section(ui: &mut egui::Ui, platform: &mut Platform) {
     match platform.own_hub.as_ref().map(|hub| hub.addr().port()) {
         Some(port) => {
             ui.horizontal(|ui| {
-                ui.label(format!("✅ Running on port {port}"));
+                theme::status(ui, theme::MINT, &format!("Running on port {port}"));
                 if ui.button("Stop the Hub").clicked() {
                     platform.stop_hub();
                 }
@@ -640,7 +726,7 @@ fn hub_section(ui: &mut egui::Ui, platform: &mut Platform) {
         None => {
             ui.horizontal(|ui| {
                 let note = platform.own_hub_note.clone().unwrap_or_default();
-                ui.label(format!("⏸ Not running here. {note}"));
+                theme::status(ui, theme::DUST, &format!("Not running here. {note}"));
                 if ui.button("Run a Hub").clicked() {
                     platform.start_hub();
                 }
@@ -696,12 +782,19 @@ fn swatches(ui: &mut egui::Ui, color: &mut Color3, label: &str) {
         ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
         for [r, g, b] in choices.iter().copied() {
             let (rect, response) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
-            ui.painter().rect_filled(rect, 5.0, Color32::from_rgb(r, g, b));
-            if rgb(*color) == [r, g, b] {
+            let chosen = rgb(*color) == [r, g, b];
+            let face = if chosen { rect.translate(egui::vec2(0.0, -2.0)) } else { rect };
+            ui.painter().rect_filled(
+                rect.translate(egui::vec2(0.0, 2.0)),
+                theme::CORNER,
+                Color32::from_rgb(r, g, b).gamma_multiply(0.55),
+            );
+            ui.painter().rect_filled(face, theme::CORNER, Color32::from_rgb(r, g, b));
+            if chosen {
                 ui.painter().rect_stroke(
-                    rect,
-                    5.0,
-                    egui::Stroke::new(2.5, ACCENT),
+                    face,
+                    theme::CORNER,
+                    egui::Stroke::new(2.0, theme::CHALK),
                     egui::StrokeKind::Outside,
                 );
             }
@@ -732,8 +825,8 @@ fn draw_avatar(ui: &mut egui::Ui, look: &Look) {
     let shade = |c: Color32| c.gamma_multiply(0.82);
     let block = |x: f32, y: f32, w: f32, h: f32, c: Color32| {
         let r = egui::Rect::from_center_size(at(x, y), egui::vec2(w * scale, h * scale));
-        painter.rect_filled(r, 3.0, c);
-        painter.rect_stroke(r, 3.0, egui::Stroke::new(1.0, shade(c)), egui::StrokeKind::Inside);
+        painter.rect_filled(r, 1.0, c);
+        painter.rect_stroke(r, 1.0, egui::Stroke::new(1.5, shade(c)), egui::StrokeKind::Inside);
     };
     let BodyColors { skin, shirt, pants } = look.colors;
     let (skin, shirt, pants) = (colour(skin), colour(shirt), colour(pants));

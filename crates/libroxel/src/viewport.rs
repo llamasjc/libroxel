@@ -149,7 +149,7 @@ pub fn draw_selection(editor: NonSend<Editor>, engine: NonSend<EngineState>, mut
     let transform = Transform::from_translation(to_bevy(pos))
         .with_rotation(rotation)
         .with_scale(to_bevy(size) + Vec3::splat(0.08));
-    gizmos.cube(transform, Color::srgb(1.0, 0.8, 0.1));
+    gizmos.cube(transform, Color::srgb(1.0, 0.42, 0.17));
 }
 
 /// A faint grid at ground level while editing.

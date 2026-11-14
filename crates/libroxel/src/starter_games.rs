@@ -21,19 +21,19 @@ pub struct StarterGame {
 pub const STARTER_GAMES: &[StarterGame] = &[
     StarterGame {
         name: "Sample obby",
-        symbol: "🏁",
+        symbol: crate::theme::icon::FLAG_CHECKERED,
         about: "An obby with coins, TNT and a rover",
         build: crate::templates::sample_obby,
     },
     StarterGame {
         name: "Kart race",
-        symbol: "🚗",
+        symbol: crate::theme::icon::STEERING_WHEEL,
         about: "Three laps round the track in a kart",
         build: kart_race,
     },
     StarterGame {
         name: "Coin rush",
-        symbol: "💰",
+        symbol: crate::theme::icon::COINS,
         about: "Beat a robot to the coins before time runs out",
         build: coin_rush,
     },

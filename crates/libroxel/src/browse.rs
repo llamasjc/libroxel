@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use bevy_egui::egui::{self, Color32, RichText};
+use bevy_egui::egui::{self, RichText};
 use libroxel_hub::{
     AccountUpdate, Announcer, GameInfo, HostKind, HubClient, Item, Listing, NewItem, Profile, Publish,
     Report, RunningHub, ServerInfo,
@@ -379,13 +379,13 @@ impl Platform {
             self.refresh();
         }
         let mut picked = None;
-        ui.label(RichText::new("Catalog").size(18.0).strong());
+        ui.label(RichText::new("Catalog").font(crate::theme::display(17.0)));
         ui.label(
             RichText::new(
                 "Hats people made and shared. To make one, build it from parts in the editor, select its \
                  model and use Edit > Share as a hat.",
             )
-            .color(Color32::from_rgb(160, 168, 190)),
+            .color(crate::theme::DUST),
         );
         if let Some(hat) = wearing {
             ui.horizontal(|ui| {
@@ -405,31 +405,25 @@ impl Platform {
                 let Some(hat) = libroxel_engine::character::CustomHat::from_json(&item.data) else {
                     continue;
                 };
-                egui::Frame::new()
-                    .fill(Color32::from_rgb(31, 36, 50))
-                    .corner_radius(8.0)
-                    .inner_margin(8.0)
-                    .show(ui, |ui| {
-                        ui.vertical(|ui| {
-                            ui.strong(&item.name);
-                            ui.label(
-                                RichText::new(format!("by {} · worn {}", item.creator, item.wears)).small(),
-                            );
-                            let on = wearing.is_some_and(|w| *w == hat);
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .add_enabled(!on, egui::Button::new(if on { "Wearing" } else { "Wear" }))
-                                    .clicked()
-                                {
-                                    worn = Some(item.item_id.clone());
-                                    picked = Some(Some(hat));
-                                }
-                                if report_button(ui, "hat") {
-                                    reporting = Some(("item", item.item_id.clone(), item.name.clone()));
-                                }
-                            });
+                crate::theme::panel().inner_margin(10.0).show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.strong(&item.name);
+                        ui.label(RichText::new(format!("by {} · worn {}", item.creator, item.wears)).small());
+                        let on = wearing.is_some_and(|w| *w == hat);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(!on, egui::Button::new(if on { "Wearing" } else { "Wear" }))
+                                .clicked()
+                            {
+                                worn = Some(item.item_id.clone());
+                                picked = Some(Some(hat));
+                            }
+                            if report_button(ui, "hat") {
+                                reporting = Some(("item", item.item_id.clone(), item.name.clone()));
+                            }
                         });
                     });
+                });
             }
         });
         if reporting.is_some() {
@@ -452,7 +446,7 @@ impl Platform {
         if let Some((kind, target, name)) = self.reporting.clone() {
             let mut done = false;
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(format!("⚑ Report {name} for:")).strong());
+                ui.label(RichText::new(format!("{} Report {name} for:", crate::theme::icon::FLAG)).strong());
                 for reason in REPORT_REASONS {
                     if ui.button(reason).clicked() {
                         self.report(kind, target.clone(), reason);
@@ -473,10 +467,10 @@ impl Platform {
     fn show_report_status(&self, ui: &mut egui::Ui) {
         match &self.report_status {
             Some(Ok(said)) => {
-                ui.colored_label(Color32::from_rgb(120, 220, 120), said);
+                ui.colored_label(crate::theme::MINT, said);
             }
             Some(Err(why)) => {
-                ui.colored_label(Color32::from_rgb(255, 120, 110), why);
+                ui.colored_label(crate::theme::BRICK, why);
             }
             None => {}
         }
@@ -532,14 +526,14 @@ impl Platform {
     /// The account part of the Avatar tab. `look` is the avatar as saved.
     pub fn account_ui(&mut self, ui: &mut egui::Ui, look: Json) {
         self.look_up_account();
-        ui.label(RichText::new("Your account").size(18.0).strong());
+        ui.label(RichText::new("Your account").font(crate::theme::display(17.0)));
         ui.label(
             RichText::new(format!(
                 "Claim a name on the Hub at {}. Games you publish then show it, and others can find your page. \
                  It belongs to the identity key on this computer, so keep that file safe.",
                 self.hub_address
             ))
-            .color(Color32::from_rgb(160, 168, 190)),
+            .color(crate::theme::DUST),
         );
         ui.add_space(6.0);
         egui::Grid::new("account").num_columns(2).show(ui, |ui| {
@@ -562,21 +556,18 @@ impl Platform {
                 self.save_account(look);
             }
             if self.account_busy {
-                ui.label("⏳");
+                ui.spinner();
             }
         });
         if !name.is_empty() && !valid {
-            ui.colored_label(
-                Color32::from_rgb(255, 200, 110),
-                "A name is 3 to 20 letters, digits or underscores.",
-            );
+            ui.colored_label(crate::theme::SUN, "A name is 3 to 20 letters, digits or underscores.");
         }
         match &self.account_status {
             Some(Ok(said)) => {
-                ui.colored_label(Color32::from_rgb(120, 220, 120), said);
+                ui.colored_label(crate::theme::MINT, said);
             }
             Some(Err(why)) => {
-                ui.colored_label(Color32::from_rgb(255, 120, 110), why);
+                ui.colored_label(crate::theme::BRICK, why);
             }
             None => {}
         }
@@ -644,7 +635,7 @@ impl Platform {
             self.refresh();
         }
         if let Some(error) = &self.games_error {
-            ui.colored_label(Color32::from_rgb(255, 120, 110), error);
+            ui.colored_label(crate::theme::BRICK, error);
         } else if self.games.is_empty() {
             ui.label(if self.fetching {
                 "Looking…"
@@ -653,10 +644,13 @@ impl Platform {
             });
         }
         if let Some(error) = &self.download_error {
-            ui.colored_label(Color32::from_rgb(255, 120, 110), error);
+            ui.colored_label(crate::theme::BRICK, error);
         }
         if let Some(title) = &self.downloading {
-            ui.label(format!("⏳ Getting {title}…"));
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(format!("Getting {title}…"));
+            });
         }
         let mut chosen = None;
         let mut search = None;
@@ -689,11 +683,23 @@ impl Platform {
                         ui.label(game.plays.to_string());
                         ui.horizontal(|ui| {
                             let free = self.downloading.is_none();
-                            if ui.add_enabled(free, egui::Button::new("▶ Play")).clicked() {
+                            if ui
+                                .add_enabled(
+                                    free,
+                                    egui::Button::new(format!("{} Play", crate::theme::icon::PLAY)),
+                                )
+                                .clicked()
+                            {
                                 chosen = Some((game.clone(), false));
                             }
                             if ui
-                                .add_enabled(free, egui::Button::new("🌐 With friends"))
+                                .add_enabled(
+                                    free,
+                                    egui::Button::new(format!(
+                                        "{} With friends",
+                                        crate::theme::icon::USERS_THREE
+                                    )),
+                                )
                                 .on_hover_text("Host it, so friends can join you")
                                 .clicked()
                             {
@@ -740,7 +746,7 @@ impl Platform {
         }
         let mut join = None;
         if let Some(error) = &self.error {
-            ui.colored_label(Color32::from_rgb(255, 120, 110), error);
+            ui.colored_label(crate::theme::BRICK, error);
         } else if self.servers.is_empty() {
             ui.label(if self.fetching {
                 "Looking…"
@@ -791,7 +797,7 @@ impl Platform {
         }
         let mut join = None;
         let mut open = self.open;
-        egui::Window::new("🌍 Browse games").open(&mut open).default_width(560.0).show(ctx, |ui| {
+        egui::Window::new(format!("{} Browse games", crate::theme::icon::GLOBE_HEMISPHERE_WEST)).open(&mut open).default_width(560.0).show(ctx, |ui| {
             egui::Grid::new("browse-settings").num_columns(2).show(ui, |ui| {
                 ui.label("Hub");
                 let hub = ui.add(
@@ -826,7 +832,7 @@ impl Platform {
                 join = Some(picked);
             }
             ui.horizontal(|ui| {
-                if ui.button("⟳ Refresh").clicked() {
+                if ui.button(format!("{} Refresh", crate::theme::icon::ARROW_CLOCKWISE)).clicked() {
                     self.refresh();
                 }
                 if let Some(status) = self.announcer.as_ref().and_then(Announcer::status) {
@@ -863,5 +869,5 @@ const REPORT_REASONS: [&str; 4] = [
 
 /// A small ⚑ button to report a `what` ("game" or "hat").
 fn report_button(ui: &mut egui::Ui, what: &str) -> bool {
-    ui.small_button("⚑").on_hover_text(format!("Report this {what}")).clicked()
+    ui.small_button(crate::theme::icon::FLAG).on_hover_text(format!("Report this {what}")).clicked()
 }
