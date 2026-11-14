@@ -19,6 +19,9 @@ use libroxel_script::names;
 use rbx_dom_weak::types::{Ref, Variant};
 use rbx_dom_weak::{Instance, WeakDom};
 
+pub mod meshes;
+pub mod terrain;
+
 /// Why a file couldn't be opened.
 #[derive(Debug)]
 pub enum ImportError {
@@ -59,6 +62,13 @@ pub struct Report {
     pub skipped_properties: BTreeMap<String, usize>,
     /// Services Libroxel doesn't have, left out with everything in them.
     pub skipped_services: Vec<String>,
+    /// One-stud terrain cells filled from the file's terrain.
+    pub terrain_cells: usize,
+    /// Model files made from shapes stored inside the file (unions), by
+    /// file name, for the caller to save where models are looked for.
+    pub files: Vec<(String, Vec<u8>)>,
+    /// Anything else worth telling the creator.
+    pub notes: Vec<String>,
 }
 
 impl Report {
@@ -73,6 +83,10 @@ impl Report {
             v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
             v.iter().take(n).map(|(k, c)| format!("{k} ×{c}")).collect::<Vec<_>>().join(", ")
         };
+        if self.terrain_cells > 0 {
+            lines.push(format!("Terrain: {} one-stud cells.", self.terrain_cells));
+        }
+        lines.extend(self.notes.iter().cloned());
         if !self.stand_ins.is_empty() {
             lines.push(format!("Made as the closest Libroxel class: {}.", list(&self.stand_ins, 12)));
         }
@@ -221,9 +235,11 @@ impl<'a> Importer<'a> {
         {
             Some(existing) => existing,
             None if class == ClassKind::Terrain => {
-                // Libroxel's terrain is its own; the file's voxels are left out.
-                self.report.skip("Terrain", "SmoothGrid");
-                return None;
+                let terrain = tree.terrain_or_make().ok()?;
+                self.terrain(tree, inst, terrain);
+                self.made.insert(inst.referent(), terrain);
+                self.children(tree, inst, terrain);
+                return Some(terrain);
             }
             None => {
                 let id = tree.create(class, inst.name.as_str()).ok()?;
@@ -249,8 +265,139 @@ impl<'a> Importer<'a> {
         } else {
             self.properties(tree, inst, id);
         }
+        if matches!(file_class, "SpecialMesh" | "BlockMesh" | "CylinderMesh") {
+            self.special_mesh(tree, inst, parent);
+        }
+        self.shape_from_file(tree, inst, id);
         self.children(tree, inst, id);
         Some(id)
+    }
+
+    /// Gives a model to a part whose shape Libroxel has no setting for:
+    /// a union's shape stored in the file, or a corner wedge.
+    fn shape_from_file(&mut self, tree: &mut InstanceTree, inst: &Instance, id: InstanceId) {
+        let made = match inst.class.as_str() {
+            "UnionOperation" | "NegateOperation" | "PartOperation" => {
+                let data = |name: &str| inst.properties.get(&name.into()).and_then(bytes_of);
+                let shape = data("MeshData")
+                    .and_then(meshes::union_graphics)
+                    .or_else(|| data("PhysicsData").and_then(meshes::union_physics));
+                match shape {
+                    Some(shape) => {
+                        let text = shape.to_obj();
+                        Some((meshes::file_name("union", &text), text))
+                    }
+                    None => {
+                        self.report.skip(inst.class.as_str(), "MeshData");
+                        None
+                    }
+                }
+            }
+            "CornerWedgePart" => {
+                let _ =
+                    tree.set(id, Property::Shape, PropertyValue::Enum(EnumValue::Shape(PartShape::Block)));
+                Some(("cornerwedge.obj".to_owned(), meshes::corner_wedge()))
+            }
+            _ => None,
+        };
+        let Some((name, text)) = made else { return };
+        if tree.set(id, Property::MeshId, PropertyValue::String(name.clone())).is_ok() {
+            self.report.properties += 1;
+        }
+        if !self.report.files.iter().any(|(n, _)| *n == name) {
+            self.report.files.push((name, text.into_bytes()));
+        }
+    }
+
+    /// An old-style mesh inside a part: changes the part's shape, or gives
+    /// it a model file. (The mesh itself is kept too, for scripts.)
+    fn special_mesh(&mut self, tree: &mut InstanceTree, inst: &Instance, part: InstanceId) {
+        if tree.class(part) != Ok(ClassKind::Part) {
+            return;
+        }
+        let kind = match inst.class.as_str() {
+            "BlockMesh" => "Brick",
+            "CylinderMesh" => "Cylinder",
+            _ => match inst.properties.get(&"MeshType".into()) {
+                Some(Variant::Enum(e)) => self.enum_item_name("MeshType", e.to_u32()).unwrap_or("Head"),
+                _ => "Head",
+            },
+        };
+        let shape = |s| PropertyValue::Enum(EnumValue::Shape(s));
+        let _ = match kind {
+            "Sphere" => tree.set(part, Property::Shape, shape(PartShape::Ball)),
+            "Cylinder" | "Head" => tree.set(part, Property::Shape, shape(PartShape::Cylinder)),
+            "Wedge" => tree.set(part, Property::Shape, shape(PartShape::Wedge)),
+            "FileMesh" => {
+                let id =
+                    ["MeshId", "MeshContent"].iter().find_map(|k| match inst.properties.get(&(*k).into()) {
+                        Some(Variant::ContentId(c)) => Some(c.as_str().to_owned()),
+                        Some(Variant::Content(c)) => c.as_uri().map(str::to_owned),
+                        Some(Variant::String(s)) => Some(s.clone()),
+                        _ => None,
+                    });
+                match id.filter(|s| !s.is_empty()) {
+                    Some(id) => tree.set(part, Property::MeshId, PropertyValue::String(id)),
+                    None => Ok(()),
+                }
+            }
+            "CornerWedge" => {
+                let text = meshes::corner_wedge();
+                if !self.report.files.iter().any(|(n, _)| n == "cornerwedge.obj") {
+                    self.report.files.push(("cornerwedge.obj".to_owned(), text.into_bytes()));
+                }
+                tree.set(part, Property::MeshId, PropertyValue::String("cornerwedge.obj".to_owned()))
+            }
+            _ => Ok(()),
+        };
+    }
+
+    /// Fills the terrain from the file's voxels.
+    fn terrain(&mut self, tree: &mut InstanceTree, inst: &Instance, terrain: InstanceId) {
+        let content_map = inst.properties.iter().any(|(k, v)| {
+            k.as_str() == "VoxelGridAssetContentMap"
+                && !matches!(v, Variant::BinaryString(b) if AsRef::<[u8]>::as_ref(b).is_empty())
+        });
+        let Some(Variant::BinaryString(grid)) = inst.properties.get(&"SmoothGrid".into()) else {
+            if content_map {
+                self.report.notes.push(EXPANDED_TERRAIN.to_owned());
+            }
+            return;
+        };
+        match terrain::decode(AsRef::<[u8]>::as_ref(grid)) {
+            Ok(voxels) => {
+                if voxels.is_empty() && content_map {
+                    self.report.notes.push(EXPANDED_TERRAIN.to_owned());
+                }
+                let (cells, cut) = terrain::cells(&voxels);
+                self.report.terrain_cells += cells.len();
+                let _ =
+                    tree.edit_voxels(terrain, |v| v.set_cells(cells.into_iter().map(|(c, m)| (c, Some(m)))));
+                if cut {
+                    self.report.notes.push(format!(
+                        "The terrain is bigger than Libroxel holds at once; only the first {} cells came across.",
+                        terrain::MAX_CELLS
+                    ));
+                }
+                let approximated: std::collections::BTreeSet<&str> = voxels
+                    .values()
+                    .map(|v| terrain::MATERIALS[v.material as usize])
+                    .filter(|m| !matches!(*m, "Air" | "Water" | "Grass" | "Sand" | "Rock" | "Snow" | "Brick"))
+                    .collect();
+                if !approximated.is_empty() {
+                    let list: Vec<&str> = approximated.into_iter().collect();
+                    self.report.notes.push(format!(
+                        "Terrain materials shown as the nearest Libroxel one: {}.",
+                        list.join(", ")
+                    ));
+                }
+            }
+            // Newer terrain keeps only a header here; its voxels are elsewhere.
+            Err(terrain::GridError::Header(version, _)) if content_map || version > 1 => {
+                self.report.notes.push(EXPANDED_TERRAIN.to_owned())
+            }
+            Err(e) => self.report.notes.push(format!("The terrain couldn't be read: {e}.")),
+        }
     }
 
     /// The Libroxel class for a file's instance, and a part shape it implies.
@@ -510,6 +657,8 @@ impl<'a> Importer<'a> {
     }
 }
 
+const EXPANDED_TERRAIN: &str = "This place uses Studio's newer expanded terrain, whose voxel format Libroxel can't read yet, so its terrain was left out.";
+
 fn is_folder(class: ClassKind) -> bool {
     matches!(class, ClassKind::StarterPlayerScripts | ClassKind::StarterCharacterScripts)
 }
@@ -542,6 +691,19 @@ fn ignored(name: &str) -> bool {
             | "FormFactor"
             | "formFactorRaw"
             | "Locked"
+            // Read separately (a union's shape, the terrain), or how Studio
+            // keeps them, which Libroxel works out for itself.
+            | "MeshData"
+            | "PhysicsData"
+            | "ChildData"
+            | "InitialSize"
+            | "PhysicalConfigData"
+            | "RenderFidelity"
+            | "CollisionFidelity"
+            | "UsePartColor"
+            | "SmoothGrid"
+            | "PhysicsGrid"
+            | "MaterialColors"
     ) || name.ends_with("Surface")
         || name.ends_with("SurfaceInput")
         || name.ends_with("ParamA")
@@ -555,7 +717,17 @@ fn renamed(name: &str) -> &str {
         "MeshContent" => "MeshId",
         "ImageContent" => "Image",
         "SoundContent" => "SoundId",
+        "ConstrainedValue" => "Value",
         other => other,
+    }
+}
+
+/// The bytes of a binary property, however the file stored them.
+fn bytes_of(value: &Variant) -> Option<&[u8]> {
+    match value {
+        Variant::BinaryString(b) => Some(b.as_ref()),
+        Variant::SharedString(s) => Some(s.data()),
+        _ => None,
     }
 }
 

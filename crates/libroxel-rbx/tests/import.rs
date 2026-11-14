@@ -213,3 +213,102 @@ fn a_game_saved_both_ways_comes_across_and_plays() {
         }
     }
 }
+
+#[test]
+fn unions_keep_their_carved_shape() {
+    let (tree, report) = libroxel_rbx::open(&file("unions-xml.rbxmx")).unwrap();
+    assert!(!report.files.is_empty(), "{report:?}");
+    let parts = tree.descendants_of_class(tree.workspace(), ClassKind::Part);
+    let with_shapes: Vec<_> = parts
+        .iter()
+        .filter_map(|p| tree.get_string(*p, Property::MeshId).filter(|m| m.starts_with("union-")))
+        .collect();
+    assert!(!with_shapes.is_empty());
+    for name in with_shapes {
+        let (_, text) = report.files.iter().find(|(n, _)| *n == name).expect("its model is made");
+        let model = libroxel_engine::mesh_files::parse(text).expect("the model reads back");
+        assert!(model.positions.len() >= 12 * 3, "more than a box's worth of triangles");
+    }
+}
+
+/// A terrain blob: one chunk with a full grass voxel, a half-full rock
+/// voxel on top of it, then air.
+fn terrain_blob() -> Vec<u8> {
+    let mut blob = vec![0x01, 0x05];
+    blob.extend([0u8; 12]);
+    // Voxel (0,0,0) grass; air up to (0,1,0); half rock; then air to the end.
+    blob.extend([0x02]);
+    let air = |mut n: u32, blob: &mut Vec<u8>| {
+        while n > 0 {
+            let run = n.min(256);
+            blob.extend([0x80, (run - 1) as u8]);
+            n -= run;
+        }
+    };
+    air(32 * 32 - 1, &mut blob);
+    blob.extend([0x48, 0x80]);
+    air(32 * 32 * 32 - 32 * 32 - 1, &mut blob);
+    blob
+}
+
+#[test]
+fn terrain_meshes_and_old_style_meshes_come_across() {
+    let dom = WeakDom::new(
+        InstanceBuilder::new("DataModel").with_child(
+            InstanceBuilder::new("Workspace")
+                .with_child(
+                    InstanceBuilder::new("Terrain")
+                        .with_property("SmoothGrid", Variant::BinaryString(terrain_blob().into())),
+                )
+                .with_child(InstanceBuilder::new("Part").with_name("Ball").with_child(
+                    InstanceBuilder::new("SpecialMesh").with_property("MeshType", Enum::from_u32(3)),
+                ))
+                .with_child(
+                    InstanceBuilder::new("Part").with_name("Rock").with_child(
+                        InstanceBuilder::new("SpecialMesh")
+                            .with_property("MeshType", Enum::from_u32(5))
+                            .with_property("MeshId", rbx_dom_weak::types::ContentId::from("rbxassetid://42")),
+                    ),
+                )
+                .with_child(
+                    InstanceBuilder::new("MeshPart")
+                        .with_name("Statue")
+                        .with_property("MeshId", rbx_dom_weak::types::ContentId::from("rbxassetid://77")),
+                )
+                .with_child(InstanceBuilder::new("CornerWedgePart").with_name("Corner"))
+                .with_child(InstanceBuilder::new("ViewportFrame").with_name("View")),
+        ),
+    );
+    let mut out = Vec::new();
+    let roots = dom.root().children().to_vec();
+    rbx_binary::to_writer(&mut out, &dom, &roots).unwrap();
+    let dom = libroxel_rbx::read_dom(&out).unwrap();
+    let mut tree = InstanceTree::new();
+    let report = libroxel_rbx::import_place(&mut tree, &dom);
+
+    // Terrain: a full 4x4x4 block of grass with two layers of rock above.
+    let terrain = tree.terrain().expect("terrain");
+    let voxels = tree.voxels(terrain).unwrap();
+    assert_eq!(voxels.get(0, 0, 0), Some(Material::Grass));
+    assert_eq!(voxels.get(3, 3, 3), Some(Material::Grass));
+    assert_eq!(voxels.get(0, 4, 0), Some(Material::Rock));
+    assert_eq!(voxels.get(3, 5, 3), Some(Material::Rock));
+    assert_eq!(voxels.get(0, 6, 0), None);
+    assert_eq!(report.terrain_cells, 64 + 32);
+
+    let shape = |name| tree.get(find(&tree, name), Property::Shape).unwrap();
+    assert_eq!(shape("Ball"), PropertyValue::Enum(EnumValue::Shape(PartShape::Ball)));
+    let mesh = |name| tree.get_string(find(&tree, name), Property::MeshId).unwrap();
+    assert_eq!(mesh("Rock"), "rbxassetid://42");
+    assert_eq!(mesh("Statue"), "rbxassetid://77");
+    assert_eq!(mesh("Corner"), "cornerwedge.obj");
+    assert!(report.files.iter().any(|(n, _)| n == "cornerwedge.obj"));
+    assert_eq!(tree.class(find(&tree, "View")), Ok(ClassKind::Frame));
+}
+
+#[test]
+fn expanded_terrain_is_named_as_left_out() {
+    let (_, report) = libroxel_rbx::open(&file("expanded-terrain-binary.rbxm")).unwrap();
+    assert_eq!(report.terrain_cells, 0);
+    assert!(report.summary().iter().any(|l| l.contains("expanded terrain")), "{:?}", report.summary());
+}

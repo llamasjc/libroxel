@@ -106,16 +106,27 @@ fn is_layer(class: ClassKind) -> bool {
     matches!(class, ClassKind::ScreenGui | ClassKind::BillboardGui | ClassKind::SurfaceGui)
 }
 
-/// Class names `Instance.new` makes as another class: parts with special
-/// meshes become plain parts (wedges keep their shape), and a manual weld
-/// is a weld.
+/// Class names `Instance.new` (and opening a Roblox Studio file) makes as
+/// another class: parts with special meshes become plain parts (wedges
+/// keep their shape), a manual weld is a weld, a viewport frame a plain
+/// frame, an actor a model, and so on.
 pub fn stand_in(name: &str) -> Option<(ClassKind, Option<PartShape>)> {
     Some(match name {
         "WedgePart" | "CornerWedgePart" => (ClassKind::Part, Some(PartShape::Wedge)),
         "MeshPart" | "TrussPart" | "UnionOperation" | "NegateOperation" | "PartOperation" => {
             (ClassKind::Part, None)
         }
+        "Platform" | "SkateboardPlatform" => (ClassKind::Part, None),
         "ManualWeld" | "Snap" | "Glue" => (ClassKind::Weld, None),
+        // GUI rectangles Libroxel draws as plain frames.
+        "ViewportFrame" | "CanvasGroup" | "VideoFrame" => (ClassKind::Frame, None),
+        "UIPageLayout" | "UITableLayout" => (ClassKind::UIListLayout, None),
+        // Groups that behave as models.
+        "Actor" | "WorldModel" => (ClassKind::Model, None),
+        "Hat" => (ClassKind::Accessory, None),
+        "BodyThrust" => (ClassKind::BodyForce, None),
+        "IntConstrainedValue" => (ClassKind::IntValue, None),
+        "DoubleConstrainedValue" => (ClassKind::NumberValue, None),
         "SoundGroup" => (ClassKind::Folder, None),
         _ => return None,
     })
@@ -126,6 +137,8 @@ pub fn service_alias(name: &str) -> &str {
     match name {
         // Things that load first: libroxel loads everything up front.
         "ReplicatedFirst" => class_name(ClassKind::ReplicatedStorage),
+        // Sounds kept there play at their own volume, as sounds outside the world do.
+        "SoundService" => class_name(ClassKind::ReplicatedStorage),
         other => other,
     }
 }

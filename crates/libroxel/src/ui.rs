@@ -393,16 +393,31 @@ pub fn editor_ui(
         editor.typing = None;
     }
     let mut boxes = gui::TextBoxes { typing: editor.typing, ..Default::default() };
-    // Pictures are looked for beside the game, then in the games folder.
+    // Pictures are looked for beside the game, then in the games folder;
+    // files named by asset number in an `assets` folder in any of these.
     let mut folders = Vec::new();
-    if let Some(dir) = editor.file.as_ref().and_then(|f| f.parent()) {
+    if let Some(dir) = editor.file.as_ref().or(editor.imported_from.as_ref()).and_then(|f| f.parent()) {
         folders.push(dir.to_path_buf());
         folders.push(dir.join("images"));
         folders.push(dir.join("meshes"));
     }
     folders.push(games_dir().join("images"));
     folders.push(crate::mesh_import::meshes_dir());
+    // So the games folder's own `assets` folder is searched for asset numbers.
+    folders.push(games_dir());
     crate::images::set_folders(folders);
+    if editor.picker.is_open() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
+    match editor.picker.poll() {
+        Some(crate::file_picker::Picked::File(path)) => actions.push(Action::Open(path)),
+        // No picker on this computer: ask for the path instead.
+        Some(crate::file_picker::Picked::Unavailable) => {
+            let path = games_dir().join("untitled.lrx").display().to_string();
+            editor.dialog = Some(Dialog::Open { path });
+        }
+        Some(crate::file_picker::Picked::Cancelled) | None => {}
+    }
     let central = egui::CentralPanel::no_frame()
         .show(&mut root, |ui| {
             if let Ok((cam, gt, _, _)) = cameras.single() {
@@ -757,6 +772,9 @@ fn shortcuts(ctx: &egui::Context, editor: &mut Editor, playing: bool, actions: &
         if i.consume_shortcut(&cmd(Key::S)) {
             actions.push(Action::Save);
         }
+        if i.consume_shortcut(&cmd(Key::O)) {
+            editor.picker.open(&games_dir());
+        }
         if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z))
             || i.consume_shortcut(&cmd(Key::Y))
         {
@@ -901,7 +919,10 @@ fn file_menu(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mu
     {
         actions.push(Action::ClearData);
     }
-    if ui.button("Open…").clicked() {
+    if ui.button("Open…       Ctrl+O").clicked() {
+        editor.picker.open(&games_dir());
+    }
+    if ui.button("Open by path…").clicked() {
         let path = games_dir().join("untitled.lrx").display().to_string();
         editor.dialog = Some(Dialog::Open { path });
     }
@@ -2209,6 +2230,7 @@ fn replace_world(engine: &mut EngineState, editor: &mut Editor, tree: InstanceTr
     editor.selection = None;
     editor.open_script = None;
     editor.file = file;
+    editor.imported_from = None;
     editor.dirty = false;
 }
 
@@ -2418,7 +2440,8 @@ fn menu_pick(pick: crate::menu::Pick, engine: &mut EngineState, editor: &mut Edi
             Game::Blank => apply(Action::New, engine, editor, now),
             Game::File(path) => {
                 apply(Action::Open(path.clone()), engine, editor, now);
-                if editor.file.as_ref() != Some(path) {
+                // A file from Roblox Studio opens as a new, unsaved game.
+                if editor.file.as_ref() != Some(path) && editor.imported_from.as_ref() != Some(path) {
                     editor.menu.error = Some(format!("Could not open {}.", path.display()));
                     return false;
                 }
@@ -2479,6 +2502,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     // A file from another engine is saved as a new .lrx, never over the original.
                     let file = (!opened.imported).then(|| path.clone());
                     replace_world(engine, editor, opened.tree, file);
+                    editor.imported_from = opened.imported.then(|| path.clone());
                     log(engine, LogLevel::Info, format!("Opened {}", path.display()));
                     let level = if opened.imported { LogLevel::Info } else { LogLevel::Warn };
                     for note in opened.notes {
@@ -3633,7 +3657,7 @@ fn help_items(ui: &mut egui::Ui) {
         "Ctrl+1..4: Select, Move, Scale, Rotate · Ctrl+5: terrain",
         "Ctrl+D: duplicate · Del: delete · Ctrl+R: turn 90°",
         "Ctrl+G: group · Ctrl+U: ungroup",
-        "Ctrl+Z / Ctrl+Y: undo / redo · Ctrl+S: save",
+        "Ctrl+Z / Ctrl+Y: undo / redo · Ctrl+S: save · Ctrl+O: open",
         "F5: play · Shift+F5 or Esc: stop",
         "While playing: WASD walk, Space jump, right mouse turns the camera",
     ] {

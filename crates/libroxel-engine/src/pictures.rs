@@ -5,6 +5,11 @@
 //! `images` folder beside it and the games folder's `images` folder); a full
 //! path is used as it is. Names starting with `libroxel://` are pictures
 //! built into Libroxel: `coin`, `smile`, `star`, `arrow` and `checker`.
+//!
+//! Games brought in from Roblox Studio name their files by asset number
+//! (`rbxassetid://123`, or a web address ending `?id=123`). Those are
+//! looked for as `123.png` (or `.jpg`, or `123` with no ending) in an `assets` folder
+//! inside each of the folders, so a creator can drop in their own files.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -53,6 +58,12 @@ pub fn bytes_for(name: &str) -> Option<Vec<u8>> {
     if let Some(built_in) = name.strip_prefix(BUILT_IN) {
         return PICTURES.iter().find(|(n, _)| *n == built_in).map(|(_, b)| b.to_vec());
     }
+    if let Some(id) = asset_id(name) {
+        return find_asset(&id, &["png", "jpg", "jpeg"]);
+    }
+    if let Some(rest) = name.strip_prefix("rbxasset://") {
+        return find_file(rest);
+    }
     let path = PathBuf::from(name);
     if path.is_absolute() {
         return std::fs::read(path).ok();
@@ -61,11 +72,63 @@ pub fn bytes_for(name: &str) -> Option<Vec<u8>> {
     folders.iter().find_map(|dir| std::fs::read(dir.join(&path)).ok())
 }
 
-/// Decodes a PNG into an image with 8-bit RGBA pixels.
+/// The asset number in an address such as `rbxassetid://123` or
+/// `https://www.roblox.com/asset/?id=123`, if `name` is one.
+pub fn asset_id(name: &str) -> Option<String> {
+    let name = name.trim();
+    let lower = name.to_ascii_lowercase();
+    let rest = if let Some(rest) = lower.strip_prefix("rbxassetid://") {
+        rest
+    } else if lower.starts_with("http://") || lower.starts_with("https://") {
+        let at = lower.find("id=")?;
+        &lower[at + 3..]
+    } else {
+        return None;
+    };
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    (!digits.is_empty()).then_some(digits)
+}
+
+/// The folders asset files are looked for in: `assets` inside each folder.
+fn asset_folders() -> Vec<PathBuf> {
+    let folders = FOLDERS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    folders.iter().map(|f| f.join("assets")).collect()
+}
+
+/// The file for asset number `id`: `id.ending` for the first of `endings`
+/// found, or else a file called just `id`.
+pub fn find_asset(id: &str, endings: &[&str]) -> Option<Vec<u8>> {
+    let folders = asset_folders();
+    endings
+        .iter()
+        .find_map(|e| folders.iter().find_map(|dir| std::fs::read(dir.join(format!("{id}.{e}"))).ok()))
+        .or_else(|| folders.iter().find_map(|dir| std::fs::read(dir.join(id)).ok()))
+}
+
+/// A path relative to the folders or their `assets` folders.
+fn find_file(relative: &str) -> Option<Vec<u8>> {
+    let relative = relative.trim_start_matches('/');
+    if relative.split(['/', '\\']).any(|part| part == "..") {
+        return None;
+    }
+    let folders = FOLDERS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    folders.iter().chain(&asset_folders()).find_map(|dir| std::fs::read(dir.join(relative)).ok())
+}
+
+/// The file a name means, trying `endings` for asset numbers.
+pub fn bytes_for_kind(name: &str, endings: &[&str]) -> Option<Vec<u8>> {
+    match asset_id(name) {
+        Some(id) => find_asset(&id, endings),
+        None => bytes_for(name),
+    }
+}
+
+/// Decodes a PNG (or JPEG) into an image with 8-bit RGBA pixels.
 pub fn decode(bytes: &[u8], sampler: ImageSampler) -> Option<Image> {
     let image = Image::from_buffer(
         bytes,
-        ImageType::Extension("png"),
+        // A creator's own asset files may be JPEGs.
+        ImageType::Extension(if bytes.starts_with(&[0xFF, 0xD8]) { "jpg" } else { "png" }),
         CompressedImageFormats::NONE,
         true,
         sampler,
@@ -105,5 +168,16 @@ mod tests {
         assert!(pixels[middle] > 150 && pixels[middle + 3] == 255, "{:?}", &pixels[middle..middle + 4]);
         assert!(bytes_for("libroxel://nothing").is_none());
         assert!(bytes_for("  ").is_none());
+    }
+
+    #[test]
+    fn asset_numbers_are_found_in_addresses() {
+        assert_eq!(asset_id("rbxassetid://12345").as_deref(), Some("12345"));
+        assert_eq!(asset_id(" rbxassetid://77/ ").as_deref(), Some("77"));
+        assert_eq!(asset_id("http://www.roblox.com/asset/?id=987").as_deref(), Some("987"));
+        assert_eq!(asset_id("https://www.roblox.com/asset?id=5&v=2").as_deref(), Some("5"));
+        assert_eq!(asset_id("coin.png"), None);
+        assert_eq!(asset_id("rbxassetid://"), None);
+        assert!(find_file("../secret").is_none());
     }
 }

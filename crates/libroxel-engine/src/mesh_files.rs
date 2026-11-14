@@ -1,5 +1,5 @@
-//! 3D models from files, for parts with a `MeshId`: Wavefront .obj files,
-//! found the same way as pictures (see [`pictures`](crate::pictures)). A
+//! 3D models from files, for parts with a `MeshId`: Wavefront .obj files
+//! and Roblox Studio's .mesh files, found the same way as pictures (see [`pictures`](crate::pictures)). A
 //! model is stretched to fit its part's Size, as a box would be; it still
 //! bumps into things as that box.
 
@@ -64,32 +64,101 @@ pub fn parse_obj(text: &str) -> Option<Model> {
             _ => {}
         }
     }
-    if corners.is_empty() {
+    let soup = corners
+        .iter()
+        .map(|&(v, t, n)| (vs[v], t.map(|t| Vec2::new(vts[t].x, 1.0 - vts[t].y)), n.map(|n| vns[n])))
+        .collect();
+    fit(soup)
+}
+
+/// A corner of a triangle: where it is, its texture position (rows from
+/// the top) and its normal, if the file gave them.
+type Corner = (Vec3, Option<Vec2>, Option<Vec3>);
+
+/// Triangles (three corners each) fitted into a 1 by 1 by 1 box.
+fn fit(corners: Vec<Corner>) -> Option<Model> {
+    if corners.len() < 3 {
         return None;
     }
     let (mut lo, mut hi) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
-    for &(v, ..) in &corners {
-        lo = lo.min(vs[v]);
-        hi = hi.max(vs[v]);
+    for (v, ..) in &corners {
+        lo = lo.min(*v);
+        hi = hi.max(*v);
+    }
+    if !lo.is_finite() || !hi.is_finite() {
+        return None;
     }
     let size = hi - lo;
     let centre = (lo + hi) / 2.0;
     // A flat side stays flat rather than becoming infinitely thin maths.
     let scale = Vec3::new(1.0 / size.x.max(1e-4), 1.0 / size.y.max(1e-4), 1.0 / size.z.max(1e-4));
     let mut model = Model { positions: Vec::new(), normals: Vec::new(), uvs: Vec::new(), size };
-    for tri in corners.chunks(3) {
-        let p: Vec<Vec3> = tri.iter().map(|c| (vs[c.0] - centre) * scale).collect();
+    for tri in corners.as_chunks::<3>().0 {
+        let p: Vec<Vec3> = tri.iter().map(|c| (c.0 - centre) * scale).collect();
         let flat = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or(Vec3::Y);
         for (corner, at) in tri.iter().zip(p) {
             model.positions.push(at.to_array());
             // Stretching to fit bends normals the other way.
-            let n = corner.2.map_or(flat, |n| (vns[n] / scale).normalize_or(flat));
+            let n = corner.2.map_or(flat, |n| (n / scale).normalize_or(flat));
             model.normals.push(n.to_array());
-            let uv = corner.1.map_or(Vec2::ZERO, |t| vts[t]);
-            model.uvs.push([uv.x, 1.0 - uv.y]);
+            model.uvs.push(corner.1.unwrap_or(Vec2::ZERO).to_array());
         }
     }
     Some(model)
+}
+
+/// Reads a mesh file in the format Roblox Studio saves and serves meshes
+/// in (versions 1 to 5), using its most detailed level.
+pub fn parse_roblox_mesh(bytes: &[u8]) -> Option<Model> {
+    use rbx_mesh::mesh::{Mesh, Vertices2};
+    let mesh = rbx_mesh::read_mesh_versioned(std::io::Cursor::new(bytes)).ok()?;
+    let corner = |pos: [f32; 3], tex: [f32; 2], norm: [f32; 3]| -> Corner {
+        (Vec3::from_array(pos), Some(Vec2::from_array(tex)), Some(Vec3::from_array(norm)))
+    };
+    let pick = |vertices: Vec<Corner>, faces: &[rbx_mesh::mesh::Face2], lods: &[rbx_mesh::mesh::Lod3]| {
+        // The first level of detail is the full one.
+        let end = match lods {
+            [_, next, ..] if (next.0 as usize) <= faces.len() && next.0 > 0 => next.0 as usize,
+            _ => faces.len(),
+        };
+        let mut soup = Vec::with_capacity(end * 3);
+        for face in &faces[..end] {
+            let ids = [face.0[0].0, face.0[1].0, face.0[2].0];
+            if ids.iter().all(|&i| (i as usize) < vertices.len()) {
+                soup.extend(ids.map(|i| vertices[i as usize]));
+            }
+        }
+        soup
+    };
+    let from_v2 = |v: &Vertices2| -> Vec<Corner> {
+        match v {
+            Vertices2::Full(v) => v.iter().map(|v| corner(v.pos, v.tex, v.norm)).collect(),
+            Vertices2::Truncated(v) => v.iter().map(|v| corner(v.pos, v.tex, v.norm)).collect(),
+        }
+    };
+    let soup = match mesh {
+        Mesh::V1(m) => m.vertices.iter().map(|v| corner(v.pos, [v.tex[0], v.tex[1]], v.norm)).collect(),
+        Mesh::V2(m) => pick(from_v2(&m.vertices), &m.faces, &[]),
+        Mesh::V3(m) => pick(from_v2(&m.vertices), &m.faces, &m.lods),
+        Mesh::V4(m) => {
+            let v = m.vertices.iter().map(|v| corner(v.pos, v.tex, v.norm)).collect();
+            pick(v, &m.faces, &m.lods)
+        }
+        Mesh::V5(m) => {
+            let v = m.vertices.iter().map(|v| corner(v.pos, v.tex, v.norm)).collect();
+            pick(v, &m.faces, &m.lods)
+        }
+    };
+    fit(soup)
+}
+
+/// Reads a model from a file's bytes, whichever kind it is.
+pub fn parse(bytes: &[u8]) -> Option<Model> {
+    if bytes.starts_with(b"version ") {
+        parse_roblox_mesh(bytes)
+    } else {
+        parse_obj(&String::from_utf8_lossy(bytes))
+    }
 }
 
 impl Model {
@@ -103,14 +172,20 @@ impl Model {
     }
 }
 
-/// Reads the model a `MeshId` names, if it can be found and read.
+/// Reads the model a `MeshId` names, if it can be found and read: an
+/// .obj or .mesh file, or an asset number (see [`crate::pictures`]) whose
+/// file is either.
 pub fn load(name: &str) -> Option<Model> {
     let name = name.trim();
-    if !name.to_ascii_lowercase().ends_with(".obj") {
+    let lower = name.to_ascii_lowercase();
+    let bytes = if crate::pictures::asset_id(name).is_some() {
+        crate::pictures::bytes_for_kind(name, &["mesh", "obj"])?
+    } else if lower.ends_with(".obj") || lower.ends_with(".mesh") || lower.starts_with("rbxasset://") {
+        crate::pictures::bytes_for(name)?
+    } else {
         return None;
-    }
-    let bytes = crate::pictures::bytes_for(name)?;
-    parse_obj(&String::from_utf8_lossy(&bytes))
+    };
+    parse(&bytes)
 }
 
 /// Models already read, by name (None when a name couldn't be read).
@@ -155,6 +230,16 @@ mod tests {
         assert!(model.normals.iter().all(|n| (Vec3::from(*n).length() - 1.0).abs() < 1e-4));
         assert_eq!(model.uvs[2], [1.0, 0.0], "texture rows count down from the top");
         assert!(parse_obj("# nothing\nv 1 2 3\n").is_none());
-        assert!(load("model.png").is_none(), "only .obj files are models");
+        assert!(load("model.png").is_none(), "only .obj and .mesh files are models");
+    }
+
+    #[test]
+    fn a_roblox_mesh_file_is_read() {
+        // Version 1.00 files are twice the size they mean.
+        let text = "version 1.00\n1\n[0,0,0][0,1,0][0,0,0][4,0,0][0,1,0][1,0,0][0,0,8][0,1,0][0,1,0]";
+        let model = parse(text.as_bytes()).unwrap();
+        assert_eq!(model.positions.len(), 3);
+        assert_eq!(model.size, Vec3::new(2.0, 0.0, 4.0));
+        assert!(parse(b"version 9.99\nnot a mesh").is_none());
     }
 }
