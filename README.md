@@ -247,6 +247,37 @@ The first build compiles Bevy and takes a while. After that it is quick.
 - **Undo/redo** with Ctrl+Z and Ctrl+Y. **Save** with Ctrl+S. Games are
   saved as `.lrx` files in `~/Projects/libroxel-games/` by default.
 
+## Bringing in games from Roblox Studio
+
+Libroxel opens your own Roblox Studio files: places (`.rbxl` and `.rbxlx`)
+and models (`.rbxm` and `.rbxmx`), saved in either the binary or the XML format.
+
+- **Open a place:** use File > Open, type its path on the Create tab, put it
+  in the games folder so it shows up there, drop it on the window, or run
+  `cargo run -- path/to/place.rbxl`.
+- **Add a model to your game:** drop the model file on the editor window.
+
+When you save, the game is written as a new `.lrx` file, so your original file
+is never changed. The Output panel lists what came across and what didn't.
+
+| What comes across | |
+| --- | --- |
+| Parts, spawn locations, seats | Position and rotation, size, colour, material, transparency, anchoring, collisions, shape. Wedge, corner wedge, truss, mesh and union parts become parts of the closest shape. |
+| Scripts | Scripts, local scripts and module scripts, with their source. A script set to run on the client becomes a local script. |
+| Containers | Models (with their primary part), folders, every service Libroxel has, and StarterPlayerScripts and StarterCharacterScripts. |
+| GUIs | Screen, billboard and surface GUIs, frames, labels, buttons, text boxes, images, scrolling frames, and the UI layout, corner, stroke, padding, gradient and constraint objects. |
+| Look | Lighting (clock time, ambient, fog), sky, atmosphere, bloom, colour correction, sun rays, lights, particles, fire, smoke, sparkles, beams, trails, highlights, decals and textures. |
+| Physics | Welds, motors, weld constraints, hinges, springs, ropes, rods, prismatic and ball-socket joints, attachments, and the body movers and constraint movers. |
+| Data | Values, attributes and CollectionService tags. |
+
+| What doesn't come across yet | |
+| --- | --- |
+| Terrain | The voxels of a place's terrain are left out. |
+| Assets | Meshes, images and sounds that live on Roblox's servers are linked by their asset IDs but not downloaded, so mesh parts show as boxes. |
+| Unions | Unions and negated parts keep their bounding box, not their carved shape. |
+| Other classes | Anything Libroxel doesn't have yet (for example animation controllers, viewport frames and dialog) is kept as a folder, so whatever is inside it survives. |
+| Other services | Services Libroxel doesn't have (such as SoundService and Chat) are left out, and the Output panel names any that had something in them. |
+
 ## Layout
 
 | Crate | What it is |
@@ -255,6 +286,7 @@ The first build compiles Bevy and takes a while. After that it is quick.
 | [`libroxel-hub`](crates/libroxel-hub) | The Hub: a small self-hostable server (axum and SQLite) that lists live games, and the client and background announcer the app uses. |
 | [`libroxel-net`](crates/libroxel-net) | Player identity (a keypair) and join codes. Carries a hosted game between computers over iroh, peer to peer with a relay fallback. |
 | [`libroxel-script`](crates/libroxel-script) | The sandboxed Luau runtime (via `mlua`) with a thread scheduler. Every name scripts can see lives in [`names.rs`](crates/libroxel-script/src/names.rs). |
+| [`libroxel-rbx`](crates/libroxel-rbx) | Opens place and model files saved by Roblox Studio (`.rbxl`, `.rbxlx`, `.rbxm`, `.rbxmx`) as instance trees, using the open-source rbx-dom readers. |
 | [`libroxel-engine`](crates/libroxel-engine) | Play sessions: physics, the player character, touch events, respawning, and the Bevy integration (rendering and cameras). |
 | [`libroxel`](crates/libroxel) | The Libroxel app: the home screen (Play, Online, Create, Host), the editor, plus `libroxel server` and `libroxel hub`. |
 | [`libroxel-proto`](crates/libroxel-proto) | A minimal player that runs a saved game or a single script. |

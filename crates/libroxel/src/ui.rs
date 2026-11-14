@@ -49,6 +49,8 @@ enum Action {
     Rotate90(InstanceId),
     /// Add a 3D model file (dropped on the window) as a part.
     ImportMesh(PathBuf),
+    /// Add the instances in a Roblox model file (.rbxm or .rbxmx) to the workspace.
+    InsertModelFile(PathBuf),
     Delete(InstanceId),
     Duplicate(InstanceId),
     Select(Option<InstanceId>),
@@ -248,6 +250,10 @@ pub fn editor_ui(
         let path = file.path();
         if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("obj")) {
             actions.push(Action::ImportMesh(path.to_path_buf()));
+        } else if crate::open::is_model_file(path) {
+            actions.push(Action::InsertModelFile(path.to_path_buf()));
+        } else if crate::open::is_game_file(path) {
+            actions.push(Action::Open(path.to_path_buf()));
         }
     }
     // A game that has ended no longer needs its internet connection.
@@ -1981,7 +1987,7 @@ fn list_places() -> Vec<PathBuf> {
         .flatten()
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "lrx"))
+        .filter(|p| crate::open::is_game_file(p))
         .collect();
     found.sort();
     found
@@ -2136,7 +2142,11 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
             Dialog::Open { path } | Dialog::SaveAs { path } => path,
             Dialog::Join { .. } | Dialog::EditTogether { .. } | Dialog::Publish { .. } => return,
         };
-        ui.label("File path (places use the .lrx extension):");
+        ui.label(if opening {
+            "File path: a Libroxel game (.lrx), or a place or model from Roblox Studio (.rbxl, .rbxlx, .rbxm, .rbxmx):"
+        } else {
+            "File path (places use the .lrx extension):"
+        });
         ui.add(egui::TextEdit::singleline(path).desired_width(f32::INFINITY));
         let places = list_places();
         if !places.is_empty() {
@@ -2547,15 +2557,22 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             }
         }
         Action::Open(path) => {
-            match std::fs::read_to_string(&path)
-                .map_err(|e| e.to_string())
-                .and_then(|t| place::load(&t).map_err(|e| e.to_string()))
-            {
-                Ok((tree, report)) => {
-                    replace_world(engine, editor, tree, Some(path.clone()));
+            match crate::open::open(&path) {
+                Ok(opened) => {
+                    // A file from another engine is saved as a new .lrx, never over the original.
+                    let file = (!opened.imported).then(|| path.clone());
+                    replace_world(engine, editor, opened.tree, file);
                     log(engine, LogLevel::Info, format!("Opened {}", path.display()));
-                    for w in report.warnings {
-                        log(engine, LogLevel::Warn, w);
+                    let level = if opened.imported { LogLevel::Info } else { LogLevel::Warn };
+                    for note in opened.notes {
+                        log(engine, level, note);
+                    }
+                    if opened.imported {
+                        log(
+                            engine,
+                            LogLevel::Info,
+                            "Save it to keep it as a Libroxel game (.lrx).".to_string(),
+                        );
                     }
                 }
                 Err(err) => log(engine, LogLevel::Error, format!("Could not open {}: {err}", path.display())),
@@ -3012,6 +3029,30 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     log(engine, LogLevel::Info, format!("Added the model {}", path.display()));
                 }
                 Err(e) => log(engine, LogLevel::Error, e),
+            }
+        }
+        Action::InsertModelFile(path) => {
+            if playing {
+                log(engine, LogLevel::Warn, "Stop the game to add a model".to_string());
+                return;
+            }
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            editor.history.begin_edit(&tree, now);
+            let ws = tree.workspace();
+            let done = crate::open::insert_model(&mut tree, &path, ws);
+            drop(tree);
+            match done {
+                Ok((made, notes)) => {
+                    editor.dirty = true;
+                    editor.selection = made.first().copied();
+                    editor.focus_selection = !made.is_empty();
+                    log(engine, LogLevel::Info, format!("Added {}", path.display()));
+                    for note in notes {
+                        log(engine, LogLevel::Info, note);
+                    }
+                }
+                Err(e) => log(engine, LogLevel::Error, format!("Could not add {}: {e}", path.display())),
             }
         }
         Action::Rotate90(id) => {

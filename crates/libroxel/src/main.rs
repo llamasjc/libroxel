@@ -19,6 +19,7 @@ mod history;
 mod images;
 mod menu;
 mod mesh_import;
+mod open;
 mod server;
 mod starter_games;
 mod templates;
@@ -36,7 +37,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::BlendState;
 use bevy_egui::{EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext};
 use libroxel_engine::view::{EnginePlugin, EngineSet, EngineState, RenderPlugin};
-use libroxel_instance::{InstanceId, InstanceTree, place};
+use libroxel_instance::{InstanceId, InstanceTree};
 
 use crate::history::History;
 
@@ -206,15 +207,16 @@ fn main() {
         return;
     }
     let mut editor = Editor { platform: browse::Platform::start(), ..Editor::default() };
+    let mut notes = Vec::new();
     let tree = match args.first().cloned() {
         Some(flag) if flag == "--sample" => templates::sample_obby(),
-        Some(path) => match std::fs::read_to_string(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|text| place::load(&text).map_err(|e| e.to_string()))
-        {
-            Ok((tree, _)) => {
-                editor.file = Some(PathBuf::from(path));
-                tree
+        Some(path) => match open::open(std::path::Path::new(&path)) {
+            Ok(opened) => {
+                if !opened.imported {
+                    editor.file = Some(PathBuf::from(path));
+                }
+                notes = opened.notes;
+                opened.tree
             }
             Err(err) => {
                 eprintln!("could not open {path}: {err}");
@@ -238,7 +240,15 @@ fn main() {
             ..default()
         }))
         .add_plugins(EguiPlugin::default())
-        .insert_non_send(EngineState::new(tree))
+        .insert_non_send({
+            let mut engine = EngineState::new(tree);
+            engine.log.extend(notes.into_iter().map(|text| libroxel_engine::LogEntry {
+                level: libroxel_engine::LogLevel::Info,
+                time: 0.0,
+                text,
+            }));
+            engine
+        })
         .insert_non_send(editor)
         .add_plugins((EnginePlugin, RenderPlugin))
         .add_systems(Startup, setup_ui_camera)

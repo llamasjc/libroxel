@@ -125,7 +125,7 @@ pub fn saved_games() -> Vec<PathBuf> {
             let path = entry.path();
             if path.is_dir() && depth == 0 {
                 deeper.push(path);
-            } else if path.extension().is_some_and(|e| e == "lrx") {
+            } else if crate::open::is_game_file(&path) {
                 let when = entry.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
                 found.push((when, path));
             }
@@ -570,7 +570,7 @@ impl Menu {
         ui.horizontal(|ui| {
             let typed = ui.add(
                 egui::TextEdit::singleline(&mut self.path)
-                    .hint_text("or open a .lrx file by its path")
+                    .hint_text("or open a .lrx, .rbxl or .rbxlx file by its path")
                     .desired_width(320.0),
             );
             let enter = typed.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
