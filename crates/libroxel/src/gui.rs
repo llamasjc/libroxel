@@ -261,6 +261,43 @@ fn constrained(tree: &InstanceTree, id: InstanceId, size: Vec2, k: f32) -> Vec2 
     size
 }
 
+thread_local! {
+    /// The context GUI text is laid out with, so sizes match what's drawn.
+    static TEXT_CONTEXT: std::cell::RefCell<Option<egui::Context>> = const { std::cell::RefCell::new(None) };
+}
+
+/// How wide and tall `text` is at `size` points, wrapped at `width`: laid
+/// out with the drawing fonts while drawing, or estimated otherwise.
+fn measure_text(text: &str, size: f32, width: f32) -> (f32, f32) {
+    if text.is_empty() {
+        return (0.0, 0.0);
+    }
+    let laid = TEXT_CONTEXT.with_borrow(|ctx| {
+        ctx.as_ref().map(|ctx| {
+            let job = egui::text::LayoutJob::simple(
+                text.to_owned(),
+                FontId::proportional(size),
+                Color32::WHITE,
+                width,
+            );
+            let galley = ctx.fonts_mut(|f| f.layout_job(job));
+            (galley.size().x, galley.size().y)
+        })
+    });
+    laid.unwrap_or_else(|| {
+        let per_line =
+            if width.is_finite() { (width / (size * 0.55)).floor().max(1.0) } else { f32::INFINITY };
+        let mut lines = 0.0;
+        let mut widest: f32 = 0.0;
+        for line in text.lines() {
+            let n = line.chars().count() as f32;
+            lines += (n / per_line).ceil().max(1.0);
+            widest = widest.max(n.min(per_line));
+        }
+        (widest * size * 0.55, lines.max(1.0) * size * 1.2)
+    })
+}
+
 /// A GUI object's size grown to fit what's inside it, along the axes its
 /// AutomaticSize names (X = 1, Y = 2, XY = 3): its children, and its text.
 fn automatic(tree: &InstanceTree, id: InstanceId, size: Vec2, k: f32) -> Vec2 {
@@ -271,7 +308,14 @@ fn automatic(tree: &InstanceTree, id: InstanceId, size: Vec2, k: f32) -> Vec2 {
     let (grow_x, grow_y) = (axes & 1 != 0, axes & 2 != 0);
     let origin = Rect::from_min_size(Pos2::ZERO, egui::vec2(size.x.max(0.0), size.y.max(0.0)));
     let inner = padded(tree, id, origin, k);
-    let (pad_right, pad_bottom) = (origin.max.x - inner.max.x, origin.max.y - inner.max.y);
+    // Read the far-side padding itself: an empty box clamps its inner rect.
+    let (pad_right, pad_bottom) = match child_of_class(tree, id, ClassKind::UIPadding) {
+        Some(pad) => (
+            res1(udim(tree, pad, Property::PaddingRight), origin.width(), k),
+            res1(udim(tree, pad, Property::PaddingBottom), origin.height(), k),
+        ),
+        None => (0.0, 0.0),
+    };
     let mut extent = Vec2::new(0.0, 0.0);
     for (_, _, r) in arrange_unsorted(tree, id, origin, k) {
         extent.x = extent.x.max(r.max.x + pad_right);
@@ -281,11 +325,14 @@ fn automatic(tree: &InstanceTree, id: InstanceId, size: Vec2, k: f32) -> Vec2 {
         && is_text(class)
     {
         let text = tree.get_string(id, Property::Text).unwrap_or_default();
-        let text_size = tree.get_number(id, Property::TextSize).unwrap_or(14.0) as f32 * k;
-        let lines = text.lines().count().max(1) as f32;
-        let widest = text.lines().map(|l| l.chars().count()).max().unwrap_or(0) as f32;
-        extent.x = extent.x.max(inner.min.x + widest * text_size * 0.55 + pad_right);
-        extent.y = extent.y.max(inner.min.y + lines * text_size * 1.2 + pad_bottom);
+        let text_size = tree.get_number(id, Property::TextSize).unwrap_or(14.0).max(1.0) as f32 * k;
+        // Wrapped text that can't grow sideways wraps at its own width, so it
+        // grows downwards by as many lines as it wraps to, as in Roblox.
+        let wraps = tree.get_bool(id, Property::TextWrapped) == Some(true) && !grow_x;
+        let width = if wraps { inner.width().max(1.0) } else { f32::INFINITY };
+        let (w, h) = measure_text(&text, text_size, width);
+        extent.x = extent.x.max(inner.min.x + w + pad_right);
+        extent.y = extent.y.max(inner.min.y + h + pad_bottom);
     }
     Vec2::new(
         if grow_x { size.x.max(extent.x) } else { size.x },
@@ -332,6 +379,7 @@ pub fn draw(
     };
     screens.sort_by(|a, b| order(*a).total_cmp(&order(*b)));
     boxes.rects.clear();
+    TEXT_CONTEXT.with_borrow_mut(|c| *c = Some(ui.ctx().clone()));
     for screen in screens {
         let k = own_scale(tree, screen);
         let mut screen_area = area;
@@ -1071,6 +1119,36 @@ mod tests {
         let at = |id| inside.iter().find(|(c, _, _)| *c == id).unwrap().2;
         assert_eq!(at(rows[0]).min, Pos2::new(350.0, 225.0));
         assert_eq!(at(rows[2]).min, Pos2::new(350.0, 325.0));
+    }
+
+    #[test]
+    fn an_automatic_box_keeps_its_padding_and_grows_for_wrapped_text() {
+        let mut tree = InstanceTree::new();
+        let root = tree.root();
+        let screen = gui(&mut tree, ClassKind::ScreenGui, root, "Screen");
+        let boxed = gui(&mut tree, ClassKind::Frame, screen, "Box");
+        set(&mut tree, boxed, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 100.0, 0.0, 0.0)));
+        tree.set_extra(boxed, "AutomaticSize", Some(PropertyValue::Number(2.0))).unwrap();
+        let pad = gui(&mut tree, ClassKind::UIPadding, boxed, "UIPadding");
+        set(&mut tree, pad, Property::PaddingTop, PropertyValue::UDim(UDim::new(0.0, 10.0)));
+        set(&mut tree, pad, Property::PaddingBottom, PropertyValue::UDim(UDim::new(0.0, 10.0)));
+        let row = gui(&mut tree, ClassKind::Frame, boxed, "Row");
+        set(&mut tree, row, Property::GuiSize, PropertyValue::UDim2(UDim2::new(1.0, 0.0, 0.0, 30.0)));
+        let area = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let at =
+            |tree: &InstanceTree| arrange(tree, screen, area).iter().find(|(c, _, _)| *c == boxed).unwrap().2;
+        // Padding above and below the row, not just above it.
+        assert_eq!(at(&tree).height(), 50.0);
+        // Long wrapped text grows taller than one line.
+        let label = gui(&mut tree, ClassKind::TextLabel, screen, "Label");
+        set(&mut tree, label, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 100.0, 0.0, 0.0)));
+        tree.set_extra(label, "AutomaticSize", Some(PropertyValue::Number(2.0))).unwrap();
+        set(&mut tree, label, Property::TextWrapped, PropertyValue::Bool(true));
+        set(&mut tree, label, Property::TextSize, PropertyValue::Number(10.0));
+        set(&mut tree, label, Property::Text, PropertyValue::String("word ".repeat(20)));
+        let placed = arrange(&tree, screen, area);
+        let tall = placed.iter().find(|(c, _, _)| *c == label).unwrap().2.height();
+        assert!(tall > 30.0, "wrapped text is {tall} tall");
     }
 
     #[test]

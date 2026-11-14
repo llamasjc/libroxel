@@ -267,7 +267,14 @@ fn sync_parts(
         };
         let color =
             tree.get_color(id, Property::Color).map(|c| Color::srgb(c.r, c.g, c.b)).unwrap_or(Color::WHITE);
-        let transparency = tree.get_number(id, Property::Transparency).unwrap_or(0.0) as f32;
+        // A local modifier (set by camera scripts to see through walls) fades
+        // the part further, as in Roblox.
+        let modifier = match tree.get_extra(id, "LocalTransparencyModifier") {
+            Ok(Some(libroxel_instance::PropertyValue::Number(m))) => m.clamp(0.0, 1.0) as f32,
+            _ => 0.0,
+        };
+        let own = tree.get_number(id, Property::Transparency).unwrap_or(0.0) as f32;
+        let transparency = 1.0 - (1.0 - own) * (1.0 - modifier);
         let material = match tree.get_enum(id, Property::Material) {
             Some(EnumValue::Material(m)) => m,
             _ => Material::Plastic,

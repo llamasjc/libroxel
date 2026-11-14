@@ -609,6 +609,7 @@ add(props, "BasePart", {
 	PivotOffset = CFrame.new(),
 	Locked = false,
 	Massless = false,
+	LocalTransparencyModifier = 0,
 	RootPriority = 0,
 	CustomPhysicalProperties = NIL,
 	CollisionGroupId = 0,
