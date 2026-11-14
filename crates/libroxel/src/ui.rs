@@ -498,6 +498,23 @@ pub fn editor_ui(
                 }
             }
             hud(ui, playing);
+            if playing && ui.input(|i| i.modifiers.shift && i.key_pressed(Key::F1)) {
+                editor.stats.shown = !editor.stats.shown;
+            }
+            if let Some(session) = engine.session.as_mut() {
+                editor.stats.update(session, ui.input(|i| i.unstable_dt));
+            }
+            if playing && editor.stats.shown {
+                let at = ui.max_rect().left_bottom() + egui::vec2(8.0, -30.0);
+                let galley = ui.painter().layout_no_wrap(
+                    editor.stats.text.clone(),
+                    egui::FontId::monospace(12.0),
+                    Color32::WHITE,
+                );
+                let rect = egui::Align2::LEFT_BOTTOM.anchor_size(at, galley.size()).expand(5.0);
+                ui.painter().rect_filled(rect, 4.0, Color32::from_black_alpha(170));
+                ui.painter().galley(rect.min + egui::vec2(5.0, 5.0), galley, Color32::WHITE);
+            }
             let list_on = engine.session.as_ref().is_none_or(|s| s.runtime().core_gui_enabled("PlayerList"));
             if playing && list_on {
                 leaderboard(ui, &tree_rc.borrow());
@@ -4081,6 +4098,12 @@ fn view_tab(ui: &mut egui::Ui, editor: &mut Editor) {
         if theme::ribbon_button(ui, icon::GRID_FOUR, "Grid", editor.show_grid).clicked() {
             editor.show_grid = !editor.show_grid;
         }
+        if theme::ribbon_button(ui, icon::GAUGE, "Stats", editor.stats.shown)
+            .on_hover_text("Frame rate and where each frame's time goes, while playing (Shift+F1)")
+            .clicked()
+        {
+            editor.stats.shown = !editor.stats.shown;
+        }
         if theme::ribbon_button(ui, icon::HAND_TAP, "Touch", editor.touch.seen)
             .on_hover_text("Show the on-screen stick and jump button while playing")
             .clicked()
@@ -4103,7 +4126,7 @@ fn help_items(ui: &mut egui::Ui) {
         "Ctrl+D: duplicate · Del: delete · Ctrl+R: turn 90°",
         "Ctrl+G: group · Ctrl+U: ungroup",
         "Ctrl+Z / Ctrl+Y: undo / redo · Ctrl+S: save · Ctrl+O: open",
-        "F5: play · Shift+F5 or Esc: stop",
+        "F5: play · Shift+F5 or Esc: stop · Shift+F1: frame stats",
         "While playing: WASD walk, Space jump, right mouse turns the camera",
     ] {
         ui.label(line);
@@ -4236,4 +4259,39 @@ fn toolbox(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut 
             );
         });
     });
+}
+
+/// Frame rate and where each frame's time goes, shown with Shift+F1 while
+/// playing (like Roblox's own stats).
+#[derive(Default)]
+pub struct Stats {
+    pub shown: bool,
+    frames: u32,
+    seconds: f32,
+    text: String,
+}
+
+impl Stats {
+    fn update(&mut self, session: &mut libroxel_engine::PlaySession, dt: f32) {
+        self.frames += 1;
+        self.seconds += dt;
+        if self.seconds < 0.5 {
+            return;
+        }
+        let t = session.take_frame_times();
+        let per = |s: f64| if t.frames > 0 { s * 1000.0 / f64::from(t.frames) } else { 0.0 };
+        let fps = self.frames as f32 / self.seconds;
+        let step = per(t.change_events + t.scripts + t.physics + t.other);
+        self.text = format!(
+            "{fps:.0} FPS ({:.1} ms a frame)\ngame step {step:.1} ms: scripts {:.1}, events {:.1}, physics {:.1}, other {:.1}\ndrawing and the rest {:.1} ms",
+            1000.0 / fps.max(0.01),
+            per(t.scripts),
+            per(t.change_events),
+            per(t.physics),
+            per(t.other),
+            (1000.0 / fps.max(0.01)) as f64 - step,
+        );
+        self.frames = 0;
+        self.seconds = 0.0;
+    }
 }

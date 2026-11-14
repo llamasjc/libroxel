@@ -471,17 +471,18 @@ impl Groups {
         self.apart.contains(&pair)
     }
 
-    fn refresh(&mut self, tree: &InstanceTree) {
+    /// Notes the group of each of `parts` (the ones in this step).
+    fn refresh(&mut self, tree: &InstanceTree, parts: impl Iterator<Item = InstanceId>) {
         self.of.clear();
         if self.apart.is_empty() {
             return;
         }
         let default = libroxel_instance::DEFAULT_COLLISION_GROUP;
-        for part in tree.descendants_of_class(tree.workspace(), ClassKind::Part) {
-            if let Some(PropertyValue::String(g)) = tree.get(part, Property::CollisionGroup).ok()
+        for part in parts {
+            if let Some(g) = tree.get_str(part, Property::CollisionGroup)
                 && g != default
             {
-                self.of.insert(part, g);
+                self.of.insert(part, g.to_owned());
             }
         }
     }
@@ -855,8 +856,8 @@ impl Physics {
     /// Advances the simulation by `dt` seconds.
     pub fn step(&mut self, tree: &mut InstanceTree, dt: f32) -> StepResult {
         let gravity = tree.get_number(tree.workspace(), Property::Gravity).map_or(GRAVITY, |g| g as f32);
-        self.groups.refresh(tree);
         let mut bodies = self.collect_bodies(tree, dt, gravity, false);
+        self.groups.refresh(tree, bodies.iter().map(|b| b.id));
         let fallen_height = fallen_parts_height(tree);
         let live: HashSet<InstanceId> = bodies.iter().map(|b| b.id).collect();
         self.velocities.retain(|id, _| live.contains(id));
