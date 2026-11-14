@@ -199,6 +199,7 @@ fn url_encode(text: &str) -> String {
 
 impl UserData for HttpService {
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
+        crate::lenient::add_service_members(m, "HttpService");
         m.add_method(http::JSON_ENCODE, |_, _, value: Value| {
             let json = crate::services::to_json(&value, 0)?;
             serde_json::to_string(&json).map_err(|e| runtime_err(e.to_string()))

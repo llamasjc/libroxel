@@ -316,6 +316,12 @@ impl ScriptRuntime {
         world::set_devices(&self.lua, devices)
     }
 
+    /// Tells scripts where each screen GUI object was drawn (its corner
+    /// and size, in pixels from the view's corner).
+    pub fn set_gui_rects(&self, rects: Vec<(libroxel_instance::InstanceId, [f32; 4])>) {
+        world::set_gui_rects(&self.lua, rects)
+    }
+
     /// Tells scripts how big the 3D view is, in pixels (for the camera).
     pub fn set_viewport(&self, width: f32, height: f32) {
         world::set_viewport(&self.lua, libroxel_instance::Vec2::new(width, height))

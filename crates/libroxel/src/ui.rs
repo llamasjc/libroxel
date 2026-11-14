@@ -448,6 +448,11 @@ pub fn editor_ui(
                 {
                     gui_hit = Some(hit);
                 }
+                if let Some(session) = engine.session.as_mut() {
+                    let rects =
+                        boxes.rects.iter().map(|(id, r)| (*id, [r.min.x, r.min.y, r.width(), r.height()]));
+                    session.set_gui_rects(rects.collect());
+                }
             }
             if playing {
                 text_field(ui, editor, &mut tree_rc.borrow_mut(), &boxes, &mut actions);

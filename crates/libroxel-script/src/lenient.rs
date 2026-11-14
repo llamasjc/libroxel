@@ -34,6 +34,14 @@ pub(crate) fn install(lua: &Lua, enum_lib: &Table) -> mlua::Result<()> {
         .call((enum_lib.clone(), lua.globals()))?;
     layer.get::<Function>("add_enums")?.call::<()>((enum_lib.clone(), crate::reflection::enums(lua)?))?;
     layer.get::<Function>("globals")?.call::<()>(())?;
+    // Where the GUI object was really drawn, for AbsolutePosition and AbsoluteSize.
+    layer.set(
+        "drawn_rect",
+        lua.create_function(|lua, obj: Value| {
+            let rect = crate::bindings::as_instance(&obj).and_then(|id| crate::world::gui_rect(lua, id));
+            Ok((rect.map(|r| r[0]), rect.map(|r| r[1]), rect.map(|r| r[2]), rect.map(|r| r[3])))
+        })?,
+    )?;
     lua.set_named_registry_value(LAYER_KEY, layer)?;
     lua.set_named_registry_value(GROUPS_KEY, lua.create_table()?)
 }
@@ -177,8 +185,10 @@ pub(crate) fn new_index(
     if kept || in_database {
         // Plain values are kept on the instance, so saving keeps them.
         if let Some(plain) = crate::reflection::extra_from_lua(&roblox, key, &value) {
-            if store(lua, instance_key(id), Value::UserData(obj), key, value, groups, false)? {
+            let has_setter: bool = layer(lua)?.get::<Function>("has_setter")?.call((groups.clone(), key))?;
+            if has_setter {
                 // The layer has its own handling: it owns the value.
+                store(lua, instance_key(id), Value::UserData(obj), key, value, groups, false)?;
                 let _ = host.tree.borrow_mut().set_extra(id, key, None);
             } else {
                 let _ = host.tree.borrow_mut().set_extra(id, key, plain);

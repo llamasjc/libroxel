@@ -999,6 +999,12 @@ impl PlaySession {
         self.runtime.set_devices(devices);
     }
 
+    /// Tells scripts where each screen GUI object was drawn: its top left
+    /// corner and size, in pixels from the view's corner.
+    pub fn set_gui_rects(&mut self, rects: Vec<(InstanceId, [f32; 4])>) {
+        self.runtime.set_gui_rects(rects);
+    }
+
     /// Tells scripts how big the view is, in pixels.
     pub fn set_viewport(&mut self, width: f32, height: f32) {
         self.runtime.set_viewport(width, height);

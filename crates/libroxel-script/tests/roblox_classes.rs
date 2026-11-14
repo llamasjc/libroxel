@@ -331,3 +331,22 @@ fn more_of_the_script_library_is_there() {
         ]
     );
 }
+
+#[test]
+fn attributes_hold_any_roblox_value() {
+    let rt = ScriptRuntime::new_with_tree(tree_with_player().0).unwrap();
+    run(
+        &rt,
+        r#"
+        local p = Instance.new("Part")
+        p:SetAttribute("Spot", CFrame.new(1, 2, 3))
+        p:SetAttribute("Team", BrickColor.new("Bright red"))
+        p:SetAttribute("Range", NumberRange.new(2, 5))
+        p:SetAttribute("Kind", Enum.Material.Wood)
+        print(p:GetAttribute("Spot").Y, p:GetAttribute("Team").Name, p:GetAttribute("Range").Max, p:GetAttribute("Kind").Name)
+        local c = p:Clone()
+        print(c:GetAttribute("Spot").Z, p:GetAttributes().Range.Min)
+        "#,
+    );
+    assert_eq!(printed(&rt), ["2 Bright red 5 Wood", "3 2"]);
+}

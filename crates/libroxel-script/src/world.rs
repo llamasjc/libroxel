@@ -37,6 +37,8 @@ pub(crate) struct WorldState {
     focused: Option<InstanceId>,
     /// The 3D view's size in pixels.
     viewport: Vec2,
+    /// Where each screen GUI object was last drawn: corner and size.
+    gui_rects: HashMap<InstanceId, [f32; 4]>,
     /// What the player plays with.
     pub(crate) devices: crate::Devices,
     /// Humanoids asked to walk somewhere (or to stop, with `None`).
@@ -501,6 +503,26 @@ pub(crate) fn focused_text_box(lua: &Lua) -> Option<InstanceId> {
 
 pub(crate) fn set_devices(lua: &Lua, devices: crate::Devices) {
     host(lua).world.borrow_mut().devices = devices;
+}
+
+pub(crate) fn set_gui_rects(lua: &Lua, rects: Vec<(InstanceId, [f32; 4])>) {
+    let new: HashMap<InstanceId, [f32; 4]> = rects.into_iter().collect();
+    let old = std::mem::replace(&mut host(lua).world.borrow_mut().gui_rects, new.clone());
+    // Scripts that lay things out by hand listen for these.
+    for (id, r) in &new {
+        let before = old.get(id);
+        if before.is_some_and(|b| b[2] != r[2] || b[3] != r[3]) {
+            let _ = crate::lenient::fire_changed(lua, *id, "AbsoluteSize");
+        }
+        if before.is_some_and(|b| b[0] != r[0] || b[1] != r[1]) {
+            let _ = crate::lenient::fire_changed(lua, *id, "AbsolutePosition");
+        }
+    }
+}
+
+/// Where a screen GUI object was last drawn, if it was.
+pub(crate) fn gui_rect(lua: &Lua, id: InstanceId) -> Option<[f32; 4]> {
+    host(lua).world.borrow().gui_rects.get(&id).copied()
 }
 
 pub(crate) fn set_viewport(lua: &Lua, size: Vec2) {

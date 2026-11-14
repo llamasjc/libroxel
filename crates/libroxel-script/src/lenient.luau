@@ -1020,9 +1020,17 @@ add(props, "GuiObject", {
 })
 add(getters, "GuiObject", {
 	AbsoluteSize = function(self)
+		local _, _, w, h = L.drawn_rect(self)
+		if w then
+			return Vector2.new(w, h)
+		end
 		return abs_size(self)
 	end,
 	AbsolutePosition = function(self)
+		local x, y = L.drawn_rect(self)
+		if x then
+			return Vector2.new(x, y)
+		end
 		return abs_position(self)
 	end,
 	AbsoluteRotation = function(self, s)
@@ -2076,6 +2084,31 @@ local SERVICES = {
 		},
 		signals = { "MessageReceived", "SendingMessage", "BubbleDisplayed" },
 		getters = {
+			ChatWindowConfiguration = function()
+				return L.chat_config("ChatWindowConfiguration", {
+					Enabled = true, BackgroundColor3 = Color3.fromRGB(25, 27, 29), BackgroundTransparency = 0.3,
+					TextColor3 = Color3.new(1, 1, 1), TextSize = 14, HeightScale = 1, WidthScale = 1,
+					HorizontalAlignment = "HorizontalAlignment.Left", VerticalAlignment = "VerticalAlignment.Top",
+					FontFace = NIL, TextStrokeTransparency = 0.5,
+				})
+			end,
+			ChatInputBarConfiguration = function()
+				return L.chat_config("ChatInputBarConfiguration", {
+					Enabled = true, BackgroundColor3 = Color3.fromRGB(25, 27, 29), BackgroundTransparency = 0.2,
+					TextColor3 = Color3.new(1, 1, 1), PlaceholderColor3 = Color3.fromRGB(178, 178, 178),
+					KeyboardKeyCode = "KeyCode.Slash", TargetTextChannel = NIL, AutocompleteEnabled = true,
+				})
+			end,
+			BubbleChatConfiguration = function()
+				return L.chat_config("BubbleChatConfiguration", {
+					Enabled = true, BubbleDuration = 15, MaxBubbles = 3, MaxDistance = 100, MinimizeDistance = 40,
+					BackgroundColor3 = Color3.new(1, 1, 1), TextColor3 = Color3.fromRGB(57, 59, 61), TextSize = 16,
+					VerticalStudsOffset = 0, BubblesSpacing = 6, TailVisible = true, LocalPlayerStudsOffset = Vector3.zero,
+				})
+			end,
+			ChannelTabsConfiguration = function()
+				return L.chat_config("ChannelTabsConfiguration", { Enabled = false })
+			end,
 			-- The usual channels, so scripts can send to RBXGeneral.
 			TextChannels = function()
 				local folder = Instance.new("Folder")
@@ -2124,7 +2157,7 @@ local SERVICES = {
 		},
 	},
 	LocalizationService = {
-		props = { SystemLocaleId = "en-us" },
+		props = { SystemLocaleId = "en-us", RobloxLocaleId = "en-us" },
 		methods = (function()
 			local function translator()
 				return {
@@ -2467,6 +2500,16 @@ local SERVICE_EXTRAS = {
 			CanViewBrandProjectAsync = returns(false),
 		},
 	},
+	BadgeService = {
+		methods = {
+			GetBadgeInfoAsync = function(_, id)
+				return { Name = "", Description = "", IconImageId = 0, IsEnabled = false, Id = id }
+			end,
+			CheckUserBadgesAsync = function()
+				return {}
+			end,
+		},
+	},
 }
 
 -- (found, value) for member `key` of a compat.rs service called `name`.
@@ -2584,6 +2627,14 @@ local function stand_in(name, def, key_id)
 	return obj
 end
 L.stand_in = stand_in
+
+local configs = {}
+function L.chat_config(name, props)
+	if not configs[name] then
+		configs[name] = stand_in(name, { props = props }, "chat:" .. name)
+	end
+	return configs[name]
+end
 
 local made = {}
 function L.service(name)
@@ -2757,6 +2808,209 @@ for _, group in pairs(props) do
 	end
 end
 
+
+-- More members games reach for ----------------------------------------------
+
+add(methods, "DataStoreService", {
+	GetGlobalDataStore = function(self)
+		return self:GetDataStore("global")
+	end,
+})
+add(methods, "PlayerGui", {
+	GetTopbarTransparency = function()
+		return 0.5
+	end,
+	SetTopbarTransparency = function() end,
+})
+plain_signals("PlayerGui", { "TopbarTransparencyChangedSignal" })
+add(methods, "TweenService", {
+	-- Moves `current` toward `target` like a critically damped spring;
+	-- returns the new value and velocity.
+	SmoothDamp = function(_, current, target, velocity, smooth_time, max_speed, dt)
+		smooth_time = math.max(smooth_time or 0.1, 1e-4)
+		dt = dt or 1 / 60
+		local omega = 2 / smooth_time
+		local x = omega * dt
+		local exp = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x)
+		local change = current - target
+		local temp = (velocity + change * omega) * dt
+		local new_velocity = (velocity - temp * omega) * exp
+		return target + (change + temp) * exp, new_velocity
+	end,
+})
+add(props, "Terrain", { Decoration = false, MaxExtents = NIL })
+-- Everything is always loaded: streaming settings are kept but change nothing.
+add(props, "Workspace", {
+	StreamingEnabled = false,
+	StreamingMinRadius = 64,
+	StreamingTargetRadius = 1024,
+	StreamingIntegrityMode = "StreamingIntegrityMode.Default",
+	StreamOutBehavior = "StreamOutBehavior.Default",
+	ModelStreamingBehavior = "ModelStreamingBehavior.Default",
+	SignalBehavior = "SignalBehavior.Default",
+	PhysicsSteppingMethod = "PhysicsSteppingMethod.Default",
+	FluidForces = "FluidForces.Default",
+	TouchesUseCollisionGroups = false,
+	AirDensity = 0.0012,
+	GlobalWind = Vector3.zero,
+})
+plain_signals("Workspace", { "PersistentLoaded" })
+add(methods, "Workspace", {
+	ArePartsTouchingOthers = function(_, parts)
+		for _, p in ipairs(parts) do
+			if #p:GetTouchingParts() > 0 then
+				return true
+			end
+		end
+		return false
+	end,
+	BulkMoveTo = function(_, parts, cframes)
+		for i, p in ipairs(parts) do
+			if cframes[i] then
+				p.CFrame = cframes[i]
+			end
+		end
+	end,
+	GetNumAwakeParts = function()
+		return 0
+	end,
+	GetRealPhysicsFPS = function()
+		return 60
+	end,
+	JoinToOutsiders = function() end,
+	UnjoinFromOutsiders = function() end,
+	SetInsertPoint = function() end,
+	IsRegion3Empty = function()
+		return true
+	end,
+})
+add(methods, "BasePart", {
+	GetNoCollisionConstraints = function()
+		return {}
+	end,
+	GetClosestPointOnSurface = function(self, point)
+		-- The nearest point of the part's box.
+		local local_point = self.CFrame:PointToObjectSpace(point)
+		local half = self.Size / 2
+		local clamped = Vector3.new(
+			math.clamp(local_point.X, -half.X, half.X),
+			math.clamp(local_point.Y, -half.Y, half.Y),
+			math.clamp(local_point.Z, -half.Z, half.Z)
+		)
+		return self.CFrame:PointToWorldSpace(clamped)
+	end,
+	IsInRadius = function(self, point, radius)
+		return (self.Position - point).Magnitude <= radius
+	end,
+	CanCollideWith = function(self, other)
+		return self.CanCollide and other.CanCollide
+	end,
+})
+plain_signals("Team", { "PlayerAdded", "PlayerRemoved" })
+plain_signals("TextChannel", { "MessageReceived", "ShouldDeliverCallback" })
+add(methods, "TextChannel", {
+	DisplaySystemMessage = function(_, text)
+		print(text)
+	end,
+	SendAsync = function(_, text)
+		print(text)
+	end,
+	AddUserAsync = function()
+		return nil, true
+	end,
+	SetDirectChatRequester = function() end,
+})
+add(methods, "CollectionService", {
+	GetAllTags = function()
+		local seen, list = {}, {}
+		for _, d in ipairs(game:GetDescendants()) do
+			for _, t in ipairs(d:GetTags()) do
+				if not seen[t] then
+					seen[t] = true
+					table.insert(list, t)
+				end
+			end
+		end
+		return list
+	end,
+})
+plain_signals("CollectionService", { "TagAdded", "TagRemoved" })
+add(methods, "Path", {
+	CheckOcclusionAsync = function()
+		return -1
+	end,
+})
+add(methods, "WorldModel", {
+	Raycast = function() end,
+	Blockcast = function() end,
+	Spherecast = function() end,
+	Shapecast = function() end,
+	GetPartBoundsInBox = function()
+		return {}
+	end,
+	GetPartBoundsInRadius = function()
+		return {}
+	end,
+	GetPartsInPart = function()
+		return {}
+	end,
+	BulkMoveTo = function(_, parts, cframes)
+		for i, p in ipairs(parts) do
+			if cframes[i] then
+				p.CFrame = cframes[i]
+			end
+		end
+	end,
+})
+add(props, "VideoFrame", { Playing = false, IsLoaded = true, TimeLength = 0, TimePosition = 0, Volume = 1, Looped = false })
+add(methods, "VideoFrame", {
+	Play = function(self)
+		self.Playing = true
+	end,
+	Pause = function(self)
+		self.Playing = false
+	end,
+})
+plain_signals("VideoFrame", { "Played", "Paused", "Ended", "Loaded", "DidLoop" })
+add(methods, "HumanoidDescription", {
+	GetAccessories = function(_, include_rigid)
+		return table.clone(CURRENT.values.__accessories or {})
+	end,
+	SetAccessories = function(_, list)
+		CURRENT.values.__accessories = table.clone(list)
+	end,
+	GetEmotes = function()
+		return table.clone(CURRENT.values.__emotes or {})
+	end,
+	SetEmotes = function(_, emotes)
+		CURRENT.values.__emotes = table.clone(emotes)
+	end,
+	AddEmote = function(_, name, id)
+		local e = CURRENT.values.__emotes or {}
+		e[name] = e[name] or {}
+		table.insert(e[name], id)
+		CURRENT.values.__emotes = e
+	end,
+	RemoveEmote = function(_, name)
+		local e = CURRENT.values.__emotes
+		if e then
+			e[name] = nil
+		end
+	end,
+	GetEquippedEmotes = function()
+		return table.clone(CURRENT.values.__equipped or {})
+	end,
+	SetEquippedEmotes = function(_, list)
+		CURRENT.values.__equipped = table.clone(list)
+	end,
+})
+add(methods, "RunService", {
+	Set3dRenderingEnabled = function() end,
+	BindToSimulation = function(_, fn)
+		return game:GetService("RunService").PreSimulation:Connect(fn)
+	end,
+})
+
 -- (found, value) for member `key` of `obj`, whose groups are `groups`.
 function L.index(key_id, obj, key, groups)
 	local s = slot(key_id)
@@ -2840,6 +3094,16 @@ function L.new_index(key_id, obj, key, value, groups, allowed)
 			L.fire_changed(key_id, key)
 		end
 		return true
+	end
+	return false
+end
+
+-- Whether the layer handles setting `key` itself for these groups.
+function L.has_setter(groups, key)
+	for _, group in ipairs(groups) do
+		if setters[group] and setters[group][key] then
+			return true
+		end
 	end
 	return false
 end
