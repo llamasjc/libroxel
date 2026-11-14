@@ -383,7 +383,7 @@ impl Platform {
         ui.label(
             RichText::new(
                 "Hats people made and shared. To make one, build it from parts in the editor, select its \
-                 model and use Edit > Share as a hat.",
+                 model and use Model > Share as hat.",
             )
             .color(crate::theme::DUST),
         );

@@ -60,24 +60,34 @@ The first build compiles Bevy and takes a while. After that it is quick.
   hinge motor and a gate on a servo hinge (click it). The quarry has a smoking
   campfire, the launch pad fizzes, the finish sparkles, and the zombie
   glows red so you can spot it.
-  Press **▶ Play** (or F5) to try it.
-- **Explorer** (left) shows the instance tree. Click to select, double-click
+  Press **Play** (or F5) to try it.
+- **Layout:** the editor is laid out the way Roblox Studio users know it.
+  Along the top is a **File** menu and a ribbon with **Home**, **Model**,
+  **Test** and **View** tabs. The **Toolbox** sits on the left, the
+  **Explorer** sits top right with **Properties** under it, and the
+  **Output** runs along the bottom. View shows or hides each panel. The
+  shortcuts match Studio's too: Ctrl+1 to Ctrl+4 for Select, Move, Scale
+  and Rotate, Ctrl+D to duplicate, Ctrl+G and Ctrl+U to group and ungroup,
+  F to look at the selection, F5 to play and Shift+F5 to stop.
+- **Toolbox** (left) holds ready-made parts, models (a character, a go-kart,
+  a spawn), gameplay pieces and effects. Click one to add it, or search.
+- **Explorer** (top right) shows the instance tree. Click to select, double-click
   a script to edit it, drag one item onto another to move it inside, and
-  right-click for Insert, Rename, Duplicate and Delete. **Insert → Character
-  (NPC)** drops in a dummy with a script that walks it back and forth, and
-  **Insert → Go-kart** drops in a ready-to-drive kart.
-- **Properties** (right) edits the selection: name, position, orientation,
+  right-click for Insert, Rename, Duplicate and Delete. The Toolbox's
+  **Character** drops in a dummy with a script that walks it back and forth,
+  and **Go-kart** drops in a ready-to-drive kart.
+- **Properties** (under the Explorer) edits the selection: name, position, orientation,
   size, shape, colour, material, anchored, can-collide, transparency, and so on.
 - **Parts** come in four shapes (block, ball, cylinder, wedge) and eleven
   materials (plastic, smooth plastic, neon, metal, glass, wood, brick, grass,
   sand, rock, snow, water).
-  Insert them from **+ Part** or the Insert menu.
+  Insert them from the Toolbox, Home > Part, or Model > Parts.
 - **Viewport:** hold the right mouse button and use WASD/QE to fly (Shift is
   faster), scroll to move forward. Click a part to select it, then drag the
   handles to move, resize or rotate it (Ctrl+1 to Ctrl+4 switch tools, and
-  Ctrl+R turns the selection 90°). The two snap boxes set the grid step and
-  the rotation step.
-- **Terrain tool** (🗻 Terrain, Ctrl+5): click and drag in the view to Add,
+  Ctrl+R turns the selection 90°). Model > Snap to grid sets the move step
+  and the rotation step.
+- **Terrain tool** (Home > Terrain Editor, Ctrl+5): click and drag in the view to Add,
   Dig or Paint terrain with the chosen material and brush size. **Make a
   hill** builds a grassy hill (sandy edge, rock inside, snowy top) where the
   view is looking, and **Clear terrain** empties it. Brush strokes undo
@@ -130,11 +140,11 @@ The first build compiles Bevy and takes a while. After that it is quick.
   and stars at night (StarCount). A `Trail` leaves a fading ribbon behind
   its two attachments as they move, lasting Lifetime seconds.
 - **Screen GUIs:** put a `ScreenGui` in StarterGui and fill it with frames,
-  text labels and text buttons (Insert menu). They are drawn over the view
+  text labels and text buttons (Home > Object). They are drawn over the view
   while you edit, so you can click one to select it and lay it out with
   Position, Size and AnchorPoint. While playing, every player gets a copy,
   buttons can be clicked, and parts with a `ClickDetector` can be clicked too.
-- **Tools:** put a `Tool` in StarterPack (Insert menu gives it a `Handle` and
+- **Tools:** put a `Tool` in StarterPack (the Toolbox's Tool gives it a `Handle` and
   a script). While playing, tools show on a hotbar at the bottom; press 1 to
   9 or click a slot to hold one, and click in the world to use it.
 - **Floating text:** a `BillboardGui` inside a part holds labels that float
@@ -152,12 +162,12 @@ The first build compiles Bevy and takes a while. After that it is quick.
   can add, change and remove. Both are saved with the game.
 - **Saved data:** what a game's data stores save during a play test is kept
   beside the game's file (as `<name>.data.json`) and loaded next time you
-  press Play. **File → Clear saved data** forgets it.
+  press Play. **File → Clear saved data** (or Test > Clear saved) forgets it.
 - **Output** (bottom) shows `print`, `warn` and script errors. While playing
   you can type Luau into its command bar and press Enter.
-- **Playing together:** **🌐 Host** plays the game and lets others join.
-  Once the toolbar shows **📋 Copy join code**, click it and send the code
-  to friends: they paste it into **🔗 Join** with a name and play from
+- **Playing together:** **Test > Host** plays the game and lets others join.
+  Once the bar along the top shows **Copy join code**, click it and send the code
+  to friends: they paste it into **Test > Join** with a name and play from
   anywhere, with no port forwarding. The code connects the two computers
   directly over [iroh](https://www.iroh.computer), going through a relay
   only when home routers block a direct path, and is encrypted either way.
@@ -165,7 +175,7 @@ The first build compiles Bevy and takes a while. After that it is quick.
   not 7420). The host runs every `Script` and all the physics; each joined
   computer runs its own player's `LocalScript`s, moves its own character
   straight away (telling the host where it went), and shows the rest of the
-  world as the host sends it. The toolbar shows how many have joined. To
+  world as the host sends it. The bar along the top shows how many have joined. To
   host without a window, run `libroxel server mygame.lrx`, which prints a
   join code. Your player identity (a key made on first use) lives in
   `~/.config/libroxel/identity.key`.
@@ -186,7 +196,7 @@ The first build compiles Bevy and takes a while. After that it is quick.
   clicking an author in Online lists all their games. Your account name is
   also the name you play as, unless you type another.
 - **Catalog:** make a hat in the editor from up to 32 parts (each at most
-  6 studs across), select its model and use **Edit > Share as a hat**. Its
+  6 studs across), select its model and use **Model > Share as hat**. Its
   bottom sits on the character's head, centred. It goes in the catalog on
   the Hub, signed as you, and everyone using that Hub sees it on the
   **👤 Avatar** tab under **Catalog** with a **Wear** button. A worn catalog
@@ -195,14 +205,14 @@ The first build compiles Bevy and takes a while. After that it is quick.
 - **Safety:** bad words in chat come out as `#`s (the starter games'
   chat, and `TextService:FilterStringAsync` for any game's scripts), and
   player names with bad words become `Player`. A host can remove a joined
-  player from **👥 Players** on the toolbar, and scripts can call
+  player from **Players** on the bar along the top, and scripts can call
   `player:Kick(reason)`; a removed player can't rejoin that game. Every
   published game and catalog hat has a **⚑** to report it. Once three
   different players report something, the Hub stops listing it until
   whoever runs the Hub looks: `libroxel hub reports` lists reports,
   `libroxel hub clear game <id>` lists one again, and
   `libroxel hub remove game <id>` takes it down (`item` for hats).
-- **Editing together:** **Together → Edit together… → Share this game**
+- **Editing together:** **Test > Edit together → Share this game**
   lets others edit the game you have open, live, while you work on it. Send
   them the code from **📋 Copy edit code** (or, on your own network, your
   address; the port is 7421): they paste it into **Edit together…** under
