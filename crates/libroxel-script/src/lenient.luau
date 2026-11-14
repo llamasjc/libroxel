@@ -737,12 +737,36 @@ add(methods, "Model", {
 		end
 		local by = scale / stored(s, "__scale", 1)
 		local pivot = self:GetPivot().Position
-		for _, part in ipairs(self:GetDescendants()) do
-			if part:IsA("BasePart") then
-				local cf = part.CFrame
+		-- Like Roblox: parts, and everything that places things relative to
+		-- them (joint offsets, attachments, meshes, hip height), scale together,
+		-- so a scaled rig keeps its shape when animated.
+		local function scaled(cf)
+			return CFrame.new(cf.Position * by) * (CFrame.new(cf.Position):Inverse() * cf)
+		end
+		for _, d in ipairs(self:GetDescendants()) do
+			if d:IsA("BasePart") then
+				local cf = d.CFrame
 				local turn = CFrame.new(cf.Position):Inverse() * cf
-				part.Size *= by
-				part.CFrame = CFrame.new(pivot + (cf.Position - pivot) * by) * turn
+				d.Size *= by
+				d.CFrame = CFrame.new(pivot + (cf.Position - pivot) * by) * turn
+			elseif d:IsA("JointInstance") then
+				pcall(function()
+					d.C0 = scaled(d.C0)
+					d.C1 = scaled(d.C1)
+				end)
+			elseif d:IsA("Attachment") then
+				pcall(function()
+					d.Position *= by
+				end)
+			elseif d:IsA("SpecialMesh") or d:IsA("BlockMesh") or d:IsA("CylinderMesh") then
+				pcall(function()
+					d.Scale *= by
+					d.Offset *= by
+				end)
+			elseif d:IsA("Humanoid") then
+				pcall(function()
+					d.HipHeight *= by
+				end)
 			end
 		end
 		s.values.__scale = scale
@@ -1648,7 +1672,16 @@ add(methods, "StarterGui", {
 		return CURRENT.values["core:" .. tostring(name)]
 	end,
 	SetCoreGuiEnabled = function(_, kind, enabled)
-		CURRENT.values["coregui:" .. tostring(kind)] = enabled
+		local values = CURRENT.values
+		if kind == Enum.CoreGuiType.All then
+			-- All sets every kind at once (later single changes still apply).
+			for k in pairs(values) do
+				if type(k) == "string" and string.sub(k, 1, 8) == "coregui:" then
+					values[k] = nil
+				end
+			end
+		end
+		values["coregui:" .. tostring(kind)] = enabled
 	end,
 	GetCoreGuiEnabled = function(_, kind)
 		local s = CURRENT

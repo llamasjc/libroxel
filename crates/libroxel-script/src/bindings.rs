@@ -265,6 +265,8 @@ pub(crate) struct Host {
     to_start: RefCell<Vec<InstanceId>>,
     /// How long each script has run, and how many times it was resumed.
     pub(crate) script_time: RefCell<std::collections::HashMap<String, (f64, u64)>>,
+    /// Finished threads kept to run the next handler in.
+    pub(crate) spare_threads: RefCell<Vec<Thread>>,
     /// Where the workspace's parts are, for raycasts and part queries.
     pub(crate) part_index: RefCell<libroxel_instance::geometry::PartIndex>,
 }
@@ -357,9 +359,15 @@ fn resume(
         let host = host(lua);
         let mut times = host.script_time.borrow_mut();
         // A nested resume's time is counted in its caller's too.
-        let entry = times.entry(script.to_owned()).or_insert((0.0, 0));
-        entry.0 += took;
-        entry.1 += 1;
+        match times.get_mut(script) {
+            Some(entry) => {
+                entry.0 += took;
+                entry.1 += 1;
+            }
+            None => {
+                times.insert(script.to_owned(), (took, 1));
+            }
+        }
     }
     *host(lua).current_script.borrow_mut() = previous;
     host(lua).current_owner.set(previous_owner);
@@ -413,9 +421,21 @@ pub(crate) fn spawn(
     script: &str,
     owner: Option<InstanceId>,
 ) -> mlua::Result<()> {
-    let thread = lua.create_thread(func)?;
-    if let Some(err) = resume(lua, thread, args, script, owner) {
+    // Threads that ran to the end are reused: making a new one for every
+    // event handler was most of what firing an event cost.
+    let reused = host(lua).spare_threads.borrow_mut().pop();
+    let thread = match reused {
+        Some(thread) if thread.reset(func.clone()).is_ok() => thread,
+        _ => lua.create_thread(func)?,
+    };
+    if let Some(err) = resume(lua, thread.clone(), args, script, owner) {
         host(lua).errors.borrow_mut().push(err);
+    } else if !thread.is_resumable() {
+        let host = host(lua);
+        let mut spare = host.spare_threads.borrow_mut();
+        if spare.len() < 64 {
+            spare.push(thread);
+        }
     }
     Ok(())
 }
@@ -1802,8 +1822,22 @@ pub(crate) fn fire(lua: &Lua, signal: SignalKind, args: impl Fn() -> mlua::Resul
     for conn in spent {
         let _ = lua.remove_registry_value(conn.handler);
     }
+    if handlers.is_empty() {
+        return;
+    }
+    // The same arguments for every handler (Roblox passes the same values).
+    let args = match args() {
+        Ok(a) => a,
+        Err(err) => {
+            host(lua)
+                .errors
+                .borrow_mut()
+                .push(ScriptError { script: String::new(), message: err.to_string() });
+            return;
+        }
+    };
     for (script, owner, handler) in handlers {
-        let result = handler.and_then(|f| spawn(lua, f, args()?, &script, owner));
+        let result = handler.and_then(|f| spawn(lua, f, args.clone(), &script, owner));
         if let Err(err) = result {
             host(lua).errors.borrow_mut().push(ScriptError { script, message: err.to_string() });
         }
@@ -1927,6 +1961,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         running_scripts: RefCell::new(std::collections::HashSet::new()),
         to_start: RefCell::new(Vec::new()),
         script_time: RefCell::new(std::collections::HashMap::new()),
+        spare_threads: RefCell::new(Vec::new()),
         part_index: RefCell::new(libroxel_instance::geometry::PartIndex::new()),
         tweens: RefCell::new(Vec::new()),
         next_tween: Cell::new(1),

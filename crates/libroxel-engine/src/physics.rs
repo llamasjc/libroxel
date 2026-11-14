@@ -477,7 +477,7 @@ impl Groups {
             return;
         }
         let default = libroxel_instance::DEFAULT_COLLISION_GROUP;
-        for part in tree.descendants(tree.workspace()).unwrap_or_default() {
+        for part in tree.descendants_of_class(tree.workspace(), ClassKind::Part) {
             if let Some(PropertyValue::String(g)) = tree.get(part, Property::CollisionGroup).ok()
                 && g != default
             {

@@ -142,8 +142,59 @@ impl InstanceData {
     }
 
     fn prop_mut(&mut self, property: Property) -> Option<&mut PropertyValue> {
-        self.props.iter_mut().find(|(p, _)| *p == property).map(|(_, v)| v)
+        let at = self.slot_of(property)?;
+        self.props.get_mut(at).map(|(_, v)| v)
     }
+
+    fn prop(&self, property: Property) -> Option<&PropertyValue> {
+        let at = self.slot_of(property)?;
+        self.props.get(at).map(|(_, v)| v)
+    }
+
+    /// Where `property` is in `props`: worked out once per class (the list
+    /// is always built in the same order), checked, else looked for.
+    fn slot_of(&self, property: Property) -> Option<usize> {
+        if let Some(at) = prop_slot(self.class, property)
+            && self.props.get(at).is_some_and(|(p, _)| *p == property)
+        {
+            return Some(at);
+        }
+        self.props.iter().position(|(p, _)| *p == property)
+    }
+}
+
+/// Each class's property positions in [`InstanceData::props`].
+fn prop_slot(class: ClassKind, property: Property) -> Option<usize> {
+    use std::sync::OnceLock;
+    static SLOTS: OnceLock<Vec<Vec<u16>>> = OnceLock::new();
+    let slots = SLOTS.get_or_init(|| {
+        let mut by_class: Vec<Vec<u16>> = Vec::new();
+        for (class, table) in ClassKind::ALL.iter().chain(std::iter::once(&ClassKind::Other)).map(|&class| {
+            let mut table = Vec::new();
+            let present = class
+                .properties()
+                .iter()
+                .filter(|p| **p != Property::Name)
+                .filter(|p| class.default_value(**p).is_some());
+            for (i, p) in present.enumerate() {
+                let n = *p as usize;
+                if table.len() <= n {
+                    table.resize(n + 1, u16::MAX);
+                }
+                table[n] = i as u16;
+            }
+            (class, table)
+        }) {
+            let n = class as usize;
+            if by_class.len() <= n {
+                by_class.resize(n + 1, Vec::new());
+            }
+            by_class[n] = table;
+        }
+        by_class
+    });
+    let at = *slots.get(class as usize)?.get(property as usize)?;
+    (at != u16::MAX).then_some(usize::from(at))
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +221,22 @@ pub struct InstanceTree {
     /// Each tag and the instances that carry it (some may have been
     /// destroyed since), so finding tagged instances doesn't walk the game.
     tag_index: std::collections::HashMap<String, std::collections::HashSet<InstanceId>>,
+    /// Bumped whenever something is reparented or destroyed.
+    structure: u64,
+    /// The workspace's descendants of each class, kept while nothing is
+    /// reparented: many systems ask for them every frame.
+    class_cache: std::cell::RefCell<ClassCache>,
+    /// Where the workspace's parts are, for raycasts.
+    part_index: std::cell::RefCell<crate::geometry::PartIndex>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ClassCache {
+    structure: Option<u64>,
+    all: Vec<InstanceId>,
+    /// The class of each of `all`, by its number.
+    classes: Vec<u16>,
+    by_class: std::collections::HashMap<ClassKind, Vec<InstanceId>>,
 }
 
 impl Default for InstanceTree {
@@ -192,6 +259,9 @@ impl InstanceTree {
             moved_epoch: 0,
             changes: Vec::new(),
             tag_index: Default::default(),
+            structure: 0,
+            class_cache: Default::default(),
+            part_index: Default::default(),
         };
         tree.root = tree.alloc(InstanceData::new(ClassKind::DataModel, "Game".into()));
         tree.data_mut(tree.root).expect("root exists").parent_locked = true;
@@ -382,6 +452,7 @@ impl InstanceTree {
             self.data_mut(parent)?.children.push(id);
         }
         self.data_mut(id)?.parent = new_parent;
+        self.structure += 1;
         self.changes.push(Change::Reparented { id, old_parent, new_parent });
         self.note_moved(id);
         Ok(())
@@ -399,6 +470,7 @@ impl InstanceTree {
             return Err(TreeError::ParentLocked(id));
         }
         self.set_parent(id, None)?;
+        self.structure += 1;
         let mut doomed = self.descendants(id)?;
         doomed.insert(0, id);
         // Destroy leaves first so observers never see a destroyed parent with live children.
@@ -447,11 +519,7 @@ impl InstanceTree {
         if property == Property::Name {
             return Ok(PropertyValue::String(data.name.clone()));
         }
-        data.props
-            .iter()
-            .find(|(p, _)| *p == property)
-            .map(|(_, v)| v.clone())
-            .ok_or(TreeError::NoSuchProperty { class: data.class, property })
+        data.prop(property).cloned().ok_or(TreeError::NoSuchProperty { class: data.class, property })
     }
 
     /// Writes a property, recording a change only if the value differs.
@@ -846,7 +914,46 @@ impl InstanceTree {
     }
 
     /// All live instances that are, or inherit from, `class` under `ancestor`.
+    /// Everything under the workspace, in tree order (cached while nothing
+    /// is reparented or destroyed).
+    pub fn workspace_descendants(&self) -> Vec<InstanceId> {
+        let mut cache = self.class_cache.borrow_mut();
+        self.refresh_class_cache(&mut cache);
+        cache.all.clone()
+    }
+
+    fn refresh_class_cache(&self, cache: &mut ClassCache) {
+        if cache.structure != Some(self.structure) {
+            cache.all = self.descendants(self.workspace).unwrap_or_default();
+            cache.classes =
+                cache.all.iter().map(|id| self.data(*id).map_or(u16::MAX, |d| d.class as u16)).collect();
+            cache.by_class.clear();
+            cache.structure = Some(self.structure);
+        }
+    }
+
     pub fn descendants_of_class(&self, ancestor: InstanceId, class: ClassKind) -> Vec<InstanceId> {
+        if ancestor == self.workspace {
+            let mut cache = self.class_cache.borrow_mut();
+            self.refresh_class_cache(&mut cache);
+            let ClassCache { all, classes, by_class, .. } = &mut *cache;
+            return by_class
+                .entry(class)
+                .or_insert_with(|| {
+                    // Which classes count, worked out once, then one pass.
+                    let fits: Vec<bool> = ClassKind::ALL.iter().map(|c| c.is_a(class)).collect();
+                    let by_number: std::collections::HashMap<u16, bool> =
+                        ClassKind::ALL.iter().zip(&fits).map(|(c, f)| (*c as u16, *f)).collect();
+                    let size = by_number.keys().map(|n| usize::from(*n) + 1).max().unwrap_or(0);
+                    let mut table = vec![false; size];
+                    for (n, f) in by_number {
+                        table[usize::from(n)] = f;
+                    }
+                    let fits = |c: &u16| table.get(usize::from(*c)).copied().unwrap_or(false);
+                    all.iter().zip(classes.iter()).filter(|(_, c)| fits(c)).map(|(id, _)| *id).collect()
+                })
+                .clone();
+        }
         self.descendants(ancestor)
             .unwrap_or_default()
             .into_iter()
@@ -861,6 +968,21 @@ impl InstanceTree {
             self.moved_epoch += 1;
         }
         self.moved.push(id);
+    }
+
+    /// The parts of the workspace that might be along a ray (see
+    /// [`PartIndex::along_ray`](crate::geometry::PartIndex::along_ray)).
+    pub fn parts_along_ray(&self, origin: Vec3, dir: Vec3, reach: f32) -> Vec<InstanceId> {
+        let mut index = self.part_index.borrow_mut();
+        index.refresh(self);
+        index.along_ray(origin, dir, reach)
+    }
+
+    /// The parts of the workspace that might be in the box from `lo` to `hi`.
+    pub fn parts_near_box(&self, lo: Vec3, hi: Vec3) -> Vec<InstanceId> {
+        let mut index = self.part_index.borrow_mut();
+        index.refresh(self);
+        index.near_box(lo, hi)
     }
 
     /// The log of instances that may have moved: its epoch (which changes

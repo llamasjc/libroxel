@@ -358,6 +358,16 @@ impl ScriptRuntime {
     }
 
     /// Tells scripts how big the 3D view is, in pixels (for the camera).
+    /// Whether scripts left one of Roblox's own on-screen parts on
+    /// (`StarterGui:SetCoreGuiEnabled`), such as "PlayerList".
+    pub fn core_gui_enabled(&self, kind: &str) -> bool {
+        self.lua
+            .load("local kind = ... return game:GetService('StarterGui'):GetCoreGuiEnabled(Enum.CoreGuiType[kind])")
+            .set_name("=core gui")
+            .call::<bool>(kind)
+            .unwrap_or(true)
+    }
+
     pub fn set_viewport(&self, width: f32, height: f32) {
         world::set_viewport(&self.lua, libroxel_instance::Vec2::new(width, height))
     }

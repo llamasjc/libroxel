@@ -30,8 +30,8 @@ pub fn raycast(
     }
     let dir = direction / reach;
     let mut best: Option<RayHit> = None;
-    for part in tree.descendants_of_class(tree.workspace(), ClassKind::Part) {
-        if !keep(part) {
+    for part in tree.parts_along_ray(origin, dir, reach) {
+        if !tree.exists(part) || tree.is_destroyed(part).unwrap_or(true) || !keep(part) {
             continue;
         }
         let Some((t, normal)) = ray_part(tree, part, origin, dir) else { continue };
@@ -430,7 +430,7 @@ mod tests {
 /// Where the workspace's parts are, in a grid of cells, so a ray or a box
 /// only looks at the parts near it instead of every part in a big world.
 /// It catches up with the tree's moved log each time it is used.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct PartIndex {
     built: bool,
     epoch: u64,

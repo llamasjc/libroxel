@@ -201,7 +201,7 @@ pub fn apply(tree: &InstanceTree, welds: &Welds, physics: &mut Physics, dt: f32)
         }
     };
 
-    for id in tree.descendants(ws).unwrap_or_default() {
+    for id in tree.workspace_descendants() {
         let Ok(class) = tree.class(id) else { continue };
         if !matches!(
             class,
