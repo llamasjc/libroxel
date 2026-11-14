@@ -18,10 +18,11 @@ libroxel-script = { path = "crates/libroxel-script", version = "0.0.1" }
 libroxel-engine = { path = "crates/libroxel-engine", version = "0.0.1" }
 libroxel-net = { path = "crates/libroxel-net", version = "0.0.1" }
 libroxel-rbx = { path = "crates/libroxel-rbx", version = "0.0.1" }
+rbx_mesh = { version = "0.8.2", default-features = false, features = ["mesh", "mesh-v1", "union-graphics", "csgphs-v8-ruzstd"] }
 thiserror = "2"
 serde_json = "1"
 mlua = { version = "0.12", features = ["luau", "vendored"] }
-bevy = { version = "0.20", default-features = false, features = ["3d", "audio", "wav"] }
+bevy = { version = "0.20", default-features = false, features = ["3d", "audio", "wav", "mp3", "jpeg"] }
 rapier3d = "0.36"
 
 [workspace.lints.rust]

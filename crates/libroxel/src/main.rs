@@ -14,6 +14,7 @@
 //! ```
 
 mod browse;
+mod file_picker;
 mod gui;
 mod history;
 mod images;
@@ -93,10 +94,15 @@ pub struct Editor {
     /// The world as it was when Play was pressed.
     pub edit_snapshot: Option<InstanceTree>,
     pub file: Option<PathBuf>,
+    /// The file from another engine the game was opened from, if it was:
+    /// its folder is searched for pictures, models and sounds.
+    pub imported_from: Option<PathBuf>,
     pub dirty: bool,
     pub open_script: Option<InstanceId>,
     pub renaming: Option<(InstanceId, String)>,
     pub dialog: Option<Dialog>,
+    /// The computer's "open a file" window, when it's showing.
+    pub picker: file_picker::Picker,
     pub command: String,
     pub gizmo: transform_gizmo_egui::Gizmo,
     /// Whether the gizmo was being dragged last frame.
@@ -162,10 +168,12 @@ impl Default for Editor {
             history: History::default(),
             edit_snapshot: None,
             file: None,
+            imported_from: None,
             dirty: false,
             open_script: None,
             renaming: None,
             dialog: None,
+            picker: file_picker::Picker::default(),
             command: String::new(),
             gizmo: transform_gizmo_egui::Gizmo::default(),
             gizmo_active: false,
@@ -227,7 +235,9 @@ fn main() {
         Some(flag) if flag == "--sample" => templates::sample_obby(),
         Some(path) => match open::open(std::path::Path::new(&path)) {
             Ok(opened) => {
-                if !opened.imported {
+                if opened.imported {
+                    editor.imported_from = Some(PathBuf::from(&path));
+                } else {
                     editor.file = Some(PathBuf::from(path));
                 }
                 notes = opened.notes;

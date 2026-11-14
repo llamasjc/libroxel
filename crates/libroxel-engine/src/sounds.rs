@@ -39,7 +39,7 @@ pub fn bytes_for(name: &str) -> Option<Vec<u8>> {
     if let Some(built_in) = name.strip_prefix(BUILT_IN) {
         return synth(built_in).map(|samples| wav(&samples));
     }
-    crate::pictures::bytes_for(name)
+    crate::pictures::bytes_for_kind(name, &["ogg", "wav", "mp3"])
 }
 
 /// How loud a sound in a part is, from 0 to 1, `distance` studs away.

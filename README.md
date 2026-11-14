@@ -272,21 +272,43 @@ is never changed. The Output panel lists what came across and what didn't.
 
 | What comes across | |
 | --- | --- |
-| Parts, spawn locations, seats | Position and rotation, size, colour, material, transparency, anchoring, collisions, shape. Wedge, corner wedge, truss, mesh and union parts become parts of the closest shape. |
+| Parts, spawn locations, seats | Position and rotation, size, colour, material, transparency, anchoring, collisions, shape. Wedge parts are wedges and corner wedges get their own model. |
+| Unions | Their real carved shape, read from the file. A published union keeps its drawn shape online, so it shows its collision shape instead, which is close. |
+| Mesh parts and special meshes | The mesh, when you put the mesh file in an `assets` folder (see below). Special meshes set to a sphere, cylinder or wedge change their part's shape. |
+| Terrain | Every voxel of the place's terrain, as Libroxel terrain. Each 4-stud voxel becomes 4 × 4 × 4 one-stud cells, and a half-full voxel at the surface fills its bottom half. |
 | Scripts | Scripts, local scripts and module scripts, with their source. A script set to run on the client becomes a local script. |
-| Containers | Models (with their primary part), folders, every service Libroxel has, and StarterPlayerScripts and StarterCharacterScripts. |
-| GUIs | Screen, billboard and surface GUIs, frames, labels, buttons, text boxes, images, scrolling frames, and the UI layout, corner, stroke, padding, gradient and constraint objects. |
+| Containers | Models (with their primary part), actors, folders, every service Libroxel has, and StarterPlayerScripts and StarterCharacterScripts. SoundService's sounds are kept in ReplicatedStorage. |
+| GUIs | Screen, billboard and surface GUIs, frames, labels, buttons, text boxes, images, scrolling frames, and the UI layout, corner, stroke, padding, gradient and constraint objects. Viewport frames, canvas groups and video frames show as plain frames. |
 | Look | Lighting (clock time, ambient, fog), sky, atmosphere, bloom, colour correction, sun rays, lights, particles, fire, smoke, sparkles, beams, trails, highlights, decals and textures. |
 | Physics | Welds, motors, weld constraints, hinges, springs, ropes, rods, prismatic and ball-socket joints, attachments, and the body movers and constraint movers. |
 | Data | Values, attributes and CollectionService tags. |
 
-| What doesn't come across yet | |
+### Your meshes, pictures and sounds
+
+A file from Roblox Studio names its meshes, pictures and sounds by asset
+number, such as `rbxassetid://1234567`, and the files themselves live online.
+Libroxel never downloads them. Put your own copies in a folder called `assets`
+next to the place file (or in the games folder), named by their number:
+
+```
+my-game.rbxl
+assets/
+  1234567.mesh     a mesh (a .mesh file from Studio, or an .obj)
+  2345678.png      a picture (.png or .jpg)
+  3456789.ogg      a sound (.ogg, .mp3 or .wav)
+```
+
+A file with no ending, just the number, works too. Anything not found shows
+as before: a mesh part as a box, a picture as nothing, a sound silent.
+
+| What's still different | |
 | --- | --- |
-| Terrain | The voxels of a place's terrain are left out. |
-| Assets | Meshes, images and sounds that live on Roblox's servers are linked by their asset IDs but not downloaded, so mesh parts show as boxes. |
-| Unions | Unions and negated parts keep their bounding box, not their carved shape. |
-| Other classes | Anything Libroxel doesn't have yet (for example animation controllers, viewport frames and dialog) is kept as a folder, so whatever is inside it survives. |
-| Other services | Services Libroxel doesn't have (such as SoundService and Chat) are left out, and the Output panel names any that had something in them. |
+| Shapes | Mesh parts, unions and corner wedges collide as their box. Truss parts look like plain blocks. A special mesh's file is stretched to its part's size, ignoring its `Scale`. |
+| Terrain | Terrain materials Libroxel doesn't have are shown as the nearest one (slate and basalt as rock, mud and ground as wood, concrete and asphalt as smooth plastic, ice as glass). Surfaces are blocky, not smoothed. Terrain saved in Studio's newer separate-asset format can't be read from the file and is left out. |
+| Mesh textures | A mesh part's own texture (`TextureID`) and surface appearances aren't shown. |
+| Other classes | Anything Libroxel doesn't have yet (for example animation controllers and dialog) is kept as a folder, so whatever is inside it survives. |
+| Other services | Services Libroxel doesn't have (such as Chat) are left out, and the Output panel names any that had something in them. |
+| Scripts | Scripts run, but any Roblox API Libroxel doesn't have yet raises an error in the Output panel when it's used. |
 
 ## Layout
 

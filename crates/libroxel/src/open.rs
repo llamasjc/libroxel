@@ -31,7 +31,9 @@ pub fn is_model_file(path: &Path) -> bool {
 pub fn open(path: &Path) -> Result<Opened, String> {
     if libroxel_rbx::is_roblox_file(path) {
         let (tree, report) = libroxel_rbx::open(path).map_err(|e| e.to_string())?;
-        return Ok(Opened { tree, notes: report.summary(), imported: true });
+        let mut notes = report.summary();
+        notes.extend(save_made_files(&report));
+        return Ok(Opened { tree, notes, imported: true });
     }
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let (tree, report) = place::load(&text).map_err(|e| e.to_string())?;
@@ -47,5 +49,27 @@ pub fn insert_model(
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     let dom = libroxel_rbx::read_dom(&bytes).map_err(|e| e.to_string())?;
     let (made, report) = libroxel_rbx::import_model(tree, &dom, parent);
-    Ok((made, report.summary()))
+    let mut notes = report.summary();
+    notes.extend(save_made_files(&report));
+    Ok((made, notes))
+}
+
+/// Saves the models an import made (union shapes) where models are looked
+/// for, returning a note if that failed.
+fn save_made_files(report: &libroxel_rbx::Report) -> Option<String> {
+    if report.files.is_empty() {
+        return None;
+    }
+    let dir = crate::mesh_import::meshes_dir();
+    let saved = std::fs::create_dir_all(&dir).and_then(|_| {
+        for (name, bytes) in &report.files {
+            let path = dir.join(name);
+            // Names follow contents, so one already there is the same file.
+            if !path.exists() {
+                std::fs::write(path, bytes)?;
+            }
+        }
+        Ok(())
+    });
+    saved.err().map(|e| format!("Couldn't save the union shapes in {}: {e}", dir.display()))
 }

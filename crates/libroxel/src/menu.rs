@@ -45,6 +45,11 @@ impl Game {
                 place::save(&(game.build)()).map_err(|e| e.to_string())
             }
             Game::Blank => place::save(&templates::blank()).map_err(|e| e.to_string()),
+            // A file from Roblox Studio is brought across first.
+            Game::File(path) if libroxel_rbx::is_roblox_file(path) => {
+                let opened = crate::open::open(path)?;
+                place::save(&opened.tree).map_err(|e| e.to_string())
+            }
             Game::File(path) => {
                 std::fs::read_to_string(path).map_err(|e| format!("could not read {}: {e}", path.display()))
             }
@@ -94,6 +99,8 @@ pub struct Menu {
     pub error: Option<String>,
     /// How the player looks, read from the avatar file the first time it's needed.
     look: Option<Look>,
+    /// The computer's "open a file" window, when it's showing.
+    picker: crate::file_picker::Picker,
 }
 
 impl Default for Menu {
@@ -111,6 +118,7 @@ impl Default for Menu {
             servers: Vec::new(),
             error: None,
             look: None,
+            picker: crate::file_picker::Picker::default(),
         }
     }
 }
@@ -559,6 +567,21 @@ impl Menu {
 
     fn create_tab(&mut self, ui: &mut egui::Ui) -> Option<Pick> {
         let mut pick = None;
+        if self.picker.is_open() {
+            // Keep looking for the choice while the window is up.
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        match self.picker.poll() {
+            Some(crate::file_picker::Picked::File(path)) => {
+                self.path = path.display().to_string();
+                pick = Some(Pick::Edit(Game::File(path)));
+            }
+            Some(crate::file_picker::Picked::Unavailable) => {
+                self.error =
+                    Some("No file picker could be opened here. Type the file's path instead.".into());
+            }
+            Some(crate::file_picker::Picked::Cancelled) | None => {}
+        }
         theme::heading(ui, "Make a game");
         ui.label(RichText::new("Opens the editor: build with parts, scripts and terrain, press Play to test, and save it to play from Play.").color(SOFT));
         ui.add_space(12.0);
@@ -574,8 +597,17 @@ impl Menu {
                     .desired_width(320.0),
             );
             let enter = typed.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (ui.button("Open").clicked() || enter) && !self.path.trim().is_empty() {
+            let typed_path = !self.path.trim().is_empty();
+            let open =
+                ui.button("Open").on_hover_text("Open the typed path, or pick a file from your computer");
+            let browse = ui
+                .add_enabled(!self.picker.is_open(), egui::Button::new("Browse…"))
+                .on_hover_text("Pick a game file from your computer");
+            if (open.clicked() || enter) && typed_path {
                 pick = Some(Pick::Edit(Game::File(PathBuf::from(self.path.trim()))));
+            } else if browse.clicked() || open.clicked() {
+                // With nothing typed, Open browses too.
+                self.picker.open(&games_dir());
             }
             if theme::tool_button(ui, theme::icon::ARROW_CLOCKWISE, "", false)
                 .on_hover_text("Look for saved games again")

@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+rbx_mesh.workspace = true
 libroxel-instance.workspace = true
 libroxel-script.workspace = true
 bevy.workspace = true
