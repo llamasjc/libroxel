@@ -498,7 +498,8 @@ pub fn editor_ui(
                 }
             }
             hud(ui, playing);
-            if playing {
+            let list_on = engine.session.as_ref().is_none_or(|s| s.runtime().core_gui_enabled("PlayerList"));
+            if playing && list_on {
                 leaderboard(ui, &tree_rc.borrow());
             }
             ui.max_rect()
