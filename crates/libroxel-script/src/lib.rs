@@ -275,6 +275,11 @@ impl ScriptRuntime {
         bindings::mouse_over(&self.lua, object, entered)
     }
 
+    /// Fires a GUI button's `MouseButton1Down` (or `MouseButton1Up`).
+    pub fn press_button(&self, button: InstanceId, down: bool) -> Vec<ScriptError> {
+        bindings::press_button(&self.lua, button, down)
+    }
+
     pub fn click_button(&self, button: InstanceId) -> Vec<ScriptError> {
         bindings::click_button(&self.lua, button)
     }

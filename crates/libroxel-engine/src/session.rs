@@ -729,6 +729,12 @@ impl PlaySession {
         let _ = tree.set(handle, Property::Orientation, PropertyValue::Vec3(orientation));
     }
 
+    /// The left mouse button went down (or up) on a GUI button.
+    pub fn press_button(&mut self, button: InstanceId, down: bool) {
+        let errors = self.runtime.press_button(button, down);
+        self.collect(errors);
+    }
+
     /// The player clicked a GUI button.
     pub fn click_button(&mut self, button: InstanceId) {
         let errors = self.runtime.click_button(button);
