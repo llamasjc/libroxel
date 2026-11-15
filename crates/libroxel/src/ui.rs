@@ -469,6 +469,11 @@ pub fn editor_ui(
                     gui_hit = Some(hit);
                 }
             }
+            // Nothing covers the 3D view unless the game's GUI says so below.
+            libroxel_engine::view::VIEW_COVERED.store(false, std::sync::atomic::Ordering::Relaxed);
+            if !playing {
+                libroxel_script::RENDERING_3D.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
             if let Some(root) = gui_root {
                 let selected = if playing { None } else { editor.selection };
                 if let Some(hit) = gui::draw(ui, &tree_rc.borrow(), root, ui.max_rect(), selected, &mut boxes)

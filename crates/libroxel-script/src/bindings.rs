@@ -221,6 +221,9 @@ struct Waiting {
     args: Option<Vec<Value>>,
     script: String,
     owner: Option<InstanceId>,
+    /// An Actor's message handler: on Roblox it runs on another core, so
+    /// it is never held back for the frame's sake.
+    parallel: bool,
 }
 
 /// Watches the running script's deadline from another thread, and raises a
@@ -445,6 +448,7 @@ fn resume(
                     args: None,
                     script: script.to_owned(),
                     owner,
+                    parallel: false,
                 });
             }
             None
@@ -2201,6 +2205,27 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
                 args: Some(args.into_iter().collect()),
                 script,
                 owner: host.current_owner.get(),
+                parallel: false,
+            });
+            Ok(thread)
+        })?,
+    )?;
+    // What an Actor's SendMessage starts (see `Waiting::parallel`).
+    task_lib.set(
+        "__parallel_defer",
+        lua.create_function(|lua, (func, args): (Function, Variadic<Value>)| {
+            let thread = lua.create_thread(func)?;
+            let host = host(lua);
+            let now = host.clock.get();
+            let script = host.current_script.borrow().clone();
+            host.waiting.borrow_mut().push(Waiting {
+                thread: thread.clone(),
+                resume_at: now,
+                since: now,
+                args: Some(args.into_iter().collect()),
+                script,
+                owner: host.current_owner.get(),
+                parallel: true,
             });
             Ok(thread)
         })?,
@@ -2545,6 +2570,12 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
     if host(lua).thread_cost.borrow().len() > 20_000 {
         host(lua).thread_cost.borrow_mut().clear();
     }
+    // What a script's last heavy piece cost fades each step, so that a
+    // script whose new threads keep being held back (and so never show
+    // they are quick) isn't marked heavy for good.
+    for cost in host(lua).script_cost.borrow_mut().values_mut() {
+        *cost = cost.mul_f32(0.97);
+    }
     let mut ran_heavy = false;
     for w in due {
         let key = w.thread.to_pointer() as usize;
@@ -2554,7 +2585,7 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
             known.or_else(|| host.script_cost.borrow().get(&w.script).copied()).unwrap_or_default()
         };
         let heavy = expected > HEAVY_RESUME;
-        if heavy && ran_heavy && budget_start.elapsed() + expected > RESUME_BUDGET {
+        if heavy && ran_heavy && !w.parallel && budget_start.elapsed() + expected > RESUME_BUDGET {
             host(lua).waiting.borrow_mut().push(w);
             continue;
         }

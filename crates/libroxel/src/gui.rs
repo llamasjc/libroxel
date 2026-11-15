@@ -362,6 +362,11 @@ pub fn layout(tree: &InstanceTree, id: InstanceId, parent: Rect, k: f32) -> Rect
     Rect::from_min_size(min, egui::vec2(size.x.max(0.0), size.y.max(0.0)))
 }
 
+thread_local! {
+    /// The screen area being drawn, and whether something solid covers it all.
+    static COVER: std::cell::Cell<(Rect, bool)> = const { std::cell::Cell::new((Rect::NOTHING, false)) };
+}
+
 /// Draws every enabled screen GUI inside `container` over `area`, and
 /// returns the topmost GUI object under the pointer.
 pub fn draw(
@@ -392,6 +397,7 @@ pub fn draw(
     screens.sort_by(|a, b| order(*a).total_cmp(&order(*b)));
     boxes.rects.clear();
     TEXT_CONTEXT.with_borrow_mut(|c| *c = Some(ui.ctx().clone()));
+    COVER.set((area, false));
     for screen in screens {
         let k = own_scale(tree, screen);
         let mut screen_area = area;
@@ -400,6 +406,7 @@ pub fn draw(
         }
         draw_children(&painter, tree, screen, screen_area, k, pointer, selected, &mut hit, boxes);
     }
+    libroxel_engine::view::VIEW_COVERED.store(COVER.get().1, std::sync::atomic::Ordering::Relaxed);
     // Roblox measures AbsolutePosition from just below the top bar.
     let origin = area.min.to_vec2() + egui::vec2(0.0, GUI_INSET);
     for (_, r) in &mut boxes.rects {
@@ -576,6 +583,14 @@ fn draw_children(
         }
 
         let alpha = 1.0 - tree.get_number(child, Property::BackgroundTransparency).unwrap_or(0.0) as f32;
+        // A solid frame over the whole screen hides the 3D view (see `COVER`).
+        if alpha >= 0.999
+            && gradient_of(tree, child).is_none_or(|g| g.transparency.0.max(g.transparency.1) < 0.001)
+            && r.expand(1.0).contains_rect(COVER.get().0)
+            && painter.clip_rect().expand(1.0).contains_rect(COVER.get().0)
+        {
+            COVER.set((COVER.get().0, true));
+        }
         let mut background = tree.get_color(child, Property::BackgroundColor).unwrap_or(Color3::WHITE);
         if class.is_button() && hovered {
             background = background.lerp(Color3::new(0.0, 0.0, 0.0), 0.15);
@@ -596,6 +611,9 @@ fn draw_children(
         let stroke = stroke_of(tree, child).map(|(c, w)| (c, w * k));
         if let Some((c, width)) = stroke.filter(|_| !is_text(class)) {
             painter.rect_stroke(r, round, Stroke::new(width, c), StrokeKind::Outside);
+        }
+        if class == ClassKind::Frame && crate::viewport_frame::is_viewport(tree, child) {
+            crate::viewport_frame::draw(painter, tree, child, r);
         }
         if matches!(class, ClassKind::ImageLabel | ClassKind::ImageButton) {
             draw_image(

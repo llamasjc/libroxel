@@ -45,6 +45,10 @@ use libroxel_instance::{InstanceId, InstanceTree, KeyCode};
 use mlua::Lua;
 
 pub use mlua;
+
+/// Whether the 3D view should be drawn: a script can turn it off
+/// (`RunService:Set3dRenderingEnabled(false)`, as loading screens do).
+pub static RENDERING_3D: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 pub use net::{NetMessage, NetRole, decode as decode_net_value, encode as encode_net_value, map_instances};
 pub use world::VelocityRequest;
 

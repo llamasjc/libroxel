@@ -1465,8 +1465,9 @@ add(methods, "Actor", {
 	end,
 	SendMessage = function(_, topic, ...)
 		local list = CURRENT.topics and CURRENT.topics[topic]
+		-- On Roblox handlers run on the Actor's own core: never held back for the frame.
 		for _, fn in ipairs(list and table.clone(list) or {}) do
-			task.defer(fn, ...)
+			task.__parallel_defer(fn, ...)
 		end
 	end,
 })
@@ -3298,7 +3299,10 @@ add(methods, "HumanoidDescription", {
 	end,
 })
 add(methods, "RunService", {
-	Set3dRenderingEnabled = function() end,
+	-- Off: the 3D view isn't drawn (a loading screen covers it anyway).
+	Set3dRenderingEnabled = function(_, on)
+		L.set_3d_rendering(on ~= false)
+	end,
 	BindToSimulation = function(_, fn)
 		return game:GetService("RunService").PreSimulation:Connect(fn)
 	end,
