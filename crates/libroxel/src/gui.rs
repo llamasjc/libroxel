@@ -526,7 +526,16 @@ fn stroke_of(tree: &InstanceTree, id: InstanceId) -> Option<(Color32, f32)> {
 }
 
 /// An image label's or button's picture, tinted and scaled as it says.
-fn draw_image(painter: &egui::Painter, tree: &InstanceTree, id: InstanceId, rect: Rect, darker: bool) {
+/// Draws an image object's picture: round when it has a UI corner, and
+/// turned by its Rotation (degrees, clockwise, about its middle).
+fn draw_image(
+    painter: &egui::Painter,
+    tree: &InstanceTree,
+    id: InstanceId,
+    rect: Rect,
+    round: f32,
+    darker: bool,
+) {
     let name = tree.get_string(id, Property::Image).unwrap_or_default();
     let Some((texture, size)) = crate::images::texture(painter.ctx(), &name) else { return };
     let scale = match tree.get_enum(id, Property::ScaleType) {
@@ -539,14 +548,61 @@ fn draw_image(painter: &egui::Painter, tree: &InstanceTree, id: InstanceId, rect
         tint = tint.lerp(Color3::new(0.0, 0.0, 0.0), 0.15);
     }
     let alpha = 1.0 - tree.get_number(id, Property::ImageTransparency).unwrap_or(0.0) as f32;
-    if alpha > 0.0 {
-        painter.with_clip_rect(rect.intersect(painter.clip_rect())).image(
-            texture,
-            at,
-            uv,
-            color(tint, alpha),
-        );
+    if alpha <= 0.0 {
+        return;
     }
+    let rotation = match tree.get_extra(id, "Rotation") {
+        Ok(Some(PropertyValue::Number(r))) => r as f32,
+        _ => 0.0,
+    };
+    let painter = painter.with_clip_rect(if rotation == 0.0 {
+        rect.intersect(painter.clip_rect())
+    } else {
+        painter.clip_rect()
+    });
+    if round <= 0.0 && rotation == 0.0 {
+        painter.image(texture, at, uv, color(tint, alpha));
+        return;
+    }
+    // The outline (corners rounded), each point with its place in the picture.
+    let shape = at.intersect(rect);
+    let r = round.min(shape.width() / 2.0).min(shape.height() / 2.0).max(0.0);
+    let mut outline = Vec::new();
+    let steps = if r > 0.0 { 10 } else { 1 };
+    let corners = [
+        (Pos2::new(shape.max.x - r, shape.min.y + r), -90.0_f32),
+        (Pos2::new(shape.max.x - r, shape.max.y - r), 0.0),
+        (Pos2::new(shape.min.x + r, shape.max.y - r), 90.0),
+        (Pos2::new(shape.min.x + r, shape.min.y + r), 180.0),
+    ];
+    for (centre, start) in corners {
+        for i in 0..=steps {
+            let a = (start + 90.0 * i as f32 / steps as f32).to_radians();
+            outline.push(centre + egui::vec2(a.cos(), a.sin()) * r);
+        }
+    }
+    let middle = rect.center();
+    let (sin, cos) = rotation.to_radians().sin_cos();
+    let place = |p: Pos2| {
+        let d = p - middle;
+        middle + egui::vec2(d.x * cos - d.y * sin, d.x * sin + d.y * cos)
+    };
+    let uv_of = |p: Pos2| {
+        let f = (p - at.min) / at.size();
+        egui::pos2(uv.min.x + f.x * uv.width(), uv.min.y + f.y * uv.height())
+    };
+    let tint = color(tint, alpha);
+    let mut mesh = egui::Mesh::with_texture(texture);
+    let centre = shape.center();
+    mesh.vertices.push(egui::epaint::Vertex { pos: place(centre), uv: uv_of(centre), color: tint });
+    for p in &outline {
+        mesh.vertices.push(egui::epaint::Vertex { pos: place(*p), uv: uv_of(*p), color: tint });
+    }
+    let n = outline.len() as u32;
+    for i in 0..n {
+        mesh.indices.extend([0, 1 + i, 1 + (i + 1) % n]);
+    }
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 fn is_text(class: ClassKind) -> bool {
@@ -621,6 +677,7 @@ fn draw_children(
                 tree,
                 child,
                 padded(tree, child, r, k),
+                round,
                 class == ClassKind::ImageButton && hovered,
             );
         }
