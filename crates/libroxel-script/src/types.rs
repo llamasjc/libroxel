@@ -174,6 +174,25 @@ fn rotation_xyz(x: f32, y: f32, z: f32) -> Rotation {
     Rotation::about_x(x) * Rotation::about_y(y) * Rotation::about_z(z)
 }
 
+/// The shortest rotation that turns `from` to point along `to`.
+fn rotation_between(from: Vec3, to: Vec3) -> Rotation {
+    let (a, b) = (from.normalize_or_zero(), to.normalize_or_zero());
+    if a.length() < 0.5 || b.length() < 0.5 {
+        return Rotation::IDENTITY;
+    }
+    let axis = a.cross(b);
+    let cos = a.dot(b).clamp(-1.0, 1.0);
+    if axis.length() < 1e-6 {
+        if cos > 0.0 {
+            return Rotation::IDENTITY;
+        }
+        // Opposite: half a turn about any axis square to them.
+        let side = if a.x.abs() < 0.9 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::new(0.0, 1.0, 0.0) };
+        return Rotation::about_axis(a.cross(side), std::f32::consts::PI);
+    }
+    Rotation::about_axis(axis, axis.length().atan2(cos))
+}
+
 fn rotation_yxz(x: f32, y: f32, z: f32) -> Rotation {
     Rotation::about_y(y) * Rotation::about_x(x) * Rotation::about_z(z)
 }
@@ -294,6 +313,40 @@ fn cframe_lib(lua: &Lua) -> mlua::Result<Table> {
             let axis = as_vector3(&axis).ok_or_else(|| err("CFrame.fromAxisAngle expects a Vector3"))?;
             Ok(LuaCFrame(CFrame::new(Vec3::ZERO, Rotation::about_axis(axis, angle))))
         })?,
+    )?;
+    lib.set(
+        "fromRotationBetweenVectors",
+        lua.create_function(|_, (from, to): (Value, Value)| {
+            let v = |v: &Value| {
+                as_vector3(v).ok_or_else(|| err("CFrame.fromRotationBetweenVectors expects two Vector3s"))
+            };
+            Ok(LuaCFrame(CFrame::new(Vec3::ZERO, rotation_between(v(&from)?, v(&to)?))))
+        })?,
+    )?;
+    lib.set(
+        "fromEulerAngles",
+        lua.create_function(
+            |lua, (x, y, z, order): (Option<f32>, Option<f32>, Option<f32>, Option<Value>)| {
+                // The order names the axes outermost first (XYZ is CFrame.Angles).
+                let order = match order {
+                    Some(Value::Nil) | None => "XYZ".to_owned(),
+                    Some(v) => lua.globals().get::<mlua::Function>("tostring")?.call::<String>(v)?,
+                };
+                let order = order.rsplit('.').next().unwrap_or("XYZ");
+                let order = if order.len() == 3 { order } else { "XYZ" };
+                let (x, y, z) = (x.unwrap_or(0.0), y.unwrap_or(0.0), z.unwrap_or(0.0));
+                let mut rot = Rotation::IDENTITY;
+                for axis in order.chars() {
+                    rot = rot
+                        * match axis {
+                            'X' => Rotation::about_x(x),
+                            'Y' => Rotation::about_y(y),
+                            _ => Rotation::about_z(z),
+                        };
+                }
+                Ok(LuaCFrame(CFrame::new(Vec3::ZERO, rot)))
+            },
+        )?,
     )?;
     lib.set(cframe::IDENTITY, LuaCFrame(CFrame::IDENTITY))?;
     Ok(lib)
