@@ -145,12 +145,18 @@ fn streaming_radius(tree: &libroxel_instance::InstanceTree) -> f32 {
 /// Nanoseconds spent copying parts into the 3D view, for the speed report.
 static SYNC_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// How many parts are in the 3D view, how many of them are drawn merged
+/// into clusters, and how many clusters there are.
+pub fn cluster_counts() -> (usize, usize, usize) {
+    crate::clusters::counts()
+}
+
 /// Seconds spent copying parts into the 3D view since the last call.
 pub fn take_sync_seconds() -> f64 {
     SYNC_NANOS.swap(0, std::sync::atomic::Ordering::Relaxed) as f64 / 1e9
 }
 
-struct TimedSync(std::time::Instant);
+pub(crate) struct TimedSync(pub(crate) std::time::Instant);
 
 impl Drop for TimedSync {
     fn drop(&mut self) {
@@ -457,9 +463,18 @@ impl Plugin for RenderPlugin {
             .init_resource::<crate::mesh_files::MeshFiles>()
             .init_resource::<MeshTextures>()
             .init_resource::<SharedMaterials>()
+            .init_resource::<crate::clusters::Clusters>()
             .add_systems(
                 PostUpdate,
-                (attach_visuals, update_materials, update_meshes, use_mesh_files, use_mesh_textures).chain(),
+                (
+                    attach_visuals,
+                    update_materials,
+                    update_meshes,
+                    use_mesh_files,
+                    use_mesh_textures,
+                    crate::clusters::cluster_parts,
+                )
+                    .chain(),
             )
             // The camera moves in Update, right after the world, and its global
             // transform is brought up to date at once, so GUIs and name tags
@@ -1184,7 +1199,7 @@ pub(crate) fn material_for(appearance: &PartAppearance, textures: &MaterialTextu
     material
 }
 
-fn visibility_for(appearance: &PartAppearance) -> Visibility {
+pub(crate) fn visibility_for(appearance: &PartAppearance) -> Visibility {
     if appearance.transparency >= 0.999 { Visibility::Hidden } else { Visibility::Inherited }
 }
 
