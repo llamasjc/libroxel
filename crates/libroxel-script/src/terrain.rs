@@ -125,21 +125,13 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
         let (lo, hi) = region(&r, "ReplaceMaterial")?;
         let from = fill_material(&from, "ReplaceMaterial")?;
         let to = fill_material(&to, "ReplaceMaterial")?;
-        edit(lua, this.0, |v| {
-            let mut cells = Vec::new();
-            for y in cell_range(lo.y, hi.y) {
-                for z in cell_range(lo.z, hi.z) {
-                    for x in cell_range(lo.x, hi.x) {
-                        if v.get(x, y, z) == from && from != to {
-                            cells.push(((x, y, z), to));
-                        }
-                    }
-                }
-            }
-            let n = cells.len();
-            v.set_cells(cells);
-            n
-        })
+        let (xs, ys, zs) = (cell_range(lo.x, hi.x), cell_range(lo.y, hi.y), cell_range(lo.z, hi.z));
+        if xs.is_empty() || ys.is_empty() || zs.is_empty() {
+            return Ok(());
+        }
+        let min = (xs.start, ys.start, zs.start);
+        let max = (xs.end - 1, ys.end - 1, zs.end - 1);
+        edit(lua, this.0, |v| v.replace(min, max, from, to))
     });
     m.add_method("ReadVoxels", |lua, this, (r, resolution): (Value, Value)| {
         require_class(lua, this.0, ClassKind::Terrain, "ReadVoxels")?;
