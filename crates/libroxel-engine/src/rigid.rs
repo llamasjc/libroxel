@@ -557,10 +557,12 @@ impl Rigid {
         self.sync_joints(joints);
         self.drive_servos(gravity, dt);
 
-        // Run it, in slices of at most a sixtieth of a second, sliding
-        // kinematic parts along to where they are going.
+        // Run it in slices (a sixtieth of a second at a good frame rate,
+        // longer when frames are slow, at most four: more would make slow
+        // frames slower still), sliding kinematic parts along to where they
+        // are going.
         self.world.gravity = RVec::new(0.0, -gravity, 0.0);
-        let slices = ((dt / (1.0 / 60.0)).ceil() as usize).clamp(1, 8);
+        let slices = ((dt * 45.0).ceil() as usize).clamp(1, 4);
         self.world.integration_parameters.dt = dt / slices as f32;
         let filter = Filter { ignored, groups };
         for k in 1..=slices {
