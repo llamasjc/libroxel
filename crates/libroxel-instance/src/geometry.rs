@@ -608,6 +608,38 @@ impl PartIndex {
         out
     }
 
+    /// The parts that might be in any of the boxes (each `(lo, hi)`), each
+    /// part once. Boxes that overlap (a character's parts, a crowd) look
+    /// each cell up only once.
+    pub fn near_boxes(&self, boxes: &[(Vec3, Vec3)]) -> Vec<InstanceId> {
+        let mut cells = std::collections::HashSet::new();
+        for (lo, hi) in boxes {
+            let (a, b) = (index_cell(*lo), index_cell(*hi));
+            let count = (i64::from(b.0) - i64::from(a.0) + 1)
+                * (i64::from(b.1) - i64::from(a.1) + 1)
+                * (i64::from(b.2) - i64::from(a.2) + 1);
+            if count > 4096 {
+                // A very big box: every part is a candidate anyway.
+                return self.near_box(*lo, *hi);
+            }
+            for x in a.0..=b.0 {
+                for y in a.1..=b.1 {
+                    for z in a.2..=b.2 {
+                        cells.insert((x, y, z));
+                    }
+                }
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut out: Vec<InstanceId> = self.huge.iter().copied().filter(|p| seen.insert(*p)).collect();
+        for cell in cells {
+            if let Some(list) = self.cells.get(&cell) {
+                out.extend(list.iter().copied().filter(|p| seen.insert(*p)));
+            }
+        }
+        out
+    }
+
     /// The parts that might be along the ray from `origin` along the unit
     /// vector `dir` for `reach` studs, roughly nearest first.
     pub fn along_ray(&self, origin: Vec3, dir: Vec3, reach: f32) -> Vec<InstanceId> {
