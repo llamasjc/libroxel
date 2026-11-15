@@ -452,7 +452,40 @@ pub struct Physics {
     groups: Groups,
     /// Where steps have spent their time, for the speed report.
     timing: PhysicsTiming,
+    /// Loose parts that have stood still, and those asleep: like Roblox, a
+    /// part at rest is left out of the simulation (and costs nothing) until
+    /// something moves it or comes near it.
+    rest: HashMap<InstanceId, Rest>,
+    /// Which turn of the slow round of waking sleeping parts this step is.
+    since_wake_all: u32,
+    /// How far the tree's log of moved parts has been read (and its epoch),
+    /// to wake sleeping parts near anything that moved or went away.
+    moved_read: (u64, usize),
+    /// The terrain's version last step.
+    terrain_version: u64,
 }
+
+/// How still a loose part has been: where it last was, and for how many
+/// steps it hasn't moved.
+#[derive(Debug, Clone, Copy)]
+struct Rest {
+    pos: Vec3,
+    orientation: Vec3,
+    still: u32,
+    /// Whether it was on something when last simulated.
+    grounded: bool,
+    /// The terrain round it when it fell asleep.
+    terrain: u64,
+}
+
+/// Steps a part must stand still before it falls asleep.
+const SLEEP_STEPS: u32 = 20;
+/// How far a part may drift (studs, degrees) and still count as still.
+const STILL_MOVE: f32 = 0.01;
+const STILL_TURN: f32 = 0.2;
+/// Every so many steps each sleeping part wakes for a moment, in case what
+/// it rested on went away without moving (made CanCollide false).
+const WAKE_ALL_STEPS: u32 = 600;
 
 /// Where physics steps spent their time (seconds, summed over `steps`), and
 /// how much they had to do: for the speed report.
@@ -550,6 +583,9 @@ impl Physics {
     }
 
     pub fn set_velocity(&mut self, id: InstanceId, velocity: Vec3) {
+        if velocity.length() > 0.05 {
+            self.wake(id);
+        }
         self.velocities.insert(id, velocity);
     }
 
@@ -559,6 +595,9 @@ impl Physics {
     }
 
     pub fn set_angular_velocity(&mut self, id: InstanceId, spin: Vec3) {
+        if spin.length() > 0.05 {
+            self.wake(id);
+        }
         if spin == Vec3::ZERO {
             self.spins.remove(&id);
         } else {
@@ -657,6 +696,7 @@ impl Physics {
     /// Keeps `id` where it is for the next step (something else moved it
     /// there), while it still touches what it overlaps.
     pub fn hold(&mut self, id: InstanceId) {
+        self.wake(id);
         self.held.insert(id);
     }
 
@@ -667,7 +707,7 @@ impl Physics {
 
     /// Whether `id` ended the last step resting on something.
     pub fn is_grounded(&self, id: InstanceId) -> bool {
-        self.grounded.contains(&id)
+        self.grounded.contains(&id) || (self.asleep(id) && self.rest.get(&id).is_some_and(|r| r.grounded))
     }
 
     fn collect_bodies(
@@ -737,6 +777,215 @@ impl Physics {
     /// The parts worth simulating: everything that moves, and the anchored
     /// parts near something that moves. A big map's thousands of anchored
     /// parts far from every mover can't touch anything this step.
+    /// Whether `id` is a loose part asleep (at rest, left out of steps).
+    fn asleep(&self, id: InstanceId) -> bool {
+        // A welded group sleeps and wakes as one, as its root does.
+        let root = self.welded.get(&id).map_or(id, |(r, _)| *r);
+        self.rest.get(&root).is_some_and(|r| r.still >= SLEEP_STEPS)
+    }
+
+    /// Wakes `id`'s welded group (something pushed it).
+    fn wake(&mut self, id: InstanceId) {
+        let root = self.welded.get(&id).map_or(id, |(r, _)| *r);
+        if let Some(r) = self.rest.get_mut(&root) {
+            r.still = 0;
+        }
+    }
+
+    /// A hash of the terrain under and round `pos` (a part `r` studs
+    /// across), to tell when it is dug out from under a sleeping part.
+    fn terrain_print(voxels: Option<&libroxel_instance::voxels::Voxels>, pos: Vec3, r: f32) -> u64 {
+        use libroxel_instance::voxels::{CHUNK, cell_at};
+        let Some(voxels) = voxels.filter(|v| !v.is_empty()) else { return 0 };
+        let (lo, hi) = (cell_at(pos - Vec3::new(r, r + 1.0, r)), cell_at(pos + Vec3::new(r, r, r)));
+        let mut print = 0u64;
+        for x in lo.0.div_euclid(CHUNK)..=hi.0.div_euclid(CHUNK) {
+            for y in lo.1.div_euclid(CHUNK)..=hi.1.div_euclid(CHUNK) {
+                for z in lo.2.div_euclid(CHUNK)..=hi.2.div_euclid(CHUNK) {
+                    print = print.rotate_left(7) ^ voxels.chunk_fingerprint((x, y, z));
+                }
+            }
+        }
+        print
+    }
+
+    /// Wakes sleeping parts that something else moved or pushed (a script
+    /// set where they are or how fast they go), and now and then all of
+    /// them.
+    fn wake_moved(&mut self, tree: &InstanceTree) {
+        // A few each step, in turn, so they don't all wake at once.
+        self.since_wake_all = (self.since_wake_all + 1) % WAKE_ALL_STEPS;
+        let turn = self.since_wake_all;
+        // Near something that moved, turned up or went away (a platform
+        // sliding under it, the floor it lay on destroyed): awake.
+        let (epoch, moved) = tree.moved_since(self.moved_read.1);
+        let mut near: HashSet<InstanceId> = HashSet::new();
+        let mut all = false;
+        if epoch != self.moved_read.0 || moved.len() > 4096 {
+            all = true;
+        } else if self.rest.values().any(|r| r.still >= SLEEP_STEPS) {
+            let mut seen = HashSet::new();
+            // (A loose part settling, moved a hair by the solver, wakes nothing.)
+            let settling = |id: InstanceId| {
+                self.rest.contains_key(&id)
+                    && self.velocity(id).length() < 0.1
+                    && self.spins.get(&id).is_none_or(|v| v.length() < 0.1)
+            };
+            let boxes: Vec<(Vec3, Vec3)> = moved
+                .iter()
+                .filter(|id| seen.insert(**id) && !settling(**id))
+                .filter_map(|id| {
+                    let pos = tree.get_vec3(*id, Property::Position)?;
+                    let r = tree.get_vec3(*id, Property::Size)?.length() * 0.5 + 1.0;
+                    Some((pos - Vec3::new(r, r, r), pos + Vec3::new(r, r, r)))
+                })
+                .collect();
+            if !boxes.is_empty() {
+                let mut index = self.index.borrow_mut();
+                index.refresh(tree);
+                let overlaps = |id: InstanceId| {
+                    let (Some(pos), Some(size)) =
+                        (tree.get_vec3(id, Property::Position), tree.get_vec3(id, Property::Size))
+                    else {
+                        return false;
+                    };
+                    let r = size.length() * 0.5;
+                    boxes.iter().any(|(lo, hi)| {
+                        pos.x + r >= lo.x
+                            && pos.x - r <= hi.x
+                            && pos.y + r >= lo.y
+                            && pos.y - r <= hi.y
+                            && pos.z + r >= lo.z
+                            && pos.z - r <= hi.z
+                    })
+                };
+                near.extend(
+                    index.near_boxes(&boxes).into_iter().filter(|id| self.asleep(*id) && overlaps(*id)),
+                );
+            }
+        }
+        self.moved_read = (epoch, tree.moved_len());
+        // The terrain changed: those it was dug out from under wake.
+        let voxels = tree.terrain().and_then(|t| tree.voxels(t).ok());
+        let version = voxels.map_or(0, |v| v.version());
+        let terrain_changed = version != self.terrain_version;
+        self.terrain_version = version;
+        let (velocities, spins, held) = (&self.velocities, &self.spins, &self.held);
+        let jointed: HashSet<InstanceId> = self.joints.iter().flat_map(|j| [j.part0, j.part1]).collect();
+        let mut woken = Vec::new();
+        self.rest.retain(|id, r| {
+            if r.still < SLEEP_STEPS {
+                return tree.exists(*id) && !tree.is_destroyed(*id).unwrap_or(true);
+            }
+            let (Some(pos), Some(orientation)) =
+                (tree.get_vec3(*id, Property::Position), tree.get_vec3(*id, Property::Orientation))
+            else {
+                return false;
+            };
+            let pushed = velocities.get(id).is_some_and(|v| v.length() > 0.05)
+                || spins.get(id).is_some_and(|v| v.length() > 0.05);
+            if all
+                || (id.to_bits() % u64::from(WAKE_ALL_STEPS)) as u32 == turn
+                || near.contains(id)
+                || (terrain_changed && {
+                    let size = tree.get_vec3(*id, Property::Size).unwrap_or_default();
+                    Self::terrain_print(voxels, pos, size.length() * 0.5) != r.terrain
+                })
+                || pushed
+                || held.contains(id)
+                || jointed.contains(id)
+                || tree.get_bool(*id, Property::Anchored) != Some(false)
+                || (pos - r.pos).length() > STILL_MOVE
+                || (orientation - r.orientation).length() > STILL_TURN
+            {
+                r.still = 0;
+                r.pos = pos;
+                r.orientation = orientation;
+                woken.push(*id);
+            }
+            true
+        });
+        // (A part of a welded group wakes the whole group.)
+        for id in woken {
+            self.wake(id);
+        }
+    }
+
+    /// Wakes sleeping parts that something moving is about to run into, so
+    /// they get pushed instead of standing like a wall.
+    fn wake_in_the_way(&mut self, tree: &InstanceTree, parts: &[InstanceId]) {
+        let sleepers: Vec<InstanceId> = parts.iter().copied().filter(|id| self.asleep(*id)).collect();
+        if sleepers.is_empty() {
+            return;
+        }
+        let bounds = |id: InstanceId, grow: f32| {
+            let pos = tree.get_vec3(id, Property::Position)?;
+            let r = tree.get_vec3(id, Property::Size)?.length() * 0.5 + grow;
+            Some((pos - Vec3::new(r, r, r), pos + Vec3::new(r, r, r)))
+        };
+        let fast: Vec<(Vec3, Vec3)> = parts
+            .iter()
+            .copied()
+            .filter(|id| !self.asleep(*id) && tree.get_bool(*id, Property::Anchored) == Some(false))
+            .filter_map(|id| {
+                let root = self.welded.get(&id).map_or(id, |(r, _)| *r);
+                let speed = self.velocity(root).length();
+                (speed > 0.3 || self.held.contains(&id)).then(|| bounds(id, speed * 0.1 + 0.5)).flatten()
+            })
+            .collect();
+        for id in sleepers {
+            let Some((lo, hi)) = bounds(id, 0.0) else { continue };
+            if fast.iter().any(|(a, b)| {
+                lo.x <= b.x && a.x <= hi.x && lo.y <= b.y && a.y <= hi.y && lo.z <= b.z && a.z <= hi.z
+            }) {
+                self.wake(id);
+            }
+        }
+    }
+
+    /// Notes which loose parts moved this step: those that didn't for long
+    /// enough fall asleep.
+    fn note_rest(&mut self, tree: &InstanceTree, bodies: &[Body]) {
+        let voxels = tree.terrain().and_then(|t| tree.voxels(t).ok());
+        // (Welded groups stay awake for now: their parts are put back on
+        // their root after each step, which a sleeping root would upset.)
+        let mut roots: HashSet<InstanceId> = self.welded.values().map(|(r, _)| *r).collect();
+        // Nor do parts joined by hinges, ropes or springs.
+        roots.extend(self.joints.iter().flat_map(|j| [j.part0, j.part1]));
+        let mut done = HashSet::new();
+        for body in bodies
+            .iter()
+            .filter(|b| b.sim && !b.held && !roots.contains(&b.id) && !self.welded.contains_key(&b.id))
+        {
+            if !done.insert(body.id) {
+                continue;
+            }
+            let (Some(pos), Some(orientation)) =
+                (tree.get_vec3(body.id, Property::Position), tree.get_vec3(body.id, Property::Orientation))
+            else {
+                continue;
+            };
+            let fast = self.velocity(body.id).length() > 0.1
+                || self.spins.get(&body.id).is_some_and(|v| v.length() > 0.1);
+            let grounded = self.grounded.contains(&body.id);
+            let r =
+                self.rest.entry(body.id).or_insert(Rest { pos, orientation, still: 0, grounded, terrain: 0 });
+            r.grounded = grounded;
+            if fast
+                || (pos - r.pos).length() > STILL_MOVE
+                || (orientation - r.orientation).length() > STILL_TURN
+            {
+                *r = Rest { pos, orientation, still: 0, grounded, terrain: 0 };
+            } else {
+                r.still = (r.still + 1).min(SLEEP_STEPS);
+                if r.still == SLEEP_STEPS {
+                    let size = tree.get_vec3(body.id, Property::Size).unwrap_or_default();
+                    r.terrain = Self::terrain_print(voxels, pos, size.length() * 0.5);
+                }
+            }
+        }
+    }
+
     fn parts_near_movers(&self, tree: &InstanceTree) -> Vec<InstanceId> {
         let mut index = self.index.borrow_mut();
         index.refresh(tree);
@@ -744,8 +993,11 @@ impl Physics {
             return tree.descendants_of_class(tree.workspace(), ClassKind::Part);
         }
         let reach = |id: InstanceId| tree.get_vec3(id, Property::Size).map_or(0.0, |s| s.length() * 0.5);
-        let movers: Vec<InstanceId> =
-            index.loose().filter(|id| !self.carried.contains(id)).chain(self.held.iter().copied()).collect();
+        let movers: Vec<InstanceId> = index
+            .loose()
+            .filter(|id| !self.carried.contains(id) && !self.asleep(*id))
+            .chain(self.held.iter().copied())
+            .collect();
         // Each mover's box, grown by how far it could get in a slow frame
         // and a margin; the index looks every cell they cover up once.
         let boxes: Vec<(Vec3, Vec3)> = movers
@@ -757,7 +1009,7 @@ impl Physics {
             })
             .collect();
         let mut out: HashSet<InstanceId> = index.near_boxes(&boxes).into_iter().collect();
-        out.extend(index.loose());
+        out.extend(movers.iter().copied());
         out.extend(self.held.iter().copied());
         // In tree order, so steps don't depend on hashing.
         let mut out: Vec<InstanceId> = out.into_iter().collect();
@@ -773,7 +1025,8 @@ impl Physics {
                 let one = |b: Option<Body>| b.into_iter().collect::<Vec<_>>();
                 let Some(size) = tree.get_vec3(id, Property::Size) else { return Vec::new() };
                 let Some(anchored) = tree.get_bool(id, Property::Anchored) else { return Vec::new() };
-                let anchored = anchored || self.carried.contains(&id);
+                // A sleeping part stands still like an anchored one until woken.
+                let anchored = anchored || self.carried.contains(&id) || self.asleep(id);
                 let shape = match tree.get_enum(id, Property::Shape) {
                     Some(EnumValue::Shape(shape)) => shape,
                     _ => PartShape::Block,
@@ -867,7 +1120,7 @@ impl Physics {
             } else {
                 (orientation_quat(orientation), orientation)
             };
-            let tree_anchored = tree.get_bool(id, Property::Anchored) != Some(false);
+            let tree_anchored = tree.get_bool(id, Property::Anchored) != Some(false) || self.asleep(id);
             let role = if tree_anchored {
                 rigid::Role::Fixed
             } else if let Some((root, offset)) = self.welded.get(&id).filter(|(r, _)| dynamic.contains(r)) {
@@ -921,7 +1174,9 @@ impl Physics {
         let gravity = tree.get_number(tree.workspace(), Property::Gravity).map_or(GRAVITY, |g| g as f32);
         // Which parts are near anything that moves: found once a step (the
         // touch check after the move reuses it; nothing moves far in a step).
+        self.wake_moved(tree);
         let parts = self.parts_near_movers(tree);
+        self.wake_in_the_way(tree, &parts);
         let mut bodies = self.collect_bodies(tree, &parts, dt, gravity, false);
         let mut gather = lap();
         self.groups.refresh(tree, bodies.iter().map(|b| b.id));
@@ -991,6 +1246,8 @@ impl Physics {
             }
         }
 
+        self.note_rest(tree, &bodies);
+
         // Touch detection, where everything is now: only pairs where something can move.
         lap();
         let bodies = self.collect_bodies(tree, &parts, dt, gravity, true);
@@ -1025,6 +1282,21 @@ impl Physics {
         let mut touches: Vec<_> = current.difference(&self.contacts).copied().collect();
         touches.sort();
         result.touches = touches;
+        // Pairs nothing looked at this step (a sleeping part on the floor)
+        // still touch.
+        let looked: HashSet<InstanceId> = bodies.iter().filter(|b| !b.anchored).map(|b| b.id).collect();
+        for pair in &self.contacts {
+            if !looked.contains(&pair.0)
+                && !looked.contains(&pair.1)
+                && tree.exists(pair.0)
+                && tree.exists(pair.1)
+                && !tree.is_destroyed(pair.0).unwrap_or(true)
+                && !tree.is_destroyed(pair.1).unwrap_or(true)
+                && (self.asleep(pair.0) || self.asleep(pair.1))
+            {
+                current.insert(*pair);
+            }
+        }
         let mut untouches: Vec<_> = self.contacts.difference(&current).copied().collect();
         untouches.sort();
         result.untouches = untouches;
