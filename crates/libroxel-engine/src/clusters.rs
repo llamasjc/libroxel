@@ -75,16 +75,36 @@ pub(crate) struct Clusters {
     by_key: FastMap<Key, Entity>,
     /// A white material for each surface; the parts' colours are on the mesh.
     materials: FastMap<Surface, Handle<StandardMaterial>>,
+    /// Parts whose visibility something else looks after.
+    kept_apart: Vec<Entity>,
 }
+
+impl Clusters {
+    /// Keeps a part out of clusters for a good while: something else shows
+    /// and hides it.
+    pub(crate) fn keep_apart(&mut self, part: Entity) {
+        self.kept_apart.push(part);
+    }
+}
+
+/// Any change to how a part is drawn.
+type Changes = Or<(
+    Changed<Transform>,
+    Changed<Mesh3d>,
+    Changed<MeshMaterial3d<StandardMaterial>>,
+    Changed<PartAppearance>,
+    Changed<PartMeshFile>,
+    Changed<PartMeshTexture>,
+)>;
 
 type PartView<'a> = (
     Entity,
-    Ref<'a, Transform>,
-    Ref<'a, Mesh3d>,
-    Ref<'a, MeshMaterial3d<StandardMaterial>>,
-    Ref<'a, PartAppearance>,
-    Ref<'a, PartMeshFile>,
-    Ref<'a, PartMeshTexture>,
+    &'a Transform,
+    &'a Mesh3d,
+    &'a MeshMaterial3d<StandardMaterial>,
+    &'a PartAppearance,
+    &'a PartMeshFile,
+    &'a PartMeshTexture,
     &'a mut Visibility,
 );
 
@@ -97,6 +117,7 @@ pub(crate) fn cluster_parts(
     textures: Res<MaterialTextures>,
     mut removed: RemovedComponents<PartLink>,
     mut parts: Query<PartView, With<PartLink>>,
+    moved: Query<Entity, (With<PartLink>, Changes)>,
     clusters: Query<&Cluster>,
 ) {
     let _timed = crate::view::TimedSync(std::time::Instant::now());
@@ -111,24 +132,18 @@ pub(crate) fn cluster_parts(
             broken.push(cluster);
         }
     }
-    for (entity, transform, mesh, material, look, file, texture, visibility) in &mut parts {
-        let changed = transform.is_changed()
-            || mesh.is_changed()
-            || material.is_changed()
-            || look.is_changed()
-            || file.is_changed()
-            || texture.is_changed();
-        if changed {
-            state.calm_since.insert(entity, frame);
-            if let Some(cluster) = state.member_of.get(&entity) {
-                broken.push(*cluster);
-                *state.restless.entry(entity).or_default() += 1;
-            }
-        } else if visibility.is_changed()
-            && *visibility != Visibility::Hidden
-            && let Some(cluster) = state.member_of.get(&entity)
-        {
-            // Something else showed it again (first person, say): it draws on its own.
+    for entity in &moved {
+        state.calm_since.insert(entity, frame);
+        if let Some(cluster) = state.member_of.get(&entity) {
+            broken.push(*cluster);
+            *state.restless.entry(entity).or_default() += 1;
+        }
+    }
+    for entity in std::mem::take(&mut state.kept_apart) {
+        // Shown or hidden by something else (first person): it draws on its own.
+        state.calm_since.insert(entity, frame);
+        *state.restless.entry(entity).or_default() += 10;
+        if let Some(cluster) = state.member_of.get(&entity) {
             broken.push(*cluster);
         }
     }
@@ -150,7 +165,7 @@ pub(crate) fn cluster_parts(
         {
             continue;
         }
-        let Some(surface) = surface(&look) else {
+        let Some(surface) = surface(look) else {
             continue;
         };
         let since = state.calm_since.get(&entity).copied().unwrap_or(0);
@@ -245,7 +260,7 @@ fn dissolve(
         if let Ok(mut item) = parts.get_mut(*member)
             && *item.7 == Visibility::Hidden
         {
-            *item.7 = visibility_for(&item.4);
+            *item.7 = visibility_for(item.4);
         }
     }
     commands.entity(cluster).despawn();
