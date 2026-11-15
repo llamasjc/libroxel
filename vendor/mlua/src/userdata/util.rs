@@ -309,6 +309,9 @@ unsafe fn init_userdata_metatable_index(state: *mut ffi::lua_State) -> Result<()
                 end
             end
 
+            -- (libroxel: what `__index` is, worked out once instead of on
+            -- every lookup, which cost a call into C each time.)
+            local index_is_function = isfunction(__index)
             return function (self, key)
                 if field_getters ~= nil then
                     local field_getter = field_getters[key]
@@ -324,7 +327,7 @@ unsafe fn init_userdata_metatable_index(state: *mut ffi::lua_State) -> Result<()
                     end
                 end
 
-                if isfunction(__index) then
+                if index_is_function then
                     return __index(self, key)
                 elseif __index == nil then
                     error("attempt to get an unknown field '"..key.."'")

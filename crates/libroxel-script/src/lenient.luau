@@ -2919,6 +2919,16 @@ function L.chat_config(name, props)
 	return configs[name]
 end
 
+-- Fires signal `signal` of a service made here (ProximityPromptService's
+-- PromptTriggered and the like), if a script has asked for that service.
+function L.fire_service_signal(name, signal, ...)
+	local obj = L.service(name)
+	local sig = obj and obj[signal]
+	if sig then
+		sig:Fire(...)
+	end
+end
+
 local made = {}
 function L.service(name)
 	if made[name] then

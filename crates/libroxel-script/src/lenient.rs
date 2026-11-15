@@ -4,7 +4,7 @@
 //! and child has said no.
 
 use libroxel_instance::{ClassKind, InstanceId, Property, PropertyValue, Vec3};
-use mlua::{AnyUserData, Function, Lua, Table, Value};
+use mlua::{AnyUserData, Function, Lua, MultiValue, Table, Value};
 
 use crate::names;
 
@@ -313,6 +313,21 @@ pub(crate) fn flush_drawn(lua: &Lua) -> mlua::Result<()> {
 
 /// Fires an object's mouse event `key` (such as `MouseButton1Down`) with
 /// the mouse position, if a script asked for it.
+/// Fires `signal` of the layer's service `name` with `args`.
+pub(crate) fn fire_service_signal(
+    lua: &Lua,
+    name: &str,
+    signal: &str,
+    args: impl mlua::IntoLuaMulti,
+) -> mlua::Result<()> {
+    let args = args.into_lua_multi(lua)?;
+    let mut all = MultiValue::new();
+    all.push_back(Value::String(lua.create_string(name)?));
+    all.push_back(Value::String(lua.create_string(signal)?));
+    all.extend(args);
+    layer(lua)?.get::<Function>("fire_service_signal")?.call::<()>(all)
+}
+
 pub(crate) fn fire_mouse(lua: &Lua, id: InstanceId, key: &str) -> mlua::Result<()> {
     layer(lua)?.get::<Function>("fire_mouse")?.call((instance_key(id), key))
 }

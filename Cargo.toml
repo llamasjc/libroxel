@@ -14,6 +14,8 @@ repository = "https://github.com/llamasjc/libroxel"
 authors = ["Libroxel contributors"]
 
 [workspace.dependencies]
+# A fast hash for maps looked up thousands of times a frame.
+foldhash = "0.2"
 libroxel-instance = { path = "crates/libroxel-instance", version = "0.0.1" }
 libroxel-script = { path = "crates/libroxel-script", version = "0.0.1" }
 libroxel-engine = { path = "crates/libroxel-engine", version = "0.0.1" }

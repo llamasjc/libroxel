@@ -268,6 +268,9 @@ impl Watchdog {
 
 /// Host state stored in the VM's app data.
 pub(crate) struct Host {
+    /// The weak-valued table of each instance's one userdata, by its id's
+    /// bits (kept here so finding it doesn't go through the registry).
+    instance_cache: RefCell<Option<Table>>,
     pub(crate) tree: SharedTree,
     connections: RefCell<Connections>,
     next_connection: Cell<u64>,
@@ -733,9 +736,13 @@ pub(crate) struct LuaInstance(pub(crate) InstanceId);
 /// Returns the one userdata for `id`, so the same instance is always the
 /// same Lua value (it works as a table key and with `rawequal`).
 pub(crate) fn push_instance(lua: &Lua, id: InstanceId) -> mlua::Result<AnyUserData> {
-    let cache: Table = lua.named_registry_value(INSTANCE_CACHE)?;
-    let key = id.to_string();
-    if let Some(existing) = cache.raw_get::<Option<AnyUserData>>(key.as_str())? {
+    let cache = match host(lua).instance_cache.borrow().clone() {
+        Some(cache) => cache,
+        None => lua.named_registry_value(INSTANCE_CACHE)?,
+    };
+    // A number key: no string to build for each lookup (ids fit in a double).
+    let key = id.to_bits() as f64;
+    if let Some(existing) = cache.raw_get::<Option<AnyUserData>>(key)? {
         return Ok(existing);
     }
     let ud = lua.create_userdata(LuaInstance(id))?;
@@ -880,6 +887,18 @@ pub(crate) fn not_a_member(lua: &Lua, id: InstanceId, key: &str) -> mlua::Error 
 /// `IsA` answers.
 pub(crate) fn is_a(lua: &Lua, id: InstanceId, name: &str) -> mlua::Result<bool> {
     let class = class_of(lua, id)?;
+    // The usual case first, without building the class name.
+    let plain = class != ClassKind::Other
+        && host(lua).tree.borrow().extras(id).map_or(true, |e| !e.contains_key(names::STAND_IN));
+    if plain {
+        if let Some(answer) = names::is_a_family(class, name) {
+            return Ok(answer);
+        }
+        return Ok(match names::class_from_name(name) {
+            Some(other) => class.is_a(other),
+            None => crate::reflection::class_is_a(names::class_name(class), name),
+        });
+    }
     let roblox = crate::lenient::roblox_class(lua, id, class);
     if roblox != names::class_name(class) {
         return Ok(name == "Instance" || crate::reflection::class_is_a(&roblox, name));
@@ -1019,8 +1038,21 @@ impl UserData for LuaInstance {
             children.into_iter().map(|id| push_instance(lua, id)).collect::<mlua::Result<Vec<_>>>()
         });
         methods.add_method(GET_DESCENDANTS, |lua, this, ()| {
-            let all = host(lua).tree.borrow().descendants(this.0).map_err(tree_err)?;
-            all.into_iter().map(|id| push_instance(lua, id)).collect::<mlua::Result<Vec<_>>>()
+            let all = {
+                let host = host(lua);
+                let tree = host.tree.borrow();
+                // The workspace's list is kept by the tree between changes.
+                if this.0 == tree.workspace() {
+                    tree.workspace_descendants()
+                } else {
+                    tree.descendants(this.0).map_err(tree_err)?
+                }
+            };
+            let out = lua.create_table_with_capacity(all.len(), 0)?;
+            for (i, id) in all.into_iter().enumerate() {
+                out.raw_set(i + 1, push_instance(lua, id)?)?;
+            }
+            Ok(out)
         });
         methods.add_method(IS_A, |lua, this, name: String| is_a(lua, this.0, &name));
         methods.add_method(IS_DESCENDANT_OF, |lua, this, other: Value| {
@@ -1217,8 +1249,16 @@ impl UserData for LuaInstance {
             tree.set(this.0, Property::Health, PropertyValue::Number(health)).map_err(tree_err)
         });
 
-        methods.add_meta_method(MetaMethod::Index, |lua, this, key: String| {
+        methods.add_meta_method(MetaMethod::Index, |lua, this, key: mlua::LuaString| {
             let id = this.0;
+            let key = key.to_str()?;
+            let key: &str = &key;
+            // The most read member of all, answered first.
+            if key == "Name" {
+                let host = host(lua);
+                let tree = host.tree.borrow();
+                return Ok(Value::String(lua.create_string(tree.name(id).map_err(tree_err)?)?));
+            }
             if key == CLASS_NAME {
                 let class = host(lua).tree.borrow().class(id).map_err(tree_err)?;
                 let name = crate::lenient::roblox_class(lua, id, class);
@@ -1238,19 +1278,19 @@ impl UserData for LuaInstance {
             if key == names::PART_CFRAME && has_cframe(class) {
                 return Ok(Value::UserData(lua.create_userdata(LuaCFrame(part_cframe(lua, id)?))?));
             }
-            if let Some(value) = crate::world::index(lua, id, class, &key)? {
+            if let Some(value) = crate::world::index(lua, id, class, key)? {
                 return Ok(value);
             }
-            if let Some(value) = crate::compat::index(lua, id, class, &key)? {
+            if let Some(value) = crate::compat::index(lua, id, class, key)? {
                 return Ok(value);
             }
-            if let Some(value) = crate::calls::index(lua, id, class, &key)? {
+            if let Some(value) = crate::calls::index(lua, id, class, key)? {
                 return Ok(value);
             }
-            if let Some(value) = crate::sound::index(lua, class, &key)? {
+            if let Some(value) = crate::sound::index(lua, class, key)? {
                 return Ok(value);
             }
-            if let Some(value) = crate::animation::index(lua, id, class, &key)? {
+            if let Some(value) = crate::animation::index(lua, id, class, key)? {
                 return Ok(value);
             }
             if key == names::methods::LOCAL_PLAYER && class == ClassKind::Players {
@@ -1259,10 +1299,10 @@ impl UserData for LuaInstance {
                     None => Ok(Value::Nil),
                 };
             }
-            if let Some(signal) = instance_event(class, id, &key) {
+            if let Some(signal) = instance_event(class, id, key) {
                 return Ok(Value::UserData(lua.create_userdata(Signal(signal))?));
             }
-            if let Some(property) = names::property_from_name(class, &key) {
+            if let Some(property) = names::property_from_name(class, key) {
                 let value = host(lua).tree.borrow().get(id, property);
                 match value {
                     Ok(value) => {
@@ -1282,13 +1322,13 @@ impl UserData for LuaInstance {
                 }
             }
             // `instance.ChildName` finds a child by name.
-            let child = host(lua).tree.borrow().find_first_child(id, &key).map_err(tree_err)?;
+            let child = host(lua).tree.borrow().find_first_child(id, key).map_err(tree_err)?;
             if let Some(child) = child {
                 return Ok(Value::UserData(push_instance(lua, child)?));
             }
-            match crate::lenient::index(lua, id, class, push_instance(lua, id)?, &key)? {
+            match crate::lenient::index(lua, id, class, push_instance(lua, id)?, key)? {
                 Some(value) => Ok(value),
-                None => Err(not_a_member(lua, id, &key)),
+                None => Err(not_a_member(lua, id, key)),
             }
         });
 
@@ -2034,6 +2074,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         world: RefCell::new(Default::default()),
         net: RefCell::new(Default::default()),
         groups: RefCell::new(Default::default()),
+        instance_cache: RefCell::new(None),
     });
 
     // Weak-valued cache so each instance has exactly one userdata.
@@ -2041,6 +2082,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     let cache_meta = lua.create_table()?;
     cache_meta.set("__mode", "v")?;
     cache.set_metatable(Some(cache_meta))?;
+    *host(lua).instance_cache.borrow_mut() = Some(cache.clone());
     lua.set_named_registry_value(INSTANCE_CACHE, cache)?;
 
     let g = lua.globals();

@@ -435,13 +435,13 @@ pub struct PartIndex {
     built: bool,
     epoch: u64,
     read: usize,
-    cells: std::collections::HashMap<(i32, i32, i32), Vec<InstanceId>>,
+    cells: foldhash::HashMap<(i32, i32, i32), Vec<InstanceId>>,
     /// Parts too big for the grid, checked by every query.
-    huge: std::collections::HashSet<InstanceId>,
+    huge: foldhash::HashSet<InstanceId>,
     /// The cells each part was put in (none for a huge part).
-    placed: std::collections::HashMap<InstanceId, Option<CellRange>>,
+    placed: foldhash::HashMap<InstanceId, Option<CellRange>>,
     /// The parts that aren't anchored (the ones that can move by themselves).
-    loose: std::collections::HashSet<InstanceId>,
+    loose: foldhash::HashSet<InstanceId>,
 }
 
 /// A box of grid cells: its lowest and highest corners.
@@ -480,7 +480,7 @@ impl PartIndex {
         let (_, moved) = tree.moved_since(self.read);
         let moved = moved.to_vec();
         self.read = tree.moved_len();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = foldhash::HashSet::default();
         for id in moved {
             if !seen.insert(id) {
                 continue;
@@ -500,14 +500,41 @@ impl PartIndex {
     }
 
     fn update(&mut self, tree: &InstanceTree, id: InstanceId) {
-        self.remove(id);
         let live = tree.exists(id) && !tree.is_destroyed(id).unwrap_or(true);
         if live
             && tree.class(id).is_ok_and(|c| c.is_a(ClassKind::Part))
             && tree.is_descendant_of(id, tree.workspace()).unwrap_or(false)
         {
+            // A part that moved a little usually stays in the same cells:
+            // nothing to do then (animated machines move thousands a frame).
+            let loose = tree.get_bool(id, Property::Anchored) == Some(false);
+            if let Some(&placed) = self.placed.get(&id)
+                && placed.is_some()
+                && placed == self.cells_for(tree, id)
+                && self.loose.contains(&id) == loose
+            {
+                return;
+            }
+            self.remove(id);
             self.place(tree, id);
+        } else {
+            self.remove(id);
         }
+    }
+
+    /// The cells a part covers, or None for one too big (or far) for cells.
+    fn cells_for(&self, tree: &InstanceTree, part: InstanceId) -> Option<CellRange> {
+        let (pos, size) = (tree.get_vec3(part, Property::Position)?, tree.get_vec3(part, Property::Size)?);
+        let r = size.length() * 0.5;
+        if !(pos.x.is_finite() && pos.y.is_finite() && pos.z.is_finite() && r.is_finite()) {
+            return None;
+        }
+        let reach = Vec3::new(r, r, r);
+        let (lo, hi) = (index_cell(pos - reach), index_cell(pos + reach));
+        let count = (i64::from(hi.0) - i64::from(lo.0) + 1)
+            * (i64::from(hi.1) - i64::from(lo.1) + 1)
+            * (i64::from(hi.2) - i64::from(lo.2) + 1);
+        (count <= INDEX_MAX_CELLS).then_some((lo, hi))
     }
 
     fn remove(&mut self, id: InstanceId) {

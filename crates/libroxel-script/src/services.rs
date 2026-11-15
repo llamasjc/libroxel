@@ -796,5 +796,18 @@ pub(crate) fn prompt(lua: &Lua, prompt: InstanceId, player: InstanceId, ended: b
     let signal =
         if ended { SignalKind::PromptTriggerEnded(prompt) } else { SignalKind::PromptTriggered(prompt) };
     fire_args(lua, signal, Some(player), MultiValue::new());
+    // ProximityPromptService hears every prompt: PromptTriggered(prompt, player).
+    let name = if ended { "PromptTriggerEnded" } else { "PromptTriggered" };
+    let fired = (|| -> mlua::Result<()> {
+        let args =
+            (crate::bindings::push_instance(lua, prompt)?, crate::bindings::push_instance(lua, player)?);
+        crate::lenient::fire_service_signal(lua, "ProximityPromptService", name, args)
+    })();
+    if let Err(err) = fired {
+        crate::bindings::host(lua)
+            .errors
+            .borrow_mut()
+            .push(ScriptError { script: "ProximityPromptService".to_owned(), message: err.to_string() });
+    }
     take_errors(lua)
 }

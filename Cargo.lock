@@ -5010,6 +5010,7 @@ dependencies = [
 name = "libroxel-instance"
 version = "0.0.1"
 dependencies = [
+ "foldhash 0.2.0",
  "serde_json",
  "thiserror 2.0.21",
 ]
