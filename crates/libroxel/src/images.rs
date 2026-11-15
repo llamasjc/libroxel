@@ -64,7 +64,14 @@ fn drawn_texture(ctx: &egui::Context, name: &str) -> Option<(egui::TextureId, eg
         match uploaded.get_mut(name) {
             Some((version, handle)) => {
                 if *version != drawn.version {
-                    handle.set(picture(), egui::TextureOptions::LINEAR);
+                    // Written over in place: replacing the whole texture makes a
+                    // new one, which can miss the frame it's made in, and the
+                    // picture blinks out (the minimap flickered as it redrew).
+                    if handle.size() == [w, h] {
+                        handle.set_partial([0, 0], picture(), egui::TextureOptions::LINEAR);
+                    } else {
+                        handle.set(picture(), egui::TextureOptions::LINEAR);
+                    }
                     *version = drawn.version;
                 }
                 Some((handle.id(), size))
