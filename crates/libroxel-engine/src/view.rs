@@ -1833,6 +1833,7 @@ fn hide_self_in_first_person(
     rigs: Query<&CameraRig>,
     mut hidden: Local<Vec<InstanceId>>,
     mut parts: Query<(&PartAppearance, &mut Visibility), With<PartLink>>,
+    mut clusters: ResMut<crate::clusters::Clusters>,
 ) {
     let inside = rigs.iter().any(first_person);
     let wanted: Vec<InstanceId> = match engine.session.as_ref().and_then(|s| s.character()) {
@@ -1843,13 +1844,19 @@ fn hide_self_in_first_person(
         return;
     }
     for id in hidden.iter().filter(|id| !wanted.contains(id)) {
-        if let Some((appearance, mut visibility)) = entities.0.get(id).and_then(|e| parts.get_mut(*e).ok()) {
+        if let Some(entity) = entities.0.get(id)
+            && let Ok((appearance, mut visibility)) = parts.get_mut(*entity)
+        {
             visibility.set_if_neq(visibility_for(appearance));
+            clusters.keep_apart(*entity);
         }
     }
     for id in &wanted {
-        if let Some((_, mut visibility)) = entities.0.get(id).and_then(|e| parts.get_mut(*e).ok()) {
+        if let Some(entity) = entities.0.get(id)
+            && let Ok((_, mut visibility)) = parts.get_mut(*entity)
+        {
             visibility.set_if_neq(Visibility::Hidden);
+            clusters.keep_apart(*entity);
         }
     }
     *hidden = wanted;
