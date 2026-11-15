@@ -4,7 +4,7 @@
 //! costs the CPU and the graphics driver a little each frame. Roblox merges
 //! parts that don't move into one mesh per area; this does the same: once a
 //! part has kept still for a while, it joins a merged mesh with the other
-//! still parts near it of the same surface material, whatever their colour
+//! still parts near it of the same surface material and see-through-ness, whatever their colour
 //! or size (the colour goes on each corner of the mesh and the texture's
 //! scale into its texture coordinates), and its own entity is hidden. When
 //! any part of a cluster moves or changes, the cluster breaks up at once
@@ -44,17 +44,16 @@ pub(crate) fn counts() -> (usize, usize, usize) {
     (get(0), get(1), get(2))
 }
 
-/// A surface: the material, how shiny (rounded), and whether it casts a shadow.
-type Surface = (Material, u16, bool);
+/// A surface: the material, how shiny (rounded), whether it casts a
+/// shadow, and how see-through it is (rounded).
+type Surface = (Material, u16, bool, u16);
 type Key = (IVec3, Surface);
 
 fn surface(look: &PartAppearance) -> Option<Surface> {
-    // Glowing and see-through parts keep their own material.
-    let own = matches!(
-        look.material,
-        Material::Neon | Material::CrackedLava | Material::ForceField | Material::Glass
-    ) || look.transparency > 0.001;
-    (!own).then(|| (look.material, (look.reflectance.clamp(0.0, 1.0) * 100.0).round() as u16, look.shadow))
+    // Parts whose glow or look depends on their colour keep their own material.
+    let own = matches!(look.material, Material::CrackedLava | Material::ForceField | Material::Glass);
+    let round = |x: f32| (x.clamp(0.0, 1.0) * 100.0).round() as u16;
+    (!own).then(|| (look.material, round(look.reflectance), look.shadow, round(look.transparency)))
 }
 
 /// A merged mesh standing in for its member parts.
@@ -204,13 +203,19 @@ pub(crate) fn cluster_parts(
             .or_insert_with(|| {
                 let white = PartAppearance {
                     color: Color::WHITE,
-                    transparency: 0.0,
+                    transparency: f32::from(surface.3) / 100.0,
                     material: surface.0,
                     texture_repeat: 1.0,
                     reflectance: f32::from(surface.1) / 100.0,
                     shadow: surface.2,
                 };
-                materials.add(material_for(&white, &textures))
+                let mut material = material_for(&white, &textures);
+                // Neon is unlit in its own colour, which is on the mesh; a
+                // white glow would wash it out.
+                if surface.0 == Material::Neon {
+                    material.emissive = LinearRgba::BLACK;
+                }
+                materials.add(material)
             })
             .clone();
         let mut cluster = commands.spawn((
