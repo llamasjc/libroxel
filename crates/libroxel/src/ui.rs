@@ -458,7 +458,10 @@ pub fn editor_ui(
                     !playing,
                 );
             }
-            if let Ok((cam, gt, _, _)) = cameras.single() {
+            // (Not while the 3D view isn't drawn at all, behind a loading screen.)
+            if let Ok((cam, gt, _, _)) = cameras.single()
+                && cam.is_active
+            {
                 let selected = if playing { None } else { editor.selection };
                 if let Some(hit) = gui::surfaces(ui, &tree_rc.borrow(), (cam, gt), selected) {
                     gui_hit = Some(hit);
@@ -4334,6 +4337,8 @@ pub struct Stats {
     seconds: f32,
     text: String,
     report: SpeedReport,
+    /// Whether the game had its 3D view off (a loading screen) last frame.
+    loading: bool,
 }
 
 /// What `speed.txt` sums up: the last few seconds of play.
@@ -4364,6 +4369,25 @@ impl Stats {
         dt: f32,
         about: impl FnOnce() -> String,
     ) {
+        // A loading screen (3D rendering off) gets a report of its own, from
+        // start to end, put in the Output when it goes: what took the time.
+        let loading = !libroxel_script::RENDERING_3D.load(std::sync::atomic::Ordering::Relaxed);
+        if loading != self.loading {
+            self.loading = loading;
+            if loading {
+                let before = std::mem::take(&mut self.report.scripts_before);
+                self.report = SpeedReport { scripts_before: before, ..Default::default() };
+                let _ = session.take_frame_times();
+                let _ = session.physics_mut().take_timing();
+                let _ = libroxel_engine::view::take_sync_seconds();
+                self.frames = 0;
+                self.seconds = 0.0;
+            } else {
+                let text = self.write_report(session, about(), true);
+                session.note(text);
+                return;
+            }
+        }
         self.frames += 1;
         self.seconds += dt;
         let r = &mut self.report;
@@ -4394,12 +4418,19 @@ impl Stats {
         );
         self.frames = 0;
         self.seconds = 0.0;
-        if r.seconds >= REPORT_EVERY {
-            self.write_report(session, about());
+        if r.seconds >= REPORT_EVERY && !self.loading {
+            self.write_report(session, about(), false);
         }
     }
 
-    fn write_report(&mut self, session: &mut libroxel_engine::PlaySession, about: String) {
+    /// Writes `speed.txt` (or, for a loading screen, `loading-speed.txt`)
+    /// and gives back its text.
+    fn write_report(
+        &mut self,
+        session: &mut libroxel_engine::PlaySession,
+        about: String,
+        loading: bool,
+    ) -> String {
         use std::fmt::Write as _;
         let r = std::mem::take(&mut self.report);
         let t = &r.step;
@@ -4407,7 +4438,12 @@ impl Stats {
         let frame_ms = r.seconds * 1000.0 / r.frames.max(1) as f32;
         let step = per(t.change_events + t.scripts + t.physics + t.other);
         let mut out = String::new();
-        let _ = writeln!(out, "Libroxel speed report (the last {:.0} seconds of play)\n", r.seconds);
+        if loading {
+            let _ =
+                writeln!(out, "Libroxel speed report for the loading screen ({:.0} seconds)\n", r.seconds);
+        } else {
+            let _ = writeln!(out, "Libroxel speed report (the last {:.0} seconds of play)\n", r.seconds);
+        }
         let _ = writeln!(out, "{about}");
         let _ = writeln!(
             out,
@@ -4481,10 +4517,15 @@ impl Stats {
             );
         }
         self.report.scripts_before = now;
-        let path = speed_report_path();
+        let path = if loading {
+            speed_report_path().with_file_name("loading-speed.txt")
+        } else {
+            speed_report_path()
+        };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(path, out);
+        let _ = std::fs::write(path, &out);
+        out
     }
 }
