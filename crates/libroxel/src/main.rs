@@ -22,6 +22,7 @@ mod images;
 mod menu;
 mod mesh_import;
 mod open;
+mod rich_text;
 mod server;
 mod starter_games;
 mod templates;

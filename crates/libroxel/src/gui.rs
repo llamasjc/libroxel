@@ -61,6 +61,11 @@ fn child_of_class(tree: &InstanceTree, id: InstanceId, class: ClassKind) -> Opti
 }
 
 /// An enumeration kept in an instance's extras, by its number.
+/// Whether a text object reads tags in its text (its RichText is on).
+fn is_rich(tree: &InstanceTree, id: InstanceId) -> bool {
+    matches!(tree.get_extra(id, "RichText"), Ok(Some(PropertyValue::Bool(true))))
+}
+
 fn extra_enum(tree: &InstanceTree, id: InstanceId, name: &str) -> Option<i64> {
     match tree.get_extra(id, name) {
         Ok(Some(PropertyValue::Number(n))) => Some(n as i64),
@@ -272,18 +277,21 @@ thread_local! {
 
 /// How wide and tall `text` is at `size` points, wrapped at `width`: laid
 /// out with the drawing fonts while drawing, or estimated otherwise.
-fn measure_text(text: &str, size: f32, width: f32) -> (f32, f32) {
+fn measure_text(text: &str, size: f32, width: f32, rich: Option<f32>) -> (f32, f32) {
     if text.is_empty() {
         return (0.0, 0.0);
     }
     let laid = TEXT_CONTEXT.with_borrow(|ctx| {
         ctx.as_ref().map(|ctx| {
-            let job = egui::text::LayoutJob::simple(
-                text.to_owned(),
-                FontId::proportional(size),
-                Color32::WHITE,
-                width,
-            );
+            let job = match rich {
+                Some(k) => crate::rich_text::job(text, size, Color32::WHITE, width, k),
+                None => egui::text::LayoutJob::simple(
+                    text.to_owned(),
+                    FontId::proportional(size),
+                    Color32::WHITE,
+                    width,
+                ),
+            };
             let galley = ctx.fonts_mut(|f| f.layout_job(job));
             (galley.size().x, galley.size().y)
         })
@@ -334,7 +342,7 @@ fn automatic(tree: &InstanceTree, id: InstanceId, size: Vec2, k: f32) -> Vec2 {
         // grows downwards by as many lines as it wraps to, as in Roblox.
         let wraps = tree.get_bool(id, Property::TextWrapped) == Some(true) && !grow_x;
         let width = if wraps { inner.width().max(1.0) } else { f32::INFINITY };
-        let (w, h) = measure_text(&text, text_size, width);
+        let (w, h) = measure_text(&text, text_size, width, is_rich(tree, id).then_some(k));
         extent.x = extent.x.max(inner.min.x + w + pad_right);
         extent.y = extent.y.max(inner.min.y + h + pad_bottom);
     }
@@ -412,6 +420,7 @@ fn draw_text(
     size: f32,
     colour: Color32,
     stroke: Option<(Color32, f32)>,
+    scale: f32,
 ) {
     use libroxel_instance::{EnumValue, TextXAlignment, TextYAlignment};
     let x = match tree.get_enum(id, Property::TextXAlignment) {
@@ -429,13 +438,14 @@ fn draw_text(
         TextXAlignment::Center => egui::Align::Center,
         TextXAlignment::Right => egui::Align::RIGHT,
     };
+    let rich = is_rich(tree, id);
     let lay = |size: f32| {
-        let mut job = egui::text::LayoutJob::simple(
-            text.clone(),
-            FontId::proportional(size),
-            colour,
-            if wrapped || scaled { rect.width().max(1.0) } else { f32::INFINITY },
-        );
+        let width = if wrapped || scaled { rect.width().max(1.0) } else { f32::INFINITY };
+        let mut job = if rich {
+            crate::rich_text::job(&text, size, colour, width, scale)
+        } else {
+            egui::text::LayoutJob::simple(text.clone(), FontId::proportional(size), colour, width)
+        };
         job.halign = halign;
         painter.layout_job(job)
     };
@@ -613,7 +623,7 @@ fn draw_children(
         if !text.is_empty() && text_alpha > 0.0 {
             let clipped = painter.with_clip_rect(r.intersect(painter.clip_rect()));
             let outline = stroke.filter(|_| is_text(class));
-            draw_text(&clipped, tree, child, inner, text, size, color(text_color, text_alpha), outline);
+            draw_text(&clipped, tree, child, inner, text, size, color(text_color, text_alpha), outline, k);
         }
         if selected == Some(child) {
             painter.rect_stroke(
