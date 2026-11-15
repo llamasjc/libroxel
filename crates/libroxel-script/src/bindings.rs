@@ -327,6 +327,10 @@ pub(crate) struct Host {
     /// not seen yet (a `pcall` or `task.spawn` inside a long loop makes a new
     /// thread for every piece of the work).
     script_cost: RefCell<std::collections::HashMap<String, Duration>>,
+    /// Heavy background work run beyond its share of recent frames: each
+    /// frame pays [`RESUME_BUDGET`] of it off, and heavy work waits while
+    /// any is owed.
+    heavy_debt: Cell<Duration>,
     /// Where the workspace's parts are, for raycasts and part queries.
     pub(crate) part_index: RefCell<libroxel_instance::geometry::PartIndex>,
 }
@@ -2064,6 +2068,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         spare_threads: RefCell::new(Vec::new()),
         thread_cost: RefCell::new(std::collections::HashMap::new()),
         script_cost: RefCell::new(std::collections::HashMap::new()),
+        heavy_debt: Cell::new(Duration::ZERO),
         part_index: RefCell::new(libroxel_instance::geometry::PartIndex::new()),
         tweens: RefCell::new(Vec::new()),
         next_tween: Cell::new(1),
@@ -2595,6 +2600,11 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
         *cost = cost.mul_f32(0.97);
     }
     let mut ran_heavy = false;
+    // Like Roblox's scheduler under load: heavy background work gets a
+    // share of each frame on average. One long piece (a 12 ms scan, say)
+    // still runs whole, but then the next ones wait the frames it
+    // borrowed, instead of a long piece running every single frame.
+    let mut debt = host(lua).heavy_debt.get().saturating_sub(RESUME_BUDGET);
     for w in due {
         let key = w.thread.to_pointer() as usize;
         let expected = {
@@ -2603,7 +2613,8 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
             known.or_else(|| host.script_cost.borrow().get(&w.script).copied()).unwrap_or_default()
         };
         let heavy = expected > HEAVY_RESUME;
-        if heavy && ran_heavy && !w.parallel && budget_start.elapsed() + expected > RESUME_BUDGET {
+        let over = ran_heavy && budget_start.elapsed() + expected > RESUME_BUDGET;
+        if heavy && !w.parallel && (over || !debt.is_zero()) {
             host(lua).waiting.borrow_mut().push(w);
             continue;
         }
@@ -2628,6 +2639,9 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
             host(lua).thread_cost.borrow_mut().remove(&key);
         }
         ran_heavy |= took > HEAVY_RESUME;
+        if heavy || took > HEAVY_RESUME {
+            debt += took.saturating_sub(RESUME_BUDGET);
+        }
         {
             let host = host(lua);
             let mut costs = host.script_cost.borrow_mut();
@@ -2641,6 +2655,7 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
             }
         }
     }
+    host(lua).heavy_debt.set(debt.min(Duration::from_millis(250)));
     step_tweens(lua, dt);
     crate::animation::step(lua);
     crate::services::step_debris(lua, now);
