@@ -185,6 +185,10 @@ struct PartSync {
     frames: u64,
     /// Frames the view was hidden (see [`view_hidden`]).
     hidden_frames: u64,
+    /// Where it last read the tree's log of what moved, came or went, and
+    /// that log's epoch.
+    moved_read: usize,
+    moved_epoch: u64,
 }
 
 /// Each part's entity, and the revision of the part it last showed.
@@ -297,10 +301,19 @@ fn sync_parts(
         (Some(e), Some(old)) => e.distance(old) > 8.0,
         (a, b) => a.is_some() != b.is_some(),
     };
-    let scan = full
-        || sync.structure != tree.workspace_structure()
-        || sync.pending
-        || (limited && (moved_far || sync.frames.is_multiple_of(30)));
+    let periodic = limited && (moved_far || sync.frames.is_multiple_of(30));
+    let scan = full || sync.structure != tree.workspace_structure() || sync.pending || periodic;
+    // When only parts came or went (a game building its world adds some
+    // nearly every frame), just those are looked at, from the tree's log of
+    // what moved, instead of every part in the workspace.
+    let (moved_epoch, came_or_went) = tree.moved_since(sync.moved_read);
+    let incremental = scan
+        && !full
+        && !sync.pending
+        && !periodic
+        && moved_epoch == sync.moved_epoch
+        && came_or_went.len() < 20_000;
+
     let mut work: Vec<InstanceId> = Vec::new();
     if full {
         // Everything spawned is compared with its revision below.
@@ -320,7 +333,70 @@ fn sync_parts(
     sync.tree = tree_ptr;
     sync.epoch = epoch;
     sync.read = tree.touched_len();
-    if scan {
+    // Like Roblox's streaming: while playing, only parts within the
+    // workspace's streaming radius of the camera are drawn, and new parts
+    // come in nearest first, a batch a frame, so a big map opens at once
+    // instead of building every part before the first frame.
+    // Like Roblox at lower graphics levels, small parts stop being drawn
+    // sooner than big ones: a pebble far off can't be seen anyway. How
+    // far a part is past where it stops being drawn (1 = right there).
+    let reach = |id: InstanceId| -> f32 {
+        let Some(eye) = eye else { return 0.0 };
+        let (Some(pos), Some(size)) =
+            (tree.get_vec3(id, Property::Position), tree.get_vec3(id, Property::Size))
+        else {
+            return 0.0;
+        };
+        let d = (Vec3::new(pos.x, pos.y, pos.z).distance(eye) - size.length() * 0.5).max(0.0);
+        let limit = if detail {
+            radius.min((size.x.max(size.y).max(size.z) * DETAIL_PER_STUD).max(DETAIL_MIN))
+        } else {
+            radius
+        };
+        d / limit
+    };
+
+    if incremental {
+        sync.structure = tree.workspace_structure();
+        let PartEntities(spawned, seen) = &mut *entities;
+        let mut once = FastSet::default();
+        let mut fresh: Vec<(f32, InstanceId)> = Vec::new();
+        for id in came_or_went {
+            if !once.insert(*id) {
+                continue;
+            }
+            let mut ids = tree.descendants(*id).unwrap_or_default();
+            ids.push(*id);
+            for id in ids {
+                let live = tree.class(id).is_ok_and(|c| c.is_a(ClassKind::Part))
+                    && !tree.is_destroyed(id).unwrap_or(true)
+                    && tree.is_descendant_of(id, tree.workspace()).unwrap_or(false);
+                match spawned.get(&id) {
+                    Some(entity) if !live => {
+                        commands.entity(*entity).despawn();
+                        spawned.remove(&id);
+                        seen.remove(&id);
+                    }
+                    None if live => {
+                        sync.far.remove(&id);
+                        let d = reach(id);
+                        if d <= 1.0 {
+                            fresh.push((d, id));
+                        } else if limited {
+                            sync.far.insert(id);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        sync.pending = fresh.len() > SPAWN_BUDGET;
+        if sync.pending {
+            fresh.select_nth_unstable_by(SPAWN_BUDGET, |a, b| a.0.total_cmp(&b.0));
+            fresh.truncate(SPAWN_BUDGET);
+        }
+        work.extend(fresh.into_iter().map(|(_, id)| id));
+    } else if scan {
         sync.structure = tree.workspace_structure();
         sync.eye = eye;
         let live: Vec<InstanceId> = tree.descendants_of_class(tree.workspace(), ClassKind::Part);
@@ -332,29 +408,6 @@ fn sync_parts(
         if measure {
             sync.far.clear();
         }
-
-        // Like Roblox's streaming: while playing, only parts within the
-        // workspace's streaming radius of the camera are drawn, and new parts
-        // come in nearest first, a batch a frame, so a big map opens at once
-        // instead of building every part before the first frame.
-        // Like Roblox at lower graphics levels, small parts stop being drawn
-        // sooner than big ones: a pebble far off can't be seen anyway. How
-        // far a part is past where it stops being drawn (1 = right there).
-        let reach = |id: InstanceId| -> f32 {
-            let Some(eye) = eye else { return 0.0 };
-            let (Some(pos), Some(size)) =
-                (tree.get_vec3(id, Property::Position), tree.get_vec3(id, Property::Size))
-            else {
-                return 0.0;
-            };
-            let d = (Vec3::new(pos.x, pos.y, pos.z).distance(eye) - size.length() * 0.5).max(0.0);
-            let limit = if detail {
-                radius.min((size.x.max(size.y).max(size.z) * DETAIL_PER_STUD).max(DETAIL_MIN))
-            } else {
-                radius
-            };
-            d / limit
-        };
 
         let PartEntities(spawned, seen) = &mut *entities;
         spawned.retain(|id, entity| {
@@ -398,6 +451,8 @@ fn sync_parts(
             spawned.keys().copied().filter(|id| seen.get(id) != Some(&tree.revision(*id).unwrap_or(0))),
         );
     }
+    sync.moved_epoch = tree.moved_epoch();
+    sync.moved_read = tree.moved_len();
     let PartEntities(spawned, seen) = &mut *entities;
 
     for id in work {
