@@ -478,23 +478,42 @@ pub struct PhysicsTiming {
 /// part is in (parts in the default group aren't listed).
 #[derive(Debug, Default)]
 pub(crate) struct Groups {
-    /// Pairs of group names that don't collide (each pair in name order).
-    apart: HashSet<(String, String)>,
-    of: HashMap<InstanceId, String>,
+    /// Pairs of group numbers that don't collide (each pair in order), the
+    /// numbers being places in `names`.
+    apart: HashSet<(u32, u32)>,
+    /// The groups named in those pairs.
+    names: HashMap<String, u32>,
+    /// The group number of each part in this step that is in one of them.
+    of: HashMap<InstanceId, u32>,
 }
 
 impl Groups {
+    /// Sets which pairs of group names pass through each other.
+    fn set(&mut self, pairs: impl IntoIterator<Item = (String, String)>) {
+        self.names.clear();
+        self.apart.clear();
+        for (a, b) in pairs {
+            let next = self.names.len() as u32;
+            let a = *self.names.entry(a).or_insert(next);
+            let next = self.names.len() as u32;
+            let b = *self.names.entry(b).or_insert(next);
+            self.apart.insert((a.min(b), a.max(b)));
+        }
+    }
+
     /// Whether `a` and `b` pass through each other for being in groups
     /// that don't collide.
     pub(crate) fn apart(&self, a: InstanceId, b: InstanceId) -> bool {
         if self.apart.is_empty() {
             return false;
         }
-        let default = libroxel_instance::DEFAULT_COLLISION_GROUP;
-        let ga = self.of.get(&a).map_or(default, String::as_str);
-        let gb = self.of.get(&b).map_or(default, String::as_str);
-        let pair = if ga <= gb { (ga.to_owned(), gb.to_owned()) } else { (gb.to_owned(), ga.to_owned()) };
-        self.apart.contains(&pair)
+        let default = self.names.get(libroxel_instance::DEFAULT_COLLISION_GROUP).copied();
+        let (Some(ga), Some(gb)) =
+            (self.of.get(&a).copied().or(default), self.of.get(&b).copied().or(default))
+        else {
+            return false;
+        };
+        self.apart.contains(&(ga.min(gb), ga.max(gb)))
     }
 
     /// Notes the group of each of `parts` (the ones in this step).
@@ -508,7 +527,9 @@ impl Groups {
             if let Some(g) = tree.get_str(part, Property::CollisionGroup)
                 && g != default
             {
-                self.of.insert(part, g.to_owned());
+                // A group no rule names collides with everything.
+                let n = self.names.get(g).copied().unwrap_or(u32::MAX);
+                self.of.insert(part, n);
             }
         }
     }
@@ -630,7 +651,7 @@ impl Physics {
     /// Sets which collision groups pass through each other: pairs of group
     /// names (in any order).
     pub fn set_collision_rules(&mut self, apart: impl IntoIterator<Item = (String, String)>) {
-        self.groups.apart = apart.into_iter().map(|(a, b)| if a <= b { (a, b) } else { (b, a) }).collect();
+        self.groups.set(apart);
     }
 
     /// Keeps `id` where it is for the next step (something else moved it
@@ -1071,7 +1092,8 @@ impl Physics {
                     }
                 }
             };
-        for i in (0..n).filter(|i| !bodies[*i].anchored) {
+        let movers: Vec<usize> = (0..n).filter(|i| !bodies[*i].anchored).collect();
+        for &i in &movers {
             let (lo, hi) = grown[i];
             let (a, b, cells) = span(lo, hi, &coarse_of);
             if cells > MAX_CELLS {
@@ -1108,7 +1130,7 @@ impl Physics {
                 let (a, b, cells) = span(lo, hi, &coarse_of);
                 if cells > MAX_CELLS {
                     // A giant box (a baseplate): every mover is a candidate.
-                    for m in (0..n).filter(|m| !bodies[*m].anchored && *m != j) {
+                    for &m in movers.iter().filter(|m| **m != j) {
                         if meet(&grown[m], &grown[j]) {
                             near[m].push(j);
                         }
@@ -1126,6 +1148,9 @@ impl Physics {
                     }
                 }
             }
+            // (A mover spans several cells: look at it once.)
+            found.sort_unstable();
+            found.dedup();
             for &m in &found {
                 if m != j && meet(&grown[m], &grown[j]) {
                     near[m].push(j);
