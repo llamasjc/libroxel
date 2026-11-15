@@ -140,10 +140,9 @@ pub(crate) fn extra_from_lua(
         Value::Integer(n) => P::Number(*n as f64),
         Value::Number(n) => P::Number(*n),
         Value::String(s) => P::String(s.to_str().ok()?.to_owned()),
+        Value::Vector(v) => P::Vec3(libroxel_instance::Vec3::new(v.x(), v.y(), v.z())),
         Value::UserData(u) => {
-            if let Ok(v) = u.borrow::<crate::bindings::LuaVector3>() {
-                P::Vec3(v.0)
-            } else if let Ok(c) = u.borrow::<crate::bindings::LuaColor3>() {
+            if let Ok(c) = u.borrow::<crate::bindings::LuaColor3>() {
                 P::Color3(c.0)
             } else if let Ok(v) = u.borrow::<crate::types::LuaVector2>() {
                 P::Vec2(v.0)

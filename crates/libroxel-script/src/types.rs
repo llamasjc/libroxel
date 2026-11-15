@@ -129,7 +129,7 @@ impl UserData for LuaCFrame {
                 return Ok(Value::UserData(lua.create_userdata(LuaCFrame(a * b))?));
             }
             if let Some(v) = as_vector3(&b) {
-                return Ok(Value::UserData(lua.create_userdata(LuaVector3(a.point_to_world(v)))?));
+                return Ok(crate::bindings::vector_value(a.point_to_world(v)));
             }
             Err(err("a CFrame can only be multiplied by a CFrame or a Vector3"))
         });

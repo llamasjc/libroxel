@@ -14,9 +14,7 @@ use libroxel_instance::{CFrame, Color3, EnumKind, InstanceId, Rotation, UDim, UD
 use mlua::{Function, Lua, MultiValue, Value};
 
 use crate::ScriptError;
-use crate::bindings::{
-    LuaColor3, LuaEnumItem, LuaVector3, SignalKind, as_instance, as_vector3, host, push_instance, take_errors,
-};
+use crate::bindings::{LuaColor3, LuaEnumItem, SignalKind, as_instance, host, push_instance, take_errors};
 use crate::types::{LuaCFrame, LuaUDim, LuaUDim2, LuaVector2};
 
 /// Which side of a game this runtime is.
@@ -123,11 +121,10 @@ fn encode_at(value: &Value, depth: usize) -> mlua::Result<Json> {
                 Json::Object(map)
             }
         }
+        Value::Vector(v) => json!({ "$v3": floats(&[v.x(), v.y(), v.z()]) }),
         Value::UserData(ud) => {
             if let Some(id) = as_instance(value) {
                 json!({ "$i": id.to_bits() })
-            } else if let Some(v) = as_vector3(value) {
-                json!({ "$v3": floats(&[v.x, v.y, v.z]) })
             } else if let Ok(c) = ud.borrow::<LuaColor3>() {
                 json!({ "$c3": floats(&[c.0.r, c.0.g, c.0.b]) })
             } else if let Ok(v) = ud.borrow::<LuaVector2>() {
@@ -194,7 +191,7 @@ pub fn decode(lua: &Lua, json: &Json) -> mlua::Result<Value> {
                 return Ok(if alive { Value::UserData(push_instance(lua, id)?) } else { Value::Nil });
             }
             if let Some(v) = tagged(map, "$v3").and_then(|j| float_list(j, 3)) {
-                return Ok(Value::UserData(lua.create_userdata(LuaVector3(Vec3::new(v[0], v[1], v[2])))?));
+                return Ok(crate::bindings::vector_value(Vec3::new(v[0], v[1], v[2])));
             }
             if let Some(v) = tagged(map, "$c3").and_then(|j| float_list(j, 3)) {
                 return Ok(Value::UserData(lua.create_userdata(LuaColor3(Color3::new(v[0], v[1], v[2])))?));

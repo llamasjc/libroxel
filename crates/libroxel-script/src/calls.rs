@@ -63,7 +63,7 @@ pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> m
                     Some(part) => crate::bindings::part_cframe(lua, part)?.point_to_world(offset),
                     None => offset,
                 };
-            return Ok(Some(Value::UserData(lua.create_userdata(crate::bindings::LuaVector3(world))?)));
+            return Ok(Some(crate::bindings::vector_value(world)));
         }
         game_info::JOB_ID if class == ClassKind::DataModel => {
             return Ok(Some(Value::String(lua.create_string("")?)));
