@@ -231,7 +231,7 @@ fn a_hat_made_from_parts_sits_on_the_head_and_survives_being_sent() {
     assert_eq!(back, look);
 
     // A character wearing it has its parts, placed by the head.
-    let character = Character::spawn_wearing(&mut tree, "Kai", None, look);
+    let character = Character::spawn_wearing(&mut tree, "Ada", None, look);
     let accessory = tree.find_first_child_of_class(character.model, ClassKind::Accessory).unwrap().unwrap();
     assert_eq!(tree.name(accessory).unwrap(), "Top hat");
     assert_eq!(tree.children(accessory).unwrap().len(), 2);
