@@ -4466,7 +4466,13 @@ impl Stats {
         let mut spent: Vec<(&String, f64, u64)> = now
             .iter()
             .map(|(name, (secs, n))| {
-                let (s0, n0) = r.scripts_before.get(name).copied().unwrap_or_default();
+                // A script that started again (a new play, a respawn) counts from nothing.
+                let (s0, n0) = r
+                    .scripts_before
+                    .get(name)
+                    .copied()
+                    .filter(|&(s0, n0)| n0 <= *n && s0 <= *secs)
+                    .unwrap_or_default();
                 (name, secs - s0, n - n0)
             })
             .filter(|(_, secs, _)| *secs > 0.0)
