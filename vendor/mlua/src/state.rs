@@ -327,6 +327,71 @@ impl Default for Lua {
     }
 }
 
+/// Libroxel: switches a VM's interrupt on from any thread (see
+/// [`Lua::interrupt_arm`]). Does nothing once the VM is gone.
+#[cfg(any(feature = "luau", doc))]
+#[derive(Clone, Debug)]
+pub struct InterruptArm(std::sync::Arc<std::sync::Mutex<usize>>);
+
+#[cfg(any(feature = "luau", doc))]
+impl InterruptArm {
+    /// Makes the VM call its interrupt at its next loop turn or call.
+    pub fn arm(&self) {
+        let at = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if *at != 0 {
+            unsafe { store_interrupt(*at as *mut ffi::lua_Callbacks, Some(interrupt_proc)) };
+        }
+    }
+}
+
+/// Sets the VM's interrupt with one machine-word store, which another
+/// thread may do while Luau runs (Luau reads it at each loop turn).
+#[cfg(feature = "luau")]
+unsafe fn store_interrupt(
+    callbacks: *mut ffi::lua_Callbacks,
+    proc_: Option<unsafe extern "C-unwind" fn(*mut ffi::lua_State, c_int)>,
+) {
+    let slot = ptr::addr_of_mut!((*callbacks).interrupt) as *const std::sync::atomic::AtomicUsize;
+    let value = proc_.map_or(0, |f| f as usize);
+    (*slot).store(value, std::sync::atomic::Ordering::Release);
+}
+
+#[cfg(feature = "luau")]
+unsafe extern "C-unwind" fn interrupt_proc(state: *mut ffi::lua_State, gc: c_int) {
+    if gc >= 0 {
+        // We don't support GC interrupts since they cannot survive Lua exceptions
+        return;
+    }
+    // Libroxel: with a flag, the interrupt is only switched on while the
+    // flag is up; once it is down again it switches itself off, so loops
+    // don't pay for a call at every turn.
+    let extra = ExtraData::get(state);
+    if !extra.is_null()
+        && let Some(flag) = (*extra).interrupt_flag.as_ref()
+        && !flag.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        store_interrupt(ffi::lua_callbacks(state), None);
+        return;
+    }
+    let result = callback_error_ext(state, ptr::null_mut(), false, move |extra, _| {
+        let interrupt_cb = (*extra).interrupt_callback.clone();
+        let interrupt_cb = mlua_expect!(interrupt_cb, "no interrupt callback set in interrupt_proc");
+        if XRc::strong_count(&interrupt_cb) > 2 {
+            return Ok(VmState::Continue); // Don't allow recursion
+        }
+        interrupt_cb((*extra).lua())
+    });
+    match result {
+        VmState::Continue => {}
+        VmState::Yield => {
+            // We can yield only at yieldable points, otherwise ignore and continue
+            if ffi::lua_isyieldable(state) != 0 {
+                ffi::lua_yield(state, 0);
+            }
+        }
+    }
+}
+
 impl Lua {
     /// Creates a new Lua state and loads the **safe** subset of the standard libraries.
     ///
@@ -844,44 +909,25 @@ impl Lua {
     where
         F: Fn(&Lua) -> Result<VmState> + MaybeSend + 'static,
     {
-        unsafe extern "C-unwind" fn interrupt_proc(state: *mut ffi::lua_State, gc: c_int) {
-            if gc >= 0 {
-                // We don't support GC interrupts since they cannot survive Lua exceptions
-                return;
-            }
-            // Libroxel: a cheap check first, so loops don't pay for the callback.
-            let extra = ExtraData::get(state);
-            if !extra.is_null()
-                && let Some(flag) = (*extra).interrupt_flag.as_ref()
-                && !flag.load(std::sync::atomic::Ordering::Relaxed)
-            {
-                return;
-            }
-            let result = callback_error_ext(state, ptr::null_mut(), false, move |extra, _| {
-                let interrupt_cb = (*extra).interrupt_callback.clone();
-                let interrupt_cb = mlua_expect!(interrupt_cb, "no interrupt callback set in interrupt_proc");
-                if XRc::strong_count(&interrupt_cb) > 2 {
-                    return Ok(VmState::Continue); // Don't allow recursion
-                }
-                interrupt_cb((*extra).lua())
-            });
-            match result {
-                VmState::Continue => {}
-                VmState::Yield => {
-                    // We can yield only at yieldable points, otherwise ignore and continue
-                    if ffi::lua_isyieldable(state) != 0 {
-                        ffi::lua_yield(state, 0);
-                    }
-                }
-            }
-        }
-
         // Set interrupt callback
         let lua = self.lock();
         unsafe {
             let _old_callback = (*lua.extra.get()).interrupt_callback.replace(XRc::new(callback));
-            (*ffi::lua_callbacks(lua.main_state())).interrupt = Some(interrupt_proc);
+            // Libroxel: with a flag it starts switched off (see `interrupt_arm`).
+            let on = (*lua.extra.get()).interrupt_flag.is_none();
+            (*ffi::lua_callbacks(lua.main_state())).interrupt = on.then_some(interrupt_proc as _);
+            *(*lua.extra.get()).interrupt_arm.lock().unwrap_or_else(|e| e.into_inner()) =
+                ffi::lua_callbacks(lua.main_state()) as usize;
         }
+    }
+
+    /// Libroxel: a handle another thread can use to switch the interrupt
+    /// on (once its flag is up, see `set_interrupt_flag`); the interrupt
+    /// switches itself off again when it finds the flag down.
+    #[cfg(any(feature = "luau", doc))]
+    pub fn interrupt_arm(&self) -> InterruptArm {
+        let lua = self.lock();
+        InterruptArm(unsafe { (*lua.extra.get()).interrupt_arm.clone() })
     }
 
     /// Libroxel: only call the interrupt callback while `flag` is true (or
