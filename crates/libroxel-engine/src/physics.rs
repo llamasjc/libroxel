@@ -824,44 +824,69 @@ impl Physics {
         if epoch != self.moved_read.0 || moved.len() > 4096 {
             all = true;
         } else if self.rest.values().any(|r| r.still >= SLEEP_STEPS) {
-            let mut seen = HashSet::new();
+            // The sleeping parts by 16-stud cell, so each moved part looks
+            // only at the few sleeping near it.
+            const CELL: f32 = 16.0;
+            let cell = |v: Vec3| {
+                ((v.x / CELL).floor() as i32, (v.y / CELL).floor() as i32, (v.z / CELL).floor() as i32)
+            };
+            let bounds = |id: InstanceId, grow: f32| {
+                let pos = tree.get_vec3(id, Property::Position)?;
+                let r = tree.get_vec3(id, Property::Size)?.length() * 0.5 + grow;
+                Some((pos - Vec3::new(r, r, r), pos + Vec3::new(r, r, r)))
+            };
+            type Sleeper = (InstanceId, Vec3, Vec3);
+            let mut sleeping: HashMap<(i32, i32, i32), Vec<Sleeper>> = HashMap::new();
+            for (id, _) in self.rest.iter().filter(|(_, r)| r.still >= SLEEP_STEPS) {
+                let Some((lo, hi)) = bounds(*id, 0.0) else { continue };
+                let (a, b) = (cell(lo), cell(hi));
+                for x in a.0..=b.0 {
+                    for y in a.1..=b.1 {
+                        for z in a.2..=b.2 {
+                            sleeping.entry((x, y, z)).or_default().push((*id, lo, hi));
+                        }
+                    }
+                }
+            }
             // (A loose part settling, moved a hair by the solver, wakes nothing.)
             let settling = |id: InstanceId| {
                 self.rest.contains_key(&id)
                     && self.velocity(id).length() < 0.1
                     && self.spins.get(&id).is_none_or(|v| v.length() < 0.1)
             };
-            let boxes: Vec<(Vec3, Vec3)> = moved
-                .iter()
-                .filter(|id| seen.insert(**id) && !settling(**id))
-                .filter_map(|id| {
-                    let pos = tree.get_vec3(*id, Property::Position)?;
-                    let r = tree.get_vec3(*id, Property::Size)?.length() * 0.5 + 1.0;
-                    Some((pos - Vec3::new(r, r, r), pos + Vec3::new(r, r, r)))
-                })
-                .collect();
-            if !boxes.is_empty() {
-                let mut index = self.index.borrow_mut();
-                index.refresh(tree);
-                let overlaps = |id: InstanceId| {
-                    let (Some(pos), Some(size)) =
-                        (tree.get_vec3(id, Property::Position), tree.get_vec3(id, Property::Size))
-                    else {
-                        return false;
-                    };
-                    let r = size.length() * 0.5;
-                    boxes.iter().any(|(lo, hi)| {
-                        pos.x + r >= lo.x
-                            && pos.x - r <= hi.x
-                            && pos.y + r >= lo.y
-                            && pos.y - r <= hi.y
-                            && pos.z + r >= lo.z
-                            && pos.z - r <= hi.z
-                    })
+            let mut seen = HashSet::new();
+            for id in moved {
+                if !seen.insert(*id) || settling(*id) {
+                    continue;
+                }
+                let Some((lo, hi)) = bounds(*id, 1.0) else { continue };
+                let (a, b) = (cell(lo), cell(hi));
+                let meets = |slo: &Vec3, shi: &Vec3| {
+                    slo.x <= hi.x
+                        && lo.x <= shi.x
+                        && slo.y <= hi.y
+                        && lo.y <= shi.y
+                        && slo.z <= hi.z
+                        && lo.z <= shi.z
                 };
-                near.extend(
-                    index.near_boxes(&boxes).into_iter().filter(|id| self.asleep(*id) && overlaps(*id)),
-                );
+                if (b.0 - a.0 + 1) * (b.1 - a.1 + 1) * (b.2 - a.2 + 1) > 512 {
+                    // Something huge moved or went: each sleeping part is looked at.
+                    for list in sleeping.values() {
+                        near.extend(list.iter().filter(|(_, slo, shi)| meets(slo, shi)).map(|(s, ..)| *s));
+                    }
+                    continue;
+                }
+                for x in a.0..=b.0 {
+                    for y in a.1..=b.1 {
+                        for z in a.2..=b.2 {
+                            for (s, slo, shi) in sleeping.get(&(x, y, z)).into_iter().flatten() {
+                                if meets(slo, shi) {
+                                    near.insert(*s);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         self.moved_read = (epoch, tree.moved_len());
