@@ -126,15 +126,22 @@ impl Voxels {
         }
     }
 
-    fn tidy(&mut self) {
-        self.chunks.retain(|_, c| c.iter().any(|v| *v != 0));
-        self.version += 1;
+    /// Drops the given chunks if they ended up empty. (Only the chunks an
+    /// edit touched: looking over every chunk of a big map on each edit
+    /// cost more than the edit.)
+    fn tidy(&mut self, touched: impl IntoIterator<Item = (i32, i32, i32)>) {
+        for key in touched {
+            if self.chunks.get(&key).is_some_and(|c| c.iter().all(|v| *v == 0)) {
+                self.chunks.remove(&key);
+            }
+        }
     }
 
     /// Fills one cell (`None` empties it).
     pub fn set(&mut self, x: i32, y: i32, z: i32, material: Option<Material>) {
         self.put(x, y, z, material.map_or(0, code_of));
-        self.tidy();
+        self.tidy([(x.div_euclid(CHUNK), y.div_euclid(CHUNK), z.div_euclid(CHUNK))]);
+        self.version += 1;
     }
 
     /// Fills every cell whose middle is inside `test`, within the cells
@@ -147,20 +154,84 @@ impl Voxels {
         test: impl Fn(Vec3) -> bool,
     ) -> usize {
         let code = material.map_or(0, code_of);
+        self.change_where(min, max, code != 0, |p, now| {
+            (now != code && test(Vec3::new(p.0 as f32 + 0.5, p.1 as f32 + 0.5, p.2 as f32 + 0.5)))
+                .then_some(code)
+        })
+    }
+
+    /// Turns every cell of `from` in the cells from `min` to `max`
+    /// (inclusive) into `to` (`None` is air). Returns how many changed.
+    pub fn replace(
+        &mut self,
+        min: (i32, i32, i32),
+        max: (i32, i32, i32),
+        from: Option<Material>,
+        to: Option<Material>,
+    ) -> usize {
+        let (from, to) = (from.map_or(0, code_of), to.map_or(0, code_of));
+        if from == to {
+            return 0;
+        }
+        self.change_where(min, max, from == 0, |_, now| (now == from).then_some(to))
+    }
+
+    /// Looks at every cell from `min` to `max` (inclusive) and sets the
+    /// code `change` gives (from its position and current code), a chunk at
+    /// a time. Chunks not there yet are looked at only when `fill_empty`.
+    fn change_where(
+        &mut self,
+        min: (i32, i32, i32),
+        max: (i32, i32, i32),
+        fill_empty: bool,
+        change: impl Fn((i32, i32, i32), u8) -> Option<u8>,
+    ) -> usize {
         let mut changed = 0;
-        for y in min.1..=max.1 {
-            for z in min.2..=max.2 {
-                for x in min.0..=max.0 {
-                    let middle = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
-                    if test(middle) && self.get(x, y, z).map_or(0, code_of) != code {
-                        self.put(x, y, z, code);
-                        changed += 1;
+        let mut touched = Vec::new();
+        // A chunk at a time, straight into its cells.
+        let (lo, hi) = (
+            (min.0.div_euclid(CHUNK), min.1.div_euclid(CHUNK), min.2.div_euclid(CHUNK)),
+            (max.0.div_euclid(CHUNK), max.1.div_euclid(CHUNK), max.2.div_euclid(CHUNK)),
+        );
+        for cy in lo.1..=hi.1 {
+            for cz in lo.2..=hi.2 {
+                for cx in lo.0..=hi.0 {
+                    let key = (cx, cy, cz);
+                    let existed = self.chunks.contains_key(&key);
+                    if !fill_empty && !existed {
+                        continue;
+                    }
+                    let base = (cx * CHUNK, cy * CHUNK, cz * CHUNK);
+                    let span = |lo: i32, hi: i32, start: i32| lo.max(start)..=hi.min(start + CHUNK - 1);
+                    let chunk = self.chunks.entry(key).or_insert_with(|| Box::new([0; CHUNK_CELLS]));
+                    let mut any = false;
+                    for y in span(min.1, max.1, base.1) {
+                        for z in span(min.2, max.2, base.2) {
+                            for x in span(min.0, max.0, base.0) {
+                                let at = index(
+                                    (x - base.0) as usize,
+                                    (y - base.1) as usize,
+                                    (z - base.2) as usize,
+                                );
+                                if let Some(code) = change((x, y, z), chunk[at])
+                                    && code != chunk[at]
+                                {
+                                    chunk[at] = code;
+                                    changed += 1;
+                                    any = true;
+                                }
+                            }
+                        }
+                    }
+                    if any || !existed {
+                        touched.push(key);
                     }
                 }
             }
         }
+        self.tidy(touched);
         if changed > 0 {
-            self.tidy();
+            self.version += 1;
         }
         changed
     }
@@ -240,10 +311,13 @@ impl Voxels {
 
     /// Sets many cells at once (`None` empties one).
     pub fn set_cells(&mut self, cells: impl IntoIterator<Item = ((i32, i32, i32), Option<Material>)>) {
+        let mut touched = std::collections::BTreeSet::new();
         for ((x, y, z), material) in cells {
             self.put(x, y, z, material.map_or(0, code_of));
+            touched.insert((x.div_euclid(CHUNK), y.div_euclid(CHUNK), z.div_euclid(CHUNK)));
         }
-        self.tidy();
+        self.tidy(touched);
+        self.version += 1;
     }
 
     /// Changes the material of the filled cells in a ball, leaving air alone.
