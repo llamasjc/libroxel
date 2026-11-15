@@ -9,7 +9,9 @@
 //! from the height of the cell it was reached from.
 
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::BinaryHeap;
+
+use foldhash::{HashMap, HashMapExt};
 
 use crate::geometry::{Region, ray_part};
 use crate::{ClassKind, InstanceId, InstanceTree, Property, Rotation, Vec3};
@@ -20,6 +22,8 @@ pub const CELL: f32 = 1.0;
 pub const MAX_DROP: f32 = 20.0;
 /// How many cells the search looks at before giving up.
 const MAX_VISITS: usize = 40_000;
+/// How far above or below the start and the goal the world is looked at.
+const CLIMB: f32 = 120.0;
 /// How far past the start and the goal the search may wander, in cells.
 const MARGIN: i32 = 40;
 
@@ -68,16 +72,25 @@ fn bucket_of(x: f32, z: f32) -> (i32, i32) {
 }
 
 impl<'a> World<'a> {
-    fn new(tree: &'a InstanceTree, keep: &impl Fn(InstanceId) -> bool) -> Self {
+    /// The world's parts that might be in the box from `lo` to `hi` (where
+    /// the search can go), and its terrain.
+    fn new(tree: &'a InstanceTree, lo: Vec3, hi: Vec3, keep: &impl Fn(InstanceId) -> bool) -> Self {
         let mut parts = Vec::new();
         let mut buckets: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
         let mut huge = Vec::new();
-        for part in tree.descendants_of_class(tree.workspace(), ClassKind::Part) {
-            if tree.get_bool(part, Property::CanCollide) == Some(false) || !keep(part) {
+        for part in tree.parts_near_box(lo, hi) {
+            if !tree.class(part).is_ok_and(|c| c.is_a(ClassKind::Part))
+                || tree.get_bool(part, Property::CanCollide) == Some(false)
+                || !keep(part)
+            {
                 continue;
             }
             let Some(region) = Region::of_part(tree, part) else { continue };
             let (low, high) = region.bounds();
+            if low.x > hi.x || high.x < lo.x || low.y > hi.y || high.y < lo.y || low.z > hi.z || high.z < lo.z
+            {
+                continue;
+            }
             let index = parts.len();
             parts.push((part, region, low, high));
             let (x0, z0) = bucket_of(low.x, low.z);
@@ -138,14 +151,27 @@ impl<'a> World<'a> {
         let half = Vec3::new(agent.radius - 0.05, tall / 2.0, agent.radius - 0.05);
         let space = Region::Box { center, rot: Rotation::IDENTITY, half };
         let (low, high) = space.bounds();
-        let mut seen = Vec::new();
+        // The patches under its corners (often all the same one).
+        let mut patches = [(0, 0); 4];
+        let mut count = 0;
         for corner_x in [low.x, high.x] {
             for corner_z in [low.z, high.z] {
-                for &i in self.near(corner_x, corner_z) {
-                    if seen.contains(&i) {
-                        continue;
-                    }
-                    seen.push(i);
+                let patch = bucket_of(corner_x, corner_z);
+                if !patches[..count].contains(&patch) {
+                    patches[count] = patch;
+                    count += 1;
+                }
+            }
+        }
+        let lists = patches[..count]
+            .iter()
+            .map(|p| self.buckets.get(p).map_or(&[][..], Vec::as_slice))
+            .chain(std::iter::once(self.huge.as_slice()));
+        // (A part over several of the patches is looked at more than once,
+        // which is cheaper than keeping track.)
+        for list in lists {
+            for &i in list {
+                {
                     let (_, region, plow, phigh) = self.parts[i];
                     let apart = plow.x > high.x
                         || phigh.x < low.x
@@ -183,6 +209,9 @@ type Node = (i32, i32, i32);
 #[derive(PartialEq)]
 struct Open {
     guess: f32,
+    /// The cost so far: of equal guesses, the one furthest along goes first
+    /// (on open ground that heads straight for the goal).
+    cost: f32,
     node: Node,
 }
 
@@ -190,7 +219,7 @@ impl Eq for Open {}
 
 impl Ord for Open {
     fn cmp(&self, other: &Self) -> Ordering {
-        other.guess.partial_cmp(&self.guess).unwrap_or(Ordering::Equal)
+        other.guess.total_cmp(&self.guess).then(self.cost.total_cmp(&other.cost))
     }
 }
 
@@ -223,26 +252,41 @@ pub fn find_path(
     agent: Agent,
     keep: impl Fn(InstanceId) -> bool,
 ) -> Option<Vec<Waypoint>> {
-    let world = World::new(tree, &keep);
-    let reach = agent.height + MAX_DROP;
-    let start_ground = world.ground(start.x, start.z, start.y + agent.step, reach)?;
-    let goal_ground = world.ground(goal.x, goal.z, goal.y + agent.step, reach)?;
     let (sx, sz, gx, gz) = (cell(start.x), cell(start.z), cell(goal.x), cell(goal.z));
     let (min_x, max_x) = (sx.min(gx) - MARGIN, sx.max(gx) + MARGIN);
     let (min_z, max_z) = (sz.min(gz) - MARGIN, sz.max(gz) + MARGIN);
+    // Only what is where the search can go matters (it goes no further up
+    // or down than a long climb or a few drops).
+    let edge = agent.radius + 4.0 * CELL;
+    let lo = Vec3::new(min_x as f32 * CELL - edge, start.y.min(goal.y) - CLIMB, min_z as f32 * CELL - edge);
+    let hi = Vec3::new(
+        (max_x + 1) as f32 * CELL + edge,
+        start.y.max(goal.y) + CLIMB,
+        (max_z + 1) as f32 * CELL + edge,
+    );
+    let world = World::new(tree, lo, hi, &keep);
+    let reach = agent.height + MAX_DROP;
+    let start_ground = world.ground(start.x, start.z, start.y + agent.step, reach)?;
+    let goal_ground = world.ground(goal.x, goal.z, goal.y + agent.step, reach)?;
 
     let first: Node = (sx, sz, level(start_ground));
+    // The length of the way there over open ground: straight and diagonal
+    // steps, as the search takes them.
     let guess = |n: Node| {
-        let (dx, dz) = ((n.0 - gx) as f32 * CELL, (n.1 - gz) as f32 * CELL);
-        (dx * dx + dz * dz).sqrt() + (n.2 as f32 / 4.0 - goal_ground).abs()
+        let (dx, dz) = (((n.0 - gx).abs()) as f32 * CELL, ((n.1 - gz).abs()) as f32 * CELL);
+        dx.max(dz) + (std::f32::consts::SQRT_2 - 1.0) * dx.min(dz) + (n.2 as f32 / 4.0 - goal_ground).abs()
     };
+    // Nowhere to stand at the goal: no need to look everywhere first.
+    if !world.room(middle(gx), goal_ground, middle(gz), &agent) {
+        return None;
+    }
     let mut open = BinaryHeap::new();
     let mut cost: HashMap<Node, f32> = HashMap::new();
     let mut came: HashMap<Node, (Node, bool)> = HashMap::new();
     // Where a step from one cell to a neighbour lands, worked out once.
     let mut landing: HashMap<(Node, i32, i32), Option<(Node, bool)>> = HashMap::new();
     cost.insert(first, 0.0);
-    open.push(Open { guess: guess(first), node: first });
+    open.push(Open { guess: guess(first), cost: 0.0, node: first });
     let mut visits = 0;
     let mut end = None;
     while let Some(Open { node, .. }) = open.pop() {
@@ -316,7 +360,7 @@ pub fn find_path(
             if cost.get(&next).is_none_or(|c| total < *c) {
                 cost.insert(next, total);
                 came.insert(next, (node, jump));
-                open.push(Open { guess: total + guess(next), node: next });
+                open.push(Open { guess: total + guess(next), cost: total, node: next });
             }
         }
     }
