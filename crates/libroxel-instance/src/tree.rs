@@ -243,8 +243,8 @@ pub struct InstanceTree {
 struct ClassCache {
     structure: Option<u64>,
     all: Vec<InstanceId>,
-    /// The class of each of `all`, by its number.
-    classes: Vec<u16>,
+    /// For each class number, where in `all` its instances are (in order).
+    buckets: Vec<Vec<u32>>,
     by_class: std::collections::HashMap<ClassKind, Vec<InstanceId>>,
 }
 
@@ -971,13 +971,19 @@ impl InstanceTree {
         if cache.structure != Some(structure) {
             // One walk notes both, reusing the lists' room.
             cache.all.clear();
-            cache.classes.clear();
+            for bucket in &mut cache.buckets {
+                bucket.clear();
+            }
             let mut stack: Vec<InstanceId> =
                 self.data(ancestor).map(|d| d.children.iter().rev().copied().collect()).unwrap_or_default();
             while let Some(next) = stack.pop() {
                 if let Ok(data) = self.data(next) {
+                    let number = data.class as usize;
+                    if cache.buckets.len() <= number {
+                        cache.buckets.resize_with(number + 1, Vec::new);
+                    }
+                    cache.buckets[number].push(cache.all.len() as u32);
                     cache.all.push(next);
-                    cache.classes.push(data.class as u16);
                     stack.extend(data.children.iter().rev().copied());
                 }
             }
@@ -997,21 +1003,26 @@ impl InstanceTree {
         if let Some((cell, structure)) = cached {
             let mut cache = cell.borrow_mut();
             self.refresh_cache(&mut cache, ancestor, structure);
-            let ClassCache { all, classes, by_class, .. } = &mut *cache;
+            let ClassCache { all, buckets, by_class, .. } = &mut *cache;
             return by_class
                 .entry(class)
                 .or_insert_with(|| {
-                    // Which classes count, worked out once, then one pass.
-                    let fits: Vec<bool> = ClassKind::ALL.iter().map(|c| c.is_a(class)).collect();
-                    let by_number: std::collections::HashMap<u16, bool> =
-                        ClassKind::ALL.iter().zip(&fits).map(|(c, f)| (*c as u16, *f)).collect();
-                    let size = by_number.keys().map(|n| usize::from(*n) + 1).max().unwrap_or(0);
-                    let mut table = vec![false; size];
-                    for (n, f) in by_number {
-                        table[usize::from(n)] = f;
+                    // The instances of each class that counts, kept in tree order.
+                    let found: Vec<&Vec<u32>> = ClassKind::ALL
+                        .iter()
+                        .filter(|c| c.is_a(class))
+                        .filter_map(|c| buckets.get(*c as usize))
+                        .filter(|b| !b.is_empty())
+                        .collect();
+                    match found.len() {
+                        0 => Vec::new(),
+                        1 => found[0].iter().map(|at| all[*at as usize]).collect(),
+                        _ => {
+                            let mut at: Vec<u32> = found.iter().flat_map(|b| b.iter().copied()).collect();
+                            at.sort_unstable();
+                            at.into_iter().map(|at| all[at as usize]).collect()
+                        }
                     }
-                    let fits = |c: &u16| table.get(usize::from(*c)).copied().unwrap_or(false);
-                    all.iter().zip(classes.iter()).filter(|(_, c)| fits(c)).map(|(id, _)| *id).collect()
                 })
                 .clone();
         }
