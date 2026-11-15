@@ -459,6 +459,11 @@ fn server_row(ui: &mut egui::Ui, platform: &mut Platform, server: &ServerInfo, t
                     ui.label(
                         RichText::new(format!("{} server", server.kind.label())).small().color(kind_colour),
                     );
+                    // Only an account the Hub checked; the server's name is whatever the host typed.
+                    if let Some(host) = &server.host {
+                        ui.label(RichText::new(format!("hosted by {host}")).small().color(theme::CHALK))
+                            .on_hover_text("The Hub checked this account really hosts it.");
+                    }
                     if !friends.is_empty() {
                         for (name, look) in friends.iter().take(4) {
                             let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());

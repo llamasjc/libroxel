@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use bevy_egui::egui::{self, RichText};
 use libroxel_hub::{
-    AccountUpdate, Announcer, GameInfo, HostKind, HubClient, Item, Listing, NewItem, Profile, Publish,
-    Report, RunningHub, ServerInfo,
+    AccountUpdate, Announcer, GameInfo, HostKind, HostSigner, HubClient, Item, Listing, NewItem, Profile,
+    Publish, Report, RunningHub, ServerInfo,
 };
 use libroxel_instance::serde_json::{self, Value as Json, json};
 
@@ -65,6 +65,15 @@ pub struct Platform {
     account_busy: bool,
     pub account: Option<Profile>,
     pub account_status: Option<Result<String, String>>,
+    /// A password being set for the account, typed twice.
+    password: String,
+    password_again: String,
+    /// Signing in to an account with its name and password.
+    sign_in_name: String,
+    sign_in_password: String,
+    password_busy: bool,
+    password_done: Slot<String>,
+    pub password_status: Option<Result<String, String>>,
     /// The catalog: things to wear that people made.
     pub items: Vec<Item>,
     fetched_items: Slot<Vec<Item>>,
@@ -112,6 +121,13 @@ impl Default for Platform {
             account_busy: false,
             account: None,
             account_status: None,
+            password: String::new(),
+            password_again: String::new(),
+            sign_in_name: String::new(),
+            sign_in_password: String::new(),
+            password_busy: false,
+            password_done: Arc::default(),
+            password_status: None,
             items: Vec::new(),
             fetched_items: Arc::default(),
             item_shared: Arc::default(),
@@ -181,7 +197,12 @@ impl Platform {
             kind: HostKind::Player,
             game_id,
         };
-        self.announcer = Some(Announcer::start(self.client(), server_id, listing));
+        // Signed, so the list shows this player's account as the host.
+        let host = crate::identity().ok().map(|me| HostSigner {
+            player_id: me.player_id(),
+            sign: Arc::new(move |message: &[u8]| me.sign(message)),
+        });
+        self.announcer = Some(Announcer::start_signed(self.client(), server_id, listing, host));
     }
 
     /// Keeps the listing current; call once a frame.
@@ -237,6 +258,17 @@ impl Platform {
                 self.account_hub = None;
             }
             self.account_status = Some(result);
+        }
+        if let Some(result) = self.password_done.lock().unwrap().take() {
+            self.password_busy = false;
+            if result.is_ok() {
+                self.password.clear();
+                self.password_again.clear();
+                self.sign_in_password.clear();
+                // A sign-in may have changed whose account this is.
+                self.account_hub = None;
+            }
+            self.password_status = Some(result);
         }
         if let Some(result) = self.published.lock().unwrap().take() {
             self.publishing = false;
@@ -543,6 +575,142 @@ impl Platform {
         });
     }
 
+    /// Seals this computer's identity key with the password typed, and
+    /// keeps it on the Hub for signing in elsewhere.
+    fn set_password(&mut self) {
+        if self.password_busy {
+            return;
+        }
+        self.password_busy = true;
+        self.password_status = None;
+        let client = self.client();
+        let password = self.password.clone();
+        let out = self.password_done.clone();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| {
+                let time = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs() as i64);
+                let set = libroxel_hub::seal_password(&me.secret_bytes(), &password, time)?;
+                client.set_password(&set)?;
+                Ok(format!(
+                    "Password set. Sign in with your name and it on any computer that uses {}.",
+                    client.url()
+                ))
+            });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    /// Signs in with a name and password, and keeps that account's key on
+    /// this computer in place of the one here (which is kept beside it).
+    fn sign_in(&mut self) {
+        if self.password_busy {
+            return;
+        }
+        self.password_busy = true;
+        self.password_status = None;
+        let client = self.client();
+        let (name, password) = (self.sign_in_name.trim().to_owned(), self.sign_in_password.clone());
+        let out = self.password_done.clone();
+        std::thread::spawn(move || {
+            let result = client.sign_in(&name, &password).and_then(|key| {
+                let me = libroxel_net::Identity::from_secret_bytes(&key);
+                let kept = me
+                    .save_replacing(&crate::identity_path())
+                    .map_err(|e| format!("Signed in, but could not save the key here: {e}"))?;
+                Ok(match kept {
+                    Some(old) => format!(
+                        "Signed in as {name}. This computer's old key is kept at {}, in case you need it.",
+                        old.display()
+                    ),
+                    None => format!("Signed in as {name}. This computer already had that account."),
+                })
+            });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    /// The password part of the Avatar tab: set one, or sign in with one.
+    fn password_ui(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(10.0);
+        if self.account.is_some() {
+            ui.label(RichText::new("Password").strong());
+            ui.label(
+                RichText::new(
+                    "Set a password to sign in to this account on another computer, or to get it back if this                      one breaks. It is worked into a key on this computer and never sent to the Hub.",
+                )
+                .color(crate::theme::DUST),
+            );
+            egui::Grid::new("account-password").num_columns(2).show(ui, |ui| {
+                ui.label("New password");
+                ui.add(egui::TextEdit::singleline(&mut self.password).password(true).char_limit(256));
+                ui.end_row();
+                ui.label("Again");
+                ui.add(egui::TextEdit::singleline(&mut self.password_again).password(true).char_limit(256));
+                ui.end_row();
+            });
+            let problem = libroxel_hub::password_problem(&self.password, self.account_name.trim())
+                .or_else(|| (self.password != self.password_again).then(|| "the two don't match".to_owned()));
+            ui.horizontal(|ui| {
+                let ready = problem.is_none() && !self.password_busy;
+                if ui.add_enabled(ready, egui::Button::new("Set password")).clicked() {
+                    self.set_password();
+                }
+                if self.password_busy {
+                    ui.spinner();
+                }
+            });
+            if let Some(problem) = problem.filter(|_| !self.password.is_empty()) {
+                ui.colored_label(crate::theme::SUN, format!("Not yet: {problem}."));
+            }
+        }
+        let header = if self.account.is_some() {
+            "Sign in to a different account"
+        } else {
+            "Already have an account?"
+        };
+        egui::CollapsingHeader::new(RichText::new(header).strong())
+            .id_salt("account-sign-in")
+            .default_open(self.account.is_none())
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(
+                        "Sign in with the name and password you set on another computer. This computer then uses                          that account; its own key is kept beside it, so nothing is lost.",
+                    )
+                    .color(crate::theme::DUST),
+                );
+                egui::Grid::new("account-sign-in-grid").num_columns(2).show(ui, |ui| {
+                    ui.label("Name");
+                    ui.add(egui::TextEdit::singleline(&mut self.sign_in_name).char_limit(20));
+                    ui.end_row();
+                    ui.label("Password");
+                    ui.add(egui::TextEdit::singleline(&mut self.sign_in_password).password(true).char_limit(256));
+                    ui.end_row();
+                });
+                ui.horizontal(|ui| {
+                    let ready = libroxel_hub::valid_account_name(self.sign_in_name.trim())
+                        && !self.sign_in_password.is_empty()
+                        && !self.password_busy;
+                    if ui.add_enabled(ready, egui::Button::new("Sign in")).clicked() {
+                        self.sign_in();
+                    }
+                    if self.password_busy {
+                        ui.spinner();
+                    }
+                });
+            });
+        match &self.password_status {
+            Some(Ok(said)) => {
+                ui.colored_label(crate::theme::MINT, said);
+            }
+            Some(Err(why)) => {
+                ui.colored_label(crate::theme::BRICK, why);
+            }
+            None => {}
+        }
+    }
+
     /// The account part of the Avatar tab. `look` is the avatar as saved.
     pub fn account_ui(&mut self, ui: &mut egui::Ui, look: Json) {
         self.look_up_account();
@@ -550,7 +718,7 @@ impl Platform {
         ui.label(
             RichText::new(format!(
                 "Claim a name on the Hub at {}. Games you publish then show it, and others can find your page. \
-                 It belongs to the identity key on this computer, so keep that file safe.",
+                 It belongs to the identity key on this computer; set a password below to use it elsewhere too.",
                 self.hub_address
             ))
             .color(crate::theme::DUST),
@@ -605,6 +773,7 @@ impl Platform {
                 ));
             }
         }
+        self.password_ui(ui);
     }
 
     /// Whether a publish is on its way.
@@ -806,7 +975,14 @@ impl Platform {
                         ui.end_row();
                     }
                     for server in &self.servers {
-                        ui.label(&server.name).on_hover_text(format!("{} host", server.kind.label()));
+                        let hover = match &server.host {
+                            Some(host) => format!(
+                                "{} host · hosted by {host} (checked by the Hub)",
+                                server.kind.label()
+                            ),
+                            None => format!("{} host", server.kind.label()),
+                        };
+                        ui.label(&server.name).on_hover_text(hover);
                         ui.label(&server.game);
                         let players = if server.max_players > 0 {
                             format!("{}/{}", server.players, server.max_players)

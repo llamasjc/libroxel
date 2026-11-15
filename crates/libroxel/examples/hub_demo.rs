@@ -182,6 +182,8 @@ fn main() {
                 max_players: *max,
                 kind: *kind,
                 game_id: Some((*game_id).into()),
+                host_id: None,
+                host_signature: None,
             };
             if let Err(e) = hub.heartbeat(&beat) {
                 println!("{name}: {e}");
