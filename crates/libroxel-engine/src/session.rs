@@ -209,6 +209,8 @@ impl PlaySession {
     /// then their character spawns, so scripts see the same order as in a
     /// real game.
     pub fn start(tree: SharedTree, with_character: bool) -> Result<Self, String> {
+        // A new game draws its 3D view until a script says not to.
+        libroxel_script::RENDERING_3D.store(true, std::sync::atomic::Ordering::Relaxed);
         Self::start_inner(tree, with_character, None, NetRole::Solo)
     }
 

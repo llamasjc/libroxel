@@ -60,6 +60,13 @@ pub(crate) fn install(lua: &Lua, enum_lib: &Table) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
+    layer.set(
+        "set_3d_rendering",
+        lua.create_function(|_, on: bool| {
+            crate::RENDERING_3D.store(on, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        })?,
+    )?;
     // A name for a new drawn picture, unique across every script runtime.
     layer.set("editable_key", lua.create_function(|_, ()| Ok(crate::drawn::new_key()))?)?;
     // A script's drawn picture changed: hand its pixels to the renderer.

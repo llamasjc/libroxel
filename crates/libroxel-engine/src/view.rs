@@ -450,6 +450,7 @@ impl Plugin for RenderPlugin {
                     .after(EngineSet::Sync),
             )
             .add_systems(Update, (sync_lights, draw_blasts, sync_ropes, sync_decals).after(EngineSet::Sync))
+            .add_systems(Update, cover_view)
             .add_systems(Update, crate::terrain_view::sync_terrain.after(EngineSet::Sync))
             .add_systems(Update, update_lighting.after(EngineSet::Sync))
             .init_resource::<GraphicsQuality>()
@@ -477,6 +478,21 @@ impl PartMeshes {
             PartShape::Ball => self.ball.clone(),
             PartShape::Cylinder => self.cylinder.clone(),
             PartShape::Wedge => self.wedge.clone(),
+        }
+    }
+}
+
+/// Whether the game's GUI covers the whole 3D view with something solid
+/// (a loading screen): then the view isn't drawn at all, and the frames it
+/// saves go to the game.
+pub static VIEW_COVERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn cover_view(mut cameras: Query<&mut Camera, With<CameraRig>>) {
+    let covered = VIEW_COVERED.load(std::sync::atomic::Ordering::Relaxed)
+        || !libroxel_script::RENDERING_3D.load(std::sync::atomic::Ordering::Relaxed);
+    for mut camera in &mut cameras {
+        if camera.is_active == covered {
+            camera.is_active = !covered;
         }
     }
 }
@@ -549,67 +565,154 @@ fn noise(x: u32, y: u32, seed: u32) -> f32 {
     (n ^ (n >> 16)) as f32 / u32::MAX as f32
 }
 
-/// A small greyscale texture that tints the part's colour. Chunky pixels
-/// on purpose, to match the blocky look.
-fn make_texture(shade: impl Fn(u32, u32) -> f32) -> Image {
+/// Smooth noise that repeats every `period` cells (so textures tile):
+/// random values on a grid, blended with a smooth curve.
+fn tile_noise(x: f32, y: f32, period: u32, seed: u32) -> f32 {
+    let (fx, fy) = (x.floor(), y.floor());
+    let (tx, ty) = (x - fx, y - fy);
+    let (sx, sy) = (tx * tx * (3.0 - 2.0 * tx), ty * ty * (3.0 - 2.0 * ty));
+    let p = period.max(1) as i64;
+    let at = |ix: i64, iy: i64| noise(ix.rem_euclid(p) as u32, iy.rem_euclid(p) as u32, seed);
+    let (ix, iy) = (fx as i64, fy as i64);
+    let top = at(ix, iy) + (at(ix + 1, iy) - at(ix, iy)) * sx;
+    let bottom = at(ix, iy + 1) + (at(ix + 1, iy + 1) - at(ix, iy + 1)) * sx;
+    top + (bottom - top) * sy
+}
+
+/// Layers of [`tile_noise`], each twice as fine and half as strong, from
+/// `cells` cells across the texture (0 to 1, about 0.5 on average).
+fn fbm(u: f32, v: f32, cells: u32, octaves: u32, seed: u32) -> f32 {
+    let (mut sum, mut weight, mut total, mut n) = (0.0, 1.0, 0.0, cells);
+    for o in 0..octaves {
+        sum += tile_noise(u * n as f32, v * n as f32, n, seed.wrapping_add(o * 101)) * weight;
+        total += weight;
+        weight *= 0.5;
+        n *= 2;
+    }
+    sum / total
+}
+
+/// Pixels across a surface texture (one covers 8 studs: 32 a stud).
+const TEXTURE_SIZE: u32 = 256;
+
+/// A greyscale texture that tints the part's colour, made from `shade`
+/// (given where in the texture, 0 to 1 each way), smooth and with
+/// mipmaps so it stays calm far away.
+fn make_texture(shade: impl Fn(f32, f32) -> f32) -> Image {
     use bevy::asset::RenderAssetUsages;
-    use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
+    use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-    const SIZE: u32 = 32;
-    let mut data = Vec::with_capacity((SIZE * SIZE * 4) as usize);
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let v = (shade(x, y).clamp(0.0, 1.0) * 255.0) as u8;
-            data.extend([v, v, v, 255]);
+    let size = TEXTURE_SIZE;
+    let mut level: Vec<f32> = Vec::with_capacity((size * size) as usize);
+    for y in 0..size {
+        for x in 0..size {
+            let (u, v) = ((x as f32 + 0.5) / size as f32, (y as f32 + 0.5) / size as f32);
+            level.push(shade(u, v).clamp(0.0, 1.0));
         }
     }
+    // Every mip level, each half the last (averaging 2 x 2 pixels).
+    let mut data = Vec::new();
+    let mut side = size;
+    let mut levels = 0;
+    loop {
+        for &g in &level {
+            let v = (g * 255.0).round() as u8;
+            data.extend([v, v, v, 255]);
+        }
+        levels += 1;
+        if side == 1 {
+            break;
+        }
+        let half = side / 2;
+        let mut next = Vec::with_capacity((half * half) as usize);
+        for y in 0..half {
+            for x in 0..half {
+                let i = |dx: u32, dy: u32| level[((y * 2 + dy) * side + x * 2 + dx) as usize];
+                next.push((i(0, 0) + i(1, 0) + i(0, 1) + i(1, 1)) * 0.25);
+            }
+        }
+        level = next;
+        side = half;
+    }
+    let first = (size * size * 4) as usize;
     let mut image = Image::new(
-        Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 },
+        Extent3d { width: size, height: size, depth_or_array_layers: 1 },
         TextureDimension::D2,
-        data,
+        data[..first].to_vec(),
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::default(),
     );
+    // The smaller levels follow the full-size one in the same data.
+    image.texture_descriptor.mip_level_count = levels;
+    image.data = Some(data);
     image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_u: ImageAddressMode::Repeat,
         address_mode_v: ImageAddressMode::Repeat,
-        ..ImageSamplerDescriptor::nearest()
+        mag_filter: ImageFilterMode::Linear,
+        min_filter: ImageFilterMode::Linear,
+        mipmap_filter: ImageFilterMode::Linear,
+        anisotropy_clamp: 4,
+        ..default()
     });
     image
 }
 
 fn material_textures(images: &mut Assets<Image>) -> MaterialTextures {
-    let wood = make_texture(|x, y| {
-        // Long grain running along U, with a few wobbles.
-        let wobble = (noise(0, y / 4, 7) - 0.5) * 3.0;
-        let ring = ((y as f32 + wobble) * 0.9).sin() * 0.5 + 0.5;
-        0.72 + ring * 0.18 + noise(x / 8, y, 3) * 0.08
+    // Planks a quarter of the texture wide, grain running along them.
+    let wood = make_texture(|u, v| {
+        let plank = (v * 4.0).floor();
+        let across = v * 4.0 - plank;
+        let warp = fbm(u, v, 2, 3, 7) * 3.0;
+        let grain = ((across * 18.0 + warp + plank * 1.7) * std::f32::consts::TAU).sin() * 0.5 + 0.5;
+        let fine = fbm(u * 1.0, v * 8.0, 4, 4, 9);
+        let tone = 0.74 + noise(plank as u32, 0, 13) * 0.12;
+        let seam = if !(0.025..=0.975).contains(&across) { -0.22 } else { 0.0 };
+        // Each plank ends somewhere along its length.
+        let end = ((u + noise(plank as u32, 1, 17)) * 2.0).fract();
+        let butt = if end < 0.006 { -0.18 } else { 0.0 };
+        tone + grain * 0.1 + fine * 0.1 + seam + butt
     });
-    let brick = make_texture(|x, y| {
-        let row = y / 8;
-        let offset = if row % 2 == 0 { 0 } else { 8 };
-        let mortar = y % 8 == 0 || (x + offset) % 16 == 0;
-        if mortar {
-            0.97
+    // Bricks 1/4 wide and 1/8 high, every other row moved half a brick.
+    let brick = make_texture(|u, v| {
+        let row = (v * 8.0).floor();
+        let shift = if (row as u32).is_multiple_of(2) { 0.0 } else { 0.125 };
+        let col = ((u + shift) * 4.0).floor();
+        let (bx, by) = (((u + shift) * 4.0).fract(), (v * 8.0).fract());
+        let edge = bx.min(1.0 - bx * 1.0).min(by * 0.5).min((1.0 - by) * 0.5);
+        let rough = fbm(u, v, 16, 3, 5);
+        if edge < 0.025 {
+            0.9 + rough * 0.08
         } else {
-            0.66 + noise((x + offset) / 16, row, 11) * 0.18 + noise(x / 2, y / 2, 5) * 0.06
+            let tone = 0.62 + noise(col as u32 & 3, row as u32, 11) * 0.2;
+            let worn = (edge * 30.0).min(1.0);
+            tone * (0.9 + 0.1 * worn) + (rough - 0.5) * 0.14
         }
     });
-    let grass = make_texture(|x, y| 0.68 + noise(x / 2, y / 2, 17) * 0.3);
-    let sand = make_texture(|x, y| 0.82 + noise(x, y, 23) * 0.14);
-    let rock = make_texture(|x, y| {
-        // Big blotches with cracks between them.
-        let blotch = noise(x / 6, y / 6, 29) * 0.25 + noise(x / 2, y / 2, 31) * 0.1;
-        let crack = (x + y / 3) % 13 == 0 || (y + x / 4) % 11 == 0;
-        if crack { 0.55 } else { 0.68 + blotch }
+    let grass = make_texture(|u, v| {
+        let patches = fbm(u, v, 4, 3, 17);
+        let blades = fbm(u, v, 64, 2, 19);
+        0.62 + patches * 0.22 + blades * 0.18
     });
+    let sand = make_texture(|u, v| {
+        let ripples = ((v * 10.0 + fbm(u, v, 3, 3, 21) * 2.0) * std::f32::consts::TAU).sin() * 0.5 + 0.5;
+        let grains = noise((u * 256.0) as u32, (v * 256.0) as u32, 23);
+        0.8 + ripples * 0.06 + fbm(u, v, 8, 3, 25) * 0.08 + grains * 0.06
+    });
+    let rock = make_texture(|u, v| {
+        let blotch = fbm(u, v, 3, 5, 29);
+        // Thin dark cracks where a noise field crosses its middle.
+        let ridge = (fbm(u, v, 4, 3, 31) - 0.5).abs();
+        let crack = if ridge < 0.015 { -0.2 * (1.0 - ridge / 0.015) } else { 0.0 };
+        0.6 + blotch * 0.32 + crack
+    });
+    let snow = make_texture(|u, v| 0.9 + fbm(u, v, 6, 4, 37) * 0.1);
     MaterialTextures {
         wood: images.add(wood),
         brick: images.add(brick),
-        grass: images.add(grass.clone()),
+        grass: images.add(grass),
         sand: images.add(sand),
         rock: images.add(rock),
-        snow: images.add(grass),
+        snow: images.add(snow),
     }
 }
 

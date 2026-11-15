@@ -31,6 +31,7 @@ mod theme;
 mod touch;
 mod ui;
 mod viewport;
+mod viewport_frame;
 
 use std::path::PathBuf;
 
