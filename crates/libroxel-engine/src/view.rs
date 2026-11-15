@@ -117,6 +117,11 @@ pub fn part_shape(tree: &InstanceTree, id: InstanceId) -> PartShape {
     }
 }
 
+/// While playing, a part is drawn out to this many times its biggest side
+/// (and at least `DETAIL_MIN` studs away).
+const DETAIL_PER_STUD: f32 = 60.0;
+const DETAIL_MIN: f32 = 150.0;
+
 /// How many parts are brought into view in one frame, nearest first.
 const SPAWN_BUDGET: usize = 1500;
 
@@ -242,6 +247,7 @@ fn sync_parts(
     mut parts: Query<PartPieces, With<PartLink>>,
     cameras: Query<&GlobalTransform, (With<Camera3d>, Without<PartLink>)>,
     mut sync: Local<PartSync>,
+    quality: Option<Res<GraphicsQuality>>,
 ) {
     let _timed = TimedSync(std::time::Instant::now());
     let mut tree = engine.tree.borrow_mut();
@@ -255,7 +261,14 @@ fn sync_parts(
     // is looked over only when parts come or go, the camera moves a fair
     // bit, or now and then to be sure.
     let eye = cameras.iter().next().map(|t| t.translation());
-    let radius = if engine.is_playing() { streaming_radius(&tree) } else { f32::INFINITY };
+    let detail = engine.is_playing();
+    let radius = if detail {
+        // (No further than the camera sees at this graphics level.)
+        streaming_radius(&tree).min(quality.as_ref().map_or(f32::INFINITY, |q| q.view_distance() + 50.0))
+    } else {
+        f32::INFINITY
+    };
+    let limited = detail || radius.is_finite();
     let tree_ptr = std::rc::Rc::as_ptr(&engine.tree) as usize;
     let (epoch, _) = tree.touched_since(0);
     sync.frames += 1;
@@ -270,7 +283,7 @@ fn sync_parts(
     let scan = full
         || sync.structure != tree.workspace_structure()
         || sync.pending
-        || (radius.is_finite() && (moved_far || sync.frames.is_multiple_of(30)));
+        || (limited && (moved_far || sync.frames.is_multiple_of(30)));
     let mut work: Vec<InstanceId> = Vec::new();
     if full {
         // Everything spawned is compared with its revision below.
@@ -307,6 +320,9 @@ fn sync_parts(
         // workspace's streaming radius of the camera are drawn, and new parts
         // come in nearest first, a batch a frame, so a big map opens at once
         // instead of building every part before the first frame.
+        // Like Roblox at lower graphics levels, small parts stop being drawn
+        // sooner than big ones: a pebble far off can't be seen anyway. How
+        // far a part is past where it stops being drawn (1 = right there).
         let reach = |id: InstanceId| -> f32 {
             let Some(eye) = eye else { return 0.0 };
             let (Some(pos), Some(size)) =
@@ -314,14 +330,19 @@ fn sync_parts(
             else {
                 return 0.0;
             };
-            (Vec3::new(pos.x, pos.y, pos.z).distance(eye) - size.length() * 0.5).max(0.0)
+            let d = (Vec3::new(pos.x, pos.y, pos.z).distance(eye) - size.length() * 0.5).max(0.0);
+            let limit = if detail {
+                radius.min((size.x.max(size.y).max(size.z) * DETAIL_PER_STUD).max(DETAIL_MIN))
+            } else {
+                radius
+            };
+            d / limit
         };
 
         let PartEntities(spawned, seen) = &mut *entities;
         spawned.retain(|id, entity| {
             // Gone, or well out of range (a little past it, so edges don't flicker).
-            let keep =
-                live_set.contains(id) && (radius.is_infinite() || !measure || reach(*id) <= radius * 1.1);
+            let keep = live_set.contains(id) && (!limited || !measure || reach(*id) <= 1.1);
             if !keep {
                 commands.entity(*entity).despawn();
             }
@@ -342,9 +363,9 @@ fn sync_parts(
                 continue;
             }
             let d = reach(id);
-            if d <= radius {
+            if d <= 1.0 {
                 fresh.push((d, id));
-            } else if radius.is_finite() {
+            } else if limited {
                 sync.far.insert(id);
             }
         }
