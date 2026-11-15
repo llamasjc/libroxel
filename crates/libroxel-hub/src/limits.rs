@@ -48,7 +48,7 @@ impl Limit {
     }
 }
 
-struct Window {
+pub(crate) struct Window {
     start: Instant,
     count: u32,
 }
@@ -56,7 +56,10 @@ struct Window {
 /// Every count the Hub keeps.
 #[derive(Default)]
 pub(crate) struct Limits {
-    windows: Mutex<HashMap<(Limit, String), Window>>,
+    pub(crate) windows: Mutex<HashMap<(Limit, String), Window>>,
+    /// Whether a web server on this computer passes callers on, saying who
+    /// they are in `X-Forwarded-For`.
+    pub(crate) trust_proxy: bool,
 }
 
 impl Limits {
@@ -99,16 +102,32 @@ pub(crate) fn too_many(what: &str) -> (StatusCode, String) {
     (StatusCode::TOO_MANY_REQUESTS, format!("too many {what} from here; wait a while and try again"))
 }
 
+/// Who is calling, from the connection's address and, when `trust_proxy`,
+/// the `X-Forwarded-For` a web server on this computer adds.
+fn caller_ip(peer: Option<std::net::IpAddr>, forwarded: Option<&str>, trust_proxy: bool) -> String {
+    match peer {
+        // Only a web server on this computer is believed, and only the
+        // address it added itself (the last one): callers can put anything
+        // before it.
+        Some(peer) if trust_proxy && peer.is_loopback() => forwarded
+            .and_then(|v| v.rsplit(',').next())
+            .and_then(|v| v.trim().parse::<std::net::IpAddr>().ok())
+            .unwrap_or(peer)
+            .to_string(),
+        Some(peer) => peer.to_string(),
+        None => "unknown".to_owned(),
+    }
+}
+
 /// Notes who is calling and turns them away past [`Limit::Any`].
 pub(crate) async fn every_request(
     State(limits): State<Arc<Limits>>,
     mut request: Request,
     next: Next,
 ) -> Response {
-    let ip = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map_or_else(|| "unknown".to_owned(), |info| info.0.ip().to_string());
+    let peer = request.extensions().get::<ConnectInfo<SocketAddr>>().map(|info| info.0.ip());
+    let forwarded = request.headers().get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    let ip = caller_ip(peer, forwarded, limits.trust_proxy);
     if !limits.take(Limit::Any, &ip) {
         return too_many("requests").into_response();
     }
@@ -134,5 +153,17 @@ mod tests {
             assert!(limits.take(Limit::WrongPassword, "Kai2"));
         }
         assert!(limits.over(Limit::WrongPassword, "kai2"));
+    }
+
+    #[test]
+    fn only_a_web_server_on_this_computer_is_believed_about_who_calls() {
+        let local = Some("127.0.0.1".parse().unwrap());
+        let far = Some("203.0.113.9".parse().unwrap());
+        // Behind Caddy: the address Caddy added (the last one), not what the caller made up.
+        assert_eq!(caller_ip(local, Some("1.1.1.1, 198.51.100.7"), true), "198.51.100.7");
+        // Not told to trust a proxy, or the header came from far away: the connection counts.
+        assert_eq!(caller_ip(local, Some("198.51.100.7"), false), "127.0.0.1");
+        assert_eq!(caller_ip(far, Some("198.51.100.7"), true), "203.0.113.9");
+        assert_eq!(caller_ip(local, Some("nonsense"), true), "127.0.0.1");
     }
 }

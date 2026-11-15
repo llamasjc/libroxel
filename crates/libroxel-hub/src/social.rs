@@ -235,6 +235,9 @@ pub(crate) async fn change_friend(
         return Err((StatusCode::BAD_REQUEST, "you can't be friends with yourself".into()));
     }
     let db = db.lock().unwrap();
+    if crate::owner::is_banned(&db, &change.player_id) {
+        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+    }
     let (me, them) = (change.player_id.as_str(), change.other_id.as_str());
     match change.action {
         FriendAction::Add => {
@@ -294,6 +297,9 @@ pub(crate) async fn update_presence(
         return Err((StatusCode::FORBIDDEN, "the signature does not match that player".into()));
     }
     let db = db.lock().unwrap();
+    if crate::owner::is_banned(&db, &update.player_id) {
+        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+    }
     fresh(&db, &update.player_id, "presence", update.time)?;
     let text = |s: &Option<String>| s.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(clip);
     db.execute(

@@ -46,9 +46,11 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 mod limits;
+mod owner;
 mod password;
 mod social;
 use limits::{Caller, Limit, Limits, too_many};
+pub use owner::{AccountRow, accounts, add_owner, ban, owners, remove_owner, unban};
 pub use password::{
     MIN_PASSWORD, PASSWORD_MEMORY_KIB, PASSWORD_PASSES, PasswordSet, SignIn, SignInSalt, SignedIn,
     password_message, password_problem, seal_password, seal_password_with, sign_in_message,
@@ -60,6 +62,23 @@ pub use social::{
 
 /// The port a Hub listens on unless told otherwise.
 pub const DEFAULT_PORT: u16 = 7430;
+
+/// The one official Hub: where every copy of the app keeps its accounts,
+/// friends, published games and server lists unless told to use another
+/// (`LIBROXEL_HUB`, or the Hub box in Online). `None` means there is no
+/// official Hub yet, and each app runs its own instead.
+///
+/// A fork sets its own here, or builds with `LIBROXEL_OFFICIAL_HUB=<url>`.
+pub const OFFICIAL_HUB: Option<&str> = option_env!("LIBROXEL_OFFICIAL_HUB");
+
+/// How a Hub is run.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HubOptions {
+    /// It sits behind a web server on this computer (such as Caddy, for
+    /// HTTPS), so trust that server's `X-Forwarded-For` for who is calling.
+    /// Without it, every caller would share one rate limit.
+    pub behind_proxy: bool,
+}
 
 /// How often hosts should announce themselves.
 pub const HEARTBEAT_EVERY: Duration = Duration::from_secs(15);
@@ -568,6 +587,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     let _ = db.execute("ALTER TABLE servers ADD COLUMN host_id TEXT", []);
     social::create_tables(&db)?;
     password::create_tables(&db)?;
+    owner::create_tables(&db)?;
     Ok(db)
 }
 
@@ -577,7 +597,13 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
 /// rate limits count each caller on their own; otherwise every caller
 /// shares one count.
 pub fn router(db: Connection) -> Router {
-    let hub = Hub { db: Arc::new(Mutex::new(db)), limits: Arc::default() };
+    router_with(db, HubOptions::default())
+}
+
+/// [`router`], run the way `options` says.
+pub fn router_with(db: Connection, options: HubOptions) -> Router {
+    let limits = Arc::new(Limits { trust_proxy: options.behind_proxy, ..Limits::default() });
+    let hub = Hub { db: Arc::new(Mutex::new(db)), limits };
     // Only publishing carries a whole place; everything else is small.
     let big = axum::extract::DefaultBodyLimit::max(MAX_PLACE * 2 + 64 * 1024);
     Router::new()
@@ -678,9 +704,10 @@ async fn list_games(State(db): State<Db>, Query(query): Query<ListQuery>) -> Jso
         .prepare(&format!(
             "SELECT {GAME_COLUMNS} FROM {GAMES}
              WHERE (g.title LIKE ?1 OR COALESCE(a.name, g.author) LIKE ?1 OR g.description LIKE ?1)
-                AND NOT {hidden}
+                AND NOT {hidden} AND NOT {banned}
              ORDER BY g.plays DESC, g.updated DESC LIMIT 200",
-            hidden = hidden_sql("game", "g.game_id")
+            hidden = hidden_sql("game", "g.game_id"),
+            banned = owner::banned_sql("g.author_id")
         ))
         .expect("the games query is valid");
     let rows = statement
@@ -750,6 +777,9 @@ async fn publish(
         _ => None,
     };
     let db = db.lock().unwrap();
+    if author_id.as_deref().is_some_and(|id| crate::owner::is_banned(&db, id)) {
+        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+    }
     let now = now();
     let title = clip(&game.title);
     let author = if game.author.trim().is_empty() { "Someone".to_owned() } else { clip(&game.author) };
@@ -819,6 +849,9 @@ async fn update_account(
         return bad("this computer's clock is too far off");
     }
     let db = db.lock().unwrap();
+    if crate::owner::is_banned(&db, &account.player_id) {
+        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+    }
     let internal = |e: rusqlite::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     let last: Option<(i64, String)> = db
         .query_row(
@@ -907,6 +940,9 @@ async fn share_item(
         return Err((StatusCode::FORBIDDEN, "the signature does not match that creator".into()));
     }
     let db = db.lock().unwrap();
+    if crate::owner::is_banned(&db, &item.creator_id) {
+        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+    }
     let item_id = new_game_id();
     db.execute(
         "INSERT INTO items (item_id, creator_id, name, kind, data, wears, created) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)",
@@ -936,9 +972,10 @@ async fn list_items(State(db): State<Db>, Query(query): Query<ListQuery>) -> Jso
         .prepare(&format!(
             "SELECT i.item_id, i.name, i.kind, COALESCE(a.name, 'Someone'), i.creator_id, i.data, i.wears
              FROM items i LEFT JOIN accounts a ON a.player_id = i.creator_id
-             WHERE (i.name LIKE ?1 OR COALESCE(a.name, '') LIKE ?1) AND NOT {}
+             WHERE (i.name LIKE ?1 OR COALESCE(a.name, '') LIKE ?1) AND NOT {} AND NOT {}
              ORDER BY i.wears DESC, i.created DESC LIMIT 200",
-            hidden_sql("item", "i.item_id")
+            hidden_sql("item", "i.item_id"),
+            owner::banned_sql("i.creator_id")
         ))
         .expect("the catalog query is valid");
     let rows = statement
@@ -1011,6 +1048,9 @@ async fn report(
         return Err((StatusCode::FORBIDDEN, "the signature does not match that player".into()));
     }
     let db = db.lock().unwrap();
+    if crate::owner::is_banned(&db, &report.reporter_id) {
+        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+    }
     let table = if report.kind == "game" { "games WHERE game_id" } else { "items WHERE item_id" };
     let exists: Option<i64> = db
         .query_row(&format!("SELECT 1 FROM {table} = ?1"), params![report.target], |r| r.get(0))
@@ -1084,7 +1124,11 @@ async fn find_people(State(db): State<Db>, Query(query): Query<ListQuery>) -> Js
     let db = db.lock().unwrap();
     let pattern = format!("%{}%", query.q.unwrap_or_default().trim().replace(['%', '_'], ""));
     let mut statement = db
-        .prepare("SELECT player_id, name, about FROM accounts WHERE name LIKE ?1 ORDER BY name LIMIT 100")
+        .prepare(&format!(
+            "SELECT player_id, name, about FROM accounts WHERE name LIKE ?1 AND NOT {}
+             ORDER BY name LIMIT 100",
+            owner::banned_sql("accounts.player_id")
+        ))
         .expect("the people query is valid");
     let rows = statement
         .query_map(params![pattern], |r| {
@@ -1100,7 +1144,11 @@ async fn profile(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<J
     let now = now();
     let found: Option<(String, String, String, String, i64)> = db
         .query_row(
-            "SELECT player_id, name, about, look, created FROM accounts WHERE player_id = ?1 OR name = ?1",
+            &format!(
+                "SELECT player_id, name, about, look, created FROM accounts
+                 WHERE (player_id = ?1 OR name = ?1) AND NOT {}",
+                owner::banned_sql("accounts.player_id")
+            ),
             params![id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
@@ -1208,6 +1256,16 @@ async fn heartbeat(
         }
         _ => None,
     };
+    if host_id.as_deref().is_some_and(|id| owner::is_banned(&db, id)) {
+        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+    }
+    // Only the Hub's owners (and servers they trust) list Official servers.
+    let kind = match beat.kind {
+        HostKind::Official if !host_id.as_deref().is_some_and(|id| owner::is_owner(&db, id)) => {
+            HostKind::Community
+        }
+        kind => kind,
+    };
     let name = if beat.name.trim().is_empty() { "Unnamed server".to_owned() } else { clip(&beat.name) };
     let game = if beat.game.trim().is_empty() { "Untitled game".to_owned() } else { clip(&beat.game) };
     db.execute(
@@ -1224,7 +1282,7 @@ async fn heartbeat(
             clip(&beat.code),
             beat.players,
             beat.max_players,
-            beat.kind.rank(),
+            kind.rank(),
             now,
             beat.game_id.as_deref().map(str::trim).filter(|g| !g.is_empty()).map(clip),
             host_id
@@ -1299,7 +1357,7 @@ pub fn start(addr: SocketAddr, db_path: Option<&Path>) -> Result<RunningHub, Str
 }
 
 /// Runs a Hub on `addr` until Ctrl+C, printing what it does.
-pub fn run(addr: SocketAddr, db_path: &Path) -> Result<(), String> {
+pub fn run(addr: SocketAddr, db_path: &Path, options: HubOptions) -> Result<(), String> {
     let db = open_db(Some(db_path))?;
     let runtime =
         tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
@@ -1308,11 +1366,14 @@ pub fn run(addr: SocketAddr, db_path: &Path) -> Result<(), String> {
             .await
             .map_err(|e| format!("could not start the Hub on {addr}: {e}"))?;
         println!("Libroxel Hub listening on http://{addr} (data in {})", db_path.display());
+        if options.behind_proxy {
+            println!("Trusting X-Forwarded-For from a web server on this computer for who is calling.");
+        }
         println!(
             "Point players at it with the Hub address in Browse, or LIBROXEL_HUB=http://<this computer>:{}",
             addr.port()
         );
-        axum::serve(listener, router(db).into_make_service_with_connect_info::<SocketAddr>())
+        axum::serve(listener, router_with(db, options).into_make_service_with_connect_info::<SocketAddr>())
             .with_graceful_shutdown(async {
                 let _ = tokio::signal::ctrl_c().await;
                 println!("Hub stopped.");
@@ -1344,7 +1405,9 @@ impl HubClient {
         let has_port = url.rsplit_once(':').is_some_and(|(head, port)| {
             !head.ends_with("http") && !head.ends_with("https") && port.parse::<u16>().is_ok()
         });
-        let base = if has_port { url } else { format!("{url}:{DEFAULT_PORT}") };
+        // HTTPS uses its usual port: a Hub reached that way is behind a web server.
+        let base =
+            if has_port || url.starts_with("https://") { url } else { format!("{url}:{DEFAULT_PORT}") };
         let local = base.contains("://127.") || base.contains("://localhost") || base.contains("://[::1]");
         let agent = |timeout: u64| {
             let mut config = ureq::Agent::config_builder()

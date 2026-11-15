@@ -755,7 +755,7 @@ impl Menu {
             text: self.game.text()?,
             key,
             port,
-            hub: HubUse::Own,
+            hub: HubUse::usual(),
             official: false,
             max_players: 0,
             game_id: crate::social::game_ref(&self.game).game_id,

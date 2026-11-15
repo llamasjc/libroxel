@@ -238,10 +238,11 @@ The first build compiles Bevy and takes a while. After that it is quick.
   wins. Only the sharing computer saves the game. Playing a game is still
   done on your own; editing together carries on when you stop.
 - **Finding games:** **🌍 Browse** lists the games being hosted right now on
-  a Hub, community servers first, and joins one with a click. Every copy of
-  Libroxel runs a small Hub on port 7430, so friends on your network can put
-  your computer's address in Browse's Hub box; `libroxel server` runs one
-  too, and `libroxel hub` runs only a Hub. Games you host are listed on the
+  a Hub, community servers first, and joins one with a click. With an
+  official Hub set, everyone uses it. Without one, every copy of Libroxel
+  runs a small Hub on port 7430, so friends on your network can put your
+  computer's address in Browse's Hub box; `libroxel server` runs one too,
+  and `libroxel hub` runs only a Hub. Games you host are listed on the
   Hub that Browse points at. Set `LIBROXEL_HUB=host:port` to use another
   Hub from the start.
 - **One app, one home screen:** the build is a single `libroxel` program
@@ -291,8 +292,14 @@ The first build compiles Bevy and takes a while. After that it is quick.
   "hosted by" with the account the Hub checked, whatever the server is
   called. Accounts, passwords and friends live in the Hub's SQLite file
   (`hub.sqlite` in Libroxel's data folder, or `--data` for `libroxel hub`),
-  so they outlast a restart. For one account system for everyone, run
-  `libroxel hub` on a computer that stays on and point every app at it.
+  so they outlast a restart.
+- **One official Hub:** set `OFFICIAL_HUB` in `crates/libroxel-hub/src/lib.rs`
+  and every copy of the app uses that Hub for accounts, friends, publishing
+  and server lists, with no Hub of its own. Whoever runs it owns it: only
+  its owners list Official servers, and `libroxel hub ban`, `owners` and
+  `accounts` look after it from its own computer.
+  [docs/OFFICIAL_HUB.md](docs/OFFICIAL_HUB.md) covers running one with
+  HTTPS. Forks set their own.
 - **Starter games:** three small finished games to play or build on. The
   **Sample obby** has coins, lava, TNT and a rover. **Kart race** is three
   laps round a track in karts, through blue gates in order, with laps and

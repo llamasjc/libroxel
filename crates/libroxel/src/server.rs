@@ -23,18 +23,28 @@ usage:
   libroxel server <game.lrx>   host a game with no window
       --port <n>               game port on this network (default 7420)
       --name <text>            name shown in Browse (default: the file name)
-      --hub <address>          list the game on that Hub instead of running one
+      --hub <address>          list the game on that Hub (default: the official
+                               Hub, or one run here if there is none)
       --no-hub                 do not run or use a Hub
-      --official               list it as an official server (the last resort)
+      --official               list it as an official server (the last resort;
+                               the Hub's owners must trust this server)
       --max-players <n>        players the list shows as the limit (0: none)
       --game-id <id>           put it on that game's server list (a published
                                game's id, or starter:<name>)
   libroxel hub                 run only a Hub
       --port <n>               Hub port (default 7430)
       --data <file>            where the Hub keeps its list
+      --behind-proxy           a web server here (such as Caddy) passes players
+                               on; trust it for their addresses
   libroxel hub reports         list reported games and hats (and which are hidden)
   libroxel hub clear <game|item> <id>    say a reported one is fine: list it again
   libroxel hub remove <game|item> <id>   take one down for good
+  libroxel hub accounts [search]         list accounts
+  libroxel hub owners                    list the Hub's owners
+  libroxel hub owner add|remove <name or player id>
+                               owners (and servers they add by id) may list
+                               Official servers
+  libroxel hub ban <name> [reason]       ban an account; unban <name> lets it back
   libroxel help                show this
 ";
 
@@ -110,11 +120,12 @@ pub fn data_dir() -> PathBuf {
 
 fn hub(args: &[String]) -> Result<(), String> {
     let flags = Flags::parse(args, &["--port", "--data"])?;
+    let options = libroxel_hub::HubOptions { behind_proxy: flags.has("--behind-proxy") };
     let port = flags.number("--port", libroxel_hub::DEFAULT_PORT)?;
     let data = flags.get("--data").map_or_else(|| data_dir().join("hub.sqlite"), PathBuf::from);
     let words: Vec<&str> = flags.rest.iter().map(String::as_str).collect();
     match words.as_slice() {
-        [] => libroxel_hub::run(SocketAddr::from(([0, 0, 0, 0], port)), &data),
+        [] => libroxel_hub::run(SocketAddr::from(([0, 0, 0, 0], port)), &data, options),
         ["reports"] => {
             let db = libroxel_hub::open_db(Some(&data))?;
             let reported = libroxel_hub::reports(&db);
@@ -147,7 +158,63 @@ fn hub(args: &[String]) -> Result<(), String> {
             println!("{kind} {id} is gone.");
             Ok(())
         }
-        _ => Err("usage: libroxel hub [reports | clear <game|item> <id> | remove <game|item> <id>]".into()),
+        ["accounts", search @ ..] => {
+            let rows = libroxel_hub::accounts(&libroxel_hub::open_db(Some(&data))?, &search.join(" "));
+            if rows.is_empty() {
+                println!("No accounts match.");
+            }
+            for a in rows {
+                let mut notes = Vec::new();
+                if a.owner {
+                    notes.push("owner".to_owned());
+                }
+                if a.has_password {
+                    notes.push("password".to_owned());
+                }
+                if let Some(reason) = &a.banned {
+                    notes.push(format!("BANNED: {reason}"));
+                }
+                let days = a.joined_secs_ago / 86_400;
+                println!("{:<20} {}  joined {days} days ago  {}", a.name, a.player_id, notes.join(", "));
+            }
+            Ok(())
+        }
+        ["owners"] => {
+            let owners = libroxel_hub::owners(&libroxel_hub::open_db(Some(&data))?);
+            if owners.is_empty() {
+                println!("No owners yet. Add yourself: libroxel hub owner add <your name>");
+            }
+            for (id, name) in owners {
+                println!("{:<20} {id}", name.as_deref().unwrap_or("(a server)"));
+            }
+            Ok(())
+        }
+        ["owner", "add", who] => {
+            let id = libroxel_hub::add_owner(&libroxel_hub::open_db(Some(&data))?, who)?;
+            println!("{who} ({id}) is an owner of this Hub.");
+            Ok(())
+        }
+        ["owner", "remove", who] => {
+            libroxel_hub::remove_owner(&libroxel_hub::open_db(Some(&data))?, who)?;
+            println!("{who} is no longer an owner.");
+            Ok(())
+        }
+        ["ban", who, reason @ ..] => {
+            let reason = if reason.is_empty() { "no reason given".to_owned() } else { reason.join(" ") };
+            libroxel_hub::ban(&libroxel_hub::open_db(Some(&data))?, who, &reason)?;
+            println!("{who} is banned.");
+            Ok(())
+        }
+        ["unban", who] => {
+            libroxel_hub::unban(&libroxel_hub::open_db(Some(&data))?, who)?;
+            println!("{who} can use this Hub again.");
+            Ok(())
+        }
+        _ => {
+            Err("usage: libroxel hub [reports | clear <game|item> <id> | remove <game|item> <id> | accounts \
+                  [search] | owners | owner add|remove <who> | ban <who> [reason] | unban <who>]"
+                .into())
+        }
     }
 }
 
@@ -170,7 +237,7 @@ fn server(args: &[String]) -> Result<(), String> {
         } else if let Some(address) = flags.get("--hub") {
             HubUse::At(address.to_owned())
         } else {
-            HubUse::Own
+            HubUse::usual()
         },
         official: flags.has("--official"),
         max_players: flags.number("--max-players", 0u32)?,
@@ -186,6 +253,16 @@ pub enum HubUse {
     Own,
     At(String),
     None,
+}
+
+impl HubUse {
+    /// The Hub `LIBROXEL_HUB` names, else the official Hub, else one run here.
+    pub fn usual() -> Self {
+        match std::env::var("LIBROXEL_HUB").ok().filter(|a| !a.trim().is_empty()) {
+            Some(address) => HubUse::At(address),
+            None => libroxel_hub::OFFICIAL_HUB.map_or(HubUse::Own, |hub| HubUse::At(hub.to_owned())),
+        }
+    }
 }
 
 /// Everything a server needs to know to start.
@@ -249,11 +326,24 @@ pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicB
         }
     };
     let kind = if official { HostKind::Official } else { HostKind::Community };
+    if official {
+        say(format!(
+            "This server's id is {}. On the Hub's computer, `libroxel hub owner add <that id>` lets it list as Official.",
+            identity.player_id()
+        ));
+    }
+    // Signed with the server's own key, so the Hub knows which server it is.
+    let signer = identity.clone();
+    let host = libroxel_hub::HostSigner {
+        player_id: identity.player_id(),
+        sign: Arc::new(move |message: &[u8]| signer.sign(message)),
+    };
     let announcer = hub.map(|hub| {
-        Announcer::start(
+        Announcer::start_signed(
             hub,
             identity.player_id(),
             Listing { name, game, code: None, players: 0, max_players, kind, game_id },
+            Some(host),
         )
     });
 
