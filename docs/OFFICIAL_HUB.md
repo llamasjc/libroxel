@@ -80,7 +80,16 @@ Claim your name in the app first, then on the server:
 libroxel hub --data /var/lib/libroxel/hub.sqlite owner add kai2
 ```
 
-Owners' servers are the only ones that list as **Official**. To run an
+Then take the name **admin** (players can't; owners can), either on the
+Avatar tab or from the server:
+
+```sh
+libroxel hub --data /var/lib/libroxel/hub.sqlite rename kai2 admin
+```
+
+Owners are the Hub's admins: their page says so, and servers they host show
+an **Admin** badge instead of "hosted by". Owners' servers are the only ones
+that list as **Official**. To run an
 official game server, start it with `libroxel server game.lrx --official`. It
 prints its id. Add that id as an owner too.
 
@@ -96,6 +105,7 @@ can do them over the network:
 | `libroxel hub owner add\|remove <name or id>` | Adds or removes an owner |
 | `libroxel hub ban <name> [reason]` | Bans an account: it can't sign in, host, publish, share, report or befriend anyone, and its page, games and hats stop being listed |
 | `libroxel hub unban <name>` | Lets it back |
+| `libroxel hub rename <name> <new name>` | Renames an account, even to a reserved name |
 | `libroxel hub reports` | Lists reported games and hats |
 | `libroxel hub clear <game\|item> <id>` | Lists a reported one again |
 | `libroxel hub remove <game\|item> <id>` | Takes one down for good |

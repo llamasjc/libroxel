@@ -460,7 +460,10 @@ fn server_row(ui: &mut egui::Ui, platform: &mut Platform, server: &ServerInfo, t
                         RichText::new(format!("{} server", server.kind.label())).small().color(kind_colour),
                     );
                     // Only an account the Hub checked; the server's name is whatever the host typed.
-                    if let Some(host) = &server.host {
+                    if server.admin_host {
+                        ui.label(RichText::new("Admin").small().strong().color(theme::SUN))
+                            .on_hover_text("Run by whoever runs this Hub, checked by the Hub.");
+                    } else if let Some(host) = &server.host {
                         ui.label(RichText::new(format!("hosted by {host}")).small().color(theme::CHALK))
                             .on_hover_text("The Hub checked this account really hosts it.");
                     }
