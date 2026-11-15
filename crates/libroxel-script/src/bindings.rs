@@ -2642,12 +2642,17 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
         }
     }
     step_tweens(lua, dt);
-    let _ = crate::lenient::flush_drawn(lua);
     crate::animation::step(lua);
     crate::services::step_debris(lua, now);
     fire(lua, SignalKind::Stepped, || Ok([Value::Number(now), Value::Number(dt)].into_iter().collect()));
     fire(lua, SignalKind::Heartbeat, || Ok(std::iter::once(Value::Number(dt)).collect()));
     fire(lua, SignalKind::RenderStepped, || Ok(std::iter::once(Value::Number(dt)).collect()));
+    // Last, so pictures drawn in this frame's Heartbeat or RenderStepped
+    // show this frame, together with the moves and turns of the labels
+    // around them made in the same handlers. (Sent before those events,
+    // a minimap showed last frame's map under this frame's markers and
+    // scroll, and jumped back and forth: it flickered.)
+    let _ = crate::lenient::flush_drawn(lua);
     take_errors(lua)
 }
 
