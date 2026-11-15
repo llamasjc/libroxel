@@ -237,6 +237,13 @@ pub struct InstanceTree {
     root_cache: std::cell::RefCell<ClassCache>,
     /// Where the workspace's parts are, for raycasts.
     part_index: std::cell::RefCell<crate::geometry::PartIndex>,
+    /// How many instances of each class (by number) exist, destroyed but not
+    /// yet purged ones included: a class with none needs no looking for.
+    kind_counts: Vec<u32>,
+    /// For each class (by number), the workspace structure count when one
+    /// of its instances last came into or left the workspace: a class
+    /// lookup made since then still holds.
+    class_stamps: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -246,6 +253,11 @@ struct ClassCache {
     /// For each class number, where in `all` its instances are (in order).
     buckets: Vec<Vec<u32>>,
     by_class: std::collections::HashMap<ClassKind, Vec<InstanceId>>,
+    /// The class numbers each looked-up class takes in.
+    fits: std::collections::HashMap<ClassKind, Vec<u16>>,
+    /// Workspace lookups with the class stamp they were made at (they hold
+    /// across walks while no instance of theirs came or went).
+    kept: std::collections::HashMap<ClassKind, (u64, Vec<InstanceId>)>,
 }
 
 impl Default for InstanceTree {
@@ -275,6 +287,8 @@ impl InstanceTree {
             class_cache: Default::default(),
             root_cache: Default::default(),
             part_index: Default::default(),
+            kind_counts: Vec::new(),
+            class_stamps: Vec::new(),
         };
         tree.root = tree.alloc(InstanceData::new(ClassKind::DataModel, "Game".into()));
         tree.data_mut(tree.root).expect("root exists").parent_locked = true;
@@ -334,6 +348,11 @@ impl InstanceTree {
     }
 
     fn alloc(&mut self, data: InstanceData) -> InstanceId {
+        let number = data.class as usize;
+        if self.kind_counts.len() <= number {
+            self.kind_counts.resize(number + 1, 0);
+        }
+        self.kind_counts[number] += 1;
         let tags = (!data.tags.is_empty()).then(|| data.tags.clone());
         let id = if let Some(index) = self.free.pop() {
             let slot = &mut self.slots[index as usize];
@@ -473,6 +492,18 @@ impl InstanceTree {
         self.data_mut(id)?.parent = new_parent;
         if world_changed {
             self.structure += 1;
+            let stamp = self.structure;
+            let mut moved = self.descendants(id).unwrap_or_default();
+            moved.push(id);
+            for each in moved {
+                if let Ok(data) = self.data(each) {
+                    let number = data.class as usize;
+                    if self.class_stamps.len() <= number {
+                        self.class_stamps.resize(number + 1, 0);
+                    }
+                    self.class_stamps[number] = stamp;
+                }
+            }
         }
         self.structure_all += 1;
         self.changes.push(Change::Reparented { id, old_parent, new_parent });
@@ -525,6 +556,11 @@ impl InstanceTree {
                     if let Some(set) = self.tag_index.get_mut(tag) {
                         set.remove(&id);
                     }
+                }
+                if let Some(count) =
+                    slot.data.as_ref().and_then(|d| self.kind_counts.get_mut(d.class as usize))
+                {
+                    *count = count.saturating_sub(1);
                 }
                 slot.data = None;
                 slot.generation = slot.generation.wrapping_add(1);
@@ -1001,30 +1037,53 @@ impl InstanceTree {
             None
         };
         if let Some((cell, structure)) = cached {
+            // None of the class anywhere: nothing to walk the game for.
+            let exists = |c: &ClassKind| self.kind_counts.get(*c as usize).is_some_and(|n| *n > 0);
+            if !ClassKind::ALL.iter().any(|c| exists(c) && c.is_a(class)) {
+                return Vec::new();
+            }
             let mut cache = cell.borrow_mut();
-            self.refresh_cache(&mut cache, ancestor, structure);
-            let ClassCache { all, buckets, by_class, .. } = &mut *cache;
-            return by_class
+            let fits = cache
+                .fits
                 .entry(class)
                 .or_insert_with(|| {
-                    // The instances of each class that counts, kept in tree order.
-                    let found: Vec<&Vec<u32>> = ClassKind::ALL
-                        .iter()
-                        .filter(|c| c.is_a(class))
-                        .filter_map(|c| buckets.get(*c as usize))
-                        .filter(|b| !b.is_empty())
-                        .collect();
-                    match found.len() {
-                        0 => Vec::new(),
-                        1 => found[0].iter().map(|at| all[*at as usize]).collect(),
-                        _ => {
-                            let mut at: Vec<u32> = found.iter().flat_map(|b| b.iter().copied()).collect();
-                            at.sort_unstable();
-                            at.into_iter().map(|at| all[at as usize]).collect()
-                        }
-                    }
+                    ClassKind::ALL.iter().filter(|c| c.is_a(class)).map(|c| *c as u16).collect()
                 })
                 .clone();
+            let workspace = ancestor == self.workspace;
+            let stamp = fits.iter().filter_map(|n| self.class_stamps.get(usize::from(*n))).max().copied();
+            let stamp = stamp.unwrap_or(0);
+            if workspace
+                && let Some((at, found)) = cache.kept.get(&class)
+                && *at == stamp
+            {
+                return found.clone();
+            }
+            self.refresh_cache(&mut cache, ancestor, structure);
+            let ClassCache { all, buckets, by_class, kept, .. } = &mut *cache;
+            let gather = || {
+                // The instances of each class that counts, kept in tree order.
+                let found: Vec<&Vec<u32>> = fits
+                    .iter()
+                    .filter_map(|n| buckets.get(usize::from(*n)))
+                    .filter(|b| !b.is_empty())
+                    .collect();
+                match found.len() {
+                    0 => Vec::new(),
+                    1 => found[0].iter().map(|at| all[*at as usize]).collect(),
+                    _ => {
+                        let mut at: Vec<u32> = found.iter().flat_map(|b| b.iter().copied()).collect();
+                        at.sort_unstable();
+                        at.into_iter().map(|at| all[at as usize]).collect()
+                    }
+                }
+            };
+            if workspace {
+                let found = gather();
+                kept.insert(class, (stamp, found.clone()));
+                return found;
+            }
+            return by_class.entry(class).or_insert_with(gather).clone();
         }
         self.descendants(ancestor)
             .unwrap_or_default()
@@ -1204,6 +1263,36 @@ mod tests {
             tree.set_parent(outer, Some(outer)),
             Err(TreeError::WouldCycle { child: outer, parent: outer })
         );
+    }
+
+    #[test]
+    fn class_lookups_follow_parts_coming_and_going() {
+        let mut tree = InstanceTree::new();
+        let ws = tree.workspace();
+        let count = |t: &InstanceTree, c| t.descendants_of_class(ws, c).len();
+        assert_eq!(count(&tree, ClassKind::Part), 0);
+        let a = tree.create(ClassKind::Part, "A").unwrap();
+        tree.set_parent(a, Some(ws)).unwrap();
+        let weld = tree.create(ClassKind::WeldConstraint, "W").unwrap();
+        tree.set_parent(weld, Some(ws)).unwrap();
+        assert_eq!(count(&tree, ClassKind::Part), 1);
+        assert_eq!(count(&tree, ClassKind::WeldConstraint), 1);
+        // A model built outside, then moved in with its parts.
+        let model = tree.create(ClassKind::Model, "M").unwrap();
+        let b = tree.create(ClassKind::Part, "B").unwrap();
+        tree.set_parent(b, Some(model)).unwrap();
+        assert_eq!(count(&tree, ClassKind::Part), 1);
+        tree.set_parent(model, Some(ws)).unwrap();
+        assert_eq!(tree.descendants_of_class(ws, ClassKind::Part), vec![a, b]);
+        // The weld list still holds; a part leaving changes the part list.
+        assert_eq!(count(&tree, ClassKind::WeldConstraint), 1);
+        tree.destroy(a).unwrap();
+        assert_eq!(tree.descendants_of_class(ws, ClassKind::Part), vec![b]);
+        tree.set_parent(model, None).unwrap();
+        assert_eq!(count(&tree, ClassKind::Part), 0);
+        assert_eq!(count(&tree, ClassKind::WeldConstraint), 1);
+        tree.destroy(weld).unwrap();
+        assert_eq!(count(&tree, ClassKind::WeldConstraint), 0);
     }
 
     #[test]
