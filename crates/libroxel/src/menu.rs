@@ -74,6 +74,8 @@ pub enum Pick {
 /// The home screen's tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
+    Home,
+    Friends,
     Play,
     Online,
     Create,
@@ -101,13 +103,15 @@ pub struct Menu {
     look: Option<Look>,
     /// The computer's "open a file" window, when it's showing.
     picker: crate::file_picker::Picker,
+    /// What the Home and Friends tabs remember.
+    pub home: crate::hub_home::HomeState,
 }
 
 impl Default for Menu {
     fn default() -> Self {
         Self {
             open: false,
-            tab: Tab::Play,
+            tab: Tab::Home,
             game: Game::Starter(STARTER_GAMES[0].name),
             games: Vec::new(),
             scanned: false,
@@ -119,6 +123,7 @@ impl Default for Menu {
             error: None,
             look: None,
             picker: crate::file_picker::Picker::default(),
+            home: crate::hub_home::HomeState::default(),
         }
     }
 }
@@ -168,7 +173,7 @@ fn subheading(ui: &mut egui::Ui, text: &str) {
 
 /// A colour for a game's picture, the same every time for the same name,
 /// picked from a few that sit well on the graphite.
-fn tint(name: &str) -> Color32 {
+pub(crate) fn tint(name: &str) -> Color32 {
     const TINTS: [Color32; 6] = [
         theme::TANGERINE,
         theme::MINT,
@@ -183,7 +188,13 @@ fn tint(name: &str) -> Color32 {
 
 /// A little stack of cubes seen from above a corner, made up from `seed`,
 /// standing on a ground tile: each game's tile gets its own.
-fn paint_diorama(painter: &egui::Painter, centre: egui::Pos2, unit: f32, seed: &str, colour: Color32) {
+pub(crate) fn paint_diorama(
+    painter: &egui::Painter,
+    centre: egui::Pos2,
+    unit: f32,
+    seed: &str,
+    colour: Color32,
+) {
     let hash = seed.bytes().fold(2166136261u32, |h, b| (h ^ b as u32).wrapping_mul(16777619));
     let (dx, dy) = (unit * 0.866, unit * 0.5);
     let at = |x: f32, y: f32, z: f32| egui::pos2(centre.x + (x - y) * dx, centre.y + (x + y) * dy - z * unit);
@@ -319,6 +330,8 @@ impl Menu {
                 ui.add_space(36.0);
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for (tab, glyph, label) in [
+                    (Tab::Home, theme::icon::HOUSE, "Home"),
+                    (Tab::Friends, theme::icon::USERS, "Friends"),
                     (Tab::Play, theme::icon::PLAY, "Play"),
                     (Tab::Online, theme::icon::GLOBE_HEMISPHERE_WEST, "Online"),
                     (Tab::Create, theme::icon::HAMMER, "Create"),
@@ -328,6 +341,9 @@ impl Menu {
                     if theme::tab(ui, glyph, label, self.tab == tab).clicked() {
                         self.tab = tab;
                         self.error = None;
+                        if tab == Tab::Home {
+                            self.home.view = crate::hub_home::View::Home;
+                        }
                     }
                 }
                 // Who you play as, at the right of the bar.
@@ -348,7 +364,14 @@ impl Menu {
         let mut pick = None;
         ui.scope_builder(egui::UiBuilder::new().max_rect(page), |ui| {
             egui::ScrollArea::vertical().id_salt("home-page").auto_shrink([false, false]).show(ui, |ui| {
+                let name = self.name.trim().to_owned();
                 pick = match self.tab {
+                    Tab::Home => {
+                        crate::hub_home::home_tab(&mut self.home, ui, platform, &name, &mut self.tab)
+                    }
+                    Tab::Friends => {
+                        crate::hub_home::friends_tab(&mut self.home, ui, platform, &name, &mut self.tab)
+                    }
                     Tab::Play => self.play_tab(ui),
                     Tab::Online => self.online_tab(ui, platform),
                     Tab::Create => self.create_tab(ui),
@@ -735,6 +758,7 @@ impl Menu {
             hub: HubUse::Own,
             official: false,
             max_players: 0,
+            game_id: crate::social::game_ref(&self.game).game_id,
         }))
     }
 }
