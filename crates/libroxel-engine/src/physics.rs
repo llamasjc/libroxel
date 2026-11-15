@@ -889,7 +889,7 @@ impl Physics {
                 }
             }
         }
-        self.moved_read = (epoch, tree.moved_len());
+        self.moved_read = (tree.moved_epoch(), tree.moved_len());
         // The terrain changed: those it was dug out from under wake.
         let voxels = tree.terrain().and_then(|t| tree.voxels(t).ok());
         let version = voxels.map_or(0, |v| v.version());

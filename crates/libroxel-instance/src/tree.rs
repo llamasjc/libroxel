@@ -218,6 +218,8 @@ pub struct InstanceTree {
     /// many times the log was restarted.
     moved: Vec<InstanceId>,
     moved_epoch: u64,
+    /// Where in the whole history `moved[0]` is (old entries are dropped).
+    moved_base: usize,
     /// Instances whose properties, attributes or tags changed, and how many
     /// times that log was restarted.
     touched: Vec<InstanceId>,
@@ -278,6 +280,7 @@ impl InstanceTree {
             services: Vec::new(),
             moved: Vec::new(),
             moved_epoch: 0,
+            moved_base: 0,
             touched: Vec::new(),
             touched_epoch: 0,
             changes: Vec::new(),
@@ -1121,10 +1124,14 @@ impl InstanceTree {
     }
 
     fn note_moved(&mut self, id: InstanceId) {
-        // A long log is cheaper to start over (indexes rebuild) than to keep.
+        // A long log drops its older half. Readers that keep up (every
+        // frame) never notice; one that fell further behind starts over.
+        // (Starting the whole log over used to make every index rebuild
+        // from scratch every few seconds in a busy game.)
         if self.moved.len() >= 1 << 18 {
-            self.moved.clear();
-            self.moved_epoch += 1;
+            let dropped = 1 << 17;
+            self.moved.drain(..dropped);
+            self.moved_base += dropped;
         }
         self.moved.push(id);
     }
@@ -1151,16 +1158,26 @@ impl InstanceTree {
         index.near_box(lo, hi)
     }
 
-    /// The log of instances that may have moved: its epoch (which changes
-    /// when the log starts over, so everything must be looked at again) and
-    /// the entries from `from` on.
+    /// The log of instances that may have moved: its epoch and the entries
+    /// from `from` on. The epoch comes back different from
+    /// [`moved_epoch`](Self::moved_epoch) when those entries are gone, so
+    /// everything must be looked at again.
     pub fn moved_since(&self, from: usize) -> (u64, &[InstanceId]) {
-        (self.moved_epoch, self.moved.get(from..).unwrap_or(&[]))
+        match from.checked_sub(self.moved_base).and_then(|at| self.moved.get(at..)) {
+            Some(entries) => (self.moved_epoch, entries),
+            // What it wanted was dropped (or it read another tree): start over.
+            None => (self.moved_epoch.wrapping_add(1), &[]),
+        }
+    }
+
+    /// The moved log's epoch now, to compare [`moved_since`](Self::moved_since)'s with.
+    pub fn moved_epoch(&self) -> u64 {
+        self.moved_epoch
     }
 
     /// How long the moved log is now (where to read from next time).
     pub fn moved_len(&self) -> usize {
-        self.moved.len()
+        self.moved_base + self.moved.len()
     }
 
     /// Convenience for renaming.

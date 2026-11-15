@@ -456,7 +456,7 @@ impl PartIndex {
 
     /// Brings the index in line with the tree.
     pub fn refresh(&mut self, tree: &InstanceTree) {
-        let (epoch, _) = tree.moved_since(0);
+        let (epoch, _) = tree.moved_since(self.read);
         if !self.built || epoch != self.epoch {
             self.cells.clear();
             self.huge.clear();
@@ -466,7 +466,7 @@ impl PartIndex {
                 self.place(tree, part);
             }
             self.built = true;
-            self.epoch = epoch;
+            self.epoch = tree.moved_epoch();
             self.read = tree.moved_len();
             return;
         }
