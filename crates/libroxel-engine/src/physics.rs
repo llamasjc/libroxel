@@ -48,7 +48,7 @@ const CELL: f32 = 8.0;
 /// Below this many parts, every part is simulated.
 const NEAR_MOVERS_MIN: usize = 2000;
 /// Anchored parts within about this far (in studs) of a moving part take part in a step.
-const MOVER_CELL: f32 = 32.0;
+const MOVER_MARGIN: f32 = 8.0;
 /// Boxes covering more cells than this are compared with everything.
 const MAX_CELLS: i64 = 64;
 /// Moving boxes climb onto anything whose top is at most this far above their bottom.
@@ -618,8 +618,15 @@ impl Physics {
         self.grounded.contains(&id)
     }
 
-    fn collect_bodies(&self, tree: &InstanceTree, dt: f32, gravity: f32, everything: bool) -> Vec<Body> {
-        let mut bodies = self.part_bodies(tree);
+    fn collect_bodies(
+        &self,
+        tree: &InstanceTree,
+        parts: &[InstanceId],
+        dt: f32,
+        gravity: f32,
+        everything: bool,
+    ) -> Vec<Body> {
+        let mut bodies = self.part_bodies(tree, parts);
         // Loose things in terrain water float (or, for characters, hang there).
         if let Some(voxels) = tree.terrain().and_then(|t| tree.voxels(t).ok()).filter(|v| !v.is_empty()) {
             for body in bodies.iter_mut().filter(|b| !b.anchored && !b.held) {
@@ -687,32 +694,29 @@ impl Physics {
         let reach = |id: InstanceId| tree.get_vec3(id, Property::Size).map_or(0.0, |s| s.length() * 0.5);
         let movers: Vec<InstanceId> =
             index.loose().filter(|id| !self.carried.contains(id)).chain(self.held.iter().copied()).collect();
-        let mut out: HashSet<InstanceId> = index.loose().collect();
+        // Each mover's box, grown by how far it could get in a slow frame
+        // and a margin; the index looks every cell they cover up once.
+        let boxes: Vec<(Vec3, Vec3)> = movers
+            .iter()
+            .filter_map(|id| {
+                let pos = tree.get_vec3(*id, Property::Position)?;
+                let r = reach(*id) + self.velocity(*id).length() * 0.1 + MOVER_MARGIN;
+                Some((pos - Vec3::new(r, r, r), pos + Vec3::new(r, r, r)))
+            })
+            .collect();
+        let mut out: HashSet<InstanceId> = index.near_boxes(&boxes).into_iter().collect();
+        out.extend(index.loose());
         out.extend(self.held.iter().copied());
-        // Movers close together share their cells' parts: look each cell up once.
-        let mut looked: HashSet<(i32, i32, i32)> = HashSet::new();
-        for id in movers {
-            let Some(pos) = tree.get_vec3(id, Property::Position) else { continue };
-            let r = reach(id) + MOVER_CELL;
-            let cell = |v: f32| (v / MOVER_CELL).floor() as i32;
-            let key = (cell(pos.x), cell(pos.y), cell(pos.z));
-            if r <= MOVER_CELL * 1.5 && !looked.insert(key) {
-                continue;
-            }
-            let r = if r <= MOVER_CELL * 1.5 { MOVER_CELL * 2.5 } else { r };
-            let lo = Vec3::new(pos.x - r, pos.y - r, pos.z - r);
-            let hi = Vec3::new(pos.x + r, pos.y + r, pos.z + r);
-            out.extend(index.near_box(lo, hi));
-        }
         // In tree order, so steps don't depend on hashing.
         let mut out: Vec<InstanceId> = out.into_iter().collect();
         out.sort_by_key(|id| id.to_bits());
         out
     }
 
-    fn part_bodies(&self, tree: &InstanceTree) -> Vec<Body> {
-        self.parts_near_movers(tree)
-            .into_iter()
+    fn part_bodies(&self, tree: &InstanceTree, parts: &[InstanceId]) -> Vec<Body> {
+        parts
+            .iter()
+            .copied()
             .flat_map(|id| -> Vec<Body> {
                 let one = |b: Option<Body>| b.into_iter().collect::<Vec<_>>();
                 let Some(size) = tree.get_vec3(id, Property::Size) else { return Vec::new() };
@@ -856,7 +860,10 @@ impl Physics {
     /// Advances the simulation by `dt` seconds.
     pub fn step(&mut self, tree: &mut InstanceTree, dt: f32) -> StepResult {
         let gravity = tree.get_number(tree.workspace(), Property::Gravity).map_or(GRAVITY, |g| g as f32);
-        let mut bodies = self.collect_bodies(tree, dt, gravity, false);
+        // Which parts are near anything that moves: found once a step (the
+        // touch check after the move reuses it; nothing moves far in a step).
+        let parts = self.parts_near_movers(tree);
+        let mut bodies = self.collect_bodies(tree, &parts, dt, gravity, false);
         self.groups.refresh(tree, bodies.iter().map(|b| b.id));
         let fallen_height = fallen_parts_height(tree);
         let live: HashSet<InstanceId> = bodies.iter().map(|b| b.id).collect();
@@ -921,7 +928,7 @@ impl Physics {
         }
 
         // Touch detection, where everything is now: only pairs where something can move.
-        let bodies = self.collect_bodies(tree, dt, gravity, true);
+        let bodies = self.collect_bodies(tree, &parts, dt, gravity, true);
         let near = self.broadphase(&bodies, dt, gravity);
         let mut current = HashSet::new();
         for (i, a) in bodies.iter().enumerate() {

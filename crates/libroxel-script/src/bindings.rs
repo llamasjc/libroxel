@@ -314,6 +314,10 @@ pub(crate) struct Host {
     /// How long each waiting thread ran the last time it was resumed from a
     /// wait (by its pointer), to tell heavy background work from the rest.
     thread_cost: RefCell<std::collections::HashMap<usize, Duration>>,
+    /// How long each script's last resume from a wait took, for its threads
+    /// not seen yet (a `pcall` or `task.spawn` inside a long loop makes a new
+    /// thread for every piece of the work).
+    script_cost: RefCell<std::collections::HashMap<String, Duration>>,
     /// Where the workspace's parts are, for raycasts and part queries.
     pub(crate) part_index: RefCell<libroxel_instance::geometry::PartIndex>,
 }
@@ -2016,6 +2020,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         script_time: RefCell::new(std::collections::HashMap::new()),
         spare_threads: RefCell::new(Vec::new()),
         thread_cost: RefCell::new(std::collections::HashMap::new()),
+        script_cost: RefCell::new(std::collections::HashMap::new()),
         part_index: RefCell::new(libroxel_instance::geometry::PartIndex::new()),
         tweens: RefCell::new(Vec::new()),
         next_tween: Cell::new(1),
@@ -2465,7 +2470,7 @@ fn stop_destroyed_scripts(lua: &Lua) {
 /// Advances the clock, resumes due threads, then fires the frame signal.
 /// How long threads resumed from waits may run in one step before the rest
 /// are left for the next one.
-const RESUME_BUDGET: Duration = Duration::from_millis(5);
+const RESUME_BUDGET: Duration = Duration::from_millis(4);
 
 /// A resume this long marks its thread as heavy background work.
 const HEAVY_RESUME: Duration = Duration::from_micros(400);
@@ -2489,19 +2494,29 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
     let started = start_enabled_scripts(lua);
     host(lua).errors.borrow_mut().extend(started);
     // Waiting threads get a share of each frame, so that long background work
-    // can't stall it: once the share is used up, threads that ran long last
-    // time wait one more frame (first in line then). Quick ones always run.
+    // can't stall it (on Roblox such work runs on the server, another
+    // computer, and never holds up the player's frames). Each frame runs at
+    // least one piece of heavy work, then only as much more as fits in the
+    // share; the rest waits one more frame (first in line then). Quick
+    // threads always run.
     let budget_start = Instant::now();
     if host(lua).thread_cost.borrow().len() > 20_000 {
         host(lua).thread_cost.borrow_mut().clear();
     }
+    let mut ran_heavy = false;
     for w in due {
         let key = w.thread.to_pointer() as usize;
-        let heavy = host(lua).thread_cost.borrow().get(&key).is_some_and(|c| *c > HEAVY_RESUME);
-        if heavy && budget_start.elapsed() > RESUME_BUDGET {
+        let expected = {
+            let host = host(lua);
+            let known = host.thread_cost.borrow().get(&key).copied();
+            known.or_else(|| host.script_cost.borrow().get(&w.script).copied()).unwrap_or_default()
+        };
+        let heavy = expected > HEAVY_RESUME;
+        if heavy && ran_heavy && budget_start.elapsed() + expected > RESUME_BUDGET {
             host(lua).waiting.borrow_mut().push(w);
             continue;
         }
+        ran_heavy |= heavy;
         // A destroyed script's threads stop where they are.
         if !owner_alive(&host(lua).tree.borrow(), w.owner) {
             continue;
@@ -2515,10 +2530,22 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
         if let Some(err) = resume(lua, w.thread, args, &w.script, w.owner) {
             host(lua).errors.borrow_mut().push(err);
         }
+        let took = resumed.elapsed();
         if thread.is_resumable() {
-            host(lua).thread_cost.borrow_mut().insert(key, resumed.elapsed());
+            host(lua).thread_cost.borrow_mut().insert(key, took);
         } else {
             host(lua).thread_cost.borrow_mut().remove(&key);
+        }
+        ran_heavy |= took > HEAVY_RESUME;
+        {
+            let host = host(lua);
+            let mut costs = host.script_cost.borrow_mut();
+            match costs.get_mut(&w.script) {
+                Some(c) => *c = took,
+                None => {
+                    costs.insert(w.script.clone(), took);
+                }
+            }
         }
     }
     step_tweens(lua, dt);

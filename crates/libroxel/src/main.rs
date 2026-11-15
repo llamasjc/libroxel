@@ -82,6 +82,8 @@ pub enum Dialog {
 
 /// Everything the editor remembers between frames.
 pub struct Editor {
+    /// The graphics card and driver drawing the game, for the speed report.
+    pub graphics_adapter: String,
     pub selection: Option<InstanceId>,
     pub tool: Tool,
     /// The terrain brush, and when it may next be used while held down.
@@ -224,6 +226,7 @@ impl Default for Editor {
             show_output: true,
             show_toolbox: true,
             panels_in_play: false,
+            graphics_adapter: String::new(),
             toolbox_search: String::new(),
             log_file: Default::default(),
             output_view: ui::OutputView::Log,

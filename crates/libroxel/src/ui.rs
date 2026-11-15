@@ -241,6 +241,7 @@ pub fn editor_ui(
     window: Query<&Window, With<PrimaryWindow>>,
     time: Res<Time>,
     mut touch_input: ResMut<libroxel_engine::devices::VirtualInput>,
+    adapter: Option<Res<bevy::render::renderer::RenderAdapterInfo>>,
 ) -> Result {
     let ctx = contexts.ctx_mut()?.clone();
     if !crate::theme::install(&ctx) {
@@ -252,6 +253,11 @@ pub fn editor_ui(
     let editor = &mut *editor;
     let tree_rc = engine.tree.clone();
     let playing = engine.is_playing();
+    if editor.graphics_adapter.is_empty()
+        && let Some(info) = adapter
+    {
+        editor.graphics_adapter = format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type);
+    }
     let mut actions: Vec<Action> = Vec::new();
     // Everything in the Output also goes to a log file.
     editor.log_file.write_new(&engine.log);
@@ -508,7 +514,19 @@ pub fn editor_ui(
                 editor.stats.shown = !editor.stats.shown;
             }
             if let Some(session) = engine.session.as_mut() {
-                editor.stats.update(session, ui.input(|i| i.unstable_dt));
+                let adapter = editor.graphics_adapter.clone();
+                let about = || {
+                    let tree = tree_rc.borrow();
+                    let all = tree.descendants(tree.root()).map(|d| d.len()).unwrap_or(0);
+                    let parts = tree.descendants_of_class(tree.workspace(), ClassKind::Part).len();
+                    format!(
+                        "Graphics: {}\nWindow: {:.0} x {:.0}\nInstances: {all}, parts in Workspace: {parts}",
+                        adapter,
+                        ui.ctx().content_rect().width(),
+                        ui.ctx().content_rect().height(),
+                    )
+                };
+                editor.stats.update(session, ui.input(|i| i.unstable_dt), about);
             }
             if playing && editor.stats.shown {
                 let at = ui.max_rect().left_bottom() + egui::vec2(8.0, -30.0);
@@ -4312,23 +4330,60 @@ fn toolbox(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut 
 }
 
 /// Frame rate and where each frame's time goes, shown with Shift+F1 while
-/// playing (like Roblox's own stats).
+/// playing (like Roblox's own stats). While playing, a fuller report is also
+/// written every few seconds to `speed.txt` in the logs folder, to send when
+/// a game runs slowly.
 #[derive(Default)]
 pub struct Stats {
     pub shown: bool,
     frames: u32,
     seconds: f32,
     text: String,
+    report: SpeedReport,
+}
+
+/// What `speed.txt` sums up: the last few seconds of play.
+#[derive(Default)]
+struct SpeedReport {
+    frames: u32,
+    seconds: f32,
+    worst: f32,
+    slow: u32,
+    step: libroxel_engine::FrameTimes,
+    scripts_before: std::collections::HashMap<String, (f64, u64)>,
+}
+
+/// How often `speed.txt` is rewritten while playing, in seconds.
+const REPORT_EVERY: f32 = 5.0;
+
+/// Where the speed report goes.
+pub fn speed_report_path() -> std::path::PathBuf {
+    crate::debugging::logs_dir().join("speed.txt")
 }
 
 impl Stats {
-    fn update(&mut self, session: &mut libroxel_engine::PlaySession, dt: f32) {
+    fn update(
+        &mut self,
+        session: &mut libroxel_engine::PlaySession,
+        dt: f32,
+        about: impl FnOnce() -> String,
+    ) {
         self.frames += 1;
         self.seconds += dt;
+        let r = &mut self.report;
+        r.frames += 1;
+        r.seconds += dt;
+        r.worst = r.worst.max(dt);
+        r.slow += u32::from(dt > 1.0 / 30.0);
         if self.seconds < 0.5 {
             return;
         }
         let t = session.take_frame_times();
+        r.step.frames += t.frames;
+        r.step.change_events += t.change_events;
+        r.step.scripts += t.scripts;
+        r.step.physics += t.physics;
+        r.step.other += t.other;
         let per = |s: f64| if t.frames > 0 { s * 1000.0 / f64::from(t.frames) } else { 0.0 };
         let fps = self.frames as f32 / self.seconds;
         let step = per(t.change_events + t.scripts + t.physics + t.other);
@@ -4343,5 +4398,62 @@ impl Stats {
         );
         self.frames = 0;
         self.seconds = 0.0;
+        if r.seconds >= REPORT_EVERY {
+            self.write_report(session, about());
+        }
+    }
+
+    fn write_report(&mut self, session: &libroxel_engine::PlaySession, about: String) {
+        use std::fmt::Write as _;
+        let r = std::mem::take(&mut self.report);
+        let t = &r.step;
+        let per = |s: f64| if t.frames > 0 { s * 1000.0 / f64::from(t.frames) } else { 0.0 };
+        let frame_ms = r.seconds * 1000.0 / r.frames.max(1) as f32;
+        let step = per(t.change_events + t.scripts + t.physics + t.other);
+        let mut out = String::new();
+        let _ = writeln!(out, "Libroxel speed report (the last {:.0} seconds of play)\n", r.seconds);
+        let _ = writeln!(out, "{about}");
+        let _ = writeln!(
+            out,
+            "{:.0} FPS, {frame_ms:.1} ms a frame on average, slowest frame {:.0} ms, {} of {} frames slower than 30 FPS",
+            r.frames as f32 / r.seconds.max(0.01),
+            r.worst * 1000.0,
+            r.slow,
+            r.frames,
+        );
+        let _ = writeln!(
+            out,
+            "game step {step:.1} ms a frame: scripts {:.1}, change events {:.1}, physics {:.1}, other {:.1}",
+            per(t.scripts),
+            per(t.change_events),
+            per(t.physics),
+            per(t.other),
+        );
+        let _ = writeln!(out, "drawing and the rest {:.1} ms a frame\n", frame_ms as f64 - step);
+        let _ = writeln!(out, "Scripts that took the most time:");
+        let now: std::collections::HashMap<String, (f64, u64)> =
+            session.runtime().script_times().into_iter().map(|(name, secs, n)| (name, (secs, n))).collect();
+        let mut spent: Vec<(&String, f64, u64)> = now
+            .iter()
+            .map(|(name, (secs, n))| {
+                let (s0, n0) = r.scripts_before.get(name).copied().unwrap_or_default();
+                (name, secs - s0, n - n0)
+            })
+            .filter(|(_, secs, _)| *secs > 0.0)
+            .collect();
+        spent.sort_by(|a, b| b.1.total_cmp(&a.1));
+        for (name, secs, n) in spent.into_iter().take(15) {
+            let _ = writeln!(
+                out,
+                "  {name}: {:.2} ms a frame ({n} runs)",
+                secs * 1000.0 / f64::from(r.frames.max(1))
+            );
+        }
+        self.report.scripts_before = now;
+        let path = speed_report_path();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(path, out);
     }
 }
