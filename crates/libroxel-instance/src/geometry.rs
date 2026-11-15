@@ -30,16 +30,9 @@ pub fn raycast(
     }
     let dir = direction / reach;
     let mut best: Option<RayHit> = None;
-    for part in tree.parts_along_ray(origin, dir, reach) {
-        if !tree.exists(part) || tree.is_destroyed(part).unwrap_or(true) || !keep(part) {
-            continue;
-        }
-        let Some((t, normal)) = ray_part(tree, part, origin, dir) else { continue };
-        if t > reach || best.is_some_and(|b| b.distance <= t) {
-            continue;
-        }
-        best = Some(RayHit { part, position: origin + dir * t, normal, distance: t });
-    }
+    tree.visit_ray(origin, dir, reach, |part, entered| {
+        nearest_hit(tree, part, entered, origin, dir, reach, &keep, &mut best)
+    });
     if let Some(terrain) = tree.terrain().filter(|t| keep(*t))
         && let Ok(voxels) = tree.voxels(terrain)
         && let Some((t, normal, _)) = voxels.raycast(origin, dir, best.map_or(reach, |b| b.distance))
@@ -670,7 +663,31 @@ impl PartIndex {
     /// The parts that might be along the ray from `origin` along the unit
     /// vector `dir` for `reach` studs, roughly nearest first.
     pub fn along_ray(&self, origin: Vec3, dir: Vec3, reach: f32) -> Vec<InstanceId> {
-        let mut out: Vec<InstanceId> = self.huge.iter().copied().collect();
+        let mut out = Vec::new();
+        self.visit_ray(origin, dir, reach, |part, _| {
+            out.push(part);
+            true
+        });
+        out
+    }
+
+    /// Hands `visit` each part that might be along the ray (as
+    /// [`along_ray`](Self::along_ray)), with how far along the ray the cell
+    /// it was found in starts, nearest cells first. Stops once `visit`
+    /// returns false. A part is in every cell it overlaps, so once a hit is
+    /// nearer than where a cell starts, nothing further on can be nearer.
+    pub fn visit_ray(
+        &self,
+        origin: Vec3,
+        dir: Vec3,
+        reach: f32,
+        mut visit: impl FnMut(InstanceId, f32) -> bool,
+    ) {
+        for part in &self.huge {
+            if !visit(*part, 0.0) {
+                return;
+            }
+        }
         let mut seen = std::collections::HashSet::new();
         let reach = reach.min(1.0e6);
         // Walk the cells the ray passes through, in order (a voxel walk).
@@ -697,17 +714,27 @@ impl PartIndex {
         let (dx, dy, dz) = (delta(dir.x), delta(dir.y), delta(dir.z));
         let max_cells = (reach / INDEX_CELL) as usize * 3 + 4;
         if max_cells > 60000 {
-            out.extend(self.placed.iter().filter(|(_, p)| p.is_some()).map(|(id, _)| *id));
-            return out;
+            for (id, _) in self.placed.iter().filter(|(_, p)| p.is_some()) {
+                if !visit(*id, 0.0) {
+                    return;
+                }
+            }
+            return;
         }
+        let mut entered = 0.0;
         for _ in 0..max_cells {
             if let Some(list) = self.cells.get(&cell) {
-                out.extend(list.iter().copied().filter(|p| seen.insert(*p)));
+                for part in list {
+                    if seen.insert(*part) && !visit(*part, entered) {
+                        return;
+                    }
+                }
             }
             let t = tx.min(ty).min(tz);
             if t > reach {
                 break;
             }
+            entered = t;
             if t == tx {
                 cell.0 += sx;
                 tx += dx;
@@ -719,8 +746,35 @@ impl PartIndex {
                 tz += dz;
             }
         }
-        out
     }
+}
+
+/// One step of a ray cast: tries `part` (found in a cell that starts
+/// `entered` along the ray) against the nearest hit so far. False once
+/// nothing further along can be nearer.
+#[allow(clippy::too_many_arguments)]
+fn nearest_hit(
+    tree: &InstanceTree,
+    part: InstanceId,
+    entered: f32,
+    origin: Vec3,
+    dir: Vec3,
+    reach: f32,
+    keep: &impl Fn(InstanceId) -> bool,
+    best: &mut Option<RayHit>,
+) -> bool {
+    if best.is_some_and(|b| b.distance < entered) {
+        return false;
+    }
+    if !tree.exists(part) || tree.is_destroyed(part).unwrap_or(true) || !keep(part) {
+        return true;
+    }
+    let Some((t, normal)) = ray_part(tree, part, origin, dir) else { return true };
+    if t > reach || best.is_some_and(|b| b.distance <= t) {
+        return true;
+    }
+    *best = Some(RayHit { part, position: origin + dir * t, normal, distance: t });
+    true
 }
 
 /// [`raycast`] with an index of where the parts are.
@@ -737,16 +791,9 @@ pub fn raycast_indexed(
     }
     let dir = direction / reach;
     let mut best: Option<RayHit> = None;
-    for part in index.along_ray(origin, dir, reach) {
-        if !tree.exists(part) || tree.is_destroyed(part).unwrap_or(true) || !keep(part) {
-            continue;
-        }
-        let Some((t, normal)) = ray_part(tree, part, origin, dir) else { continue };
-        if t > reach || best.is_some_and(|b| b.distance <= t) {
-            continue;
-        }
-        best = Some(RayHit { part, position: origin + dir * t, normal, distance: t });
-    }
+    index.visit_ray(origin, dir, reach, |part, entered| {
+        nearest_hit(tree, part, entered, origin, dir, reach, &keep, &mut best)
+    });
     if let Some(terrain) = tree.terrain().filter(|t| keep(*t))
         && let Ok(voxels) = tree.voxels(terrain)
         && let Some((t, normal, _)) = voxels.raycast(origin, dir, best.map_or(reach, |b| b.distance))
