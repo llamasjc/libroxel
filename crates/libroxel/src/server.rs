@@ -45,6 +45,8 @@ usage:
                                owners (and servers they add by id) may list
                                Official servers
   libroxel hub ban <name> [reason]       ban an account; unban <name> lets it back
+  libroxel hub rename <name> <new name>  rename an account (reserved names such as
+                               admin too)
   libroxel help                show this
 ";
 
@@ -205,6 +207,11 @@ fn hub(args: &[String]) -> Result<(), String> {
             println!("{who} is banned.");
             Ok(())
         }
+        ["rename", who, name] => {
+            libroxel_hub::rename(&libroxel_hub::open_db(Some(&data))?, who, name)?;
+            println!("{who} is now called {name}.");
+            Ok(())
+        }
         ["unban", who] => {
             libroxel_hub::unban(&libroxel_hub::open_db(Some(&data))?, who)?;
             println!("{who} can use this Hub again.");
@@ -212,7 +219,7 @@ fn hub(args: &[String]) -> Result<(), String> {
         }
         _ => {
             Err("usage: libroxel hub [reports | clear <game|item> <id> | remove <game|item> <id> | accounts \
-                  [search] | owners | owner add|remove <who> | ban <who> [reason] | unban <who>]"
+                  [search] | owners | owner add|remove <who> | ban <who> [reason] | unban <who> | rename <who> <name>]"
                 .into())
         }
     }

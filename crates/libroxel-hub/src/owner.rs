@@ -146,6 +146,30 @@ pub fn ban(db: &Connection, who: &str, reason: &str) -> Result<String, String> {
     Ok(id)
 }
 
+/// Renames `who` to `name`, whatever the rules for players say (a
+/// reserved name such as "admin" too). The old name is freed.
+pub fn rename(db: &Connection, who: &str, name: &str) -> Result<String, String> {
+    if !super::valid_account_name(name) {
+        return Err("a name is 3 to 20 letters, digits or underscores".into());
+    }
+    let id = resolve(db, who)?;
+    let taken: Option<String> = db
+        .query_row("SELECT player_id FROM accounts WHERE name = ?1", params![name], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if taken.is_some_and(|owner| owner != id) {
+        return Err(format!("someone already has the name {name}"));
+    }
+    let changed = db
+        .execute("UPDATE accounts SET name = ?2 WHERE player_id = ?1", params![id, name])
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err(format!("{who} has no account here"));
+    }
+    db.execute("DELETE FROM released_names WHERE name = ?1", params![name]).map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
 pub fn unban(db: &Connection, who: &str) -> Result<(), String> {
     let id = resolve(db, who)?;
     match db.execute("DELETE FROM banned WHERE player_id = ?1", params![id]) {

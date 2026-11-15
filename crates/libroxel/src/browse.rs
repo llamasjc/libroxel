@@ -772,6 +772,9 @@ impl Platform {
                 n => format!("{n} published games"),
             };
             ui.label(format!("Your page on this Hub: {} · {games}", profile.name));
+            if profile.admin {
+                ui.colored_label(crate::theme::SUN, "You are an admin of this Hub.");
+            }
             for game in &profile.games {
                 ui.label(format!(
                     "  • {} (version {}, played {} times)",
@@ -982,6 +985,12 @@ impl Platform {
                     }
                     for server in &self.servers {
                         let hover = match &server.host {
+                            _ if server.admin_host => {
+                                format!(
+                                    "{} host · run by this Hub's admin (checked by the Hub)",
+                                    server.kind.label()
+                                )
+                            }
                             Some(host) => format!(
                                 "{} host · hosted by {host} (checked by the Hub)",
                                 server.kind.label()

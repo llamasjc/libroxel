@@ -164,9 +164,19 @@ fn whoever_runs_the_hub_bans_accounts_and_names_its_owners() {
     claim(&hub, &kai, "kai2", now).unwrap();
     claim(&hub, &eve, "eve", now).unwrap();
     let db = open_db(Some(&path)).unwrap();
+    // Players can't be "admin"; the Hub's owner can.
+    assert!(claim(&hub, &kai, "admin", now + 1).unwrap_err().contains("kept"));
     add_owner(&db, "kai2").unwrap();
+    claim(&hub, &kai, "admin", now + 2).unwrap();
+    let page = hub.profile("admin").unwrap().unwrap();
+    assert!(page.admin && page.player_id == player_id_of(&kai));
+    assert!(!hub.profile("eve").unwrap().unwrap().admin);
+    // Or straight from the Hub's computer.
+    libroxel_hub::rename(&db, "admin", "kai2").unwrap();
+    libroxel_hub::rename(&db, "kai2", "Admin").unwrap();
+    assert!(libroxel_hub::rename(&db, "eve", "admin").is_err());
     // Owners can't be banned by mistake.
-    assert!(ban(&db, "kai2", "oops").is_err());
+    assert!(ban(&db, "Admin", "oops").is_err());
 
     // Official servers only from owners; anyone else's are listed as Community.
     let official = |key: &[u8; 32], id: &str| {
@@ -189,6 +199,9 @@ fn whoever_runs_the_hub_bans_accounts_and_names_its_owners() {
     hub.heartbeat(&official(&eve, "hers")).unwrap();
     let kind = |id: &str| hub.servers("").unwrap().into_iter().find(|s| s.server_id == id).map(|s| s.kind);
     assert_eq!(kind("mine"), Some(HostKind::Official));
+    let admin_host =
+        |id: &str| hub.servers("").unwrap().into_iter().find(|s| s.server_id == id).unwrap().admin_host;
+    assert!(admin_host("mine") && !admin_host("hers"));
     assert_eq!(kind("hers"), Some(HostKind::Community));
 
     ban(&db, "eve", "spam").unwrap();

@@ -50,7 +50,7 @@ mod owner;
 mod password;
 mod social;
 use limits::{Caller, Limit, Limits, too_many};
-pub use owner::{AccountRow, accounts, add_owner, ban, owners, remove_owner, unban};
+pub use owner::{AccountRow, accounts, add_owner, ban, owners, remove_owner, rename, unban};
 pub use password::{
     MIN_PASSWORD, PASSWORD_MEMORY_KIB, PASSWORD_PASSES, PasswordSet, SignIn, SignInSalt, SignedIn,
     password_message, password_problem, seal_password, seal_password_with, sign_in_message,
@@ -196,6 +196,9 @@ pub struct ServerInfo {
     pub host: Option<String>,
     #[serde(default)]
     pub host_id: Option<String>,
+    /// Whether one of the Hub's owners (its admins) hosts it.
+    #[serde(default)]
+    pub admin_host: bool,
 }
 
 /// What `GET /` answers, so a client can check it reached a Hub.
@@ -396,6 +399,9 @@ pub struct Profile {
     pub joined_secs_ago: i64,
     /// The games they published.
     pub games: Vec<GameInfo>,
+    /// Whether they are one of the Hub's owners (its admins).
+    #[serde(default)]
+    pub admin: bool,
 }
 
 /// A player found by name.
@@ -866,7 +872,8 @@ async fn update_account(
     }
     let old_name = last.map(|(_, name)| name);
     let renaming = !old_name.as_ref().is_some_and(|old| old.eq_ignore_ascii_case(&account.name));
-    if renaming && reserved_account_name(&account.name) {
+    // The Hub's owners may take them: "admin" can be whoever runs it.
+    if renaming && reserved_account_name(&account.name) && !owner::is_owner(&db, &account.player_id) {
         return bad("that name is kept for whoever runs the Hub");
     }
     let taken: Option<String> = db
@@ -1164,12 +1171,14 @@ async fn profile(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<J
         .query_map(params![player_id], |r| game_row(r, now))
         .map(|rows| rows.filter_map(Result::ok).collect())
         .unwrap_or_default();
+    let admin = owner::is_owner(&db, &player_id);
     Ok(Json(Profile {
         player_id,
         name,
         about,
         look: serde_json::from_str(&look).unwrap_or(serde_json::Value::Null),
         joined_secs_ago: now - created,
+        admin,
         games,
     }))
 }
@@ -1189,7 +1198,8 @@ async fn unpublish(
 
 /// The columns [`server_row`] reads, from `servers`.
 const SERVER_COLUMNS: &str = "server_id, name, game, code, players, max_players, kind, last_seen, game_id,
-    (SELECT a.name FROM accounts a WHERE a.player_id = servers.host_id), host_id";
+    (SELECT a.name FROM accounts a WHERE a.player_id = servers.host_id), host_id,
+    EXISTS (SELECT 1 FROM owners o WHERE o.player_id = servers.host_id)";
 
 fn server_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<ServerInfo> {
     Ok(ServerInfo {
@@ -1204,6 +1214,7 @@ fn server_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<ServerInfo> {
         game_id: r.get(8)?,
         host: r.get(9)?,
         host_id: r.get(10)?,
+        admin_host: r.get(11)?,
     })
 }
 
