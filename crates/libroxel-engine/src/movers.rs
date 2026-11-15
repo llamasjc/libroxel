@@ -201,27 +201,37 @@ pub fn apply(tree: &InstanceTree, welds: &Welds, physics: &mut Physics, dt: f32)
         }
     };
 
-    for id in tree.workspace_descendants() {
-        let Ok(class) = tree.class(id) else { continue };
-        if !matches!(
-            class,
-            ClassKind::LinearVelocity
-                | ClassKind::VectorForce
-                | ClassKind::AlignPosition
-                | ClassKind::RopeConstraint
-                | ClassKind::SpringConstraint
-                | ClassKind::BodyVelocity
-                | ClassKind::BodyPosition
-                | ClassKind::BodyForce
-                | ClassKind::AngularVelocity
-                | ClassKind::BodyAngularVelocity
-                | ClassKind::AlignOrientation
-                | ClassKind::BodyGyro
-                | ClassKind::Torque
-                | ClassKind::RodConstraint
-                | ClassKind::NoCollisionConstraint
-        ) || !enabled(tree, id)
-        {
+    // Each kind is looked up on its own: the tree keeps those lists while
+    // none of their instances come or go, where a walk of the whole
+    // workspace every step cost more than the movers themselves.
+    const MOVERS: [ClassKind; 15] = [
+        ClassKind::LinearVelocity,
+        ClassKind::VectorForce,
+        ClassKind::AlignPosition,
+        ClassKind::RopeConstraint,
+        ClassKind::SpringConstraint,
+        ClassKind::BodyVelocity,
+        ClassKind::BodyPosition,
+        ClassKind::BodyForce,
+        ClassKind::AngularVelocity,
+        ClassKind::BodyAngularVelocity,
+        ClassKind::AlignOrientation,
+        ClassKind::BodyGyro,
+        ClassKind::Torque,
+        ClassKind::RodConstraint,
+        ClassKind::NoCollisionConstraint,
+    ];
+    let found: Vec<(ClassKind, InstanceId)> = MOVERS
+        .iter()
+        .flat_map(|&kind| {
+            tree.descendants_of_class(ws, kind)
+                .into_iter()
+                .filter(move |id| tree.class(*id).is_ok_and(|c| c == kind))
+                .map(move |id| (kind, id))
+        })
+        .collect();
+    for (class, id) in found {
+        if !enabled(tree, id) {
             continue;
         }
         let a0 = tree.get_ref(id, Property::Attachment0);
