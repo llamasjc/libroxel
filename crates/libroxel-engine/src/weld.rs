@@ -92,7 +92,10 @@ pub fn pose_joints(tree: &mut InstanceTree, dt: f32) {
     let mut links: HashMap<InstanceId, Vec<(InstanceId, InstanceId, bool)>> = HashMap::new();
     for class in [ClassKind::Weld, ClassKind::Motor6D] {
         for joint in tree.descendants_of_class(ws, class) {
-            if tree.get_bool(joint, Property::Enabled) != Some(true) {
+            // A character's own joints: the engine poses its body itself.
+            if tree.get_bool(joint, Property::Enabled) != Some(true)
+                || crate::character::is_body_joint(tree, joint)
+            {
                 continue;
             }
             let (Some(a), Some(b)) =
@@ -174,7 +177,8 @@ pub fn assemblies(tree: &InstanceTree) -> Vec<Vec<InstanceId>> {
     }
     let welds = JOINT_CLASSES.iter().flat_map(|&c| tree.descendants_of_class(ws, c));
     for weld in welds {
-        if tree.get_bool(weld, Property::Enabled) != Some(true) {
+        if tree.get_bool(weld, Property::Enabled) != Some(true) || crate::character::is_body_joint(tree, weld)
+        {
             continue;
         }
         let (Some(a), Some(b)) = (tree.get_ref(weld, Property::Part0), tree.get_ref(weld, Property::Part1))

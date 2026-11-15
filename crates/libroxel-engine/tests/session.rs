@@ -820,3 +820,51 @@ fn characters_sound_when_they_jump() {
     assert_eq!(heard, vec![jumping]);
     assert_eq!(shared.borrow().get_bool(jumping, Property::Playing), Some(true));
 }
+
+#[test]
+fn characters_have_r6_joints_that_scripts_can_turn() {
+    let mut tree = world();
+    script(
+        &mut tree,
+        "Pose",
+        r#"
+        local Players = game:GetService("Players")
+        local function pose(character)
+            local torso = character:WaitForChild("Torso")
+            local rs = torso:WaitForChild("Right Shoulder")
+            assert(rs:IsA("Motor6D") and rs.Part0 == torso and rs.Part1 == character["Right Arm"])
+            for _, name in { "Left Shoulder", "Left Hip", "Right Hip", "Neck" } do
+                assert(torso:FindFirstChild(name), name)
+            end
+            assert(character.HumanoidRootPart:FindFirstChild("RootJoint"))
+            assert(character.Humanoid.RigType == Enum.HumanoidRigType.R6, tostring(character.Humanoid.RigType))
+            rs.C0 = rs.C0 * CFrame.Angles(0, 0, math.rad(90))
+            print("posed")
+        end
+        Players.PlayerAdded:Connect(function(p)
+            p.CharacterAdded:Connect(pose)
+            if p.Character then pose(p.Character) end
+        end)
+        for _, p in Players:GetPlayers() do
+            if p.Character then pose(p.Character) end
+        end
+        "#,
+    );
+    let mut session = start_on(tree, true).unwrap();
+    let character = session.character().unwrap();
+    let tree = session.runtime().tree().clone();
+    for _ in 0..30 {
+        session.step(DT, CharacterInput::default());
+    }
+    let log: Vec<String> = session.take_log().into_iter().map(|l| l.text).collect();
+    assert!(log.iter().any(|l| l == "posed"), "{log:?}");
+    let t = tree.borrow();
+    let arm = t.find_first_child(character.model, "Right Arm").unwrap().unwrap();
+    let torso = t.find_first_child(character.model, "Torso").unwrap().unwrap();
+    let a = t.get_vec3(arm, Property::Position).unwrap();
+    let b = t.get_vec3(torso, Property::Position).unwrap();
+    // The arm points straight forward (-Z) at shoulder height, to the right.
+    assert!(a.z - b.z < -0.6, "arm forward: arm {a:?} torso {b:?}");
+    assert!(a.y - b.y > 0.5, "arm up at the shoulder: arm {a:?} torso {b:?}");
+    assert!(a.x - b.x > 1.0, "arm on the right: arm {a:?} torso {b:?}");
+}

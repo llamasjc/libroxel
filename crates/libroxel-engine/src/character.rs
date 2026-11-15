@@ -2,8 +2,8 @@
 //! moved by input instead of by physics forces.
 
 use libroxel_instance::{
-    ClassKind, Color3, EnumValue, InstanceId, InstanceTree, Material, PartShape, Property, PropertyValue,
-    Rotation, Vec3,
+    CFrame, ClassKind, Color3, EnumValue, InstanceId, InstanceTree, Material, PartShape, Property,
+    PropertyValue, Rotation, Vec3,
 };
 use libroxel_script::names::character as names;
 
@@ -57,10 +57,10 @@ pub struct Limbs {
 pub mod part_names {
     pub const HEAD: &str = "Head";
     pub const TORSO: &str = "Torso";
-    pub const LEFT_ARM: &str = "LeftArm";
-    pub const RIGHT_ARM: &str = "RightArm";
-    pub const LEFT_LEG: &str = "LeftLeg";
-    pub const RIGHT_LEG: &str = "RightLeg";
+    pub const LEFT_ARM: &str = "Left Arm";
+    pub const RIGHT_ARM: &str = "Right Arm";
+    pub const LEFT_LEG: &str = "Left Leg";
+    pub const RIGHT_LEG: &str = "Right Leg";
     pub const LEFT_EYE: &str = "LeftEye";
     pub const RIGHT_EYE: &str = "RightEye";
 }
@@ -607,6 +607,137 @@ pub fn build_rig(tree: &mut InstanceTree, model: InstanceId, colors: BodyColors)
     (head, limbs)
 }
 
+/// The joints that hold a body together, named as scripts expect (R6).
+pub mod joints {
+    pub const ROOT: &str = "RootJoint";
+    pub const NECK: &str = "Neck";
+    pub const LEFT_SHOULDER: &str = "Left Shoulder";
+    pub const RIGHT_SHOULDER: &str = "Right Shoulder";
+    pub const LEFT_HIP: &str = "Left Hip";
+    pub const RIGHT_HIP: &str = "Right Hip";
+    pub const ALL: [&str; 6] = [ROOT, NECK, LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP];
+}
+
+/// How a joint of the body sits at rest: its name, its C0 (on Part0) and C1
+/// (on Part1). The turns are the ones R6 bodies use, so a script's
+/// `CFrame.Angles` on a C0 turns a limb the way it would there (a right
+/// shoulder's Z turn lifts the arm forward).
+fn joint_rest(name: &str) -> Option<(CFrame, CFrame)> {
+    let flip = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
+    let quarter = std::f32::consts::FRAC_PI_2;
+    let right = Rotation::about_y(quarter);
+    let left = Rotation::about_y(-quarter);
+    // Turned so the joint's Z is up: the root's and the neck's.
+    let upright =
+        Rotation { x: Vec3::new(-1.0, 0.0, 0.0), y: Vec3::new(0.0, 0.0, 1.0), z: Vec3::new(0.0, 1.0, 0.0) };
+    let arm_top = Vec3::new(0.0, ARM_SIZE.y * 0.5 - 0.1, 0.0);
+    let leg_top = Vec3::new(0.0, LEG_SIZE.y * 0.5, 0.0);
+    let cf = CFrame::new;
+    Some(match name {
+        joints::ROOT => (cf(TORSO_AT, upright), cf(Vec3::ZERO, upright)),
+        joints::NECK => (cf(NECK - TORSO_AT, upright), cf(NECK - HEAD_AT, upright)),
+        joints::RIGHT_SHOULDER => (cf(SHOULDER - TORSO_AT, right), cf(arm_top, right)),
+        joints::LEFT_SHOULDER => (cf(flip(SHOULDER) - TORSO_AT, left), cf(arm_top, left)),
+        joints::RIGHT_HIP => (cf(HIP - TORSO_AT, right), cf(leg_top, right)),
+        joints::LEFT_HIP => (cf(flip(HIP) - TORSO_AT, left), cf(leg_top, left)),
+        _ => return None,
+    })
+}
+
+/// Gives a body [`build_rig`] made its joints: `RootJoint` in the root part
+/// and `Neck`, the shoulders and the hips in the torso, all `Motor6D`s, as
+/// on an R6 character.
+pub fn add_joints(tree: &mut InstanceTree, root: InstanceId, head: InstanceId, limbs: &Limbs) {
+    let list = [
+        (joints::ROOT, root, root, limbs.torso),
+        (joints::NECK, limbs.torso, limbs.torso, head),
+        (joints::LEFT_SHOULDER, limbs.torso, limbs.torso, limbs.left_arm),
+        (joints::RIGHT_SHOULDER, limbs.torso, limbs.torso, limbs.right_arm),
+        (joints::LEFT_HIP, limbs.torso, limbs.torso, limbs.left_leg),
+        (joints::RIGHT_HIP, limbs.torso, limbs.torso, limbs.right_leg),
+    ];
+    for (name, holder, part0, part1) in list {
+        let Some((c0, c1)) = joint_rest(name) else { continue };
+        let Ok(motor) = tree.create(ClassKind::Motor6D, name) else { continue };
+        set(tree, motor, Property::Part0, PropertyValue::Ref(Some(part0)));
+        set(tree, motor, Property::Part1, PropertyValue::Ref(Some(part1)));
+        set(tree, motor, Property::C0Position, PropertyValue::Vec3(c0.pos));
+        set(tree, motor, Property::C0Orientation, PropertyValue::Vec3(c0.rot.to_orientation()));
+        set(tree, motor, Property::C1Position, PropertyValue::Vec3(c1.pos));
+        set(tree, motor, Property::C1Orientation, PropertyValue::Vec3(c1.rot.to_orientation()));
+        set(tree, motor, Property::MaxVelocity, PropertyValue::Number(0.1));
+        let _ = tree.set_parent(motor, Some(holder));
+    }
+}
+
+/// Whether `joint` is one of the joints [`add_joints`] gives a body, still
+/// in its body (the engine poses those itself, not as welds).
+pub fn is_body_joint(tree: &InstanceTree, joint: InstanceId) -> bool {
+    let Ok(name) = tree.name(joint) else { return false };
+    if !joints::ALL.contains(&name) {
+        return false;
+    }
+    let model = tree.parent(joint).ok().flatten().and_then(|holder| tree.parent(holder).ok().flatten());
+    model.is_some_and(|m| find_rig(tree, m).is_some())
+}
+
+fn part_cframe(tree: &InstanceTree, part: InstanceId) -> Option<CFrame> {
+    Some(CFrame::new(
+        tree.get_vec3(part, Property::Position)?,
+        Rotation::from_orientation(tree.get_vec3(part, Property::Orientation).unwrap_or_default()),
+    ))
+}
+
+fn place_at(tree: &mut InstanceTree, id: InstanceId, cf: CFrame) {
+    let orientation = cf.rot.to_orientation();
+    if tree.get_vec3(id, Property::Position) != Some(cf.pos) {
+        let _ = tree.set(id, Property::Position, PropertyValue::Vec3(cf.pos));
+    }
+    if tree.get_vec3(id, Property::Orientation) != Some(orientation) {
+        let _ = tree.set(id, Property::Orientation, PropertyValue::Vec3(orientation));
+    }
+}
+
+/// Puts `part1` where the joint `name` in `holder` holds it on a part at
+/// `part0`, with the body turned by `r` about the joint (in the body's
+/// own axes). Returns where it went, or nothing if the joint is gone or
+/// switched off, or holds something else.
+fn joint_place(
+    tree: &mut InstanceTree,
+    holder: InstanceId,
+    name: &str,
+    part1: InstanceId,
+    part0: CFrame,
+    r: Rotation,
+) -> Option<CFrame> {
+    let joint = tree.find_first_child(holder, name).ok().flatten()?;
+    if tree.class(joint) != Ok(ClassKind::Motor6D)
+        || tree.get_ref(joint, Property::Part1) != Some(part1)
+        || tree.get_bool(joint, Property::Enabled) == Some(false)
+    {
+        return None;
+    }
+    let c0 = crate::weld::joint_offset(tree, joint, false);
+    let c1 = crate::weld::joint_offset(tree, joint, true);
+    // The turn in the joint's own axes (those it has at rest), so it stays
+    // the same whatever a script does to C0.
+    let rest = joint_rest(name).map_or(Rotation::IDENTITY, |(c0, _)| c0.rot);
+    let script =
+        match (tree.get_extra(joint, "TransformPosition"), tree.get_extra(joint, "TransformOrientation")) {
+            (Ok(Some(PropertyValue::Vec3(p))), Ok(Some(PropertyValue::Vec3(o)))) => {
+                Some(CFrame::new(p, Rotation::from_orientation(o)))
+            }
+            _ => None,
+        };
+    // A Transform a script set takes over from the walk and animations.
+    let transform = script.unwrap_or_else(|| CFrame::new(Vec3::ZERO, rest.transpose() * r * rest));
+    let angle = tree.get_number(joint, Property::CurrentAngle).unwrap_or(0.0) as f32;
+    let turn = CFrame::new(Vec3::ZERO, Rotation::about_z(angle)) * transform;
+    let cf = part0 * c0 * turn * c1.inverse();
+    place_at(tree, part1, cf);
+    Some(cf)
+}
+
 /// Finds the head and limbs [`build_rig`] made in `model`, if they are all there.
 pub fn find_rig(tree: &InstanceTree, model: InstanceId) -> Option<(InstanceId, Limbs)> {
     use part_names::*;
@@ -650,17 +781,6 @@ pub fn pose_rig(tree: &mut InstanceTree, root: InstanceId, head: InstanceId, lim
         None => (None, false),
     };
     let at = at + Vec3::new(0.0, anim.map_or(0.0, |a| a.bob), 0.0);
-    // Puts a part `hang` from `pivot`, turned by `r` about the pivot.
-    let mut place = |id: InstanceId, pivot: Vec3, hang: Vec3, r: Rotation| {
-        let pos = at + turn.apply(pivot + r.apply(hang));
-        let orientation = (turn * r).to_orientation();
-        if tree.get_vec3(id, Property::Position) != Some(pos) {
-            let _ = tree.set(id, Property::Position, PropertyValue::Vec3(pos));
-        }
-        if tree.get_vec3(id, Property::Orientation) != Some(orientation) {
-            let _ = tree.set(id, Property::Orientation, PropertyValue::Vec3(orientation));
-        }
-    };
     // A limb swung forward by `tilt` and out to the side by `roll` (radians).
     let limb = |tilt: f32, roll: f32| Rotation::about_x(tilt) * Rotation::about_z(roll);
     let (legs, arms) =
@@ -687,15 +807,28 @@ pub fn pose_rig(tree: &mut InstanceTree, root: InstanceId, head: InstanceId, lim
     if pose.holding {
         right_arm = limb(90f32.to_radians() + pose.slash, 0.0);
     }
-    let flip = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
-    place(head, NECK, HEAD_AT - NECK, neck);
-    place(limbs.left_eye, NECK, flip(EYE_AT) - NECK, neck);
-    place(limbs.right_eye, NECK, EYE_AT - NECK, neck);
-    place(limbs.torso, TORSO_AT, Vec3::ZERO, Rotation::IDENTITY);
-    place(limbs.left_arm, flip(SHOULDER), Vec3::new(0.0, -0.85, 0.0), left_arm);
-    place(limbs.right_arm, SHOULDER, Vec3::new(0.0, -0.85, 0.0), right_arm);
-    place(limbs.left_leg, flip(HIP), Vec3::new(0.0, -1.0, 0.0), left_leg);
-    place(limbs.right_leg, HIP, Vec3::new(0.0, -1.0, 0.0), right_leg);
+    // The torso hangs on the root by its RootJoint, the head and limbs on
+    // the torso by their joints: Part1 = Part0 * C0 * Transform * C1⁻¹, with
+    // the walk and animations as the Transform, so a script that turns a
+    // joint's C0 (or its angle) turns the limb on top of them. A joint a
+    // script took out leaves its part where it is.
+    let root_cf = CFrame::new(at, turn);
+    let torso = joint_place(tree, root, joints::ROOT, limbs.torso, root_cf, Rotation::IDENTITY);
+    let torso_cf = torso.or_else(|| part_cframe(tree, limbs.torso));
+    let mut head_cf = None;
+    if let Some(torso_cf) = torso_cf {
+        let t = limbs.torso;
+        head_cf = joint_place(tree, t, joints::NECK, head, torso_cf, neck);
+        joint_place(tree, t, joints::LEFT_SHOULDER, limbs.left_arm, torso_cf, left_arm);
+        joint_place(tree, t, joints::RIGHT_SHOULDER, limbs.right_arm, torso_cf, right_arm);
+        joint_place(tree, t, joints::LEFT_HIP, limbs.left_leg, torso_cf, left_leg);
+        joint_place(tree, t, joints::RIGHT_HIP, limbs.right_leg, torso_cf, right_leg);
+    }
+    if let Some(head_cf) = head_cf.or_else(|| part_cframe(tree, head)) {
+        let flip = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
+        place_at(tree, limbs.left_eye, head_cf * CFrame::new(flip(EYE_AT) - HEAD_AT, Rotation::IDENTITY));
+        place_at(tree, limbs.right_eye, head_cf * CFrame::new(EYE_AT - HEAD_AT, Rotation::IDENTITY));
+    }
     if let Ok(Some(model)) = tree.parent(root) {
         dress(tree, model, head, limbs);
     }
@@ -793,6 +926,7 @@ impl Character {
         // The root is the collision box; the body drawn around it is the rig.
         set(tree, root, Property::Transparency, PropertyValue::Number(1.0));
         let (head, limbs) = build_rig(tree, model, colors);
+        add_joints(tree, root, head, &limbs);
         // The sounds a character makes by itself.
         for (name, sound, volume) in CHARACTER_SOUNDS {
             let id = make(tree, ClassKind::Sound, name, root);
@@ -801,6 +935,8 @@ impl Character {
         }
         let humanoid = make(tree, ClassKind::Humanoid, names::HUMANOID, model);
         make(tree, ClassKind::Animator, libroxel_script::names::animation::ANIMATOR, humanoid);
+        // The body is an R6 one (scripts check this to know which joints to look for).
+        let _ = tree.set_extra(humanoid, "RigType", Some(PropertyValue::Number(0.0)));
         // New characters start with the starter player's walk speed and jump power.
         if let Some(starter) = tree.service(ClassKind::StarterPlayer) {
             for (from, to) in [
@@ -988,6 +1124,17 @@ pub fn fall_apart(
     for accessory in tree.children(model).map(|c| c.to_vec()).unwrap_or_default() {
         if tree.class(accessory) == Ok(ClassKind::Accessory) {
             stuck.extend(tree.descendants_of_class(accessory, ClassKind::Part));
+        }
+    }
+    // The body comes apart: its joints go, as they do on R6 bodies.
+    let holders = [Some(limbs.torso), root];
+    for holder in holders.into_iter().flatten() {
+        for name in joints::ALL {
+            if let Ok(Some(joint)) = tree.find_first_child(holder, name)
+                && tree.class(joint) == Ok(ClassKind::Motor6D)
+            {
+                let _ = tree.destroy(joint);
+            }
         }
     }
     let pieces = [head, limbs.torso, limbs.left_arm, limbs.right_arm, limbs.left_leg, limbs.right_leg];

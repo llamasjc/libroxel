@@ -136,14 +136,14 @@ fn animations_move_the_limbs_and_stop() {
     let arm_height = |session: &PlaySession| {
         let tree = session.runtime().tree().borrow();
         let model = tree.find_first_child(tree.workspace(), "Player1").unwrap().unwrap();
-        let arm = tree.find_first_child(model, "RightArm").unwrap().unwrap();
+        let arm = tree.find_first_child(model, "Right Arm").unwrap().unwrap();
         let root = tree.find_first_child(model, "HumanoidRootPart").unwrap().unwrap();
         tree.get_vec3(arm, Property::Position).unwrap().y - tree.get_vec3(root, Property::Position).unwrap().y
     };
     let arm_out = |session: &PlaySession| {
         let tree = session.runtime().tree().borrow();
         let model = tree.find_first_child(tree.workspace(), "Player1").unwrap().unwrap();
-        let arm = tree.find_first_child(model, "RightArm").unwrap().unwrap();
+        let arm = tree.find_first_child(model, "Right Arm").unwrap().unwrap();
         let root = tree.find_first_child(model, "HumanoidRootPart").unwrap().unwrap();
         tree.get_vec3(arm, Property::Position).unwrap().x - tree.get_vec3(root, Property::Position).unwrap().x
     };
@@ -183,7 +183,7 @@ fn a_character_that_dies_falls_apart_and_its_hat_stays_on_its_head() {
     let tree = session.runtime().tree().borrow();
     let model = tree.find_first_child(tree.workspace(), "Player1").unwrap().unwrap();
     let find = |name: &str| tree.find_first_child(model, name).unwrap().unwrap();
-    let (head, torso, left_leg) = (find("Head"), find("Torso"), find("LeftLeg"));
+    let (head, torso, left_leg) = (find("Head"), find("Torso"), find("Left Leg"));
     for piece in [head, torso, left_leg] {
         assert_eq!(tree.get_bool(piece, Property::Anchored), Some(false));
         let y = tree.get_vec3(piece, Property::Position).unwrap().y;
