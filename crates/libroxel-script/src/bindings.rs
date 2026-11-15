@@ -2522,6 +2522,7 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
         }
     }
     step_tweens(lua, dt);
+    let _ = crate::lenient::flush_drawn(lua);
     crate::animation::step(lua);
     crate::services::step_debris(lua, now);
     fire(lua, SignalKind::Stepped, || Ok([Value::Number(now), Value::Number(dt)].into_iter().collect()));

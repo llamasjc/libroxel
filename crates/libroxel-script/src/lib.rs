@@ -23,6 +23,7 @@ mod animation;
 mod bindings;
 mod calls;
 mod compat;
+pub mod drawn;
 mod effects;
 pub mod filter;
 mod items;

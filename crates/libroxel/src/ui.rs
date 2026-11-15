@@ -326,12 +326,13 @@ pub fn editor_ui(
         egui::Panel::top("ribbon").show(&mut root, |ui| {
             ribbon(ui, editor, engine.session.as_ref(), &tree_rc.borrow(), &mut actions);
         });
-        if editor.show_toolbox {
+        let side_panels = !playing || editor.panels_in_play;
+        if editor.show_toolbox && side_panels {
             egui::Panel::left("toolbox").resizable(true).default_size(190.0).show(&mut root, |ui| {
                 toolbox(ui, editor, playing, &mut actions);
             });
         }
-        if editor.show_explorer || editor.show_properties {
+        if (editor.show_explorer || editor.show_properties) && side_panels {
             egui::Panel::right("side").resizable(true).default_size(300.0).show(&mut root, |ui| {
                 if editor.show_explorer {
                     let explorer = |ui: &mut egui::Ui, editor: &mut Editor, actions: &mut Vec<Action>| {
@@ -452,6 +453,9 @@ pub fn editor_ui(
                 let selected = if playing { None } else { editor.selection };
                 if let Some(hit) = gui::surfaces(ui, &tree_rc.borrow(), (cam, gt), selected) {
                     gui_hit = Some(hit);
+                    if hit.1.is_button() {
+                        boxes.input = Some(hit);
+                    }
                 }
                 if let Some(hit) = gui::billboards(ui, &tree_rc.borrow(), (cam, gt), selected, &mut boxes) {
                     gui_hit = Some(hit);
@@ -593,7 +597,9 @@ pub fn editor_ui(
 
     // GUI buttons: down when pressed on one, then up and a click when let go
     // over the same one, however long it was held (hold-to-confirm buttons).
-    let button_under = gui_hit.filter(|(_, class)| class.is_button()).map(|(id, _)| id).filter(|_| over_view);
+    // Only buttons, text boxes and Active objects take a press; a label on
+    // a button or a see-through frame over the screen lets it through.
+    let button_under = boxes.input.filter(|(_, class)| class.is_button() && over_view).map(|(id, _)| id);
     if playing && on_hotbar.is_none() {
         let (pressed, released) = ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_released()));
         if pressed && let Some(id) = button_under {
@@ -613,7 +619,7 @@ pub fn editor_ui(
 
     // Mouse buttons for the input service, while playing.
     if playing && over_view {
-        let on_ui = gui_hit.is_some()
+        let on_ui = boxes.input.is_some()
             || on_hotbar.is_some()
             || prompt_hit.is_some_and(|(_, r)| pointer.is_some_and(|p| r.contains(p)));
         ctx.input(|i| {
@@ -3801,7 +3807,7 @@ fn ribbon(
                     RibbonTab::Home => home_tab(ui, editor, playing, tree, actions),
                     RibbonTab::Model => model_tab(ui, editor, playing, actions),
                     RibbonTab::Test => test_tab(ui, editor, playing, actions),
-                    RibbonTab::View => view_tab(ui, editor),
+                    RibbonTab::View => view_tab(ui, editor, playing),
                 });
             });
         });
@@ -4107,17 +4113,35 @@ fn test_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
     });
 }
 
-fn view_tab(ui: &mut egui::Ui, editor: &mut Editor) {
+fn view_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool) {
     theme::ribbon_group(ui, "Show", |ui| {
-        for (glyph, label, on) in [
-            (icon::TREE_STRUCTURE, "Explorer", &mut editor.show_explorer),
-            (icon::SLIDERS_HORIZONTAL, "Properties", &mut editor.show_properties),
-            (icon::TOOLBOX, "Toolbox", &mut editor.show_toolbox),
-            (icon::TERMINAL_WINDOW, "Output", &mut editor.show_output),
+        let side = !playing || editor.panels_in_play;
+        let mut opened_side = false;
+        for (glyph, label, on, is_side) in [
+            (icon::TREE_STRUCTURE, "Explorer", &mut editor.show_explorer, true),
+            (icon::SLIDERS_HORIZONTAL, "Properties", &mut editor.show_properties, true),
+            (icon::TOOLBOX, "Toolbox", &mut editor.show_toolbox, true),
+            (icon::TERMINAL_WINDOW, "Output", &mut editor.show_output, false),
         ] {
-            if theme::ribbon_button(ui, glyph, label, *on).clicked() {
-                *on = !*on;
+            let shown = *on && (side || !is_side);
+            if theme::ribbon_button(ui, glyph, label, shown).clicked() {
+                if is_side && !side {
+                    // Asking for a side panel while playing brings the panels back.
+                    *on = true;
+                    opened_side = true;
+                } else {
+                    *on = !*on;
+                }
             }
+        }
+        if opened_side {
+            editor.panels_in_play = true;
+        }
+        if theme::ribbon_button(ui, icon::SIDEBAR, "In play", editor.panels_in_play)
+            .on_hover_text("Keep the side panels open while playing (off: the game gets the whole width)")
+            .clicked()
+        {
+            editor.panels_in_play = !editor.panels_in_play;
         }
     });
     theme::ribbon_group(ui, "Settings", |ui| {

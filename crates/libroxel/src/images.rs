@@ -26,6 +26,9 @@ pub fn texture(ctx: &egui::Context, name: &str) -> Option<(egui::TextureId, egui
     if name.is_empty() {
         return None;
     }
+    if name.starts_with(libroxel_script::drawn::PREFIX) {
+        return drawn_texture(ctx, name);
+    }
     LOADED.with(|loaded| {
         let mut loaded = loaded.borrow_mut();
         let generation = pictures::generation();
@@ -40,6 +43,40 @@ pub fn texture(ctx: &egui::Context, name: &str) -> Option<(egui::TextureId, egui
             Some((handle, egui::vec2(size[0] as f32, size[1] as f32)))
         });
         slot.as_ref().map(|(handle, size)| (handle.id(), *size))
+    })
+}
+
+thread_local! {
+    /// Pictures scripts draw, uploaded: by name, the version uploaded and its texture.
+    static DRAWN: RefCell<HashMap<String, (u64, egui::TextureHandle)>> = RefCell::new(HashMap::new());
+}
+
+/// A picture a script draws (an EditableImage), uploaded again when it changed.
+fn drawn_texture(ctx: &egui::Context, name: &str) -> Option<(egui::TextureId, egui::Vec2)> {
+    let drawn = libroxel_script::drawn::image(name)?;
+    let [w, h] = drawn.size;
+    if w == 0 || h == 0 || drawn.rgba.len() < w * h * 4 {
+        return None;
+    }
+    let size = egui::vec2(w as f32, h as f32);
+    DRAWN.with_borrow_mut(|uploaded| {
+        let picture = || egui::ColorImage::from_rgba_unmultiplied([w, h], &drawn.rgba[..w * h * 4]);
+        match uploaded.get_mut(name) {
+            Some((version, handle)) => {
+                if *version != drawn.version {
+                    handle.set(picture(), egui::TextureOptions::LINEAR);
+                    *version = drawn.version;
+                }
+                Some((handle.id(), size))
+            }
+            None => {
+                let handle =
+                    ctx.load_texture(format!("drawn:{name}"), picture(), egui::TextureOptions::LINEAR);
+                let id = handle.id();
+                uploaded.insert(name.to_owned(), (drawn.version, handle));
+                Some((id, size))
+            }
+        }
     })
 }
 

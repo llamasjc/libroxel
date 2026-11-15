@@ -127,7 +127,14 @@ pub fn pose_joints(tree: &mut InstanceTree, dt: f32) {
                 } else {
                     0.0
                 };
-                let turn = CFrame::new(Vec3::ZERO, Rotation::about_z(angle));
+                let mut turn = CFrame::new(Vec3::ZERO, Rotation::about_z(angle));
+                // A script's (or animation's) Transform sits between C0 and C1.
+                if let (Ok(Some(PropertyValue::Vec3(p))), Ok(Some(PropertyValue::Vec3(o)))) = (
+                    tree.get_extra(joint, "TransformPosition"),
+                    tree.get_extra(joint, "TransformOrientation"),
+                ) {
+                    turn = turn * CFrame::new(p, Rotation::from_orientation(o));
+                }
                 // Part1 = Part0 * C0 * turn * C1⁻¹, and the other way round.
                 let there = if at_is_part0 {
                     here * c0 * turn * c1.inverse()

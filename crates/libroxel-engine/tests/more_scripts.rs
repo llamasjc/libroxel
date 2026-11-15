@@ -392,3 +392,29 @@ fn gradients_keep_both_ends_of_their_sequences() {
     "#);
     assert_eq!(printed, vec!["2 1 1 0.5 90", "1 Vector2"]);
 }
+
+#[test]
+fn a_motor_transform_moves_its_part_like_roblox() {
+    use libroxel_engine::{CharacterInput, PlaySession};
+    let tree = std::rc::Rc::new(std::cell::RefCell::new(libroxel_instance::InstanceTree::new()));
+    let mut session = PlaySession::start(tree.clone(), false).unwrap();
+    session
+        .runtime()
+        .run(
+            "Rig",
+            r#"
+            local a = Instance.new("Part", workspace); a.Anchored = true; a.Position = Vector3.new(0, 10, 0)
+            local b = Instance.new("Part", workspace); b.Name = "Arm"
+            local j = Instance.new("Motor6D", a); j.Part0 = a; j.Part1 = b; j.C0 = CFrame.new(0, 2, 0)
+            j.Transform = CFrame.new(1, 0, 0)
+            "#,
+        )
+        .unwrap();
+    for _ in 0..3 {
+        session.step(1.0 / 30.0, CharacterInput::default());
+    }
+    let t = tree.borrow();
+    let arm = t.find_first_child(t.workspace(), "Arm").unwrap().unwrap();
+    let p = t.get_vec3(arm, libroxel_instance::Property::Position).unwrap();
+    assert!((p.x - 1.0).abs() < 1e-3 && (p.y - 12.0).abs() < 1e-3, "arm at {p:?}");
+}

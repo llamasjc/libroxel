@@ -23,6 +23,10 @@ pub struct TextBoxes {
     /// Where each screen GUI object was drawn, from the view's top left
     /// corner, for scripts' AbsolutePosition and AbsoluteSize.
     pub rects: Vec<(InstanceId, Rect)>,
+    /// The topmost object under the pointer that takes input while playing:
+    /// a button, a text box or an Active object. Labels and frames let the
+    /// press through to what's under them, as in Roblox.
+    pub input: GuiHit,
 }
 
 fn color(c: Color3, alpha: f32) -> Color32 {
@@ -553,6 +557,12 @@ fn draw_children(
         let hovered = pointer.is_some_and(|p| r.contains(p) && painter.clip_rect().contains(p));
         if hovered {
             *hit = Some((child, class));
+            if class.is_button()
+                || class == ClassKind::TextBox
+                || matches!(tree.get_extra(child, "Active"), Ok(Some(PropertyValue::Bool(true))))
+            {
+                boxes.input = Some((child, class));
+            }
         }
 
         let alpha = 1.0 - tree.get_number(child, Property::BackgroundTransparency).unwrap_or(0.0) as f32;

@@ -627,7 +627,7 @@ fn update_lighting(
     mut ambient: ResMut<GlobalAmbientLight>,
     mut fogs: Query<&mut bevy::pbr::DistanceFog>,
 ) {
-    let (clock, brightness, tint, fog, haze) = {
+    let (clock, brightness, tint, exposure, fog, haze) = {
         let tree = engine.tree.borrow();
         let lighting = tree.service(ClassKind::Lighting);
         let atmosphere =
@@ -637,7 +637,24 @@ fn update_lighting(
         (
             read(Property::ClockTime).unwrap_or(14.0),
             read(Property::Brightness).unwrap_or(2.0),
-            colour(Property::Ambient).unwrap_or(libroxel_instance::Color3::new(0.5, 0.5, 0.5)),
+            // Outdoors, Roblox lights with OutdoorAmbient (Ambient is for indoors);
+            // the brighter of the two lights the world here.
+            {
+                let ambient =
+                    colour(Property::Ambient).unwrap_or(libroxel_instance::Color3::new(0.5, 0.5, 0.5));
+                match lighting.map(|l| tree.get_extra(l, "OutdoorAmbient")) {
+                    Some(Ok(Some(libroxel_instance::PropertyValue::Color3(o))))
+                        if o.r.max(o.g).max(o.b) > ambient.r.max(ambient.g).max(ambient.b) =>
+                    {
+                        o
+                    }
+                    _ => ambient,
+                }
+            },
+            match lighting.map(|l| tree.get_extra(l, "ExposureCompensation")) {
+                Some(Ok(Some(libroxel_instance::PropertyValue::Number(e)))) => e.clamp(-3.0, 3.0) as f32,
+                _ => 0.0,
+            },
             (
                 colour(Property::FogColor).unwrap_or(libroxel_instance::Color3::new(0.75, 0.75, 0.75)),
                 read(Property::FogStart).unwrap_or(0.0),
@@ -646,10 +663,15 @@ fn update_lighting(
             atmosphere.map(|a| atmosphere_fog(&tree, a)),
         )
     };
-    let (dir, illuminance, sky, ambient_brightness) = sky_at(clock, brightness);
-    // Ambient 0.5 grey is the normal amount; brighter or coloured ambient tints the shadows.
+    let (dir, illuminance, sky, _) = sky_at(clock, brightness);
+    // Exposure brightens (or darkens) everything, a stop at a time.
+    let exposure = 2f32.powf(exposure);
+    let illuminance = illuminance * exposure;
+    // The ambient colour lights every face the same at any time of day, as in
+    // Roblox: a game that keeps it bright at night has bright nights. 0.5 grey
+    // is the normal amount; coloured ambient tints the shadows.
     let strongest = tint.r.max(tint.g).max(tint.b);
-    let ambient_brightness = ambient_brightness * (strongest * 2.0);
+    let ambient_brightness = 500.0 * strongest * 2.0 * exposure;
     let ambient_color = if strongest > 0.0 {
         Color::srgb(tint.r / strongest, tint.g / strongest, tint.b / strongest)
     } else {
