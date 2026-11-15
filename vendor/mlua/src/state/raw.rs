@@ -71,6 +71,10 @@ impl Drop for RawLua {
 
             #[cfg(feature = "luau")]
             {
+                // Libroxel: no other thread may switch the interrupt on now.
+                if let Ok(mut arm) = (*self.extra.get()).interrupt_arm.lock() {
+                    *arm = 0;
+                }
                 // Reset any callbacks
                 (*ffi::lua_callbacks(self.main_state())).interrupt = None;
                 (*ffi::lua_callbacks(self.main_state())).userthread = None;

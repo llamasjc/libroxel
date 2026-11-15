@@ -120,13 +120,22 @@ pub(crate) struct Connections {
     signal_of: std::collections::HashMap<u64, SignalKind>,
     /// How many connections follow each instance's changes.
     watched: std::collections::HashMap<InstanceId, usize>,
+    /// How many connections each script instance made.
+    owners: std::collections::HashMap<InstanceId, usize>,
     tags: usize,
     tools: usize,
 }
 
 impl Connections {
-    fn count(&mut self, signal: SignalKind, by: isize) {
+    fn count(&mut self, signal: SignalKind, owner: Option<InstanceId>, by: isize) {
         let bump = |n: &mut usize| *n = n.saturating_add_signed(by);
+        if let Some(owner) = owner {
+            let n = self.owners.entry(owner).or_default();
+            bump(n);
+            if *n == 0 {
+                self.owners.remove(&owner);
+            }
+        }
         if let Some(id) = signal.watched() {
             let n = self.watched.entry(id).or_default();
             bump(n);
@@ -142,7 +151,7 @@ impl Connections {
     }
 
     fn push(&mut self, conn: Connection) {
-        self.count(conn.signal, 1);
+        self.count(conn.signal, conn.owner, 1);
         self.signal_of.insert(conn.id, conn.signal);
         self.by_signal.entry(conn.signal).or_default().push(conn);
     }
@@ -159,7 +168,7 @@ impl Connections {
         if list.is_empty() {
             self.by_signal.remove(&signal);
         }
-        self.count(signal, -1);
+        self.count(signal, conn.owner, -1);
         Some(conn)
     }
 
@@ -180,7 +189,7 @@ impl Connections {
         self.by_signal.retain(|_, l| !l.is_empty());
         for c in &out {
             self.signal_of.remove(&c.id);
-            self.count(c.signal, -1);
+            self.count(c.signal, c.owner, -1);
         }
         out
     }
@@ -198,13 +207,18 @@ impl Connections {
         }
         for c in &once {
             self.signal_of.remove(&c.id);
-            self.count(c.signal, -1);
+            self.count(c.signal, c.owner, -1);
         }
         once
     }
 
     fn len(&self) -> usize {
         self.signal_of.len()
+    }
+
+    /// The script instances that made connections.
+    fn owners(&self) -> impl Iterator<Item = InstanceId> + '_ {
+        self.owners.keys().copied()
     }
 
     fn is_watched(&self, id: &InstanceId) -> bool {
@@ -233,15 +247,19 @@ pub(crate) struct Watchdog {
     /// Milliseconds after `start` the running script must stop by; 0: none.
     deadline_ms: std::sync::atomic::AtomicU64,
     overdue: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Switches Luau's interrupt on. It stays off otherwise: a call at
+    /// every loop turn would make loops about twice as slow.
+    arm: mlua::InterruptArm,
 }
 
 impl Watchdog {
     /// A watchdog with its own thread, which ends when the watchdog is dropped.
-    fn start() -> std::sync::Arc<Self> {
+    fn start(arm: mlua::InterruptArm) -> std::sync::Arc<Self> {
         let dog = std::sync::Arc::new(Self {
             start: Instant::now(),
             deadline_ms: std::sync::atomic::AtomicU64::new(0),
             overdue: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            arm,
         });
         let weak = std::sync::Arc::downgrade(&dog);
         let _ = std::thread::Builder::new().name("script watchdog".into()).spawn(move || {
@@ -249,6 +267,9 @@ impl Watchdog {
                 let due = dog.deadline_ms.load(std::sync::atomic::Ordering::Relaxed);
                 if due != 0 && dog.start.elapsed().as_millis() as u64 > due {
                     dog.overdue.store(true, std::sync::atomic::Ordering::Relaxed);
+                    // (Again each time: the interrupt may have switched
+                    // itself off just as the flag went up.)
+                    dog.arm.arm();
                 }
                 drop(dog);
                 std::thread::sleep(Duration::from_millis(100));
@@ -334,6 +355,8 @@ pub(crate) struct Host {
     /// When the last frame's waiting threads were resumed, to size the share
     /// of the next frame by how long frames really take.
     last_step: Cell<Option<Instant>>,
+    /// The tree's destroy count when destroyed scripts were last looked for.
+    destroys_seen: Cell<Option<u64>>,
     /// Where the workspace's parts are, for raycasts and part queries.
     pub(crate) part_index: RefCell<libroxel_instance::geometry::PartIndex>,
 }
@@ -441,6 +464,11 @@ fn resume(
     }
     *host(lua).current_script.borrow_mut() = previous;
     host(lua).current_owner.set(previous_owner);
+    // A thread of a script destroyed before the last look (one it didn't
+    // find waiting) may have waited or connected again: look again.
+    if owner.is_some() && host(lua).tree.try_borrow().is_ok_and(|tree| !owner_alive(&tree, owner)) {
+        host(lua).destroys_seen.set(None);
+    }
     match result {
         Ok(yielded) => {
             if thread.is_resumable() {
@@ -2035,10 +2063,10 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     };
     let deadline: Rc<Cell<Option<Instant>>> = Rc::new(Cell::new(None));
     let check = deadline.clone();
-    // Luau asks at every loop turn. Asking Rust each time would cost more
-    // than most loops, so the question only reaches here once a watchdog
-    // thread has seen a script run past its deadline.
-    let watchdog = Watchdog::start();
+    // Luau would ask at every loop turn, which costs about as much as a
+    // simple loop itself, so the interrupt stays switched off until a
+    // watchdog thread sees a script run past its deadline.
+    let watchdog = Watchdog::start(lua.interrupt_arm());
     lua.set_interrupt_flag(Some(watchdog.overdue_flag()));
     let watched = watchdog.clone();
     lua.set_interrupt(move |_| {
@@ -2073,6 +2101,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         script_cost: RefCell::new(std::collections::HashMap::new()),
         heavy_debt: Cell::new(Duration::ZERO),
         last_step: Cell::new(None),
+        destroys_seen: Cell::new(None),
         part_index: RefCell::new(libroxel_instance::geometry::PartIndex::new()),
         tweens: RefCell::new(Vec::new()),
         next_tween: Cell::new(1),
@@ -2552,8 +2581,24 @@ fn stop_destroyed_scripts(lua: &Lua) {
     let gone: Vec<Connection> = {
         let host = host(lua);
         let tree = host.tree.borrow();
-        let gone = host.connections.borrow_mut().take_where(|c| !owner_alive(&tree, c.owner));
-        host.waiting.borrow_mut().retain(|w| owner_alive(&tree, w.owner));
+        // Nothing destroyed since the last look: no script can have gone.
+        if host.destroys_seen.replace(Some(tree.destroy_count())) == Some(tree.destroy_count()) {
+            return;
+        }
+        // Each script looked at once, not each of its (maybe thousands of)
+        // connections and waiting threads.
+        let mut connections = host.connections.borrow_mut();
+        let dead: std::collections::HashSet<InstanceId> =
+            connections.owners().filter(|o| !owner_alive(&tree, Some(*o))).collect();
+        let gone = if dead.is_empty() {
+            Vec::new()
+        } else {
+            connections.take_where(|c| c.owner.is_some_and(|o| dead.contains(&o)))
+        };
+        let mut alive = std::collections::HashMap::new();
+        host.waiting.borrow_mut().retain(|w| {
+            w.owner.is_none_or(|o| *alive.entry(o).or_insert_with(|| owner_alive(&tree, Some(o))))
+        });
         gone
     };
     for conn in gone {

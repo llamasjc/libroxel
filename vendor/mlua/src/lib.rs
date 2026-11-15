@@ -115,6 +115,8 @@ pub use crate::multi::{MultiValue, Variadic};
 pub use crate::scope::Scope;
 #[doc(inline)]
 pub use crate::state::{Lua, LuaOptions, WeakLua};
+#[cfg(feature = "luau")]
+pub use crate::state::InterruptArm;
 pub use crate::stdlib::StdLib;
 #[doc(inline)]
 pub use crate::string::LuaString;

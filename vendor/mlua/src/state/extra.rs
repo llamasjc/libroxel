@@ -93,6 +93,10 @@ pub(crate) struct ExtraData {
     // Libroxel: while set and false, the interrupt callback is skipped.
     #[cfg(feature = "luau")]
     pub(super) interrupt_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    // Libroxel: where another thread may switch the interrupt on (the
+    // address of the VM's callbacks, or 0 once the VM is closing).
+    #[cfg(feature = "luau")]
+    pub(crate) interrupt_arm: std::sync::Arc<std::sync::Mutex<usize>>,
     pub(super) thread_triggers: ThreadTriggers,
     pub(super) thread_event_callback: Option<ThreadEventCallback>,
     pub(super) thread_event_state: *mut ffi::lua_State,
@@ -211,6 +215,8 @@ impl ExtraData {
             interrupt_callback: None,
             #[cfg(feature = "luau")]
             interrupt_flag: None,
+            #[cfg(feature = "luau")]
+            interrupt_arm: std::sync::Arc::new(std::sync::Mutex::new(0)),
             thread_triggers: ThreadTriggers::default(),
             thread_event_callback: None,
             thread_event_state: ptr::null_mut(),

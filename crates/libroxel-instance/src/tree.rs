@@ -232,6 +232,8 @@ pub struct InstanceTree {
     structure: u64,
     /// Bumped whenever anything at all is reparented or destroyed.
     structure_all: u64,
+    /// How many times `destroy` destroyed something.
+    destroys: u64,
     /// The workspace's descendants of each class, kept while nothing in it
     /// is reparented: many systems ask for them every frame.
     class_cache: std::cell::RefCell<ClassCache>,
@@ -287,6 +289,7 @@ impl InstanceTree {
             tag_index: Default::default(),
             structure: 0,
             structure_all: 0,
+            destroys: 0,
             class_cache: Default::default(),
             root_cache: Default::default(),
             part_index: Default::default(),
@@ -527,6 +530,7 @@ impl InstanceTree {
         }
         self.set_parent(id, None)?;
         self.structure_all += 1;
+        self.destroys += 1;
         let mut doomed = self.descendants(id)?;
         doomed.insert(0, id);
         // Destroy leaves first so observers never see a destroyed parent with live children.
@@ -544,6 +548,12 @@ impl InstanceTree {
             self.note_moved(victim);
         }
         Ok(())
+    }
+
+    /// Goes up each time something is destroyed, so a caller can tell
+    /// whether anything it holds might have been since it last looked.
+    pub fn destroy_count(&self) -> u64 {
+        self.destroys
     }
 
     /// Frees every destroyed instance. Their ids stop resolving.
