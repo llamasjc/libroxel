@@ -550,6 +550,7 @@ end
 -- (BasePart, GuiObject, GuiButton, ...); "Instance" is everything.
 ------------------------------------------------------------------------------
 
+local editable_keys = setmetatable({}, { __mode = "k" }) -- EditableImage -> its key (see editable_image)
 local props = {} -- group -> name -> default
 local getters = {} -- group -> name -> function(self, slot)
 local setters = {} -- group -> name -> function(self, value, slot)
@@ -1081,7 +1082,26 @@ add(props, "GuiObject", {
 	BottomImage = "",
 	ScrollingEnabled = true,
 })
+add(setters, "GuiObject", {
+	-- A picture by address, or one a script draws (an EditableImage).
+	ImageContent = function(self, v, s)
+		s.values.ImageContent = v
+		local key = type(v) == "table" and v.Object and editable_keys[v.Object]
+		if key then
+			self.Image = "editable://" .. key
+		else
+			self.Image = type(v) == "table" and v.Uri or ""
+		end
+	end,
+})
 add(getters, "GuiObject", {
+	ImageContent = function(self, s)
+		local v = s.values.ImageContent
+		if v ~= nil then
+			return v
+		end
+		return { SourceType = "Uri", Uri = self.Image }
+	end,
 	AbsoluteSize = function(self)
 		local _, _, w, h = L.drawn_rect(self)
 		if w then
@@ -1382,6 +1402,15 @@ plain_signals("Camera", { "InterpolationFinished" })
 
 -- Joints: the turn a motor's animation adds.
 add(props, "Motor6D", { Transform = CFrame.new(), CurrentAngle = 0 })
+add(setters, "Motor6D", {
+	-- The animated offset between C0 and C1: libroxel's joints use it too.
+	Transform = function(self, v, s)
+		s.values.Transform = v
+		local p = v.Position
+		local rx, ry, rz = v:ToOrientation()
+		L.set_joint_transform(self, p.X, p.Y, p.Z, math.deg(rx), math.deg(ry), math.deg(rz))
+	end,
+})
 add(props, "JointInstance", { Active = true })
 
 -- Kept-for-scripts classes ---------------------------------------------------
@@ -2098,8 +2127,20 @@ local function returns(...)
 	end
 end
 
--- Pictures scripts draw pixel by pixel. libroxel keeps the pixels (so
--- reading them back works) but doesn't show them yet.
+-- Pictures scripts draw pixel by pixel. The pixels live here (so reading
+-- them back works); once a frame, changed ones go to the renderer, which
+-- shows them where an image's ImageContent names them.
+local dirty_editables = {} -- key -> function that sends the pixels
+function L.flush_editables()
+	if next(dirty_editables) == nil then
+		return
+	end
+	local list = dirty_editables
+	dirty_editables = {}
+	for _, send in pairs(list) do
+		send()
+	end
+end
 local function editable_image(size)
 	size = size or Vector2.new(512, 512)
 	local w, h = math.max(1, math.floor(size.X)), math.max(1, math.floor(size.Y))
@@ -2108,10 +2149,15 @@ local function editable_image(size)
 	end
 	local pixels = buffer.create(w * h * 4)
 	local gone = false
+	local key = L.editable_key()
+	local function send()
+		L.editable_store(key, w, h, if gone then nil else pixels)
+	end
 	local function check()
 		if gone then
 			error("the EditableImage was destroyed", 3)
 		end
+		dirty_editables[key] = send
 	end
 	local function rect(pos, sz)
 		local x0, y0 = math.max(0, math.floor(pos.X)), math.max(0, math.floor(pos.Y))
@@ -2129,6 +2175,7 @@ local function editable_image(size)
 		methods = {
 			Destroy = function()
 				gone = true
+				dirty_editables[key] = send
 			end,
 			WritePixelsBuffer = function(_, pos, sz, buf)
 				check()
@@ -2228,7 +2275,8 @@ local function editable_image(size)
 				return c == "EditableImage" or c == "Object"
 			end,
 		},
-	}, "editable:" .. tostring(math.random()))
+	}, "editable:" .. key)
+	editable_keys[img] = key
 	return img
 end
 L.editable_image = editable_image

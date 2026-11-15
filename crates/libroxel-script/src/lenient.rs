@@ -3,7 +3,7 @@
 //! stand-ins. The bindings ask it only after every real member, property
 //! and child has said no.
 
-use libroxel_instance::{ClassKind, InstanceId, Property, PropertyValue};
+use libroxel_instance::{ClassKind, InstanceId, Property, PropertyValue, Vec3};
 use mlua::{AnyUserData, Function, Lua, Table, Value};
 
 use crate::names;
@@ -40,6 +40,37 @@ pub(crate) fn install(lua: &Lua, enum_lib: &Table) -> mlua::Result<()> {
         lua.create_function(|lua, obj: Value| {
             let rect = crate::bindings::as_instance(&obj).and_then(|id| crate::world::gui_rect(lua, id));
             Ok((rect.map(|r| r[0]), rect.map(|r| r[1]), rect.map(|r| r[2]), rect.map(|r| r[3])))
+        })?,
+    )?;
+    // A Motor6D's Transform, for the engine to pose its parts with.
+    layer.set(
+        "set_joint_transform",
+        lua.create_function(|lua, (obj, x, y, z, rx, ry, rz): (Value, f32, f32, f32, f32, f32, f32)| {
+            if let Some(id) = crate::bindings::as_instance(&obj) {
+                let host = crate::bindings::host(lua);
+                let mut tree = host.tree.borrow_mut();
+                let _ =
+                    tree.set_extra(id, "TransformPosition", Some(PropertyValue::Vec3(Vec3::new(x, y, z))));
+                let _ = tree.set_extra(
+                    id,
+                    "TransformOrientation",
+                    Some(PropertyValue::Vec3(Vec3::new(rx, ry, rz))),
+                );
+            }
+            Ok(())
+        })?,
+    )?;
+    // A name for a new drawn picture, unique across every script runtime.
+    layer.set("editable_key", lua.create_function(|_, ()| Ok(crate::drawn::new_key()))?)?;
+    // A script's drawn picture changed: hand its pixels to the renderer.
+    layer.set(
+        "editable_store",
+        lua.create_function(|_, (key, w, h, pixels): (String, usize, usize, Option<mlua::Buffer>)| {
+            match pixels {
+                Some(pixels) => crate::drawn::store(&key, [w, h], pixels.to_vec()),
+                None => crate::drawn::forget(&key),
+            }
+            Ok(())
         })?,
     )?;
     lua.set_named_registry_value(LAYER_KEY, layer)?;
@@ -273,6 +304,11 @@ pub(crate) fn changed_signal(lua: &Lua, id: InstanceId, key: &str) -> mlua::Resu
 /// Fires [`changed_signal`] for `key`, if a script asked for it.
 pub(crate) fn fire_changed(lua: &Lua, id: InstanceId, key: &str) -> mlua::Result<()> {
     layer(lua)?.get::<Function>("fire_changed")?.call((instance_key(id), key))
+}
+
+/// Hands the pictures scripts drew since the last call to the renderer.
+pub(crate) fn flush_drawn(lua: &Lua) -> mlua::Result<()> {
+    layer(lua)?.get::<Function>("flush_editables")?.call(())
 }
 
 /// Fires an object's mouse event `key` (such as `MouseButton1Down`) with

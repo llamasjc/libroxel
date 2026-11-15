@@ -145,6 +145,9 @@ pub struct Editor {
     pub show_properties: bool,
     pub show_output: bool,
     pub show_toolbox: bool,
+    /// Keep the toolbox, explorer and properties open while playing; by
+    /// default the game gets the whole width, as players see it.
+    pub panels_in_play: bool,
     /// What's typed in the toolbox's search box.
     pub toolbox_search: String,
     /// The Output, saved to a file as it grows.
@@ -220,6 +223,7 @@ impl Default for Editor {
             show_properties: true,
             show_output: true,
             show_toolbox: true,
+            panels_in_play: false,
             toolbox_search: String::new(),
             log_file: Default::default(),
             output_view: ui::OutputView::Log,
