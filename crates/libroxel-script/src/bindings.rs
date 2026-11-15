@@ -2677,6 +2677,20 @@ pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
     let with_instance = |signal: SignalKind, id: InstanceId| {
         fire(lua, signal, || Ok(std::iter::once(Value::UserData(push_instance(lua, id)?)).collect()));
     };
+    // Changes are heard after the fact, against the tree as it is now: a
+    // folder parented and then filled in the same frame already holds its
+    // parts when its move is heard. Parts that are moved themselves later in
+    // the batch are announced by their own move, not the folder's.
+    // (And each instance is announced to an ancestor once a batch: a clone's
+    // parts are put in it before it's parented, so both moves would.)
+    let mut announced: std::collections::HashSet<(bool, InstanceId, InstanceId)> =
+        std::collections::HashSet::new();
+    let mut moves_left: std::collections::HashMap<InstanceId, usize> = std::collections::HashMap::new();
+    for change in changes {
+        if let Change::Reparented { id, .. } = change {
+            *moves_left.entry(*id).or_default() += 1;
+        }
+    }
     for change in changes {
         match change {
             Change::PropertyChanged { id, property } if watched(id) => {
@@ -2695,6 +2709,9 @@ pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
                 }
             }
             Change::Reparented { id, old_parent, new_parent } => {
+                if let Some(n) = moves_left.get_mut(id) {
+                    *n = n.saturating_sub(1);
+                }
                 if let Some(parent) = old_parent
                     && watched(parent)
                 {
@@ -2721,7 +2738,18 @@ pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
                         }
                         chain
                     };
-                    let (left, arrived) = (up(old_parent), up(new_parent));
+                    let (left, mut arrived) = (up(old_parent), up(new_parent));
+                    // Put into something that is itself moved later in the
+                    // batch (a clone's parts): that move announces it, after
+                    // the clone itself.
+                    let mut at = *new_parent;
+                    while let Some(a) = at {
+                        if moves_left.get(&a).is_some_and(|n| *n > 0) {
+                            arrived.clear();
+                            break;
+                        }
+                        at = tree.parent(a).ok().flatten();
+                    }
                     let mut moved = Vec::new();
                     if !left.is_empty() || !arrived.is_empty() {
                         moved.push(*id);
@@ -2748,14 +2776,22 @@ pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
                         Ok([Value::UserData(push_instance(lua, *id)?), parent].into_iter().collect())
                     });
                 }
+                let moved: Vec<InstanceId> = moved
+                    .into_iter()
+                    .filter(|item| item == id || moves_left.get(item).is_none_or(|n| *n == 0))
+                    .collect();
                 for &ancestor in &left {
                     for &item in &moved {
-                        with_instance(SignalKind::DescendantRemoving(ancestor), item);
+                        if announced.insert((false, ancestor, item)) {
+                            with_instance(SignalKind::DescendantRemoving(ancestor), item);
+                        }
                     }
                 }
                 for &ancestor in &arrived {
                     for &item in &moved {
-                        with_instance(SignalKind::DescendantAdded(ancestor), item);
+                        if announced.insert((true, ancestor, item)) {
+                            with_instance(SignalKind::DescendantAdded(ancestor), item);
+                        }
                     }
                 }
                 if tools_heard {
