@@ -944,6 +944,21 @@ pub fn surfaces(
         if (eye - centre).dot(normal) <= 0.0 {
             continue;
         }
+        // Not on screen at all (or partly behind the camera, which isn't
+        // drawn either), or too small to see: skip it before the costly
+        // check for something in front of it.
+        let corners: Option<Vec<bevy::prelude::Vec2>> =
+            [(0.0, 0.0), (canvas.x, 0.0), (canvas.x, canvas.y), (0.0, canvas.y)]
+                .iter()
+                .map(|(x, y)| {
+                    cam.world_to_viewport(gt, canvas_to_world(&face, canvas, Pos2::new(*x, *y))).ok()
+                })
+                .collect();
+        let Some(corners) = corners else { continue };
+        let on_screen = Rect::from_points(&corners.iter().map(|p| Pos2::new(p.x, p.y)).collect::<Vec<_>>());
+        if !on_screen.intersects(area) || on_screen.width() * on_screen.height() < 1.0 {
+            continue;
+        }
         if tree.get_bool(board, Property::AlwaysOnTop) != Some(true) {
             let part = tree.get_ref(board, Property::Adornee).or_else(|| tree.parent(board).ok().flatten());
             let from = Vec3::new(eye.x, eye.y, eye.z);

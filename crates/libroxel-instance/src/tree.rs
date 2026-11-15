@@ -969,9 +969,18 @@ impl InstanceTree {
 
     fn refresh_cache(&self, cache: &mut ClassCache, ancestor: InstanceId, structure: u64) {
         if cache.structure != Some(structure) {
-            cache.all = self.descendants(ancestor).unwrap_or_default();
-            cache.classes =
-                cache.all.iter().map(|id| self.data(*id).map_or(u16::MAX, |d| d.class as u16)).collect();
+            // One walk notes both, reusing the lists' room.
+            cache.all.clear();
+            cache.classes.clear();
+            let mut stack: Vec<InstanceId> =
+                self.data(ancestor).map(|d| d.children.iter().rev().copied().collect()).unwrap_or_default();
+            while let Some(next) = stack.pop() {
+                if let Ok(data) = self.data(next) {
+                    cache.all.push(next);
+                    cache.classes.push(data.class as u16);
+                    stack.extend(data.children.iter().rev().copied());
+                }
+            }
             cache.by_class.clear();
             cache.structure = Some(structure);
         }
@@ -1056,6 +1065,13 @@ impl InstanceTree {
         let mut index = self.part_index.borrow_mut();
         index.refresh(self);
         index.along_ray(origin, dir, reach)
+    }
+
+    /// [`PartIndex::visit_ray`] over the workspace's parts.
+    pub fn visit_ray(&self, origin: Vec3, dir: Vec3, reach: f32, visit: impl FnMut(InstanceId, f32) -> bool) {
+        let mut index = self.part_index.borrow_mut();
+        index.refresh(self);
+        index.visit_ray(origin, dir, reach, visit);
     }
 
     /// The parts of the workspace that might be in the box from `lo` to `hi`.
