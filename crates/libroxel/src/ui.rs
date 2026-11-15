@@ -517,7 +517,6 @@ pub fn editor_ui(
                     prompt_hit = Some((active.prompt, rect));
                 }
             }
-            hud(ui, playing);
             if playing && ui.input(|i| i.modifiers.shift && i.key_pressed(Key::F1)) {
                 editor.stats.shown = !editor.stats.shown;
             }
@@ -2373,22 +2372,6 @@ fn output_text<'a>(log: impl IntoIterator<Item = &'a LogEntry>) -> String {
         text.push('\n');
     }
     text
-}
-
-fn hud(ui: &mut egui::Ui, playing: bool) {
-    // The game's own screen belongs to the game while it plays.
-    if playing {
-        return;
-    }
-    let text = "Right mouse + WASD fly · click to select · F5 play";
-    let rect = ui.max_rect();
-    ui.painter().text(
-        rect.right_bottom() + egui::vec2(-8.0, -8.0),
-        egui::Align2::RIGHT_BOTTOM,
-        text,
-        theme::display(12.5),
-        theme::CHALK.gamma_multiply(0.75),
-    );
 }
 
 fn script_editor(ctx: &egui::Context, editor: &mut Editor, tree: &mut InstanceTree, now: f64, playing: bool) {
