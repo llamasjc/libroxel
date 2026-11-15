@@ -60,8 +60,19 @@ fn material_of(code: u8) -> Option<Material> {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Voxels {
     chunks: BTreeMap<(i32, i32, i32), Box<[u8; CHUNK_CELLS]>>,
+    /// Each chunk's fingerprint, worked out when it changes (viewers ask
+    /// for every chunk's after each edit; hashing them all each time cost
+    /// more than the edits on a big map).
+    prints: BTreeMap<(i32, i32, i32), u64>,
     /// Goes up with every change, so viewers know when to look again.
     version: u64,
+}
+
+fn print_of(cells: &[u8; CHUNK_CELLS]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    cells[..].hash(&mut h);
+    h.finish() | 1
 }
 
 fn split(v: i32) -> (i32, usize) {
@@ -131,8 +142,17 @@ impl Voxels {
     /// cost more than the edit.)
     fn tidy(&mut self, touched: impl IntoIterator<Item = (i32, i32, i32)>) {
         for key in touched {
-            if self.chunks.get(&key).is_some_and(|c| c.iter().all(|v| *v == 0)) {
-                self.chunks.remove(&key);
+            match self.chunks.get(&key) {
+                Some(c) if c.iter().all(|v| *v == 0) => {
+                    self.chunks.remove(&key);
+                    self.prints.remove(&key);
+                }
+                Some(c) => {
+                    self.prints.insert(key, print_of(c));
+                }
+                None => {
+                    self.prints.remove(&key);
+                }
             }
         }
     }
@@ -349,6 +369,7 @@ impl Voxels {
     pub fn clear(&mut self) {
         if !self.chunks.is_empty() {
             self.chunks.clear();
+            self.prints.clear();
             self.version += 1;
         }
     }
@@ -360,11 +381,10 @@ impl Voxels {
 
     /// A number that changes when a chunk's cells do (0 for an empty chunk).
     pub fn chunk_fingerprint(&self, chunk: (i32, i32, i32)) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let Some(cells) = self.chunks.get(&chunk) else { return 0 };
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        cells[..].hash(&mut h);
-        h.finish() | 1
+        match self.prints.get(&chunk) {
+            Some(print) => *print,
+            None => self.chunks.get(&chunk).map_or(0, |cells| print_of(cells)),
+        }
     }
 
     /// Every filled cell of one chunk, as world cell positions.
@@ -521,6 +541,7 @@ impl Voxels {
                 i = end;
             }
             if cells.iter().any(|c| *c != 0) {
+                voxels.prints.insert((cx, cy, cz), print_of(&cells));
                 voxels.chunks.insert((cx, cy, cz), cells);
             }
         }
