@@ -331,6 +331,9 @@ pub(crate) struct Host {
     /// frame pays [`RESUME_BUDGET`] of it off, and heavy work waits while
     /// any is owed.
     heavy_debt: Cell<Duration>,
+    /// When the last frame's waiting threads were resumed, to size the share
+    /// of the next frame by how long frames really take.
+    last_step: Cell<Option<Instant>>,
     /// Where the workspace's parts are, for raycasts and part queries.
     pub(crate) part_index: RefCell<libroxel_instance::geometry::PartIndex>,
 }
@@ -2069,6 +2072,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         thread_cost: RefCell::new(std::collections::HashMap::new()),
         script_cost: RefCell::new(std::collections::HashMap::new()),
         heavy_debt: Cell::new(Duration::ZERO),
+        last_step: Cell::new(None),
         part_index: RefCell::new(libroxel_instance::geometry::PartIndex::new()),
         tweens: RefCell::new(Vec::new()),
         next_tween: Cell::new(1),
@@ -2571,6 +2575,11 @@ const HEAVY_RESUME: Duration = Duration::from_micros(400);
 /// background work, like building the world) finishes sooner.
 const LOADING_BUDGET: Duration = Duration::from_millis(30);
 
+/// The part of a frame's length waiting threads may use while playing, and
+/// while a loading screen is up.
+const PLAYING_SHARE: f32 = 0.2;
+const LOADING_SHARE: f32 = 0.6;
+
 pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
     let now = {
         let host = host(lua);
@@ -2607,7 +2616,19 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
     }
     let mut ran_heavy = false;
     let loading = !crate::RENDERING_3D.load(std::sync::atomic::Ordering::Relaxed);
-    let share = if loading { LOADING_BUDGET } else { RESUME_BUDGET };
+    // The share is a part of the frame's real length, not a fixed time: on a
+    // slower computer frames are longer and fewer, and a fixed few ms a frame
+    // starved background work (building the world took minutes there, while
+    // on Roblox it runs on the server at full speed).
+    let frame = host(lua)
+        .last_step
+        .replace(Some(budget_start))
+        .map_or(Duration::ZERO, |last| budget_start.duration_since(last).min(Duration::from_millis(100)));
+    let share = if loading {
+        LOADING_BUDGET.max(frame.mul_f32(LOADING_SHARE))
+    } else {
+        RESUME_BUDGET.max(frame.mul_f32(PLAYING_SHARE))
+    };
     // Like Roblox's scheduler under load: heavy background work gets a
     // share of each frame on average. One long piece (a 12 ms scan, say)
     // still runs whole, but then the next ones wait the frames it
