@@ -1964,7 +1964,12 @@ mod tests {
         frame(&mut session, 90);
         let (base_end, left_end) = (pos(base), pos(left));
         assert!(base_end.z < base_start.z - 2.0, "pushed: {base_start:?} -> {base_end:?}");
-        assert!((left_end - base_end - (left_start - base_start)).length() < 0.01, "the side came along");
+        // (It may have turned a little on the way.)
+        assert!(
+            ((left_end - base_end).length() - (left_start - base_start).length()).abs() < 0.01
+                && (left_end.y - base_end.y - (left_start.y - base_start.y)).abs() < 0.01,
+            "the side came along"
+        );
 
         // Back on the start, away from the zombie, the health bar shows damage.
         session

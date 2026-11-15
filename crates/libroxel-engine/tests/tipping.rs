@@ -167,3 +167,45 @@ fn a_welded_model_falls_over_as_one_piece() {
     let welded = (2.5f32 * 2.5 + 3.5 * 3.5).sqrt();
     assert!((apart.length() - welded).abs() < 0.05, "{post_at:?} {arm_at:?}");
 }
+
+#[test]
+fn crates_at_rest_fall_asleep_and_wake_when_the_floor_goes() {
+    let mut tree = InstanceTree::new();
+    let floor = part(&mut tree, "Floor", Vec3::new(0.0, -0.5, 0.0), Vec3::new(40.0, 1.0, 40.0), true);
+    let crates: Vec<InstanceId> = (0..6)
+        .map(|i| {
+            part(
+                &mut tree,
+                "Crate",
+                Vec3::new(i as f32 * 5.0 - 12.0, 3.0, 0.0),
+                Vec3::new(2.0, 2.0, 2.0),
+                false,
+            )
+        })
+        .collect();
+    let mut session = start_on(tree, false).unwrap();
+    let shared = session.runtime().tree().clone();
+    for _ in 0..120 {
+        session.step(DT, CharacterInput::default());
+    }
+    session.physics_mut().take_timing();
+    for _ in 0..30 {
+        session.step(DT, CharacterInput::default());
+    }
+    // Settled on the floor, they cost nothing.
+    let timing = session.physics_mut().take_timing();
+    assert!(timing.movers < 20, "{timing:?}");
+    for c in &crates {
+        let y = shared.borrow().get_vec3(*c, Property::Position).unwrap().y;
+        assert!((y - 1.0).abs() < 0.1, "{y}");
+    }
+    // Take the floor away: they fall.
+    shared.borrow_mut().destroy(floor).unwrap();
+    for _ in 0..60 {
+        session.step(DT, CharacterInput::default());
+    }
+    for c in &crates {
+        let y = shared.borrow().get_vec3(*c, Property::Position).unwrap().y;
+        assert!(y < -2.0, "{y}");
+    }
+}
