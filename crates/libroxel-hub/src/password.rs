@@ -260,6 +260,9 @@ pub(crate) async fn set_password(
         return bad("that is not a sealed key the Hub can keep");
     }
     let db = db.lock().unwrap();
+    if crate::owner::is_banned(&db, &set.player_id) {
+        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+    }
     let has_account: Option<i64> = db
         .query_row("SELECT 1 FROM accounts WHERE player_id = ?1", params![set.player_id], |r| r.get(0))
         .optional()
@@ -343,6 +346,9 @@ pub(crate) async fn sign_in(
     };
     if !verify(&login_id, &sign_in_message(&attempt.name, attempt.time), &attempt.signature) {
         return wrong();
+    }
+    if crate::owner::is_banned(&db, &player_id) {
+        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
     }
     // Each sign-in is used once.
     super::social::fresh(&db, &player_id, "sign in", attempt.time)?;

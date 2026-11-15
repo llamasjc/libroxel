@@ -141,11 +141,17 @@ impl Default for Platform {
 }
 
 impl Platform {
-    /// Starts the built-in Hub, unless `LIBROXEL_HUB` names another one.
+    /// Uses the official Hub, or the one `LIBROXEL_HUB` names. With
+    /// neither, runs a Hub on this computer.
     pub fn start() -> Self {
         let mut platform = Self::default();
         if let Some(address) = std::env::var("LIBROXEL_HUB").ok().filter(|a| !a.trim().is_empty()) {
             platform.hub_address = address;
+            return platform;
+        }
+        if let Some(official) = libroxel_hub::OFFICIAL_HUB {
+            platform.hub_address = official.to_owned();
+            platform.own_hub_note = Some("Everyone uses the official Hub.".into());
             return platform;
         }
         platform.start_hub();

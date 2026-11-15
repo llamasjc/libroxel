@@ -31,11 +31,14 @@ fn hosts_announce_and_players_find_them() {
     client.heartbeat(&beat("player", &b, HostKind::Player, 2)).unwrap();
     client.heartbeat(&beat("community", &c, HostKind::Community, 1)).unwrap();
 
-    // Community hosts come first and official servers last.
+    // Community hosts come first. A server only lists as Official when one
+    // of the Hub's owners signs it (see tests/accounts.rs), so this one is
+    // listed as a Community server, and comes first for having more players.
     let list = client.servers("").unwrap();
     let ids: Vec<&str> = list.iter().map(|s| s.server_id.as_str()).collect();
-    assert_eq!(ids, ["community", "player", "official"]);
-    assert_eq!(list[0].code, "lrx1community");
+    assert_eq!(ids, ["official", "community", "player"]);
+    assert_eq!(list[0].kind, HostKind::Community);
+    assert_eq!(list[1].code, "lrx1community");
     assert_eq!(client.status().unwrap().players, 12);
 
     // Someone else cannot take over a listed server.
@@ -83,6 +86,8 @@ fn addresses_are_tidied() {
     assert_eq!(HubClient::new("http://hub.example.com/").url(), "http://hub.example.com:7430");
     assert_eq!(HubClient::new("https://hub.example.com:443").url(), "https://hub.example.com:443");
     assert_eq!(HubClient::new("localhost:9000").url(), "http://localhost:9000");
+    // HTTPS goes to its usual port, as behind a web server it does.
+    assert_eq!(HubClient::new("https://hub.example.com/").url(), "https://hub.example.com");
 }
 
 #[test]

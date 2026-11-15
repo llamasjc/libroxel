@@ -150,3 +150,57 @@ fn the_server_list_shows_who_really_hosts() {
     assert_eq!(host("real").as_deref(), Some("kai2"));
     assert_eq!(host("plain"), None);
 }
+
+#[test]
+fn whoever_runs_the_hub_bans_accounts_and_names_its_owners() {
+    use libroxel_hub::{Heartbeat, add_owner, ban, open_db, unban};
+    let dir = std::env::temp_dir().join(format!("libroxel-owners-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("hub.sqlite");
+    let running = start("127.0.0.1:0".parse().unwrap(), Some(&path)).unwrap();
+    let hub = HubClient::new(&running.url());
+    let (kai, eve) = ([7u8; 32], [3u8; 32]);
+    let now = time();
+    claim(&hub, &kai, "kai2", now).unwrap();
+    claim(&hub, &eve, "eve", now).unwrap();
+    let db = open_db(Some(&path)).unwrap();
+    add_owner(&db, "kai2").unwrap();
+    // Owners can't be banned by mistake.
+    assert!(ban(&db, "kai2", "oops").is_err());
+
+    // Official servers only from owners; anyone else's are listed as Community.
+    let official = |key: &[u8; 32], id: &str| {
+        let secret = libroxel_hub::new_secret();
+        Heartbeat {
+            server_id: id.into(),
+            name: id.into(),
+            game: "Obby".into(),
+            code: format!("lrx1{id}"),
+            players: 0,
+            max_players: 0,
+            kind: HostKind::Official,
+            game_id: None,
+            host_id: Some(player_id_of(key)),
+            host_signature: Some(sign(key, &libroxel_hub::host_message(id, &secret))),
+            secret,
+        }
+    };
+    hub.heartbeat(&official(&kai, "mine")).unwrap();
+    hub.heartbeat(&official(&eve, "hers")).unwrap();
+    let kind = |id: &str| hub.servers("").unwrap().into_iter().find(|s| s.server_id == id).map(|s| s.kind);
+    assert_eq!(kind("mine"), Some(HostKind::Official));
+    assert_eq!(kind("hers"), Some(HostKind::Community));
+
+    ban(&db, "eve", "spam").unwrap();
+    assert!(claim(&hub, &eve, "eve", now + 1).unwrap_err().contains("banned"));
+    assert!(hub.profile("eve").unwrap().is_none());
+    assert!(hub.people("eve").unwrap().is_empty());
+    assert_eq!(kind("hers"), None);
+    assert!(hub.heartbeat(&official(&eve, "again")).is_err());
+    // The name stays taken while she's banned.
+    assert!(claim(&hub, &[4u8; 32], "eve", now).unwrap_err().contains("already has"));
+    unban(&db, "eve").unwrap();
+    claim(&hub, &eve, "eve", now + 2).unwrap();
+    drop(running);
+    let _ = std::fs::remove_dir_all(&dir);
+}
