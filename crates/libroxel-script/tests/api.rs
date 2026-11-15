@@ -1118,3 +1118,23 @@ fn scripts_see_what_the_player_plays_with() {
     );
     assert_eq!(printed(&rt), vec!["false false Keyboard", "true true true"]);
 }
+
+#[test]
+fn cframes_from_two_directions_and_from_angles_in_any_order() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local function r(v) return math.round(v.X) + 0, math.round(v.Y) + 0, math.round(v.Z) + 0 end
+        local turn = CFrame.fromRotationBetweenVectors(Vector3.new(0, -1, 0), Vector3.new(1, 0, 0))
+        print(r(turn:VectorToWorldSpace(Vector3.new(0, -1, 0))))
+        local flip = CFrame.fromRotationBetweenVectors(Vector3.new(0, 1, 0), Vector3.new(0, -3, 0))
+        print(r(flip:VectorToWorldSpace(Vector3.new(0, 1, 0))))
+        local a = CFrame.fromEulerAngles(0.3, 0.5, 0.7, Enum.RotationOrder.YXZ)
+        local b = CFrame.fromEulerAnglesYXZ(0.3, 0.5, 0.7)
+        print((a.LookVector - b.LookVector).Magnitude < 1e-5)
+        print((CFrame.fromEulerAngles(0.3, 0.5, 0.7).UpVector - CFrame.Angles(0.3, 0.5, 0.7).UpVector).Magnitude < 1e-5)
+    "#,
+    );
+    assert_eq!(printed(&rt), vec!["1 0 0", "0 -1 0", "true", "true"]);
+}
