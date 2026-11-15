@@ -137,9 +137,50 @@ fn streaming_radius(tree: &libroxel_instance::InstanceTree) -> f32 {
     }
 }
 
+/// Nanoseconds spent copying parts into the 3D view, for the speed report.
+static SYNC_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Seconds spent copying parts into the 3D view since the last call.
+pub fn take_sync_seconds() -> f64 {
+    SYNC_NANOS.swap(0, std::sync::atomic::Ordering::Relaxed) as f64 / 1e9
+}
+
+struct TimedSync(std::time::Instant);
+
+impl Drop for TimedSync {
+    fn drop(&mut self) {
+        let took = self.0.elapsed().as_nanos() as u64;
+        SYNC_NANOS.fetch_add(took, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// What `sync_parts` remembers between frames, to skip the parts that
+/// haven't changed.
+#[derive(Default)]
+struct PartSync {
+    /// The tree it last looked at (a new one is looked over in full).
+    tree: usize,
+    /// Where it last read the tree's touched log, and that log's epoch.
+    read: usize,
+    epoch: u64,
+    /// The workspace's structure when it last looked it over.
+    structure: u64,
+    /// Where the camera was then.
+    eye: Option<Vec3>,
+    /// Whether parts in range were left to spawn next frame.
+    pending: bool,
+    /// Parts out of range when last measured.
+    far: FastSet<InstanceId>,
+    frames: u64,
+}
+
 /// Each part's entity, and the revision of the part it last showed.
 #[derive(Resource, Default)]
-struct PartEntities(HashMap<InstanceId, Entity>, HashMap<InstanceId, u64>);
+struct PartEntities(FastMap<InstanceId, Entity>, FastMap<InstanceId, u64>);
+
+/// Hash maps with a fast hash, for ones looked up thousands of times a frame.
+type FastMap<K, V> = bevy::platform::collections::HashMap<K, V>;
+type FastSet<K> = bevy::platform::collections::HashSet<K>;
 
 /// Mirrors the tree into the ECS and runs the play session each frame.
 /// Works headless; add [`RenderPlugin`] to draw.
@@ -200,63 +241,126 @@ fn sync_parts(
     mut commands: Commands,
     mut parts: Query<PartPieces, With<PartLink>>,
     cameras: Query<&GlobalTransform, (With<Camera3d>, Without<PartLink>)>,
+    mut sync: Local<PartSync>,
 ) {
+    let _timed = TimedSync(std::time::Instant::now());
     let mut tree = engine.tree.borrow_mut();
     // While playing, the session reads the change journal (for Changed events).
     if !engine.is_playing() {
         tree.drain_changes();
     }
 
-    let live: Vec<InstanceId> = tree.descendants_of_class(tree.workspace(), ClassKind::Part);
-    let live_set: std::collections::HashSet<_> = live.iter().copied().collect();
-
-    // Like Roblox's streaming: while playing, only parts within the
-    // workspace's streaming radius of the camera are drawn, and new parts
-    // come in nearest first, a batch a frame, so a big map opens at once
-    // instead of building every part before the first frame.
+    // Most frames most of a big map is unchanged: only parts whose properties
+    // changed (the tree's touched log) are copied, and the whole workspace
+    // is looked over only when parts come or go, the camera moves a fair
+    // bit, or now and then to be sure.
     let eye = cameras.iter().next().map(|t| t.translation());
     let radius = if engine.is_playing() { streaming_radius(&tree) } else { f32::INFINITY };
-    let reach = |id: InstanceId| -> f32 {
-        let Some(eye) = eye else { return 0.0 };
-        let (Some(pos), Some(size)) =
-            (tree.get_vec3(id, Property::Position), tree.get_vec3(id, Property::Size))
-        else {
-            return 0.0;
-        };
-        (Vec3::new(pos.x, pos.y, pos.z).distance(eye) - size.length() * 0.5).max(0.0)
+    let tree_ptr = std::rc::Rc::as_ptr(&engine.tree) as usize;
+    let (epoch, _) = tree.touched_since(0);
+    sync.frames += 1;
+    let full = sync.tree != tree_ptr
+        || sync.epoch != epoch
+        || tree.touched_len() < sync.read
+        || sync.frames.is_multiple_of(120);
+    let moved_far = match (eye, sync.eye) {
+        (Some(e), Some(old)) => e.distance(old) > 8.0,
+        (a, b) => a.is_some() != b.is_some(),
     };
-
-    let PartEntities(spawned, seen) = &mut *entities;
-    spawned.retain(|id, entity| {
-        // Gone, or well out of range (a little past it, so edges don't flicker).
-        let keep = live_set.contains(id) && (radius.is_infinite() || reach(*id) <= radius * 1.1);
-        if !keep {
-            commands.entity(*entity).despawn();
-        }
-        keep
-    });
-    seen.retain(|id, _| spawned.contains_key(id));
-
-    let mut fresh: Vec<(f32, InstanceId)> = Vec::new();
+    let scan = full
+        || sync.structure != tree.workspace_structure()
+        || sync.pending
+        || (radius.is_finite() && (moved_far || sync.frames.is_multiple_of(30)));
     let mut work: Vec<InstanceId> = Vec::new();
-    for id in live {
-        if spawned.contains_key(&id) {
-            // Unchanged since last frame: nothing to copy.
-            if seen.get(&id) != Some(&tree.revision(id).unwrap_or(0)) {
-                work.push(id);
+    if full {
+        // Everything spawned is compared with its revision below.
+    } else {
+        let (_, touched) = tree.touched_since(sync.read);
+        let PartEntities(spawned, seen) = &*entities;
+        let mut once = FastSet::default();
+        for id in touched {
+            if spawned.contains_key(id)
+                && once.insert(*id)
+                && seen.get(id) != Some(&tree.revision(*id).unwrap_or(0))
+            {
+                work.push(*id);
             }
-            continue;
-        }
-        let d = reach(id);
-        if d <= radius {
-            fresh.push((d, id));
         }
     }
-    if fresh.len() > SPAWN_BUDGET {
-        fresh.select_nth_unstable_by(SPAWN_BUDGET, |a, b| a.0.total_cmp(&b.0));
-        fresh.truncate(SPAWN_BUDGET);
+    sync.tree = tree_ptr;
+    sync.epoch = epoch;
+    sync.read = tree.touched_len();
+    if scan {
+        sync.structure = tree.workspace_structure();
+        sync.eye = eye;
+        let live: Vec<InstanceId> = tree.descendants_of_class(tree.workspace(), ClassKind::Part);
+        let live_set: FastSet<InstanceId> = live.iter().copied().collect();
+        // Out-of-range parts are measured again only when the camera moved
+        // a fair bit (or now and then); otherwise the ones measured before
+        // are skipped.
+        let measure = full || moved_far || sync.frames.is_multiple_of(30);
+        if measure {
+            sync.far.clear();
+        }
+
+        // Like Roblox's streaming: while playing, only parts within the
+        // workspace's streaming radius of the camera are drawn, and new parts
+        // come in nearest first, a batch a frame, so a big map opens at once
+        // instead of building every part before the first frame.
+        let reach = |id: InstanceId| -> f32 {
+            let Some(eye) = eye else { return 0.0 };
+            let (Some(pos), Some(size)) =
+                (tree.get_vec3(id, Property::Position), tree.get_vec3(id, Property::Size))
+            else {
+                return 0.0;
+            };
+            (Vec3::new(pos.x, pos.y, pos.z).distance(eye) - size.length() * 0.5).max(0.0)
+        };
+
+        let PartEntities(spawned, seen) = &mut *entities;
+        spawned.retain(|id, entity| {
+            // Gone, or well out of range (a little past it, so edges don't flicker).
+            let keep =
+                live_set.contains(id) && (radius.is_infinite() || !measure || reach(*id) <= radius * 1.1);
+            if !keep {
+                commands.entity(*entity).despawn();
+            }
+            keep
+        });
+        seen.retain(|id, _| spawned.contains_key(id));
+
+        let mut fresh: Vec<(f32, InstanceId)> = Vec::new();
+        for id in live {
+            if spawned.contains_key(&id) {
+                // Unchanged since last frame: nothing to copy.
+                if full && seen.get(&id) != Some(&tree.revision(id).unwrap_or(0)) {
+                    work.push(id);
+                }
+                continue;
+            }
+            if !measure && sync.far.contains(&id) {
+                continue;
+            }
+            let d = reach(id);
+            if d <= radius {
+                fresh.push((d, id));
+            } else if radius.is_finite() {
+                sync.far.insert(id);
+            }
+        }
+        sync.pending = fresh.len() > SPAWN_BUDGET;
+        if sync.pending {
+            fresh.select_nth_unstable_by(SPAWN_BUDGET, |a, b| a.0.total_cmp(&b.0));
+            fresh.truncate(SPAWN_BUDGET);
+        }
+        work.extend(fresh.into_iter().map(|(_, id)| id));
+    } else if full {
+        let PartEntities(spawned, seen) = &*entities;
+        work.extend(
+            spawned.keys().copied().filter(|id| seen.get(id) != Some(&tree.revision(*id).unwrap_or(0))),
+        );
     }
-    work.extend(fresh.into_iter().map(|(_, id)| id));
+    let PartEntities(spawned, seen) = &mut *entities;
 
     for id in work {
         let revision = tree.revision(id).unwrap_or(0);
@@ -348,6 +452,8 @@ impl Plugin for RenderPlugin {
             .add_systems(Update, (sync_lights, draw_blasts, sync_ropes, sync_decals).after(EngineSet::Sync))
             .add_systems(Update, crate::terrain_view::sync_terrain.after(EngineSet::Sync))
             .add_systems(Update, update_lighting.after(EngineSet::Sync))
+            .init_resource::<GraphicsQuality>()
+            .add_systems(Update, auto_quality.after(EngineSet::Sync))
             .add_plugins((crate::effects::EffectsPlugin, crate::sounds::SoundPlugin));
         crate::view_effects::build(app);
     }
@@ -600,6 +706,110 @@ fn setup_scene(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ima
 /// The world's main light, moved by the time of day.
 #[derive(Component)]
 struct Sun;
+
+/// How much the 3D view draws, like Roblox's automatic graphics quality:
+/// when frames come too slowly for a few seconds it steps down (smoothing
+/// edges off, then shadows off, then a shorter view distance), and steps
+/// back up once there is room again.
+#[derive(Resource, Debug)]
+pub struct GraphicsQuality {
+    /// 3 is everything; 0 is the least.
+    pub level: u8,
+    /// The highest level to go back up to for now (lowered when a level
+    /// turned out too slow, so it doesn't flip back and forth).
+    ceiling: u8,
+    /// Smoothed seconds a frame.
+    average: f32,
+    slow_for: f32,
+    fast_for: f32,
+    since_drop: f32,
+    applied: Option<u8>,
+}
+
+impl Default for GraphicsQuality {
+    fn default() -> Self {
+        Self {
+            level: 3,
+            ceiling: 3,
+            average: 1.0 / 60.0,
+            slow_for: 0.0,
+            fast_for: 0.0,
+            since_drop: 0.0,
+            applied: None,
+        }
+    }
+}
+
+impl GraphicsQuality {
+    /// How far away parts are still drawn at each level, in studs.
+    const VIEW_DISTANCE: [f32; 4] = [350.0, 600.0, 1000.0, 1000.0];
+
+    /// Counts one frame of `dt` seconds; returns whether the level changed.
+    pub fn frame(&mut self, dt: f32) -> bool {
+        let dt = dt.clamp(0.0, 0.5);
+        self.average += (dt - self.average) * 0.1;
+        self.since_drop += dt;
+        self.slow_for = if self.average > 1.0 / 40.0 { self.slow_for + dt } else { 0.0 };
+        self.fast_for = if self.average < 1.0 / 55.0 { self.fast_for + dt } else { 0.0 };
+        // A minute after a drop, the level that was too slow may be tried again.
+        if self.since_drop > 60.0 {
+            self.ceiling = 3;
+        }
+        if self.slow_for > 2.0 && self.level > 0 {
+            self.ceiling = self.level - 1;
+            self.level -= 1;
+            self.slow_for = 0.0;
+            self.since_drop = 0.0;
+            return true;
+        }
+        if self.fast_for > 6.0 && self.level < self.ceiling {
+            self.level += 1;
+            self.fast_for = 0.0;
+            return true;
+        }
+        false
+    }
+
+    /// Whether edges are smoothed (multisampling).
+    pub fn smooth_edges(&self) -> bool {
+        self.level >= 3
+    }
+
+    /// Whether the sun casts shadows.
+    pub fn shadows(&self) -> bool {
+        self.level >= 2
+    }
+
+    /// How far away parts are still drawn, in studs.
+    pub fn view_distance(&self) -> f32 {
+        Self::VIEW_DISTANCE[usize::from(self.level.min(3))]
+    }
+}
+
+fn auto_quality(
+    time: Res<Time>,
+    mut quality: ResMut<GraphicsQuality>,
+    mut cameras: Query<(&mut Msaa, &mut Projection), With<CameraRig>>,
+    mut sun: Query<&mut DirectionalLight, With<Sun>>,
+) {
+    quality.frame(time.delta_secs());
+    if quality.applied == Some(quality.level) {
+        return;
+    }
+    quality.applied = Some(quality.level);
+    for (mut msaa, mut projection) in &mut cameras {
+        let want = if quality.smooth_edges() { Msaa::Sample4 } else { Msaa::Off };
+        if *msaa != want {
+            *msaa = want;
+        }
+        if let Projection::Perspective(p) = &mut *projection {
+            p.far = quality.view_distance();
+        }
+    }
+    for mut light in &mut sun {
+        light.shadow_maps_enabled = quality.shadows();
+    }
+}
 
 /// How the sky and sun look at a time of day (hours, 0 to 24) and brightness.
 pub fn sky_at(clock: f32, brightness: f32) -> (Vec3, f32, Color, f32) {

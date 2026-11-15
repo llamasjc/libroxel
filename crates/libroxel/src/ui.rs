@@ -242,7 +242,9 @@ pub fn editor_ui(
     time: Res<Time>,
     mut touch_input: ResMut<libroxel_engine::devices::VirtualInput>,
     adapter: Option<Res<bevy::render::renderer::RenderAdapterInfo>>,
+    quality: Option<Res<libroxel_engine::view::GraphicsQuality>>,
 ) -> Result {
+    let ui_began = std::time::Instant::now();
     let ctx = contexts.ctx_mut()?.clone();
     if !crate::theme::install(&ctx) {
         ctx.request_repaint();
@@ -515,12 +517,13 @@ pub fn editor_ui(
             }
             if let Some(session) = engine.session.as_mut() {
                 let adapter = editor.graphics_adapter.clone();
+                let level = quality.as_ref().map_or(3, |q| q.level);
                 let about = || {
                     let tree = tree_rc.borrow();
                     let all = tree.descendants(tree.root()).map(|d| d.len()).unwrap_or(0);
                     let parts = tree.descendants_of_class(tree.workspace(), ClassKind::Part).len();
                     format!(
-                        "Graphics: {}\nWindow: {:.0} x {:.0}\nInstances: {all}, parts in Workspace: {parts}",
+                        "Graphics: {}, quality level {level} of 3 (it drops by itself when frames are slow)\nWindow: {:.0} x {:.0}\nInstances: {all}, parts in Workspace: {parts}",
                         adapter,
                         ui.ctx().content_rect().width(),
                         ui.ctx().content_rect().height(),
@@ -776,6 +779,7 @@ pub fn editor_ui(
             *rig = saved_rig;
         }
     }
+    editor.stats.report.ui_seconds += ui_began.elapsed().as_secs_f64();
     Ok(())
 }
 
@@ -4349,6 +4353,8 @@ struct SpeedReport {
     seconds: f32,
     worst: f32,
     slow: u32,
+    /// Seconds spent building the UI (the editor and the game's screens).
+    ui_seconds: f64,
     step: libroxel_engine::FrameTimes,
     scripts_before: std::collections::HashMap<String, (f64, u64)>,
 }
@@ -4403,7 +4409,7 @@ impl Stats {
         }
     }
 
-    fn write_report(&mut self, session: &libroxel_engine::PlaySession, about: String) {
+    fn write_report(&mut self, session: &mut libroxel_engine::PlaySession, about: String) {
         use std::fmt::Write as _;
         let r = std::mem::take(&mut self.report);
         let t = &r.step;
@@ -4429,7 +4435,31 @@ impl Stats {
             per(t.physics),
             per(t.other),
         );
-        let _ = writeln!(out, "drawing and the rest {:.1} ms a frame\n", frame_ms as f64 - step);
+        let _ = writeln!(out, "drawing and the rest {:.1} ms a frame", frame_ms as f64 - step);
+        let frames = f64::from(r.frames.max(1));
+        let _ = writeln!(
+            out,
+            "  of which: copying parts to the 3D view {:.1} ms, building the screen's UI {:.1} ms",
+            libroxel_engine::view::take_sync_seconds() * 1000.0 / frames,
+            r.ui_seconds * 1000.0 / frames,
+        );
+        let p = session.physics_mut().take_timing();
+        if p.steps > 0 {
+            let ms = |s: f64| s * 1000.0 / f64::from(p.steps);
+            let _ = writeln!(
+                out,
+                "physics {:.1} ms a step: gathering parts {:.1}, broadphase {:.1}, characters {:.1}, loose parts {:.1}, touches {:.1}; {} parts looked at, {} moving",
+                ms(p.gather + p.broadphase + p.characters + p.loose + p.touches),
+                ms(p.gather),
+                ms(p.broadphase),
+                ms(p.characters),
+                ms(p.loose),
+                ms(p.touches),
+                p.bodies / u64::from(p.steps),
+                p.movers / u64::from(p.steps),
+            );
+        }
+        let _ = writeln!(out);
         let _ = writeln!(out, "Scripts that took the most time:");
         let now: std::collections::HashMap<String, (f64, u64)> =
             session.runtime().script_times().into_iter().map(|(name, secs, n)| (name, (secs, n))).collect();

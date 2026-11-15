@@ -2540,8 +2540,10 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
         {
             let host = host(lua);
             let mut costs = host.script_cost.borrow_mut();
+            // A script's heavy pieces keep it marked heavy for a while,
+            // even when quick waits of the same script run in between.
             match costs.get_mut(&w.script) {
-                Some(c) => *c = took,
+                Some(c) => *c = took.max(c.mul_f32(0.9)),
                 None => {
                     costs.insert(w.script.clone(), took);
                 }

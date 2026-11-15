@@ -218,14 +218,23 @@ pub struct InstanceTree {
     /// many times the log was restarted.
     moved: Vec<InstanceId>,
     moved_epoch: u64,
+    /// Instances whose properties, attributes or tags changed, and how many
+    /// times that log was restarted.
+    touched: Vec<InstanceId>,
+    touched_epoch: u64,
     /// Each tag and the instances that carry it (some may have been
     /// destroyed since), so finding tagged instances doesn't walk the game.
     tag_index: std::collections::HashMap<String, std::collections::HashSet<InstanceId>>,
-    /// Bumped whenever something is reparented or destroyed.
+    /// Bumped whenever something in the workspace is reparented or destroyed
+    /// (or something moves in or out of it).
     structure: u64,
-    /// The workspace's descendants of each class, kept while nothing is
-    /// reparented: many systems ask for them every frame.
+    /// Bumped whenever anything at all is reparented or destroyed.
+    structure_all: u64,
+    /// The workspace's descendants of each class, kept while nothing in it
+    /// is reparented: many systems ask for them every frame.
     class_cache: std::cell::RefCell<ClassCache>,
+    /// The same for the whole game.
+    root_cache: std::cell::RefCell<ClassCache>,
     /// Where the workspace's parts are, for raycasts.
     part_index: std::cell::RefCell<crate::geometry::PartIndex>,
 }
@@ -257,10 +266,14 @@ impl InstanceTree {
             services: Vec::new(),
             moved: Vec::new(),
             moved_epoch: 0,
+            touched: Vec::new(),
+            touched_epoch: 0,
             changes: Vec::new(),
             tag_index: Default::default(),
             structure: 0,
+            structure_all: 0,
             class_cache: Default::default(),
+            root_cache: Default::default(),
             part_index: Default::default(),
         };
         tree.root = tree.alloc(InstanceData::new(ClassKind::DataModel, "Game".into()));
@@ -451,8 +464,17 @@ impl InstanceTree {
         if let Some(parent) = new_parent {
             self.data_mut(parent)?.children.push(id);
         }
+        let in_world = |p: Option<InstanceId>| {
+            p.is_some_and(|p| {
+                p == self.workspace || self.is_descendant_of(p, self.workspace).unwrap_or(false)
+            })
+        };
+        let world_changed = in_world(old_parent) || in_world(new_parent);
         self.data_mut(id)?.parent = new_parent;
-        self.structure += 1;
+        if world_changed {
+            self.structure += 1;
+        }
+        self.structure_all += 1;
         self.changes.push(Change::Reparented { id, old_parent, new_parent });
         self.note_moved(id);
         Ok(())
@@ -470,7 +492,7 @@ impl InstanceTree {
             return Err(TreeError::ParentLocked(id));
         }
         self.set_parent(id, None)?;
-        self.structure += 1;
+        self.structure_all += 1;
         let mut doomed = self.descendants(id)?;
         doomed.insert(0, id);
         // Destroy leaves first so observers never see a destroyed parent with live children.
@@ -616,6 +638,7 @@ impl InstanceTree {
         };
         if changed {
             self.data_mut(id)?.revision = next_revision();
+            self.note_touched(id);
             self.changes.push(Change::PropertyChanged { id, property });
             if matches!(
                 property,
@@ -661,6 +684,7 @@ impl InstanceTree {
         };
         if changed {
             self.data_mut(id)?.revision = next_revision();
+            self.note_touched(id);
             self.changes.push(Change::AttributeChanged { id, name: name.to_owned() });
         }
         Ok(())
@@ -687,6 +711,7 @@ impl InstanceTree {
         };
         if changed {
             data.revision = next_revision();
+            self.note_touched(id);
         }
         Ok(())
     }
@@ -711,6 +736,7 @@ impl InstanceTree {
         if data.voxels.version() != before {
             data.revision = next_revision();
             self.changes.push(Change::VoxelsChanged(id));
+            self.note_touched(id);
         }
         Ok(Some(out))
     }
@@ -745,6 +771,7 @@ impl InstanceTree {
             tags.insert(at, tag.to_owned());
             self.tag_index.entry(tag.to_owned()).or_default().insert(id);
             self.data_mut(id)?.revision = next_revision();
+            self.note_touched(id);
             self.changes.push(Change::TagAdded { id, tag: tag.to_owned() });
         }
         Ok(())
@@ -758,6 +785,7 @@ impl InstanceTree {
                 set.remove(&id);
             }
             self.data_mut(id)?.revision = next_revision();
+            self.note_touched(id);
             self.changes.push(Change::TagRemoved { id, tag: tag.to_owned() });
         }
         Ok(())
@@ -936,19 +964,30 @@ impl InstanceTree {
     }
 
     fn refresh_class_cache(&self, cache: &mut ClassCache) {
-        if cache.structure != Some(self.structure) {
-            cache.all = self.descendants(self.workspace).unwrap_or_default();
+        self.refresh_cache(cache, self.workspace, self.structure);
+    }
+
+    fn refresh_cache(&self, cache: &mut ClassCache, ancestor: InstanceId, structure: u64) {
+        if cache.structure != Some(structure) {
+            cache.all = self.descendants(ancestor).unwrap_or_default();
             cache.classes =
                 cache.all.iter().map(|id| self.data(*id).map_or(u16::MAX, |d| d.class as u16)).collect();
             cache.by_class.clear();
-            cache.structure = Some(self.structure);
+            cache.structure = Some(structure);
         }
     }
 
     pub fn descendants_of_class(&self, ancestor: InstanceId, class: ClassKind) -> Vec<InstanceId> {
-        if ancestor == self.workspace {
-            let mut cache = self.class_cache.borrow_mut();
-            self.refresh_class_cache(&mut cache);
+        let cached = if ancestor == self.workspace {
+            Some((&self.class_cache, self.structure))
+        } else if ancestor == self.root {
+            Some((&self.root_cache, self.structure_all))
+        } else {
+            None
+        };
+        if let Some((cell, structure)) = cached {
+            let mut cache = cell.borrow_mut();
+            self.refresh_cache(&mut cache, ancestor, structure);
             let ClassCache { all, classes, by_class, .. } = &mut *cache;
             return by_class
                 .entry(class)
@@ -972,6 +1011,34 @@ impl InstanceTree {
             .into_iter()
             .filter(|id| self.class(*id).is_ok_and(|c| c.is_a(class)))
             .collect()
+    }
+
+    fn note_touched(&mut self, id: InstanceId) {
+        // A long log is cheaper to start over (readers look at everything again).
+        if self.touched.len() >= 1 << 18 {
+            self.touched.clear();
+            self.touched_epoch += 1;
+        }
+        self.touched.push(id);
+    }
+
+    /// The log of instances whose properties, attributes or tags changed (a
+    /// mirror like the renderer copies only those): its epoch (which changes
+    /// when the log starts over, so everything must be looked at again) and
+    /// the entries from `from` on.
+    pub fn touched_since(&self, from: usize) -> (u64, &[InstanceId]) {
+        (self.touched_epoch, self.touched.get(from..).unwrap_or(&[]))
+    }
+
+    /// How long the touched log is now (where to read from next time).
+    pub fn touched_len(&self) -> usize {
+        self.touched.len()
+    }
+
+    /// A number that changes whenever something in the workspace is
+    /// reparented or destroyed, or moves in or out of it.
+    pub fn workspace_structure(&self) -> u64 {
+        self.structure
     }
 
     fn note_moved(&mut self, id: InstanceId) {
