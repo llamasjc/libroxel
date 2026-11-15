@@ -45,6 +45,11 @@ debug = "line-tables-only"
 opt-level = 3
 # Debug info for Bevy and friends is huge and rarely needed; keep it for our crates only.
 debug = false
+# Their debug checks cost speed on every frame, and in wgpu they also switch
+# on the GPU driver's validation layers, which can make drawing several times
+# slower. Our own crates keep their checks.
+debug-assertions = false
+overflow-checks = false
 
 # The builds attached to GitHub Releases: `cargo build --profile dist`.
 [profile.dist]
