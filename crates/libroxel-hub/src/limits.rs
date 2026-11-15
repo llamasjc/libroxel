@@ -150,9 +150,9 @@ mod tests {
         assert!(limits.take(Limit::NewAccount, "5.6.7.8"));
         // Names are counted whatever their case.
         for _ in 0..10 {
-            assert!(limits.take(Limit::WrongPassword, "Kai2"));
+            assert!(limits.take(Limit::WrongPassword, "Alice2"));
         }
-        assert!(limits.over(Limit::WrongPassword, "kai2"));
+        assert!(limits.over(Limit::WrongPassword, "alice2"));
     }
 
     #[test]

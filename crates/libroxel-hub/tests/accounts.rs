@@ -16,6 +16,7 @@ fn claim(hub: &HubClient, key: &[u8; 32], name: &str, time: i64) -> Result<(), S
     let look = serde_json::json!({});
     let message = account_message(&id, name, "", &look, time);
     hub.update_account(&AccountUpdate {
+        work: Some(libroxel_hub::account_work(&id, name)),
         player_id: id,
         name: name.into(),
         about: String::new(),
@@ -32,43 +33,49 @@ fn a_password_signs_in_on_another_computer_and_nobody_else_gets_in() {
     let db = dir.join("hub.sqlite");
     let running = start("127.0.0.1:0".parse().unwrap(), Some(&db)).unwrap();
     let hub = HubClient::new(&running.url());
-    let kai = [7u8; 32];
+    let alice = [7u8; 32];
     let now = time();
 
     // A password needs an account first.
-    let early = seal_password(&kai, "correct horse battery", now).unwrap();
+    let early = seal_password(&alice, "correct horse battery", now).unwrap();
     assert!(hub.set_password(&early).unwrap_err().contains("claim a name"));
-    claim(&hub, &kai, "kai2", now).unwrap();
+    claim(&hub, &alice, "alice2", now).unwrap();
 
-    // Someone else can't set a password on Kai's account: it's signed with Kai's key.
+    // Someone else can't set a password on Alice's account: it's signed with Alice's key.
     let mut forged = seal_password(&[8u8; 32], "mallory's password", now).unwrap();
-    forged.player_id = player_id_of(&kai);
+    forged.player_id = player_id_of(&alice);
     assert!(hub.set_password(&forged).unwrap_err().contains("signature"));
 
-    let set = seal_password(&kai, "correct horse battery", now + 1).unwrap();
+    let set = seal_password(&alice, "correct horse battery", now + 1).unwrap();
     // The password goes nowhere near the Hub.
     assert!(!serde_json::to_string(&set).unwrap().contains("correct horse"));
     hub.set_password(&set).unwrap();
     // An old signed change can't be sent again to roll it back.
     assert!(hub.set_password(&early).is_err());
 
-    // On a new computer: the name and password give back Kai's own key, whatever the case.
-    assert_eq!(hub.sign_in("KAI2", "correct horse battery").unwrap(), kai);
-    assert!(hub.sign_in("kai2", "wrong horse battery").unwrap_err().contains("wrong name or password"));
-    assert!(hub.sign_in("nobody_here", "correct horse battery").is_err());
+    // On a new computer: the name and password give back Alice's own key, whatever the case.
+    assert_eq!(hub.sign_in("ALICE2", "correct horse battery", None).unwrap(), alice);
+    assert!(
+        hub.sign_in("alice2", "wrong horse battery", None).unwrap_err().contains("wrong name or password")
+    );
+    assert!(hub.sign_in("nobody_here", "correct horse battery", None).is_err());
 
     // Accounts and passwords outlast the Hub.
     drop(running);
     let running = start("127.0.0.1:0".parse().unwrap(), Some(&db)).unwrap();
     let hub = HubClient::new(&running.url());
-    assert_eq!(hub.profile("kai2").unwrap().unwrap().player_id, player_id_of(&kai));
-    assert_eq!(hub.sign_in("kai2", "correct horse battery").unwrap(), kai);
+    assert_eq!(hub.profile("alice2").unwrap().unwrap().player_id, player_id_of(&alice));
+    assert_eq!(hub.sign_in("alice2", "correct horse battery", None).unwrap(), alice);
 
     // Guessing gets locked out after 10 wrong tries, even with the right one after.
     for _ in 0..10 {
-        let _ = hub.sign_in("kai2", "guess guess guess");
+        let _ = hub.sign_in("alice2", "guess guess guess", None);
     }
-    assert!(hub.sign_in("kai2", "correct horse battery").unwrap_err().contains("too many wrong passwords"));
+    assert!(
+        hub.sign_in("alice2", "correct horse battery", None)
+            .unwrap_err()
+            .contains("too many wrong passwords")
+    );
     drop(running);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -117,8 +124,8 @@ fn one_computer_can_only_make_a_few_accounts_an_hour() {
 fn the_server_list_shows_who_really_hosts() {
     let running = start("127.0.0.1:0".parse().unwrap(), None).unwrap();
     let hub = HubClient::new(&running.url());
-    let kai = [7u8; 32];
-    claim(&hub, &kai, "kai2", time()).unwrap();
+    let alice = [7u8; 32];
+    claim(&hub, &alice, "alice2", time()).unwrap();
     let listing = |name: &str, code: &str| Listing {
         name: name.into(),
         game: "Obby".into(),
@@ -127,15 +134,16 @@ fn the_server_list_shows_who_really_hosts() {
         kind: HostKind::Player,
         ..Listing::default()
     };
-    let signer = HostSigner { player_id: player_id_of(&kai), sign: Arc::new(move |m: &[u8]| sign(&kai, m)) };
+    let signer =
+        HostSigner { player_id: player_id_of(&alice), sign: Arc::new(move |m: &[u8]| sign(&alice, m)) };
     let _real =
-        Announcer::start_signed(hub.clone(), "real".into(), listing("kai2's game", "lrx1a"), Some(signer));
-    // Someone names their server after Kai, and even says it's Kai's, signed with their own key.
+        Announcer::start_signed(hub.clone(), "real".into(), listing("alice2's game", "lrx1a"), Some(signer));
+    // Someone names their server after Alice, and even says it's Alice's, signed with their own key.
     let eve = [3u8; 32];
-    let fake = HostSigner { player_id: player_id_of(&kai), sign: Arc::new(move |m: &[u8]| sign(&eve, m)) };
+    let fake = HostSigner { player_id: player_id_of(&alice), sign: Arc::new(move |m: &[u8]| sign(&eve, m)) };
     let forged =
-        Announcer::start_signed(hub.clone(), "fake".into(), listing("kai2's game", "lrx1b"), Some(fake));
-    let _unsigned = Announcer::start(hub.clone(), "plain".into(), listing("kai2's game", "lrx1c"));
+        Announcer::start_signed(hub.clone(), "fake".into(), listing("alice2's game", "lrx1b"), Some(fake));
+    let _unsigned = Announcer::start(hub.clone(), "plain".into(), listing("alice2's game", "lrx1c"));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let servers = loop {
         let servers = hub.servers("").unwrap();
@@ -147,7 +155,7 @@ fn the_server_list_shows_who_really_hosts() {
     assert!(!forged.status().unwrap().starts_with("Listed"));
     assert_eq!(servers.len(), 2);
     let host = |id: &str| servers.iter().find(|s| s.server_id == id).unwrap().host.clone();
-    assert_eq!(host("real").as_deref(), Some("kai2"));
+    assert_eq!(host("real").as_deref(), Some("alice2"));
     assert_eq!(host("plain"), None);
 }
 
@@ -159,21 +167,21 @@ fn whoever_runs_the_hub_bans_accounts_and_names_its_owners() {
     let path = dir.join("hub.sqlite");
     let running = start("127.0.0.1:0".parse().unwrap(), Some(&path)).unwrap();
     let hub = HubClient::new(&running.url());
-    let (kai, eve) = ([7u8; 32], [3u8; 32]);
+    let (alice, eve) = ([7u8; 32], [3u8; 32]);
     let now = time();
-    claim(&hub, &kai, "kai2", now).unwrap();
+    claim(&hub, &alice, "alice2", now).unwrap();
     claim(&hub, &eve, "eve", now).unwrap();
     let db = open_db(Some(&path)).unwrap();
     // Players can't be "admin"; the Hub's owner can.
-    assert!(claim(&hub, &kai, "admin", now + 1).unwrap_err().contains("kept"));
-    add_owner(&db, "kai2").unwrap();
-    claim(&hub, &kai, "admin", now + 2).unwrap();
+    assert!(claim(&hub, &alice, "admin", now + 1).unwrap_err().contains("kept"));
+    add_owner(&db, "alice2").unwrap();
+    claim(&hub, &alice, "admin", now + 2).unwrap();
     let page = hub.profile("admin").unwrap().unwrap();
-    assert!(page.admin && page.player_id == player_id_of(&kai));
+    assert!(page.admin && page.player_id == player_id_of(&alice));
     assert!(!hub.profile("eve").unwrap().unwrap().admin);
     // Or straight from the Hub's computer.
-    libroxel_hub::rename(&db, "admin", "kai2").unwrap();
-    libroxel_hub::rename(&db, "kai2", "Admin").unwrap();
+    libroxel_hub::rename(&db, "admin", "alice2").unwrap();
+    libroxel_hub::rename(&db, "alice2", "Admin").unwrap();
     assert!(libroxel_hub::rename(&db, "eve", "admin").is_err());
     // Owners can't be banned by mistake.
     assert!(ban(&db, "Admin", "oops").is_err());
@@ -195,7 +203,7 @@ fn whoever_runs_the_hub_bans_accounts_and_names_its_owners() {
             secret,
         }
     };
-    hub.heartbeat(&official(&kai, "mine")).unwrap();
+    hub.heartbeat(&official(&alice, "mine")).unwrap();
     hub.heartbeat(&official(&eve, "hers")).unwrap();
     let kind = |id: &str| hub.servers("").unwrap().into_iter().find(|s| s.server_id == id).map(|s| s.kind);
     assert_eq!(kind("mine"), Some(HostKind::Official));
@@ -214,6 +222,95 @@ fn whoever_runs_the_hub_bans_accounts_and_names_its_owners() {
     assert!(claim(&hub, &[4u8; 32], "eve", now).unwrap_err().contains("already has"));
     unban(&db, "eve").unwrap();
     claim(&hub, &eve, "eve", now + 2).unwrap();
+    drop(running);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn two_step_sign_in_needs_the_app_code_and_sign_ins_are_listed() {
+    use libroxel_hub::{
+        NEEDS_CODE, TwoStepSet, new_two_step_secret, security_message, two_step_code, two_step_message,
+    };
+    let running = start("127.0.0.1:0".parse().unwrap(), None).unwrap();
+    let hub = HubClient::new(&running.url());
+    let alice = [7u8; 32];
+    let id = player_id_of(&alice);
+    claim(&hub, &alice, "alice2", time()).unwrap();
+    hub.set_password(&seal_password_with(&alice, "correct horse battery", time(), 19 * 1024, 2).unwrap())
+        .unwrap();
+
+    // Turning it on needs a code from the app, to show the app has the secret.
+    let secret = new_two_step_secret();
+    let mut set = TwoStepSet {
+        player_id: id.clone(),
+        secret: Some(secret.clone()),
+        code: "000000".into(),
+        time: time(),
+        signature: String::new(),
+    };
+    set.code =
+        if two_step_code(&secret, time()).unwrap() == "000000" { "111111".into() } else { "000000".into() };
+    set.signature = sign(&alice, &two_step_message(&set));
+    assert!(hub.set_two_step(&set).unwrap_err().contains("does not match"));
+    // Use the code from 30 seconds ago, so the sign-in below gets a newer one.
+    set.code = two_step_code(&secret, time() - 30).unwrap();
+    set.signature = sign(&alice, &two_step_message(&set));
+    hub.set_two_step(&set).unwrap();
+
+    // The password alone isn't enough now; a wrong code isn't either.
+    assert_eq!(hub.sign_in("alice2", "correct horse battery", None).unwrap_err(), NEEDS_CODE);
+    assert!(hub.sign_in("alice2", "correct horse battery", Some("12")).unwrap_err().contains("wrong code"));
+    let code = two_step_code(&secret, time()).unwrap();
+    assert_eq!(hub.sign_in("alice2", "correct horse battery", Some(&code)).unwrap(), alice);
+    // A code works once.
+    assert!(
+        hub.sign_in("alice2", "correct horse battery", Some(&code)).unwrap_err().contains("already used")
+    );
+
+    // Only Alice sees how the account is kept safe, and the sign-in shows there.
+    let now_ms = time() * 1000;
+    let security = hub.security(&id, now_ms, &sign(&alice, &security_message(&id, now_ms))).unwrap();
+    assert!(security.has_password && security.two_step);
+    assert_eq!(security.sign_ins.len(), 1);
+    assert_eq!(security.sign_ins[0].from, "127.0.0.1");
+    assert!(hub.security(&id, now_ms, &sign(&[3u8; 32], &security_message(&id, now_ms))).is_err());
+}
+
+#[test]
+fn new_accounts_need_the_bot_check_and_whoever_runs_the_hub_verifies_people() {
+    let running = start("127.0.0.1:0".parse().unwrap(), None).unwrap();
+    let hub = HubClient::new(&running.url());
+    let bot = [5u8; 32];
+    let id = player_id_of(&bot);
+    let look = serde_json::json!({});
+    let mut account = AccountUpdate {
+        player_id: id.clone(),
+        name: "bot1".into(),
+        about: String::new(),
+        look: look.clone(),
+        time: time(),
+        signature: sign(&bot, &account_message(&id, "bot1", "", &look, time())),
+        work: None,
+    };
+    assert!(hub.update_account(&account).unwrap_err().contains("bot check"));
+    account.work = Some(libroxel_hub::account_work(&id, "someone_else"));
+    assert!(hub.update_account(&account).is_err());
+    account.work = Some(libroxel_hub::account_work(&id, "bot1"));
+    hub.update_account(&account).unwrap();
+    assert!(!hub.profile("bot1").unwrap().unwrap().verified);
+    // Changing an account that exists needs no new puzzle.
+    claim(&hub, &bot, "bot1", time() + 1).unwrap();
+
+    let dir = std::env::temp_dir().join(format!("libroxel-verified-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("hub.sqlite");
+    let running = start("127.0.0.1:0".parse().unwrap(), Some(&path)).unwrap();
+    let hub = HubClient::new(&running.url());
+    claim(&hub, &bot, "Famous", time()).unwrap();
+    libroxel_hub::set_verified(&libroxel_hub::open_db(Some(&path)).unwrap(), "famous", true).unwrap();
+    assert!(hub.profile("Famous").unwrap().unwrap().verified);
+    libroxel_hub::set_verified(&libroxel_hub::open_db(Some(&path)).unwrap(), "famous", false).unwrap();
+    assert!(!hub.profile("Famous").unwrap().unwrap().verified);
     drop(running);
     let _ = std::fs::remove_dir_all(&dir);
 }

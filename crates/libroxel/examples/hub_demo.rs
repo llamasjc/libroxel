@@ -6,7 +6,7 @@
 //! LIBROXEL_HUB=127.0.0.1:7431 cargo run -p libroxel
 //! ```
 //!
-//! It claims the name "KaiBuilds" for the identity on this computer (the
+//! It claims the name "AliceBuilds" for the identity on this computer (the
 //! one the app uses), makes five friends (some in games, one online, one
 //! offline), leaves a friend request waiting, and lists servers for the
 //! starter games and one published game. The servers answer pings but run
@@ -36,6 +36,7 @@ impl Person {
         let id = self.me.player_id();
         let message = libroxel_hub::account_message(&id, self.name, "", &look, time);
         let account = AccountUpdate {
+            work: Some(libroxel_hub::account_work(&id, self.name)),
             player_id: id,
             name: self.name.into(),
             about: String::new(),
@@ -92,7 +93,7 @@ fn main() {
         .or_else(|| std::env::var_os("HOME").map(|d| PathBuf::from(d).join(".config/libroxel")))
         .unwrap_or_else(|| PathBuf::from(".libroxel"));
     let you =
-        Person { me: Identity::load_or_create(&config.join("identity.key")).unwrap(), name: "KaiBuilds" };
+        Person { me: Identity::load_or_create(&config.join("identity.key")).unwrap(), name: "AliceBuilds" };
     you.claim(&hub, look([255, 204, 153], [255, 106, 43], "Cap"));
 
     let person = |name| Person { me: Identity::generate(), name };

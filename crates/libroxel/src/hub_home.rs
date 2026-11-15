@@ -464,8 +464,11 @@ fn server_row(ui: &mut egui::Ui, platform: &mut Platform, server: &ServerInfo, t
                         ui.label(RichText::new("Admin").small().strong().color(theme::SUN))
                             .on_hover_text("Run by whoever runs this Hub, checked by the Hub.");
                     } else if let Some(host) = &server.host {
-                        ui.label(RichText::new(format!("hosted by {host}")).small().color(theme::CHALK))
-                            .on_hover_text("The Hub checked this account really hosts it.");
+                        let verified = if server.host_verified { " · verified" } else { "" };
+                        ui.label(
+                            RichText::new(format!("hosted by {host}{verified}")).small().color(theme::CHALK),
+                        )
+                        .on_hover_text("The Hub checked this account really hosts it.");
                     }
                     if !friends.is_empty() {
                         for (name, look) in friends.iter().take(4) {
