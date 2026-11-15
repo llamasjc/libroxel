@@ -13,6 +13,12 @@ use crate::physics::Physics;
 /// How long a character stays dead before respawning, in seconds, unless
 /// the players service's `RespawnTime` says otherwise.
 pub const RESPAWN_DELAY: f32 = 5.0;
+
+/// Seconds after joining before a player's first character appears by
+/// itself. Like Roblox, where it waits for the player's game to load: the
+/// place's scripts get to run first, and one that turns
+/// `CharacterAutoLoads` off in that time spawns the character itself.
+pub const FIRST_SPAWN_DELAY: f32 = 0.5;
 /// The name of the local player.
 pub const LOCAL_PLAYER_NAME: &str = "Player1";
 
@@ -92,6 +98,8 @@ pub(crate) struct Avatar {
     pub(crate) hotbar: Vec<InstanceId>,
     pub(crate) character: Option<Character>,
     pub(crate) respawn_in: Option<f32>,
+    /// Seconds before their first character appears by itself.
+    pub(crate) first_spawn_in: Option<f32>,
     /// Whether the current character's death has been seen.
     pub(crate) death_seen: bool,
     pub(crate) hold: Option<PromptHold>,
@@ -131,6 +139,7 @@ impl Avatar {
             hotbar: Vec::new(),
             character: None,
             respawn_in: None,
+            first_spawn_in: None,
             death_seen: false,
             hold: None,
             seating: Default::default(),
@@ -330,10 +339,8 @@ impl PlaySession {
         auto_assign_team(&mut tree.borrow_mut(), player);
         let errors = self.runtime.player_added(player);
         self.collect(errors);
-        if self.auto_loads(&tree)
-            && let Some(index) = self.avatar_of(player)
-        {
-            self.spawn_character(index);
+        if let Some(index) = self.avatar_of(player) {
+            self.avatars[index].first_spawn_in = Some(FIRST_SPAWN_DELAY);
         }
         player
     }
@@ -399,8 +406,24 @@ impl PlaySession {
         avatar.moved_to = None;
         avatar.death_seen = false;
         avatar.respawn_in = None;
+        avatar.first_spawn_in = None;
         let errors = self.runtime.character_added(player, character.model);
         self.collect(errors);
+    }
+
+    /// Spawns now the characters of players who joined but whose first
+    /// character hasn't appeared yet ([`FIRST_SPAWN_DELAY`]), as if their
+    /// game had finished loading.
+    pub fn load_characters_now(&mut self) {
+        let tree = self.runtime.tree().clone();
+        for index in 0..self.avatars.len() {
+            if self.avatars[index].first_spawn_in.take().is_some()
+                && self.avatars[index].character.is_none()
+                && self.auto_loads(&tree)
+            {
+                self.spawn_character(index);
+            }
+        }
     }
 
     /// Makes `player` look like `look`, now and every time they respawn.
@@ -1393,6 +1416,15 @@ impl PlaySession {
 
     fn handle_death(&mut self, index: usize, dt: f32) {
         let tree = self.runtime.tree().clone();
+        if let Some(left) = self.avatars[index].first_spawn_in.as_mut() {
+            *left -= dt;
+            if *left <= 0.0 {
+                self.avatars[index].first_spawn_in = None;
+                if self.avatars[index].character.is_none() && self.auto_loads(&tree) {
+                    self.spawn_character(index);
+                }
+            }
+        }
         let avatar = &mut self.avatars[index];
         // The spawn shield wears off.
         if let Some((field, left)) = avatar.shield.as_mut() {
@@ -1500,9 +1532,13 @@ fn auto_assign_team(tree: &mut InstanceTree, player: InstanceId) {
     let _ = tree.set(player, Property::Neutral, PropertyValue::Bool(false));
 }
 
-/// Convenience for tests and tools: a session over a fresh copy of `tree`.
+/// Convenience for tests and tools: a session over a fresh copy of `tree`,
+/// with the character there from the start (see
+/// [`PlaySession::load_characters_now`]).
 pub fn start_on(tree: InstanceTree, with_character: bool) -> Result<PlaySession, String> {
-    PlaySession::start(std::rc::Rc::new(std::cell::RefCell::new(tree)), with_character)
+    let mut session = PlaySession::start(std::rc::Rc::new(std::cell::RefCell::new(tree)), with_character)?;
+    session.load_characters_now();
+    Ok(session)
 }
 
 /// An error's text without the stack frames that are Libroxel's own

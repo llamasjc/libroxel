@@ -493,6 +493,45 @@ fn characters_wait_for_load_character_when_auto_loading_is_off() {
 }
 
 #[test]
+fn the_first_character_waits_so_scripts_can_turn_auto_loading_off() {
+    // A game that turns auto-loading off a moment after starting (after a
+    // require or two) and spawns the character itself, once.
+    let mut tree = world();
+    script(
+        &mut tree,
+        "Join",
+        r#"
+        local Players = game:GetService("Players")
+        task.wait(0.1)
+        Players.CharacterAutoLoads = false
+        local spawned = 0
+        for _, p in ipairs(Players:GetPlayers()) do
+            p.CharacterAdded:Connect(function() spawned += 1; print("spawned", spawned) end)
+            task.wait(0.2)
+            p:LoadCharacter()
+        end
+        "#,
+    );
+    let shared = std::rc::Rc::new(std::cell::RefCell::new(tree));
+    let mut session = libroxel_engine::PlaySession::start(shared, true).unwrap();
+    assert!(session.character().is_none(), "not right away");
+    for _ in 0..120 {
+        session.step(DT, CharacterInput::default());
+    }
+    let log: Vec<String> = session.take_log().into_iter().map(|l| l.text).collect();
+    assert!(log.iter().any(|l| l == "spawned 1"), "{log:?}");
+    assert!(!log.iter().any(|l| l == "spawned 2"), "only the script's character: {log:?}");
+
+    // Left on, the character comes by itself a moment after joining.
+    let shared = std::rc::Rc::new(std::cell::RefCell::new(world()));
+    let mut session = libroxel_engine::PlaySession::start(shared, true).unwrap();
+    for _ in 0..40 {
+        session.step(DT, CharacterInput::default());
+    }
+    assert!(session.character().is_some());
+}
+
+#[test]
 fn sitting_and_driving_a_kart() {
     let mut tree = world();
     script(
