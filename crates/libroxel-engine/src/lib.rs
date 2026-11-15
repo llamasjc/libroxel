@@ -7,6 +7,7 @@
 
 pub mod camera;
 pub mod character;
+mod clusters;
 pub mod coedit;
 pub mod collision_shapes;
 pub mod devices;

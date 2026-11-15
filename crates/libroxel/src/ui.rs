@@ -4450,6 +4450,11 @@ impl Stats {
             libroxel_engine::view::take_sync_seconds() * 1000.0 / frames,
             r.ui_seconds * 1000.0 / frames,
         );
+        let (shown, merged, clusters) = libroxel_engine::view::cluster_counts();
+        let _ = writeln!(
+            out,
+            "  {shown} parts in the 3D view, {merged} of them drawn merged into {clusters} clusters"
+        );
         let p = session.physics_mut().take_timing();
         if p.steps > 0 {
             let ms = |s: f64| s * 1000.0 / f64::from(p.steps);
