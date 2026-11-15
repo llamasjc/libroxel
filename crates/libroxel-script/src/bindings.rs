@@ -2565,6 +2565,12 @@ const RESUME_BUDGET: Duration = Duration::from_millis(4);
 /// A resume this long marks its thread as heavy background work.
 const HEAVY_RESUME: Duration = Duration::from_micros(400);
 
+/// The share of a frame waiting threads get while the 3D view is turned off
+/// (`Set3dRenderingEnabled(false)`, a loading screen): nobody plays yet, so
+/// a long frame costs nothing, and the loading itself (often heavy
+/// background work, like building the world) finishes sooner.
+const LOADING_BUDGET: Duration = Duration::from_millis(30);
+
 pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
     let now = {
         let host = host(lua);
@@ -2600,11 +2606,13 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
         *cost = cost.mul_f32(0.97);
     }
     let mut ran_heavy = false;
+    let loading = !crate::RENDERING_3D.load(std::sync::atomic::Ordering::Relaxed);
+    let share = if loading { LOADING_BUDGET } else { RESUME_BUDGET };
     // Like Roblox's scheduler under load: heavy background work gets a
     // share of each frame on average. One long piece (a 12 ms scan, say)
     // still runs whole, but then the next ones wait the frames it
     // borrowed, instead of a long piece running every single frame.
-    let mut debt = host(lua).heavy_debt.get().saturating_sub(RESUME_BUDGET);
+    let mut debt = host(lua).heavy_debt.get().saturating_sub(share);
     for w in due {
         let key = w.thread.to_pointer() as usize;
         let expected = {
@@ -2613,7 +2621,7 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
             known.or_else(|| host.script_cost.borrow().get(&w.script).copied()).unwrap_or_default()
         };
         let heavy = expected > HEAVY_RESUME;
-        let over = ran_heavy && budget_start.elapsed() + expected > RESUME_BUDGET;
+        let over = ran_heavy && budget_start.elapsed() + expected > share;
         if heavy && !w.parallel && (over || !debt.is_zero()) {
             host(lua).waiting.borrow_mut().push(w);
             continue;
@@ -2640,7 +2648,7 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
         }
         ran_heavy |= took > HEAVY_RESUME;
         if heavy || took > HEAVY_RESUME {
-            debt += took.saturating_sub(RESUME_BUDGET);
+            debt += took.saturating_sub(share);
         }
         {
             let host = host(lua);
