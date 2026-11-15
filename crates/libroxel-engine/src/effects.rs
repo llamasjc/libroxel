@@ -411,12 +411,15 @@ fn highlight_materials(look: HighlightLook) -> (StandardMaterial, StandardMateri
         StandardMaterial {
             base_color: Color::srgba(fill.x, fill.y, fill.z, alpha(fill_t)),
             unlit: true,
+            // Roblox draws a highlight after the atmosphere, so haze never fades it.
+            fog_enabled: false,
             alpha_mode: mode(alpha(fill_t)),
             ..default()
         },
         StandardMaterial {
             base_color: Color::srgba(line.x, line.y, line.z, alpha(line_t)),
             unlit: true,
+            fog_enabled: false,
             alpha_mode: mode(alpha(line_t)),
             // Only the inside faces of a slightly bigger copy: an outline around the part.
             cull_mode: Some(Face::Front),

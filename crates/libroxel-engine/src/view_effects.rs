@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 
+use bevy::camera::visibility::NoFrustumCulling;
 use bevy::post_process::bloom::{Bloom, BloomPrefilter};
 use bevy::prelude::*;
 use bevy::render::view::ColorGrading;
@@ -269,8 +270,10 @@ fn sync_beams(
     }
 }
 
-/// How far away the sun, moon and stars are drawn (inside the camera's far plane).
-const SKY_DISTANCE: f32 = 800.0;
+/// How far away the sun, moon and stars are drawn: behind anything a map
+/// holds, as Roblox's sky is. The camera's depth reaches to infinity, so only
+/// culling has to be told to keep them (see [`NoFrustumCulling`]).
+const SKY_DISTANCE: f32 = 60_000.0;
 
 /// What a sky in Lighting draws at the current time of day.
 #[derive(Debug, Clone, PartialEq)]
@@ -304,16 +307,27 @@ pub fn sky_look(tree: &InstanceTree) -> Option<SkyLook> {
     })
 }
 
-/// Where the stars sit: `count` points spread evenly over the upper sky
-/// (unit directions), the same every time.
+/// A repeatable random number in 0..1 for star `i` (the same every time).
+fn star_noise(i: u32, salt: u32) -> f32 {
+    let mut h = i.wrapping_mul(0x9E37_79B9) ^ salt.wrapping_mul(0x85EB_CA6B);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2C1B_3C6D);
+    h ^= h >> 12;
+    h = h.wrapping_mul(0x297A_2D39);
+    h ^= h >> 15;
+    (h & 0xFF_FFFF) as f32 / 0x100_0000 as f32
+}
+
+/// Where the stars sit: `count` points scattered at random over the upper
+/// sky (unit directions), the same every time. Evenly spaced stars read as
+/// a grid of dots, so each one is placed at random.
 pub fn star_directions(count: u32) -> Vec<Vec3> {
-    let golden = std::f32::consts::PI * (3.0 - 5f32.sqrt());
     (0..count)
         .map(|i| {
-            // A spiral over the top half of a sphere, dipping a little below the horizon.
-            let y = 1.0 - (i as f32 + 0.5) / count as f32 * 1.1;
+            // Uniform over the top half of a sphere, dipping a little below the horizon.
+            let y = 1.0 - star_noise(i, 1) * 1.1;
             let r = (1.0 - y * y).max(0.0).sqrt();
-            let a = golden * i as f32;
+            let a = star_noise(i, 2) * std::f32::consts::TAU;
             Vec3::new(r * a.cos(), y, r * a.sin())
         })
         .collect()
@@ -328,8 +342,9 @@ fn star_mesh(count: u32) -> Mesh {
         let centre = dir * SKY_DISTANCE;
         let side = dir.any_orthonormal_vector();
         let other = dir.cross(side);
-        // Some stars are bigger than others.
-        let size = 1.2 + (i % 7) as f32 * 0.25;
+        // Mostly tiny points (about a pixel), with a few brighter, bigger ones.
+        let big = star_noise(i as u32, 3);
+        let size = SKY_DISTANCE * (0.0009 + big * big * big * 0.0016);
         let base = positions.len() as u32;
         for (a, b) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
             positions.push((centre + (side * a + other * b) * size).to_array());
@@ -407,6 +422,7 @@ fn sync_sky(
             MeshMaterial3d(materials.add(glow_material(Color::WHITE, 0.0))),
             Transform::from_translation(eye),
             bevy::light::NotShadowCaster,
+            NoFrustumCulling,
         ));
         state.stars = Some((star_count, mesh));
         state.brightness = -1.0;
@@ -456,6 +472,7 @@ fn sync_sky(
                 Transform::from_translation(eye + Vec3::Y * SKY_DISTANCE),
                 Visibility::Hidden,
                 bevy::light::NotShadowCaster,
+                NoFrustumCulling,
             ));
         }
     }
