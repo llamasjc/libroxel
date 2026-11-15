@@ -1077,6 +1077,11 @@ impl PlaySession {
         self.character().map(|c| c.root)
     }
 
+    /// Adds an engine note to the Output (like "Respawned").
+    pub fn note(&mut self, text: impl Into<String>) {
+        self.info(text);
+    }
+
     pub(crate) fn info(&mut self, text: impl Into<String>) {
         self.log.push(LogEntry { level: LogLevel::Info, time: self.runtime.clock(), text: text.into() });
     }

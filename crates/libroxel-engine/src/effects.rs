@@ -438,6 +438,10 @@ fn sync_highlights(
     time: Res<Time>,
 ) {
     let Some(part_meshes) = part_meshes else { return };
+    // (Nothing to show them on behind a loading screen.)
+    if crate::view::view_hidden() {
+        return;
+    }
     let tree = engine.tree.borrow();
     let mut wanted: HashMap<InstanceId, (HighlightLook, Vec<InstanceId>)> = HashMap::new();
     // A force field shows as a pale shimmer over its character, drawn like a highlight.

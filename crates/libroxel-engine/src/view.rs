@@ -183,6 +183,8 @@ struct PartSync {
     /// Parts out of range when last measured.
     far: FastSet<InstanceId>,
     frames: u64,
+    /// Frames the view was hidden (see [`view_hidden`]).
+    hidden_frames: u64,
 }
 
 /// Each part's entity, and the revision of the part it last showed.
@@ -260,6 +262,15 @@ fn sync_parts(
     // While playing, the session reads the change journal (for Changed events).
     if !engine.is_playing() {
         tree.drain_changes();
+    }
+    // Nothing of the 3D view shows behind a loading screen: keep up only now
+    // and then (so the world is there when it goes), leaving the frames to
+    // the loading itself.
+    if engine.is_playing() && view_hidden() {
+        sync.hidden_frames += 1;
+        if !sync.hidden_frames.is_multiple_of(10) {
+            return;
+        }
     }
 
     // Most frames most of a big map is unchanged: only parts whose properties
@@ -522,6 +533,13 @@ impl PartMeshes {
 /// (a loading screen): then the view isn't drawn at all, and the frames it
 /// saves go to the game.
 pub static VIEW_COVERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the 3D view isn't being drawn: a loading screen covers it, or
+/// the game turned 3D rendering off.
+pub fn view_hidden() -> bool {
+    VIEW_COVERED.load(std::sync::atomic::Ordering::Relaxed)
+        || !libroxel_script::RENDERING_3D.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 fn cover_view(mut cameras: Query<&mut Camera, With<CameraRig>>) {
     let covered = VIEW_COVERED.load(std::sync::atomic::Ordering::Relaxed)
