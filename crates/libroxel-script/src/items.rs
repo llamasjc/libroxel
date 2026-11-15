@@ -4,7 +4,7 @@ use libroxel_instance::{CFrame, ClassKind, InstanceId, Property, PropertyValue, 
 use mlua::{Lua, MetaMethod, UserData, UserDataFields, UserDataMethods, Value};
 
 use crate::bindings::{
-    LuaColor3, LuaInstance, LuaVector3, Signal, SignalKind, as_instance, fire, host, intern, is_character,
+    LuaColor3, LuaInstance, Signal, SignalKind, as_instance, fire, host, intern, is_character,
     property_to_lua, push_instance, require_class, tree_err,
 };
 use crate::names::{self, methods, mouse};
@@ -41,10 +41,9 @@ fn attribute_from_lua(value: &Value) -> mlua::Result<Option<PropertyValue>> {
         Value::Integer(n) => PropertyValue::Number(*n as f64),
         Value::Number(n) => PropertyValue::Number(*n),
         Value::String(s) => PropertyValue::String(s.to_str()?.to_owned()),
+        Value::Vector(v) => PropertyValue::Vec3(libroxel_instance::Vec3::new(v.x(), v.y(), v.z())),
         Value::UserData(ud) => {
-            if let Ok(v) = ud.borrow::<LuaVector3>() {
-                PropertyValue::Vec3(v.0)
-            } else if let Ok(c) = ud.borrow::<LuaColor3>() {
+            if let Ok(c) = ud.borrow::<LuaColor3>() {
                 PropertyValue::Color3(c.0)
             } else if let Some(v) = as_vector2(value) {
                 PropertyValue::Vec2(v)

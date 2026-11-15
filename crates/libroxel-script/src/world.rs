@@ -139,10 +139,10 @@ pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> m
             Value::UserData(push_instance(lua, terrain)?)
         }
         extras::ASSEMBLY_LINEAR_VELOCITY if class.is_physical() => {
-            Value::UserData(lua.create_userdata(LuaVector3(velocity(lua, id)))?)
+            crate::bindings::vector_value(velocity(lua, id))
         }
         extras::ASSEMBLY_ANGULAR_VELOCITY if class.is_physical() => {
-            Value::UserData(lua.create_userdata(LuaVector3(spin(lua, id)))?)
+            crate::bindings::vector_value(spin(lua, id))
         }
         // A method on seats, but a property on humanoids, so it's looked up here.
         methods::SIT if class.is_seat() => {

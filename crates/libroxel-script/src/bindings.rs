@@ -516,7 +516,7 @@ pub(crate) struct LuaColor3(pub(crate) Color3);
 
 pub(crate) fn as_vector3(value: &Value) -> Option<Vec3> {
     match value {
-        Value::UserData(ud) => ud.borrow::<LuaVector3>().ok().map(|v| v.0),
+        Value::Vector(v) => Some(Vec3::new(v.x(), v.y(), v.z())),
         _ => None,
     }
 }
@@ -529,119 +529,99 @@ pub(crate) fn as_number(value: &Value) -> Option<f32> {
     }
 }
 
-fn vector_operands(op: &str, a: &Value, b: &Value) -> mlua::Result<(Vec3, Vec3)> {
-    let lift = |v: &Value| as_vector3(v).or_else(|| as_number(v).map(|n| Vec3::new(n, n, n)));
-    match (lift(a), lift(b)) {
-        (Some(a), Some(b)) => Ok((a, b)),
-        _ => {
-            Err(mlua::Error::runtime(format!("attempt to {op} a {} with a {}", a.type_name(), b.type_name())))
-        }
+/// Like Roblox, a Vector3 is Luau's built-in vector: made, read and
+/// added up by the VM itself, with no allocation. Its members (Magnitude,
+/// Unit, Dot...) come from the vector type's metatable, set up in
+/// [`install_vector3`].
+impl mlua::IntoLua for LuaVector3 {
+    fn into_lua(self, _: &Lua) -> mlua::Result<Value> {
+        Ok(vector_value(self.0))
     }
 }
 
-impl UserData for LuaVector3 {
-    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
-        use names::vector3::*;
-        fields.add_field_method_get(X, |_, this| Ok(this.0.x));
-        fields.add_field_method_get(Y, |_, this| Ok(this.0.y));
-        fields.add_field_method_get(Z, |_, this| Ok(this.0.z));
-        fields.add_field_method_get(MAGNITUDE, |_, this| Ok(this.0.length()));
-        fields.add_field_method_get(UNIT, |_, this| Ok(LuaVector3(this.0.normalize_or_zero())));
-        fields.add_meta_field(MetaMethod::Type, TYPE_NAME);
-    }
-
-    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        use names::vector3::*;
-        methods.add_method(DOT, |_, this, other: Value| {
-            let other = as_vector3(&other).ok_or_else(|| mlua::Error::runtime("Dot expects a Vector3"))?;
-            Ok(this.0.dot(other))
-        });
-        methods.add_method(CROSS, |_, this, other: Value| {
-            let other = as_vector3(&other).ok_or_else(|| mlua::Error::runtime("Cross expects a Vector3"))?;
-            Ok(LuaVector3(this.0.cross(other)))
-        });
-        methods.add_method(LERP, |_, this, (other, t): (Value, f32)| {
-            let other = as_vector3(&other).ok_or_else(|| mlua::Error::runtime("Lerp expects a Vector3"))?;
-            Ok(LuaVector3(this.0.lerp(other, t)))
-        });
-        for (name, pick) in [(MIN, f32::min as fn(f32, f32) -> f32), (MAX, f32::max)] {
-            methods.add_method(name, move |_, this, others: Variadic<Value>| {
-                let mut out = this.0;
-                for other in others.iter() {
-                    let other = as_vector3(other)
-                        .ok_or_else(|| mlua::Error::runtime(format!("{name} expects Vector3s")))?;
-                    out = Vec3::new(pick(out.x, other.x), pick(out.y, other.y), pick(out.z, other.z));
-                }
-                Ok(LuaVector3(out))
-            });
-        }
-        for (name, each) in [
-            (ABS, f32::abs as fn(f32) -> f32),
-            (FLOOR, f32::floor),
-            (CEIL, f32::ceil),
-            (SIGN, |v: f32| {
-                if v > 0.0 {
-                    1.0
-                } else if v < 0.0 {
-                    -1.0
-                } else {
-                    0.0
-                }
-            }),
-        ] {
-            methods.add_method(name, move |_, this, ()| {
-                Ok(LuaVector3(Vec3::new(each(this.0.x), each(this.0.y), each(this.0.z))))
-            });
-        }
-        methods.add_method(FUZZY_EQ, |_, this, (other, epsilon): (Value, Option<f32>)| {
-            let other =
-                as_vector3(&other).ok_or_else(|| mlua::Error::runtime("FuzzyEq expects a Vector3"))?;
-            let eps = epsilon.unwrap_or(1e-5);
-            let d = this.0 - other;
-            Ok(d.x.abs() <= eps && d.y.abs() <= eps && d.z.abs() <= eps)
-        });
-        methods.add_method(ANGLE, |_, this, (other, axis): (Value, Option<Value>)| {
-            let other = as_vector3(&other).ok_or_else(|| mlua::Error::runtime("Angle expects a Vector3"))?;
-            let (a, b) = (this.0.normalize_or_zero(), other.normalize_or_zero());
-            let angle = a.dot(b).clamp(-1.0, 1.0).acos();
-            // With an axis, the angle is signed: positive turning one way round it.
-            let sign = match axis.as_ref().and_then(as_vector3) {
-                Some(axis) if a.cross(b).dot(axis) < 0.0 => -1.0,
-                _ => 1.0,
-            };
-            Ok(angle * sign)
-        });
-
-        methods.add_meta_function(MetaMethod::Add, |_, (a, b): (Value, Value)| {
-            let (a, b) = vector_operands("add", &a, &b)?;
-            Ok(LuaVector3(a + b))
-        });
-        methods.add_meta_function(MetaMethod::Sub, |_, (a, b): (Value, Value)| {
-            let (a, b) = vector_operands("subtract", &a, &b)?;
-            Ok(LuaVector3(a - b))
-        });
-        methods.add_meta_function(MetaMethod::Mul, |_, (a, b): (Value, Value)| {
-            let (a, b) = vector_operands("multiply", &a, &b)?;
-            Ok(LuaVector3(a * b))
-        });
-        methods.add_meta_function(MetaMethod::Div, |_, (a, b): (Value, Value)| {
-            let (a, b) = vector_operands("divide", &a, &b)?;
-            Ok(LuaVector3(a / b))
-        });
-        methods.add_meta_function(MetaMethod::IDiv, |_, (a, b): (Value, Value)| {
-            let (a, b) = vector_operands("divide", &a, &b)?;
-            let q = a / b;
-            Ok(LuaVector3(Vec3::new(q.x.floor(), q.y.floor(), q.z.floor())))
-        });
-        methods.add_meta_method(MetaMethod::Unm, |_, this, ()| Ok(LuaVector3(-this.0)));
-        methods.add_meta_function(MetaMethod::Eq, |_, (a, b): (Value, Value)| {
-            Ok(matches!((as_vector3(&a), as_vector3(&b)), (Some(a), Some(b)) if a == b))
-        });
-        methods.add_meta_method(MetaMethod::ToString, |_, this, ()| {
-            Ok(format!("{}, {}, {}", this.0.x, this.0.y, this.0.z))
-        });
+impl mlua::FromLua for LuaVector3 {
+    fn from_lua(value: Value, _: &Lua) -> mlua::Result<Self> {
+        as_vector3(&value)
+            .map(LuaVector3)
+            .ok_or_else(|| mlua::Error::runtime(format!("expected a Vector3, got a {}", value.type_name())))
     }
 }
+
+/// How a Vector3 prints: "1, 2.5, 3".
+pub(crate) fn vector_text(v: mlua::Vector) -> String {
+    format!("{}, {}, {}", v.x(), v.y(), v.z())
+}
+
+/// A Vector3 as a script value.
+pub(crate) fn vector_value(v: Vec3) -> Value {
+    Value::Vector(mlua::Vector::new(v.x, v.y, v.z))
+}
+
+/// Vector3's members, on Luau's vector type (so every vector has them), and
+/// `typeof` saying "Vector3" for one, as in Roblox.
+fn install_vector3(lua: &Lua) -> mlua::Result<()> {
+    let mt: Table = lua.load(VECTOR3_MEMBERS).set_name("=Vector3").eval()?;
+    mt.set("__tostring", lua.create_function(|_, v: mlua::Vector| Ok(vector_text(v)))?)?;
+    lua.set_type_metatable::<mlua::Vector>(Some(mt));
+    Ok(())
+}
+
+const VECTOR3_MEMBERS: &str = r##"
+local vector, error, type, select, math = vector, error, type, select, math
+local abs = math.abs
+local zero = vector.create(0, 0, 0)
+local function check(v, what)
+	if type(v) ~= "vector" then
+		error(what .. " expects a Vector3", 3)
+	end
+end
+local methods = {}
+function methods.Dot(a, b) check(b, "Dot"); return vector.dot(a, b) end
+function methods.Cross(a, b) check(b, "Cross"); return vector.cross(a, b) end
+function methods.Lerp(a, b, t) check(b, "Lerp"); return a + (b - a) * t end
+function methods.Min(a, ...)
+	for i = 1, select("#", ...) do local b = select(i, ...); check(b, "Min"); a = vector.min(a, b) end
+	return a
+end
+function methods.Max(a, ...)
+	for i = 1, select("#", ...) do local b = select(i, ...); check(b, "Max"); a = vector.max(a, b) end
+	return a
+end
+function methods.Abs(a) return vector.abs(a) end
+function methods.Floor(a) return vector.floor(a) end
+function methods.Ceil(a) return vector.ceil(a) end
+function methods.Sign(a) return vector.sign(a) end
+function methods.FuzzyEq(a, b, eps)
+	check(b, "FuzzyEq")
+	eps = eps or 1e-5
+	local d = a - b
+	return abs(d.x) <= eps and abs(d.y) <= eps and abs(d.z) <= eps
+end
+function methods.Angle(a, b, axis)
+	check(b, "Angle")
+	local m = vector.magnitude(a) * vector.magnitude(b)
+	if m == 0 then return 0 end
+	local angle = math.acos(math.clamp(vector.dot(a, b) / m, -1, 1))
+	if type(axis) == "vector" and vector.dot(vector.cross(a, b), axis) < 0 then
+		return -angle
+	end
+	return angle
+end
+return {
+	__index = function(v, key)
+		if key == "Magnitude" then
+			return vector.magnitude(v)
+		elseif key == "Unit" then
+			if v == zero then return v end
+			return vector.normalize(v)
+		end
+		local m = methods[key]
+		if m then return m end
+		error(tostring(key) .. " is not a valid member of Vector3", 2)
+	end,
+	__type = "Vector3",
+}
+"##;
 
 impl UserData for LuaColor3 {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
@@ -785,7 +765,7 @@ pub(crate) fn property_to_lua(lua: &Lua, value: PropertyValue) -> mlua::Result<V
         PropertyValue::Bool(b) => Value::Boolean(b),
         PropertyValue::Number(n) => Value::Number(n),
         PropertyValue::String(s) => Value::String(lua.create_string(&s)?),
-        PropertyValue::Vec3(v) => Value::UserData(lua.create_userdata(LuaVector3(v))?),
+        PropertyValue::Vec3(v) => vector_value(v),
         PropertyValue::Color3(c) => Value::UserData(lua.create_userdata(LuaColor3(c))?),
         PropertyValue::Enum(e) => Value::UserData(lua.create_userdata(LuaEnumItem(e))?),
         PropertyValue::Ref(Some(id)) => Value::UserData(push_instance(lua, id)?),
@@ -815,6 +795,7 @@ fn property_from_lua(property: Property, value: &Value) -> Option<PropertyValue>
         Value::Number(n) => PropertyValue::Number(*n),
         Value::Integer(n) => PropertyValue::Number(*n as f64),
         Value::String(s) => PropertyValue::String(s.to_string_lossy()),
+        Value::Vector(_) => PropertyValue::Vec3(as_vector3(value)?),
         Value::UserData(ud) => {
             if let Some(v) = as_vector2(value) {
                 PropertyValue::Vec2(v)
@@ -822,8 +803,6 @@ fn property_from_lua(property: Property, value: &Value) -> Option<PropertyValue>
                 PropertyValue::UDim2(u)
             } else if let Some(u) = crate::types::as_udim(value) {
                 PropertyValue::UDim(u)
-            } else if let Ok(v) = ud.borrow::<LuaVector3>() {
-                PropertyValue::Vec3(v.0)
             } else if let Ok(c) = ud.borrow::<LuaColor3>() {
                 PropertyValue::Color3(c.0)
             } else {
@@ -1583,10 +1562,9 @@ impl TweenValue {
         Some(match value {
             Value::Integer(n) => TweenValue::Number(*n as f64),
             Value::Number(n) => TweenValue::Number(*n),
+            Value::Vector(_) => TweenValue::Vec3(as_vector3(value)?),
             Value::UserData(ud) => {
-                if let Ok(v) = ud.borrow::<LuaVector3>() {
-                    TweenValue::Vec3(v.0)
-                } else if let Ok(c) = ud.borrow::<LuaColor3>() {
+                if let Ok(c) = ud.borrow::<LuaColor3>() {
                     TweenValue::Color(c.0)
                 } else if let Ok(c) = ud.borrow::<LuaCFrame>() {
                     TweenValue::CFrame(c.0)
@@ -1605,7 +1583,7 @@ impl TweenValue {
     fn to_lua(self, lua: &Lua) -> mlua::Result<Value> {
         Ok(match self {
             TweenValue::Number(n) => Value::Number(n),
-            TweenValue::Vec3(v) => Value::UserData(lua.create_userdata(LuaVector3(v))?),
+            TweenValue::Vec3(v) => vector_value(v),
             TweenValue::Color(c) => Value::UserData(lua.create_userdata(LuaColor3(c))?),
             TweenValue::CFrame(c) => Value::UserData(lua.create_userdata(LuaCFrame(c))?),
             TweenValue::Vec2(v) => Value::UserData(lua.create_userdata(LuaVector2(v))?),
@@ -1962,7 +1940,13 @@ pub(crate) fn fire(lua: &Lua, signal: SignalKind, args: impl Fn() -> mlua::Resul
 // ---------------------------------------------------------------------------
 
 fn join_args(args: Variadic<Value>) -> mlua::Result<String> {
-    let parts: mlua::Result<Vec<String>> = args.iter().map(|v| v.to_string()).collect();
+    let parts: mlua::Result<Vec<String>> = args
+        .iter()
+        .map(|v| match v {
+            Value::Vector(v) => Ok(vector_text(*v)),
+            v => v.to_string(),
+        })
+        .collect();
     Ok(parts?.join(" "))
 }
 
@@ -2172,13 +2156,13 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     )?;
     g.set(globals::INSTANCE, instance_lib)?;
 
+    install_vector3(lua)?;
     let vector3_lib = lua.create_table()?;
-    vector3_lib.set(
-        constructors::NEW,
-        lua.create_function(|_, (x, y, z): (Option<f32>, Option<f32>, Option<f32>)| {
-            Ok(LuaVector3(Vec3::new(x.unwrap_or(0.0), y.unwrap_or(0.0), z.unwrap_or(0.0))))
-        })?,
-    )?;
+    let new: mlua::Function = lua
+        .load("local create = vector.create\nreturn function(x, y, z) return create(x or 0, y or 0, z or 0) end")
+        .set_name("=Vector3.new")
+        .eval()?;
+    vector3_lib.set(constructors::NEW, new)?;
     vector3_lib.set(constructors::ZERO, LuaVector3(Vec3::ZERO))?;
     vector3_lib.set(constructors::ONE, LuaVector3(Vec3::ONE))?;
     g.set(globals::VECTOR3, vector3_lib)?;

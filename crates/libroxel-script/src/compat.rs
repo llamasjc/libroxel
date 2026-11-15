@@ -221,15 +221,15 @@ fn find_part_on_ray(lua: &Lua, ray: &Value, listed: Vec<InstanceId>, only: bool)
     match hit {
         Some((hit, material)) => {
             out.push_back(Value::UserData(push_instance(lua, hit.part)?));
-            out.push_back(Value::UserData(lua.create_userdata(LuaVector3(hit.position))?));
-            out.push_back(Value::UserData(lua.create_userdata(LuaVector3(hit.normal))?));
+            out.push_back(crate::bindings::vector_value(hit.position));
+            out.push_back(crate::bindings::vector_value(hit.normal));
             let material = material.unwrap_or(EnumValue::Material(libroxel_instance::Material::Plastic));
             out.push_back(Value::UserData(lua.create_userdata(LuaEnumItem(material))?));
         }
         None => {
             out.push_back(Value::Nil);
-            out.push_back(Value::UserData(lua.create_userdata(LuaVector3(ray.origin + ray.direction))?));
-            out.push_back(Value::UserData(lua.create_userdata(LuaVector3(Vec3::ZERO))?));
+            out.push_back(crate::bindings::vector_value(ray.origin + ray.direction));
+            out.push_back(crate::bindings::vector_value(Vec3::ZERO));
             let air = EnumValue::Material(libroxel_instance::Material::Air);
             out.push_back(Value::UserData(lua.create_userdata(LuaEnumItem(air))?));
         }
@@ -697,7 +697,7 @@ pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> m
             let v = humanoid_velocity(lua, id);
             let flat = Vec3::new(v.x, 0.0, v.z);
             let dir = if flat.length() > 0.1 { flat.normalize_or_zero() } else { Vec3::ZERO };
-            Value::UserData(lua.create_userdata(LuaVector3(dir))?)
+            crate::bindings::vector_value(dir)
         }
         DISPLAY_NAME if class == ClassKind::Humanoid => {
             let host = host(lua);
