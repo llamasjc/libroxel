@@ -274,6 +274,9 @@ pub(crate) struct Host {
     /// The weak-valued table of each instance's one userdata, by its id's
     /// bits (kept here so finding it doesn't go through the registry).
     instance_cache: RefCell<Option<Table>>,
+    /// A Luau function that turns a list of instance numbers into their
+    /// objects in place (see [`instance_list`]).
+    fill_instances: RefCell<Option<Function>>,
     pub(crate) tree: SharedTree,
     connections: RefCell<Connections>,
     next_connection: Cell<u64>,
@@ -754,6 +757,22 @@ pub(crate) fn push_instance(lua: &Lua, id: InstanceId) -> mlua::Result<AnyUserDa
     Ok(ud)
 }
 
+/// A script table holding the objects for `ids`, in order.
+pub(crate) fn instance_list(lua: &Lua, ids: Vec<InstanceId>) -> mlua::Result<Table> {
+    let out = lua.create_sequence_from(ids.into_iter().map(|id| id.to_bits() as f64))?;
+    let fill = host(lua).fill_instances.borrow().clone();
+    match fill {
+        Some(fill) => fill.call::<()>(&out)?,
+        None => {
+            for i in 1..=out.raw_len() {
+                let key: f64 = out.raw_get(i)?;
+                out.raw_set(i, push_instance(lua, InstanceId::from_bits(key as u64))?)?;
+            }
+        }
+    }
+    Ok(out)
+}
+
 pub(crate) fn as_instance(value: &Value) -> Option<InstanceId> {
     match value {
         Value::UserData(ud) => ud.borrow::<LuaInstance>().ok().map(|i| i.0),
@@ -1039,7 +1058,7 @@ impl UserData for LuaInstance {
         });
         methods.add_method(GET_CHILDREN, |lua, this, ()| {
             let children = host(lua).tree.borrow().children(this.0).map_err(tree_err)?.to_vec();
-            children.into_iter().map(|id| push_instance(lua, id)).collect::<mlua::Result<Vec<_>>>()
+            instance_list(lua, children)
         });
         methods.add_method(GET_DESCENDANTS, |lua, this, ()| {
             let all = {
@@ -1052,11 +1071,7 @@ impl UserData for LuaInstance {
                     tree.descendants(this.0).map_err(tree_err)?
                 }
             };
-            let out = lua.create_table_with_capacity(all.len(), 0)?;
-            for (i, id) in all.into_iter().enumerate() {
-                out.raw_set(i + 1, push_instance(lua, id)?)?;
-            }
-            Ok(out)
+            instance_list(lua, all)
         });
         methods.add_method(IS_A, |lua, this, name: String| is_a(lua, this.0, &name));
         methods.add_method(IS_DESCENDANT_OF, |lua, this, other: Value| {
@@ -2079,6 +2094,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         net: RefCell::new(Default::default()),
         groups: RefCell::new(Default::default()),
         instance_cache: RefCell::new(None),
+        fill_instances: RefCell::new(None),
     });
 
     // Weak-valued cache so each instance has exactly one userdata.
@@ -2087,6 +2103,24 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     cache_meta.set("__mode", "v")?;
     cache.set_metatable(Some(cache_meta))?;
     *host(lua).instance_cache.borrow_mut() = Some(cache.clone());
+    // Lists of instances are filled in Luau: a cache lookup there is a
+    // fraction of what each one costs from Rust; only new objects come back.
+    let make = lua.create_function(|lua, key: f64| push_instance(lua, InstanceId::from_bits(key as u64)))?;
+    let fill: Function = lua
+        .load(
+            "local cache, make = ...\n\
+             return function(t)\n\
+                 for i = 1, #t do\n\
+                     local key = t[i]\n\
+                     local u = cache[key]\n\
+                     if u == nil then u = make(key) end\n\
+                     t[i] = u\n\
+                 end\n\
+             end",
+        )
+        .set_name("=instances")
+        .call((cache.clone(), make))?;
+    *host(lua).fill_instances.borrow_mut() = Some(fill);
     lua.set_named_registry_value(INSTANCE_CACHE, cache)?;
 
     let g = lua.globals();
