@@ -15,6 +15,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use bevy::platform::collections::HashMap as FastMap;
+
 use bevy::math::{EulerRot, Mat3, Quat, Vec3 as GVec3};
 use libroxel_instance::{
     ClassKind, EnumValue, InstanceId, InstanceTree, PartShape, Property, PropertyValue, Vec3,
@@ -51,6 +53,8 @@ const NEAR_MOVERS_MIN: usize = 2000;
 const MOVER_MARGIN: f32 = 8.0;
 /// Boxes covering more cells than this are compared with everything.
 const MAX_CELLS: i64 = 64;
+/// The size of the broadphase's coarse cells (for big boxes), in studs.
+const COARSE_CELL: f32 = 64.0;
 /// Moving boxes climb onto anything whose top is at most this far above their bottom.
 pub const STEP_HEIGHT: f32 = 0.6;
 /// Terrain is made of one-stud steps, so moving things climb those.
@@ -446,6 +450,28 @@ pub struct Physics {
     joints: Vec<JointSpec>,
     /// Collision groups that pass through each other, and each part's group.
     groups: Groups,
+    /// Where steps have spent their time, for the speed report.
+    timing: PhysicsTiming,
+}
+
+/// Where physics steps spent their time (seconds, summed over `steps`), and
+/// how much they had to do: for the speed report.
+#[derive(Debug, Default, Clone)]
+pub struct PhysicsTiming {
+    pub steps: u32,
+    /// Finding the parts near anything that moves, and reading them.
+    pub gather: f64,
+    /// Finding which boxes could meet.
+    pub broadphase: f64,
+    /// Walking characters.
+    pub characters: f64,
+    /// Loose parts (the rigid body solver).
+    pub loose: f64,
+    /// Touched and TouchEnded.
+    pub touches: f64,
+    /// Bodies looked at, moving ones, and loose parts, summed over steps.
+    pub bodies: u64,
+    pub movers: u64,
 }
 
 /// Which collision groups pass through each other, and which group each
@@ -493,6 +519,11 @@ fn ordered(a: InstanceId, b: InstanceId) -> (InstanceId, InstanceId) {
 }
 
 impl Physics {
+    /// Where steps spent their time since the last call.
+    pub fn take_timing(&mut self) -> PhysicsTiming {
+        std::mem::take(&mut self.timing)
+    }
+
     pub fn velocity(&self, id: InstanceId) -> Vec3 {
         self.velocities.get(&id).copied().unwrap_or_default()
     }
@@ -859,11 +890,19 @@ impl Physics {
 
     /// Advances the simulation by `dt` seconds.
     pub fn step(&mut self, tree: &mut InstanceTree, dt: f32) -> StepResult {
+        let mut clock = std::time::Instant::now();
+        let mut lap = || {
+            let now = std::time::Instant::now();
+            let took = (now - clock).as_secs_f64();
+            clock = now;
+            took
+        };
         let gravity = tree.get_number(tree.workspace(), Property::Gravity).map_or(GRAVITY, |g| g as f32);
         // Which parts are near anything that moves: found once a step (the
         // touch check after the move reuses it; nothing moves far in a step).
         let parts = self.parts_near_movers(tree);
         let mut bodies = self.collect_bodies(tree, &parts, dt, gravity, false);
+        let mut gather = lap();
         self.groups.refresh(tree, bodies.iter().map(|b| b.id));
         let fallen_height = fallen_parts_height(tree);
         let live: HashSet<InstanceId> = bodies.iter().map(|b| b.id).collect();
@@ -879,12 +918,15 @@ impl Physics {
         // Characters first, against the world as it stands.
         let substeps = ((dt / MAX_SUBSTEP).ceil() as usize).clamp(1, MAX_SUBSTEPS);
         let h = dt / substeps as f32;
+        lap();
         let near = self.broadphase(&bodies, dt, gravity);
+        let mut broadphase = lap();
         for _ in 0..substeps {
             self.integrate(&mut bodies, &near, h, gravity);
         }
 
         // Then everything loose, shoved by where the characters went.
+        let characters = lap();
         let specs = self.specs(tree, &bodies);
         let voxels = tree.terrain().and_then(|t| tree.voxels(t).ok());
         let moved = self.rigid.step(
@@ -899,6 +941,7 @@ impl Physics {
             dt,
         );
 
+        let loose = lap();
         let mut result = StepResult::default();
         for body in &bodies {
             if body.anchored || body.held || body.sim {
@@ -928,8 +971,11 @@ impl Physics {
         }
 
         // Touch detection, where everything is now: only pairs where something can move.
+        lap();
         let bodies = self.collect_bodies(tree, &parts, dt, gravity, true);
+        gather += lap();
         let near = self.broadphase(&bodies, dt, gravity);
+        broadphase += lap();
         let mut current = HashSet::new();
         for (i, a) in bodies.iter().enumerate() {
             if a.anchored {
@@ -945,6 +991,16 @@ impl Physics {
                 }
             }
         }
+        let touch_time = lap();
+        let t = &mut self.timing;
+        t.steps += 1;
+        t.gather += gather;
+        t.broadphase += broadphase;
+        t.characters += characters;
+        t.loose += loose;
+        t.touches += touch_time;
+        t.bodies += bodies.len() as u64;
+        t.movers += bodies.iter().filter(|b| !b.anchored).count() as u64;
         let mut touches: Vec<_> = current.difference(&self.contacts).copied().collect();
         touches.sort();
         result.touches = touches;
@@ -984,23 +1040,50 @@ impl Physics {
                 (b.min() - r, b.max() + r)
             })
             .collect();
+        // Two grids: small boxes in fine cells, big ones (floors, walls) in
+        // coarse cells, and only the giant ones (a baseplate) are checked
+        // against everything. A map with hundreds of big floor parts would
+        // otherwise compare every mover with every one of them.
+        // Only movers go in the grids (fine cells for small ones, coarse
+        // cells as well for big boxes to find them by); every box then looks
+        // up the movers in its own cells. Most boxes are anchored and never
+        // need a cell of their own, and a map with hundreds of big floor
+        // parts doesn't compare every mover with every one of them.
         let cell_of = |v: f32| (v / CELL).floor() as i32;
-        let mut grid: HashMap<(i32, i32, i32), Vec<usize>> = HashMap::new();
-        let mut huge = Vec::new();
-        for (i, (lo, hi)) in grown.iter().enumerate() {
-            let (x0, y0, z0) = (cell_of(lo.x), cell_of(lo.y), cell_of(lo.z));
-            let (x1, y1, z1) = (cell_of(hi.x), cell_of(hi.y), cell_of(hi.z));
-            let cells = (x1 - x0 + 1) as i64 * (y1 - y0 + 1) as i64 * (z1 - z0 + 1) as i64;
-            if cells > MAX_CELLS {
-                huge.push(i);
-                continue;
-            }
-            for x in x0..=x1 {
-                for y in y0..=y1 {
-                    for z in z0..=z1 {
-                        grid.entry((x, y, z)).or_default().push(i);
+        let coarse_of = |v: f32| (v / COARSE_CELL).floor() as i32;
+        let span = |lo: Vec3, hi: Vec3, of: &dyn Fn(f32) -> i32| {
+            let (a, b) = ((of(lo.x), of(lo.y), of(lo.z)), (of(hi.x), of(hi.y), of(hi.z)));
+            let cells = (b.0 - a.0 + 1) as i64 * (b.1 - a.1 + 1) as i64 * (b.2 - a.2 + 1) as i64;
+            (a, b, cells)
+        };
+        // (A fast hash: these maps are rebuilt twice a frame.)
+        let mut fine: FastMap<(i32, i32, i32), Vec<usize>> = FastMap::default();
+        let mut coarse: FastMap<(i32, i32, i32), Vec<usize>> = FastMap::default();
+        // Movers too big for fine cells, and ones too big even for coarse cells.
+        let (mut big_movers, mut giant_movers) = (Vec::new(), Vec::new());
+        let add =
+            |grid: &mut FastMap<(i32, i32, i32), Vec<usize>>, a: (i32, i32, i32), b: (i32, i32, i32), i| {
+                for x in a.0..=b.0 {
+                    for y in a.1..=b.1 {
+                        for z in a.2..=b.2 {
+                            grid.entry((x, y, z)).or_default().push(i);
+                        }
                     }
                 }
+            };
+        for i in (0..n).filter(|i| !bodies[*i].anchored) {
+            let (lo, hi) = grown[i];
+            let (a, b, cells) = span(lo, hi, &coarse_of);
+            if cells > MAX_CELLS {
+                giant_movers.push(i);
+                continue;
+            }
+            add(&mut coarse, a, b, i);
+            let (a, b, cells) = span(lo, hi, &cell_of);
+            if cells > MAX_CELLS {
+                big_movers.push(i);
+            } else {
+                add(&mut fine, a, b, i);
             }
         }
         let meet = |a: &(Vec3, Vec3), b: &(Vec3, Vec3)| {
@@ -1012,25 +1095,46 @@ impl Physics {
                 && b.0.z <= a.1.z
         };
         let mut near = vec![Vec::new(); n];
-        for i in 0..n {
-            if bodies[i].anchored {
-                continue;
-            }
-            let (lo, hi) = grown[i];
-            let mut found = huge.clone();
-            for x in cell_of(lo.x)..=cell_of(hi.x) {
-                for y in cell_of(lo.y)..=cell_of(hi.y) {
-                    for z in cell_of(lo.z)..=cell_of(hi.z) {
+        let mut found: Vec<usize> = Vec::new();
+        for j in 0..n {
+            let (lo, hi) = grown[j];
+            found.clear();
+            found.extend_from_slice(&giant_movers);
+            let (a, b, cells) = span(lo, hi, &cell_of);
+            let (grid, a, b) = if cells <= MAX_CELLS {
+                found.extend_from_slice(&big_movers);
+                (&fine, a, b)
+            } else {
+                let (a, b, cells) = span(lo, hi, &coarse_of);
+                if cells > MAX_CELLS {
+                    // A giant box (a baseplate): every mover is a candidate.
+                    for m in (0..n).filter(|m| !bodies[*m].anchored && *m != j) {
+                        if meet(&grown[m], &grown[j]) {
+                            near[m].push(j);
+                        }
+                    }
+                    continue;
+                }
+                (&coarse, a, b)
+            };
+            for x in a.0..=b.0 {
+                for y in a.1..=b.1 {
+                    for z in a.2..=b.2 {
                         if let Some(list) = grid.get(&(x, y, z)) {
                             found.extend_from_slice(list);
                         }
                     }
                 }
             }
-            found.sort_unstable();
-            found.dedup();
-            found.retain(|&j| j != i && meet(&grown[i], &grown[j]));
-            near[i] = found;
+            for &m in &found {
+                if m != j && meet(&grown[m], &grown[j]) {
+                    near[m].push(j);
+                }
+            }
+        }
+        for list in &mut near {
+            list.sort_unstable();
+            list.dedup();
         }
         near
     }
