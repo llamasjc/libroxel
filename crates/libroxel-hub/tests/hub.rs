@@ -15,6 +15,8 @@ fn beat(id: &str, secret: &str, kind: HostKind, players: u32) -> Heartbeat {
         max_players: 10,
         kind,
         game_id: None,
+        host_id: None,
+        host_signature: None,
     }
 }
 

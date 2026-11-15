@@ -16,6 +16,14 @@
 //! player id (the public half of the identity key on their computer).
 //! Every change is signed with that key, so no one else can change it, and
 //! games published with a signature show their author's account name.
+//! Setting a **password** keeps a sealed copy of that key on the Hub, so the
+//! player can sign in on another computer (see [`seal_password`]); the
+//! password itself never leaves their computer.
+//!
+//! Hosts can sign their listing too, so the server list shows which
+//! account really hosts each server. A Hub limits how fast any one address
+//! can make accounts, guess passwords, publish or report, and keeps names
+//! that look official, or that someone gave up recently, from being taken.
 //!
 //! Friends and **presence** live here too: players send and accept friend
 //! requests (each one signed), and the app tells the Hub every few seconds
@@ -30,14 +38,21 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use axum::extract::{Path as UrlPath, Query, State};
+use axum::extract::{Extension, FromRef, Path as UrlPath, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
+mod limits;
+mod password;
 mod social;
+use limits::{Caller, Limit, Limits, too_many};
+pub use password::{
+    MIN_PASSWORD, PASSWORD_MEMORY_KIB, PASSWORD_PASSES, PasswordSet, SignIn, SignInSalt, SignedIn,
+    password_message, password_problem, seal_password, seal_password_with, sign_in_message,
+};
 pub use social::{
     Friend, FriendAction, FriendChange, FriendState, Friends, PresenceUpdate, friend_message,
     friends_list_message, presence_message,
@@ -126,6 +141,18 @@ pub struct Heartbeat {
     /// a starter game. Servers that say put the game on its own list.
     #[serde(default)]
     pub game_id: Option<String>,
+    /// The player hosting it, to show their account on the list.
+    #[serde(default)]
+    pub host_id: Option<String>,
+    /// [`host_message`] signed with that player's identity key.
+    #[serde(default)]
+    pub host_signature: Option<String>,
+}
+
+/// What a host signs to show a listed server is theirs: its id and its
+/// secret, which only they know.
+pub fn host_message(server_id: &str, secret: &str) -> Vec<u8> {
+    format!("libroxel host\n{server_id}\n{secret}").into_bytes()
 }
 
 /// A live server as the list shows it.
@@ -143,6 +170,13 @@ pub struct ServerInfo {
     /// Which game it runs, if it said (see [`Heartbeat::game_id`]).
     #[serde(default)]
     pub game_id: Option<String>,
+    /// The account name of whoever hosts it, when they signed the listing
+    /// and have an account here. The server's own name is whatever the host
+    /// typed; this is checked.
+    #[serde(default)]
+    pub host: Option<String>,
+    #[serde(default)]
+    pub host_id: Option<String>,
 }
 
 /// What `GET /` answers, so a client can check it reached a Hub.
@@ -215,6 +249,38 @@ pub fn account_message(
 pub fn valid_account_name(name: &str) -> bool {
     (3..=20).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
+
+/// Names no player can claim, so no one passes for whoever runs the Hub.
+const RESERVED_NAMES: &[&str] = &[
+    "admin",
+    "administrator",
+    "mod",
+    "moderator",
+    "staff",
+    "support",
+    "official",
+    "system",
+    "owner",
+    "hub",
+    "server",
+    "root",
+    "help",
+    "everyone",
+    "nobody",
+    "someone",
+    "player",
+    "guest",
+];
+
+/// Whether `name` is kept back from players (whatever the case).
+pub fn reserved_account_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let bare = name.trim_matches(|c: char| c == '_' || c.is_ascii_digit());
+    RESERVED_NAMES.contains(&bare) || bare.starts_with("libroxel")
+}
+
+/// How long a name someone gave up stays theirs to take back, in seconds.
+pub const NAME_HELD_FOR_SECS: i64 = 30 * 24 * 60 * 60;
 
 /// Sharing something to wear in the catalog.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -392,6 +458,25 @@ struct Secret {
 
 type Db = Arc<Mutex<Connection>>;
 
+/// Everything the Hub's routes share.
+#[derive(Clone)]
+struct Hub {
+    db: Db,
+    limits: Arc<Limits>,
+}
+
+impl FromRef<Hub> for Db {
+    fn from_ref(hub: &Hub) -> Db {
+        hub.db.clone()
+    }
+}
+
+impl FromRef<Hub> for Arc<Limits> {
+    fn from_ref(hub: &Hub) -> Arc<Limits> {
+        hub.limits.clone()
+    }
+}
+
 fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
@@ -467,6 +552,11 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
             look        TEXT NOT NULL,
             signed_at   INTEGER NOT NULL,
             created     INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS released_names (
+            name        TEXT PRIMARY KEY COLLATE NOCASE,
+            player_id   TEXT NOT NULL,
+            released    INTEGER NOT NULL
         );",
     )
     .map_err(|e| format!("could not set up the Hub database: {e}"))?;
@@ -474,23 +564,35 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     let _ = db.execute("ALTER TABLE games ADD COLUMN author_id TEXT", []);
     // Hubs from before per-game server lists.
     let _ = db.execute("ALTER TABLE servers ADD COLUMN game_id TEXT", []);
+    // Hubs from before signed hosts.
+    let _ = db.execute("ALTER TABLE servers ADD COLUMN host_id TEXT", []);
     social::create_tables(&db)?;
+    password::create_tables(&db)?;
     Ok(db)
 }
 
 /// The Hub's routes over `db`.
+///
+/// Serve it with `into_make_service_with_connect_info::<SocketAddr>()` so
+/// rate limits count each caller on their own; otherwise every caller
+/// shares one count.
 pub fn router(db: Connection) -> Router {
-    let db: Db = Arc::new(Mutex::new(db));
+    let hub = Hub { db: Arc::new(Mutex::new(db)), limits: Arc::default() };
+    // Only publishing carries a whole place; everything else is small.
+    let big = axum::extract::DefaultBodyLimit::max(MAX_PLACE * 2 + 64 * 1024);
     Router::new()
         .route("/", get(status))
         .route("/servers", get(list_servers))
         .route("/servers/heartbeat", post(heartbeat))
         .route("/servers/{id}", delete(remove_server))
-        .route("/games", get(list_games).post(publish))
+        .route("/games", get(list_games).post(publish).layer(big))
         .route("/games/{id}", get(game_info).delete(unpublish))
         .route("/games/{id}/place", get(download))
         .route("/accounts", get(find_people).post(update_account))
         .route("/accounts/{id}", get(profile))
+        .route("/accounts/password", post(password::set_password))
+        .route("/accounts/sign-in", post(password::sign_in))
+        .route("/accounts/sign-in/{name}", get(password::sign_in_salt))
         .route("/catalog", get(list_items).post(share_item))
         .route("/catalog/{id}", delete(unlist_item))
         .route("/catalog/{id}/wear", post(wear_item))
@@ -498,9 +600,9 @@ pub fn router(db: Connection) -> Router {
         .route("/friends", post(social::change_friend))
         .route("/friends/{id}", get(social::list_friends))
         .route("/presence", post(social::update_presence))
-        // Room for a big place, written out as JSON inside a JSON request.
-        .layer(axum::extract::DefaultBodyLimit::max(MAX_PLACE * 2 + 64 * 1024))
-        .with_state(db)
+        .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
+        .layer(axum::middleware::from_fn_with_state(hub.limits.clone(), limits::every_request))
+        .with_state(hub)
 }
 
 async fn status(State(db): State<Db>) -> Json<HubStatus> {
@@ -617,8 +719,13 @@ async fn download(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<
 
 async fn publish(
     State(db): State<Db>,
+    State(limits): State<Arc<Limits>>,
+    Extension(caller): Extension<Caller>,
     Json(game): Json<Publish>,
 ) -> Result<Json<Published>, (StatusCode, String)> {
+    if !limits.take(Limit::Share, &caller.0) {
+        return Err(too_many("games and items shared"));
+    }
     let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
     if game.secret.len() < 16 {
         return bad("publishing needs a secret of 16 or more characters");
@@ -686,6 +793,8 @@ async fn publish(
 
 async fn update_account(
     State(db): State<Db>,
+    State(limits): State<Arc<Limits>>,
+    Extension(caller): Extension<Caller>,
     Json(account): Json<AccountUpdate>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
@@ -711,14 +820,21 @@ async fn update_account(
     }
     let db = db.lock().unwrap();
     let internal = |e: rusqlite::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
-    let last: Option<i64> = db
-        .query_row("SELECT signed_at FROM accounts WHERE player_id = ?1", params![account.player_id], |r| {
-            r.get(0)
-        })
+    let last: Option<(i64, String)> = db
+        .query_row(
+            "SELECT signed_at, name FROM accounts WHERE player_id = ?1",
+            params![account.player_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .optional()
         .map_err(internal)?;
-    if last.is_some_and(|last| account.time <= last) {
+    if last.as_ref().is_some_and(|(last, _)| account.time <= *last) {
         return Err((StatusCode::CONFLICT, "a newer change to that account is already here".into()));
+    }
+    let old_name = last.map(|(_, name)| name);
+    let renaming = !old_name.as_ref().is_some_and(|old| old.eq_ignore_ascii_case(&account.name));
+    if renaming && reserved_account_name(&account.name) {
+        return bad("that name is kept for whoever runs the Hub");
     }
     let taken: Option<String> = db
         .query_row("SELECT player_id FROM accounts WHERE name = ?1", params![account.name], |r| r.get(0))
@@ -727,6 +843,32 @@ async fn update_account(
     if taken.is_some_and(|owner| owner != account.player_id) {
         return Err((StatusCode::CONFLICT, format!("someone already has the name {}", account.name)));
     }
+    let held: Option<String> = db
+        .query_row(
+            "SELECT player_id FROM released_names WHERE name = ?1 AND released >= ?2",
+            params![account.name, now - NAME_HELD_FOR_SECS],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(internal)?;
+    if held.is_some_and(|owner| owner != account.player_id) {
+        return Err((
+            StatusCode::CONFLICT,
+            format!("{} was someone else's name until recently; it stays theirs for 30 days", account.name),
+        ));
+    }
+    if old_name.is_none() && !limits.take(Limit::NewAccount, &caller.0) {
+        return Err(too_many("new accounts"));
+    }
+    if let Some(old) = old_name.filter(|_| renaming) {
+        db.execute(
+            "INSERT INTO released_names (name, player_id, released) VALUES (?1, ?2, ?3)
+             ON CONFLICT(name) DO UPDATE SET player_id = ?2, released = ?3",
+            params![old, account.player_id, now],
+        )
+        .map_err(internal)?;
+    }
+    db.execute("DELETE FROM released_names WHERE name = ?1", params![account.name]).map_err(internal)?;
     db.execute(
         "INSERT INTO accounts (player_id, name, about, look, signed_at, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(player_id) DO UPDATE SET name = ?2, about = ?3, look = ?4, signed_at = ?5",
@@ -738,8 +880,13 @@ async fn update_account(
 
 async fn share_item(
     State(db): State<Db>,
+    State(limits): State<Arc<Limits>>,
+    Extension(caller): Extension<Caller>,
     Json(item): Json<NewItem>,
 ) -> Result<Json<Item>, (StatusCode, String)> {
+    if !limits.take(Limit::Share, &caller.0) {
+        return Err(too_many("games and items shared"));
+    }
     let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
     if item.kind != "hat" {
         return bad("the catalog only takes hats for now");
@@ -844,8 +991,13 @@ async fn unlist_item(
 
 async fn report(
     State(db): State<Db>,
+    State(limits): State<Arc<Limits>>,
+    Extension(caller): Extension<Caller>,
     Json(report): Json<Report>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    if !limits.take(Limit::Report, &caller.0) {
+        return Err(too_many("reports"));
+    }
     let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
     if report.kind != "game" && report.kind != "item" {
         return bad("only games and items can be reported");
@@ -988,7 +1140,8 @@ async fn unpublish(
 }
 
 /// The columns [`server_row`] reads, from `servers`.
-const SERVER_COLUMNS: &str = "server_id, name, game, code, players, max_players, kind, last_seen, game_id";
+const SERVER_COLUMNS: &str = "server_id, name, game, code, players, max_players, kind, last_seen, game_id,
+    (SELECT a.name FROM accounts a WHERE a.player_id = servers.host_id), host_id";
 
 fn server_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<ServerInfo> {
     Ok(ServerInfo {
@@ -1001,6 +1154,8 @@ fn server_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<ServerInfo> {
         kind: HostKind::from_rank(r.get(6)?),
         seen_secs_ago: now - r.get::<_, i64>(7)?,
         game_id: r.get(8)?,
+        host: r.get(9)?,
+        host_id: r.get(10)?,
     })
 }
 
@@ -1044,14 +1199,23 @@ async fn heartbeat(
     if owner.is_some_and(|s| s != beat.secret) {
         return Err((StatusCode::FORBIDDEN, "another host owns that server_id".into()));
     }
+    let host_id = match (&beat.host_id, &beat.host_signature) {
+        (Some(id), Some(signature)) => {
+            if !verify(id, &host_message(&beat.server_id, &beat.secret), signature) {
+                return Err((StatusCode::FORBIDDEN, "the host's signature does not match".into()));
+            }
+            Some(id.clone())
+        }
+        _ => None,
+    };
     let name = if beat.name.trim().is_empty() { "Unnamed server".to_owned() } else { clip(&beat.name) };
     let game = if beat.game.trim().is_empty() { "Untitled game".to_owned() } else { clip(&beat.game) };
     db.execute(
         "INSERT INTO servers (server_id, secret, name, game, code, players, max_players, kind, first_seen, last_seen,
-             game_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10)
+             game_id, host_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11)
          ON CONFLICT(server_id) DO UPDATE SET name = ?3, game = ?4, code = ?5, players = ?6,
-             max_players = ?7, kind = ?8, last_seen = ?9, game_id = ?10",
+             max_players = ?7, kind = ?8, last_seen = ?9, game_id = ?10, host_id = ?11",
         params![
             clip(&beat.server_id),
             beat.secret,
@@ -1062,7 +1226,8 @@ async fn heartbeat(
             beat.max_players,
             beat.kind.rank(),
             now,
-            beat.game_id.as_deref().map(str::trim).filter(|g| !g.is_empty()).map(clip)
+            beat.game_id.as_deref().map(str::trim).filter(|g| !g.is_empty()).map(clip),
+            host_id
         ],
     )
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1121,7 +1286,8 @@ pub fn start(addr: SocketAddr, db_path: Option<&Path>) -> Result<RunningHub, Str
         .spawn(move || {
             runtime.block_on(async move {
                 let Ok(listener) = tokio::net::TcpListener::from_std(listener) else { return };
-                let _ = axum::serve(listener, router(db))
+                let app = router(db).into_make_service_with_connect_info::<SocketAddr>();
+                let _ = axum::serve(listener, app)
                     .with_graceful_shutdown(async {
                         let _ = stopped.await;
                     })
@@ -1146,7 +1312,7 @@ pub fn run(addr: SocketAddr, db_path: &Path) -> Result<(), String> {
             "Point players at it with the Hub address in Browse, or LIBROXEL_HUB=http://<this computer>:{}",
             addr.port()
         );
-        axum::serve(listener, router(db))
+        axum::serve(listener, router(db).into_make_service_with_connect_info::<SocketAddr>())
             .with_graceful_shutdown(async {
                 let _ = tokio::signal::ctrl_c().await;
                 println!("Hub stopped.");
@@ -1302,6 +1468,64 @@ impl HubClient {
                     Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
                 }
             })
+    }
+
+    /// Sets or changes this account's password (see [`seal_password`]).
+    pub fn set_password(&self, set: &PasswordSet) -> Result<(), String> {
+        self.agent
+            .post(format!("{}/accounts/password", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(set)
+            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .and_then(|mut r| {
+                if r.status().is_success() {
+                    Ok(())
+                } else {
+                    Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+                }
+            })
+    }
+
+    /// Signs in to the account called `name` with its password, and gives
+    /// back its identity key (32 bytes) to keep on this computer. The
+    /// password is stretched here and never sent. Takes a moment.
+    pub fn sign_in(&self, name: &str, password: &str) -> Result<[u8; 32], String> {
+        let name = name.trim();
+        let answer = |r: Result<ureq::http::Response<ureq::Body>, ureq::Error>| {
+            let mut r = r.map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))?;
+            if r.status().is_success() {
+                Ok(r)
+            } else {
+                Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+            }
+        };
+        let salt: SignInSalt = answer(
+            self.agent
+                .get(format!("{}/accounts/sign-in/{name}", self.base))
+                .config()
+                .http_status_as_error(false)
+                .build()
+                .call(),
+        )?
+        .body_mut()
+        .read_json()
+        .map_err(|e| e.to_string())?;
+        let time = social::now_ms();
+        let (attempt, seal) = password::sign_in_with(name, password, &salt, time)?;
+        let signed_in: SignedIn = answer(
+            self.agent
+                .post(format!("{}/accounts/sign-in", self.base))
+                .config()
+                .http_status_as_error(false)
+                .build()
+                .send_json(&attempt),
+        )?
+        .body_mut()
+        .read_json()
+        .map_err(|e| e.to_string())?;
+        password::open_sealed(&seal, &signed_in)
     }
 
     /// A player's page, by player id or account name.
@@ -1464,6 +1688,17 @@ pub struct Listing {
     pub game_id: Option<String>,
 }
 
+/// Signs a message with a player's identity key, as [`sign`] does.
+pub type SignWith = Arc<dyn Fn(&[u8]) -> String + Send + Sync>;
+
+/// Signs a listing as a player's, so the list shows their account.
+#[derive(Clone)]
+pub struct HostSigner {
+    pub player_id: String,
+    /// Signs a message with that player's identity key, as [`sign`] does.
+    pub sign: SignWith,
+}
+
 /// Keeps a hosted game on a Hub's list from a background thread. Update the
 /// shared [`Listing`] as players come and go; dropping the announcer takes
 /// the game off the list.
@@ -1478,6 +1713,17 @@ impl Announcer {
     /// Starts announcing to `hub`. Nothing is sent until the listing has a
     /// join code.
     pub fn start(hub: HubClient, server_id: String, listing: Listing) -> Self {
+        Self::start_signed(hub, server_id, listing, None)
+    }
+
+    /// [`Announcer::start`], with the listing signed by `host` so the list
+    /// shows who hosts it.
+    pub fn start_signed(
+        hub: HubClient,
+        server_id: String,
+        listing: Listing,
+        host: Option<HostSigner>,
+    ) -> Self {
         let listing = Arc::new(Mutex::new(listing));
         let status = Arc::new(Mutex::new(None));
         let (stop, stopped) = std::sync::mpsc::channel::<()>();
@@ -1487,6 +1733,7 @@ impl Announcer {
             .spawn(move || {
                 let (listing, status) = shared;
                 let secret = new_secret();
+                let host_signature = host.as_ref().map(|h| (h.sign)(&host_message(&server_id, &secret)));
                 let mut sent = false;
                 loop {
                     let now = listing.lock().unwrap().clone();
@@ -1501,6 +1748,8 @@ impl Announcer {
                             max_players: now.max_players,
                             kind: now.kind,
                             game_id: now.game_id,
+                            host_id: host.as_ref().map(|h| h.player_id.clone()),
+                            host_signature: host_signature.clone(),
                         };
                         let result = hub.heartbeat(&beat);
                         sent |= result.is_ok();

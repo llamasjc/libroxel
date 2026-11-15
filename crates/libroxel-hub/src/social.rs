@@ -23,7 +23,7 @@ const LIST_SLACK_MS: i64 = 10 * 60 * 1000;
 /// The most friends (and requests) one player keeps.
 pub const MAX_FRIENDS: i64 = 200;
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
@@ -177,7 +177,7 @@ fn internal(e: rusqlite::Error) -> Failure {
 
 /// Checks a signed time is near now and newer than the player's last one
 /// of this `kind`, and remembers it.
-fn fresh(db: &Connection, player_id: &str, kind: &str, time: i64) -> Result<(), Failure> {
+pub(crate) fn fresh(db: &Connection, player_id: &str, kind: &str, time: i64) -> Result<(), Failure> {
     if (time - now_ms()).abs() > CLOCK_SLACK_MS {
         return Err((StatusCode::BAD_REQUEST, "this computer's clock is too far off".into()));
     }

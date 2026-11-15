@@ -85,6 +85,47 @@ impl Identity {
         }
     }
 
+    /// The identity whose secret key is `bytes`, such as one signed in to
+    /// with a password.
+    pub fn from_secret_bytes(bytes: &[u8; 32]) -> Self {
+        Self { key: SecretKey::from_bytes(bytes) }
+    }
+
+    /// The secret key itself. Only for sealing it with a password; never
+    /// send it anywhere.
+    pub fn secret_bytes(&self) -> [u8; 32] {
+        self.key.to_bytes()
+    }
+
+    /// Saves this identity at `path` in place of whatever is there. A
+    /// different identity already there is kept beside it as
+    /// `<name>.old-<seconds since 1970>`, whose path comes back, so no
+    /// account is ever lost by signing in to another.
+    pub fn save_replacing(&self, path: &Path) -> std::io::Result<Option<std::path::PathBuf>> {
+        let mut kept = None;
+        match std::fs::read(path) {
+            Ok(old) if old == self.key.to_bytes() => return Ok(None),
+            Ok(_) => {
+                let secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                let mut name = path.file_name().unwrap_or_default().to_os_string();
+                name.push(format!(".old-{secs}"));
+                let old_path = path.with_file_name(name);
+                std::fs::rename(path, &old_path)?;
+                kept = Some(old_path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if let Some(dir) = path.parent() {
+                    std::fs::create_dir_all(dir)?;
+                }
+            }
+            Err(e) => return Err(e),
+        }
+        write_private(path, &self.key.to_bytes())?;
+        Ok(kept)
+    }
+
     /// The player's permanent ID: their public key, as text.
     pub fn player_id(&self) -> String {
         self.key.public().to_string()

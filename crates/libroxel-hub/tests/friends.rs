@@ -110,6 +110,8 @@ fn friends_ask_accept_see_each_other_and_join() {
         max_players: 8,
         kind: HostKind::Player,
         game_id: Some("starter:Kart race".into()),
+        host_id: None,
+        host_signature: None,
     })
     .unwrap();
     ana.presence(&hub, true, Some(&ana.id));
@@ -178,6 +180,8 @@ fn published_games_count_their_players() {
             max_players: 10,
             kind: HostKind::Community,
             game_id: Some(published.game_id.clone()),
+            host_id: None,
+            host_signature: None,
         })
         .unwrap();
     }

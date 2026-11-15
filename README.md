@@ -195,6 +195,21 @@ The first build compiles Bevy and takes a while. After that it is quick.
   it or publish as you. Games you publish show your account name, and
   clicking an author in Online lists all their games. Your account name is
   also the name you play as, unless you type another.
+- **Passwords and signing in elsewhere:** under **Password** on the same
+  tab, set a password (10 or more characters) to use your account on
+  another computer or get it back if yours breaks. On the other computer,
+  open **Already have an account?** and sign in with your name and
+  password. The password is stretched with Argon2id on your computer and
+  never sent: the Hub only keeps a copy of your key sealed with it, and
+  hands that copy out only to someone who proves the password. Ten wrong
+  passwords for a name lock signing in to it for 15 minutes. Signing in
+  keeps this computer's old key beside the new one (`identity.key.old-…`).
+- **Names no one else can take:** a name stays yours on that Hub. Names
+  that look official (admin, moderator, staff, libroxel…) can't be
+  claimed, and a name you give up stays yours to take back for 30 days, so
+  no one can rename into it and pass for you. One address can make 5
+  accounts an hour, and every address is limited in how fast it calls the
+  Hub, publishes, shares and reports.
 - **Catalog:** make a hat in the editor from up to 32 parts (each at most
   6 studs across), select its model and use **Model > Share as hat**. Its
   bottom sits on the character's head, centred. It goes in the catalog on
@@ -272,7 +287,12 @@ The first build compiles Bevy and takes a while. After that it is quick.
   app pings each host itself for the ping column. Everything a player
   changes on the Hub (friend requests, where they are) is signed with
   their identity key, and only you can read your friends list and where
-  your friends are.
+  your friends are. Hosts sign their listing too, so server lists show
+  "hosted by" with the account the Hub checked, whatever the server is
+  called. Accounts, passwords and friends live in the Hub's SQLite file
+  (`hub.sqlite` in Libroxel's data folder, or `--data` for `libroxel hub`),
+  so they outlast a restart. For one account system for everyone, run
+  `libroxel hub` on a computer that stays on and point every app at it.
 - **Starter games:** three small finished games to play or build on. The
   **Sample obby** has coins, lava, TNT and a rover. **Kart race** is three
   laps round a track in karts, through blue gates in order, with laps and
