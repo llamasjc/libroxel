@@ -1675,6 +1675,7 @@ mod tests {
         let mut session =
             libroxel_engine::PlaySession::start_with_data(shared, r#"{"PlayerData": {"coins_1": 5}}"#)
                 .unwrap();
+        session.load_characters_now();
         frame(&mut session, 10);
         assert_eq!(leaderstat(&session, "Coins"), 5.0);
         let (hud, shop) = {
@@ -2277,7 +2278,8 @@ mod tests {
                 .and_then(|hud| child(&tree, hud, "CoinLabel"));
             label.is_some_and(|l| tree.get_string(l, Property::Text).as_deref() == Some("Coins: 0"))
         });
-        assert!(g_has(&guest, "Builder"), "the guest has the builder tool");
+        // Their character (and with it their tools) comes a moment after they join.
+        until(&mut host, &mut guest, "the builder tool", &|g| g_has(g, "Builder"));
 
         // Pressing 1 holds the builder; the host moves it into the guest's character.
         guest.input_began(UserInput::Key(KeyCode::One), false);
