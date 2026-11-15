@@ -17,6 +17,12 @@
 //! Every change is signed with that key, so no one else can change it, and
 //! games published with a signature show their author's account name.
 //!
+//! Friends and **presence** live here too: players send and accept friend
+//! requests (each one signed), and the app tells the Hub every few seconds
+//! whether its player is online and which server they are in, so their
+//! friends (and only their friends) can see it and join them. Servers say
+//! which game they run, so each game has its own server list.
+//!
 //! [`HubClient`] is the blocking client the editor and servers use.
 
 use std::net::SocketAddr;
@@ -30,6 +36,12 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
+
+mod social;
+pub use social::{
+    Friend, FriendAction, FriendChange, FriendState, Friends, PresenceUpdate, friend_message,
+    friends_list_message, presence_message,
+};
 
 /// The port a Hub listens on unless told otherwise.
 pub const DEFAULT_PORT: u16 = 7430;
@@ -110,6 +122,10 @@ pub struct Heartbeat {
     /// 0 means no limit.
     pub max_players: u32,
     pub kind: HostKind,
+    /// Which game it runs: a published game's id, or `starter:<name>` for
+    /// a starter game. Servers that say put the game on its own list.
+    #[serde(default)]
+    pub game_id: Option<String>,
 }
 
 /// A live server as the list shows it.
@@ -124,6 +140,9 @@ pub struct ServerInfo {
     pub kind: HostKind,
     /// Seconds since the host last announced itself.
     pub seen_secs_ago: i64,
+    /// Which game it runs, if it said (see [`Heartbeat::game_id`]).
+    #[serde(default)]
+    pub game_id: Option<String>,
 }
 
 /// What `GET /` answers, so a client can check it reached a Hub.
@@ -347,11 +366,19 @@ pub struct GameInfo {
     pub size: u64,
     /// Seconds since the latest version came out.
     pub updated_secs_ago: i64,
+    /// Players in its live servers right now (older Hubs don't say).
+    #[serde(default)]
+    pub playing: u32,
+    /// How many servers run it right now.
+    #[serde(default)]
+    pub servers: u32,
 }
 
 #[derive(Debug, Deserialize)]
 struct ListQuery {
     q: Option<String>,
+    /// Only the servers running this game.
+    game_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -445,6 +472,9 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     .map_err(|e| format!("could not set up the Hub database: {e}"))?;
     // Hubs from before accounts: games get an author id (this fails, harmlessly, once it has one).
     let _ = db.execute("ALTER TABLE games ADD COLUMN author_id TEXT", []);
+    // Hubs from before per-game server lists.
+    let _ = db.execute("ALTER TABLE servers ADD COLUMN game_id TEXT", []);
+    social::create_tables(&db)?;
     Ok(db)
 }
 
@@ -465,6 +495,9 @@ pub fn router(db: Connection) -> Router {
         .route("/catalog/{id}", delete(unlist_item))
         .route("/catalog/{id}/wear", post(wear_item))
         .route("/reports", post(report))
+        .route("/friends", post(social::change_friend))
+        .route("/friends/{id}", get(social::list_friends))
+        .route("/presence", post(social::update_presence))
         // Room for a big place, written out as JSON inside a JSON request.
         .layer(axum::extract::DefaultBodyLimit::max(MAX_PLACE * 2 + 64 * 1024))
         .with_state(db)
@@ -500,9 +533,14 @@ fn new_game_id() -> String {
     data_encoding::BASE32_NOPAD.encode(&bytes).to_ascii_lowercase()
 }
 
-const GAME_COLUMNS: &str =
+const GAME_COLUMNS: &str = concat!(
     "g.game_id, g.title, COALESCE(a.name, g.author), g.description, g.version, g.plays,
-    LENGTH(g.place), g.updated, g.author_id";
+    LENGTH(g.place), g.updated, g.author_id,
+    (SELECT COALESCE(SUM(s.players), 0) FROM servers s WHERE s.game_id = g.game_id AND s.last_seen >= ",
+    "CAST(strftime('%s', 'now') AS INTEGER) - 45),
+    (SELECT COUNT(*) FROM servers s WHERE s.game_id = g.game_id AND s.last_seen >= ",
+    "CAST(strftime('%s', 'now') AS INTEGER) - 45)"
+);
 const GAMES: &str = "games g LEFT JOIN accounts a ON a.player_id = g.author_id";
 
 /// SQL that holds for a `kind` of thing whose id is `column` when enough
@@ -525,6 +563,8 @@ fn game_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<GameInfo> {
         size: r.get::<_, i64>(6)? as u64,
         updated_secs_ago: now - r.get::<_, i64>(7)?,
         author_id: r.get(8)?,
+        playing: r.get::<_, i64>(9)? as u32,
+        servers: r.get::<_, i64>(10)? as u32,
     })
 }
 
@@ -947,31 +987,38 @@ async fn unpublish(
     }
 }
 
+/// The columns [`server_row`] reads, from `servers`.
+const SERVER_COLUMNS: &str = "server_id, name, game, code, players, max_players, kind, last_seen, game_id";
+
+fn server_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<ServerInfo> {
+    Ok(ServerInfo {
+        server_id: r.get(0)?,
+        name: r.get(1)?,
+        game: r.get(2)?,
+        code: r.get(3)?,
+        players: r.get::<_, i64>(4)? as u32,
+        max_players: r.get::<_, i64>(5)? as u32,
+        kind: HostKind::from_rank(r.get(6)?),
+        seen_secs_ago: now - r.get::<_, i64>(7)?,
+        game_id: r.get(8)?,
+    })
+}
+
 async fn list_servers(State(db): State<Db>, Query(query): Query<ListQuery>) -> Json<Vec<ServerInfo>> {
     let db = db.lock().unwrap();
     let now = now();
     let _ = db.execute("DELETE FROM servers WHERE last_seen < ?1", params![now - EXPIRES_AFTER_SECS]);
     let pattern = format!("%{}%", query.q.unwrap_or_default().trim().replace(['%', '_'], ""));
+    let game_id = query.game_id.filter(|g| !g.trim().is_empty());
     let mut statement = db
-        .prepare(
-            "SELECT server_id, name, game, code, players, max_players, kind, last_seen FROM servers
-             WHERE name LIKE ?1 OR game LIKE ?1
-             ORDER BY kind ASC, players DESC, first_seen ASC LIMIT 200",
-        )
+        .prepare(&format!(
+            "SELECT {SERVER_COLUMNS} FROM servers
+             WHERE (name LIKE ?1 OR game LIKE ?1) AND (?2 IS NULL OR game_id = ?2)
+             ORDER BY kind ASC, players DESC, first_seen ASC LIMIT 200"
+        ))
         .expect("the list query is valid");
     let rows = statement
-        .query_map(params![pattern], |r| {
-            Ok(ServerInfo {
-                server_id: r.get(0)?,
-                name: r.get(1)?,
-                game: r.get(2)?,
-                code: r.get(3)?,
-                players: r.get::<_, i64>(4)? as u32,
-                max_players: r.get::<_, i64>(5)? as u32,
-                kind: HostKind::from_rank(r.get(6)?),
-                seen_secs_ago: now - r.get::<_, i64>(7)?,
-            })
-        })
+        .query_map(params![pattern, game_id], |r| server_row(r, now))
         .map(|rows| rows.filter_map(Result::ok).collect())
         .unwrap_or_default();
     Json(rows)
@@ -1000,10 +1047,11 @@ async fn heartbeat(
     let name = if beat.name.trim().is_empty() { "Unnamed server".to_owned() } else { clip(&beat.name) };
     let game = if beat.game.trim().is_empty() { "Untitled game".to_owned() } else { clip(&beat.game) };
     db.execute(
-        "INSERT INTO servers (server_id, secret, name, game, code, players, max_players, kind, first_seen, last_seen)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+        "INSERT INTO servers (server_id, secret, name, game, code, players, max_players, kind, first_seen, last_seen,
+             game_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10)
          ON CONFLICT(server_id) DO UPDATE SET name = ?3, game = ?4, code = ?5, players = ?6,
-             max_players = ?7, kind = ?8, last_seen = ?9",
+             max_players = ?7, kind = ?8, last_seen = ?9, game_id = ?10",
         params![
             clip(&beat.server_id),
             beat.secret,
@@ -1013,7 +1061,8 @@ async fn heartbeat(
             beat.players,
             beat.max_players,
             beat.kind.rank(),
-            now
+            now,
+            beat.game_id.as_deref().map(str::trim).filter(|g| !g.is_empty()).map(clip)
         ],
     )
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1163,6 +1212,16 @@ impl HubClient {
         self.agent
             .get(format!("{}/servers", self.base))
             .query("q", search)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+    }
+
+    /// The live servers running one game (see [`Heartbeat::game_id`]).
+    pub fn game_servers(&self, game_id: &str) -> Result<Vec<ServerInfo>, String> {
+        self.agent
+            .get(format!("{}/servers", self.base))
+            .query("game_id", game_id)
             .call()
             .and_then(|mut r| r.body_mut().read_json())
             .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
@@ -1331,6 +1390,45 @@ impl HubClient {
             .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
     }
 
+    /// Sends, accepts, declines or ends a friendship.
+    pub fn change_friend(&self, change: &FriendChange) -> Result<FriendState, String> {
+        self.agent
+            .post(format!("{}/friends", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(change)
+            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .and_then(|mut r| {
+                if r.status().is_success() {
+                    r.body_mut().read_json().map_err(|e| e.to_string())
+                } else {
+                    Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+                }
+            })
+    }
+
+    /// A player's friends (with where they are) and requests, with
+    /// [`friends_list_message`] for `time` signed by that player.
+    pub fn friends(&self, player_id: &str, time: i64, signature: &str) -> Result<Friends, String> {
+        self.agent
+            .get(format!("{}/friends/{player_id}", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not get your friends from the Hub at {}: {e}", self.base))
+    }
+
+    /// Says whether this player is online and what they are playing.
+    pub fn presence(&self, update: &PresenceUpdate) -> Result<(), String> {
+        self.agent
+            .post(format!("{}/presence", self.base))
+            .send_json(update)
+            .map(|_| ())
+            .map_err(|e| format!("the Hub at {} did not take your status: {e}", self.base))
+    }
+
     /// Takes a published game down.
     pub fn unpublish(&self, game_id: &str, secret: &str) -> Result<(), String> {
         self.agent
@@ -1362,6 +1460,8 @@ pub struct Listing {
     pub players: u32,
     pub max_players: u32,
     pub kind: HostKind,
+    /// Which game it is (see [`Heartbeat::game_id`]).
+    pub game_id: Option<String>,
 }
 
 /// Keeps a hosted game on a Hub's list from a background thread. Update the
@@ -1400,6 +1500,7 @@ impl Announcer {
                             players: now.players,
                             max_players: now.max_players,
                             kind: now.kind,
+                            game_id: now.game_id,
                         };
                         let result = hub.heartbeat(&beat);
                         sent |= result.is_ok();

@@ -230,7 +230,7 @@ The first build compiles Bevy and takes a while. After that it is quick.
   Hub that Browse points at. Set `LIBROXEL_HUB=host:port` to use another
   Hub from the start.
 - **One app, one home screen:** the build is a single `libroxel` program
-  (`cargo run` starts it) and it opens on a home screen with four tabs.
+  (`cargo run` starts it) and it opens on a home screen with tabs.
   **▶ Play** shows your games as tiles (the starter games and every saved game):
   pick one and press Play, or double-click it, or **Play with friends** to
   host it. **🌍 Online** lists the games being hosted, with a Join button
@@ -246,6 +246,33 @@ The first build compiles Bevy and takes a while. After that it is quick.
   goes back, and **File → Main menu** does from the editor. (For scripts
   and servers without a screen, `libroxel server <game.lrx>`,
   `libroxel hub` and `libroxel help` still work.)
+- **Home and Friends:** the home screen opens on **Home**: your friends
+  along the top (a green dot when they're online, blue with the game's name
+  when they're in one; click one in a game to join them), then every game
+  with how many people play it right now. Click a game for its page: a big
+  **Play** button that drops you into the best server (one with friends in
+  it first, then the busiest with room, or starts a new one if none are
+  running), **New server** to host your own, and the list of its servers,
+  each with its players, its ping measured from your computer and a Join
+  button, with the servers your friends are in on top. **Friends** finds
+  people by name, sends and answers friend requests, and lists every
+  friend with where they are. Friends need a name claimed on the Avatar
+  tab. Try it all on one computer with
+  `cargo run -p libroxel --example hub_demo` and
+  `LIBROXEL_HUB=127.0.0.1:7431 cargo run -p libroxel`, which fills a Hub
+  with pretend friends and servers.
+- **How the Hub and game servers split the work:** the Hub is one small
+  program (axum and SQLite) that only keeps lists: accounts, friends and
+  requests, who's online and in which server, and the live servers of each
+  game. It never runs a game or carries its traffic. Games run on whoever
+  hosts them, a player pressing Host or a server left running with
+  `libroxel server game.lrx --game-id <id>`, and each host tells the Hub
+  every 15 seconds which game it runs, how many play and its join code;
+  one that stops drops off. Players connect straight to the host, and the
+  app pings each host itself for the ping column. Everything a player
+  changes on the Hub (friend requests, where they are) is signed with
+  their identity key, and only you can read your friends list and where
+  your friends are.
 - **Starter games:** three small finished games to play or build on. The
   **Sample obby** has coins, lava, TNT and a rover. **Kart race** is three
   laps round a track in karts, through blue gates in order, with laps and
@@ -315,7 +342,7 @@ as before: a mesh part as a box, a picture as nothing, a sound silent.
 | Crate | What it is |
 | --- | --- |
 | [`libroxel-instance`](crates/libroxel-instance) | The instance tree: classes, typed properties, parenting, destroy, a change journal, and the `.lrx` file format. No engine dependencies. |
-| [`libroxel-hub`](crates/libroxel-hub) | The Hub: a small self-hostable server (axum and SQLite) that lists live games, and the client and background announcer the app uses. |
+| [`libroxel-hub`](crates/libroxel-hub) | The Hub: a small self-hostable server (axum and SQLite) that lists live games per game, accounts, friends and who's online, and the client and background announcer the app uses. |
 | [`libroxel-net`](crates/libroxel-net) | Player identity (a keypair) and join codes. Carries a hosted game between computers over iroh, peer to peer with a relay fallback. |
 | [`libroxel-script`](crates/libroxel-script) | The sandboxed Luau runtime (via `mlua`) with a thread scheduler. Every name scripts can see lives in [`names.rs`](crates/libroxel-script/src/names.rs). |
 | [`libroxel-rbx`](crates/libroxel-rbx) | Opens place and model files saved by Roblox Studio (`.rbxl`, `.rbxlx`, `.rbxm`, `.rbxmx`) as instance trees, using the open-source rbx-dom readers. |

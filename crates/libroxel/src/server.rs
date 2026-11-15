@@ -27,6 +27,8 @@ usage:
       --no-hub                 do not run or use a Hub
       --official               list it as an official server (the last resort)
       --max-players <n>        players the list shows as the limit (0: none)
+      --game-id <id>           put it on that game's server list (a published
+                               game's id, or starter:<name>)
   libroxel hub                 run only a Hub
       --port <n>               Hub port (default 7430)
       --data <file>            where the Hub keeps its list
@@ -150,7 +152,7 @@ fn hub(args: &[String]) -> Result<(), String> {
 }
 
 fn server(args: &[String]) -> Result<(), String> {
-    let flags = Flags::parse(args, &["--port", "--name", "--hub", "--max-players"])?;
+    let flags = Flags::parse(args, &["--port", "--name", "--hub", "--max-players", "--game-id"])?;
     let Some(path) = flags.rest.first() else {
         return Err("usage: libroxel server <game.lrx> (see libroxel help)".into());
     };
@@ -172,6 +174,7 @@ fn server(args: &[String]) -> Result<(), String> {
         },
         official: flags.has("--official"),
         max_players: flags.number("--max-players", 0u32)?,
+        game_id: flags.get("--game-id").map(str::to_owned),
     };
     run(settings, &mut |line| println!("{line}"), &AtomicBool::new(false))
 }
@@ -200,11 +203,14 @@ pub struct ServerSettings {
     pub hub: HubUse,
     pub official: bool,
     pub max_players: u32,
+    /// Which game it is, so it shows on that game's server list (a
+    /// published game's id, or `starter:<name>`).
+    pub game_id: Option<String>,
 }
 
 /// Hosts a game with no window until `stop` is set, telling `say` what happens.
 pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicBool) -> Result<(), String> {
-    let ServerSettings { game, name, text, key, port, hub, official, max_players } = settings;
+    let ServerSettings { game, name, text, key, port, hub, official, max_players, game_id } = settings;
     let (tree, report) = place::load(&text).map_err(|e| format!("could not load {game}: {e}"))?;
     for warning in report.warnings {
         say(format!("warning: {warning}"));
@@ -247,7 +253,7 @@ pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicB
         Announcer::start(
             hub,
             identity.player_id(),
-            Listing { name, game, code: None, players: 0, max_players, kind },
+            Listing { name, game, code: None, players: 0, max_players, kind, game_id },
         )
     });
 

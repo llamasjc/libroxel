@@ -286,6 +286,7 @@ pub fn editor_ui(
         (code, s.joined_count())
     });
     editor.platform.tick(hosting);
+    editor.platform.social_tick(engine.session.is_some());
     if !playing {
         edit_together(engine, editor);
     }
@@ -2978,6 +2979,7 @@ fn menu_pick(pick: crate::menu::Pick, engine: &mut EngineState, editor: &mut Edi
             }
         }
     };
+    editor.platform.picked(&pick);
     match pick {
         Pick::Edit(game) => {
             if open(&game, engine, editor) {

@@ -11,6 +11,8 @@
 //! - [`JoinTunnel`] takes a join code and gives back a local address that
 //!   `PlaySession::join` connects to as if the host were on this computer.
 //!
+//! - [`Pinger`] measures how far away hosts are, for server lists.
+//!
 //! Every connection is encrypted end to end, relayed or not.
 
 use std::fmt;
@@ -33,6 +35,10 @@ pub const ALPN: &[u8] = b"libroxel/game/0";
 /// Every join code starts with this, so the Join box can tell a code from an
 /// address.
 pub const CODE_PREFIX: &str = "lrx1";
+
+/// The protocol server lists use to time a round trip to a host. A host
+/// echoes back whatever arrives on each stream.
+pub const PING_ALPN: &[u8] = b"libroxel/ping/0";
 
 /// How long a host waits to reach a relay before handing out a code that
 /// only holds its direct addresses.
@@ -261,7 +267,7 @@ impl HostTunnel {
         let identity = identity.clone();
         let shared = status.clone();
         let stop = spawn("libroxel-host-net", status.clone(), async move {
-            let endpoint = match bind(&identity, network, vec![ALPN.to_vec()]).await {
+            let endpoint = match bind(&identity, network, vec![ALPN.to_vec(), PING_ALPN.to_vec()]).await {
                 Ok(endpoint) => endpoint,
                 Err(e) => return shared.fail(e),
             };
@@ -276,6 +282,9 @@ impl HostTunnel {
                 let shared = shared.clone();
                 tokio::spawn(async move {
                     let Ok(connection) = incoming.await else { return };
+                    if connection.alpn() == PING_ALPN {
+                        return answer_pings(connection).await;
+                    }
                     let Ok(tcp) = TcpStream::connect((Ipv4Addr::LOCALHOST, game_port)).await else {
                         connection.close(1u32.into(), b"game not running");
                         return;
@@ -303,6 +312,100 @@ impl HostTunnel {
     pub fn connections(&self) -> usize {
         self.status.connections.load(Ordering::Relaxed)
     }
+}
+
+/// Echoes each ping stream back until the pinger hangs up.
+async fn answer_pings(connection: Connection) {
+    while let Ok(Ok((mut send, mut recv))) =
+        tokio::time::timeout(Duration::from_secs(10), connection.accept_bi()).await
+    {
+        tokio::spawn(async move {
+            if let Ok(bytes) = recv.read_to_end(64).await {
+                let _ = send.write_all(&bytes).await;
+                let _ = send.finish();
+            }
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pinging
+// ---------------------------------------------------------------------------
+
+/// How long a ping may take before the host counts as unreachable.
+const PING_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// What a ping found.
+pub type PingResult = Result<Duration, String>;
+
+/// Times round trips to hosts from a background thread, like a server
+/// browser does. Ask with [`ping`](Self::ping); the answer shows up in
+/// [`result`](Self::result) a moment later.
+pub struct Pinger {
+    asks: tokio::sync::mpsc::UnboundedSender<String>,
+    results: Arc<Mutex<std::collections::HashMap<String, PingResult>>>,
+    _stop: oneshot::Sender<()>,
+}
+
+impl Pinger {
+    /// Starts pinging with a throwaway identity.
+    pub fn start(network: Network) -> Result<Self, String> {
+        let (asks, mut asked) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let results: Arc<Mutex<std::collections::HashMap<String, PingResult>>> = Arc::default();
+        let shared = results.clone();
+        let status = Arc::new(Status::default());
+        let keep = status.clone();
+        let stop = spawn("libroxel-ping", status, async move {
+            let endpoint = match bind(&Identity::generate(), network, Vec::new()).await {
+                Ok(endpoint) => endpoint,
+                Err(e) => return keep.fail(e),
+            };
+            *keep.endpoint.lock().unwrap() = Some(endpoint.clone());
+            while let Some(code) = asked.recv().await {
+                let (endpoint, shared) = (endpoint.clone(), shared.clone());
+                tokio::spawn(async move {
+                    let result = match tokio::time::timeout(PING_TIMEOUT, ping_once(&endpoint, &code)).await {
+                        Ok(result) => result,
+                        Err(_) => Err("no answer".to_owned()),
+                    };
+                    shared.lock().unwrap().insert(code, result);
+                });
+            }
+        })?;
+        Ok(Self { asks, results, _stop: stop })
+    }
+
+    /// Pings the host behind `code` (again, if it was pinged before).
+    pub fn ping(&self, code: &str) {
+        let _ = self.asks.send(code.trim().to_owned());
+    }
+
+    /// The last ping to `code`'s host, once it has come back.
+    pub fn result(&self, code: &str) -> Option<PingResult> {
+        self.results.lock().unwrap().get(code.trim()).cloned()
+    }
+}
+
+/// Connects to a host and returns the fastest of a few round trips.
+async fn ping_once(endpoint: &Endpoint, code: &str) -> PingResult {
+    let host = decode_code(code)?;
+    let connection =
+        endpoint.connect(host, PING_ALPN).await.map_err(|e| format!("could not reach it: {e}"))?;
+    let mut best = None::<Duration>;
+    for i in 0..3u8 {
+        let started = std::time::Instant::now();
+        let (mut send, mut recv) = connection.open_bi().await.map_err(|e| e.to_string())?;
+        send.write_all(&[i; 8]).await.map_err(|e| e.to_string())?;
+        let _ = send.finish();
+        let back = recv.read_to_end(64).await.map_err(|e| e.to_string())?;
+        if back != [i; 8] {
+            return Err("the host answered oddly".into());
+        }
+        let took = started.elapsed();
+        best = Some(best.map_or(took, |b| b.min(took)));
+    }
+    connection.close(0u32.into(), b"pinged");
+    best.ok_or_else(|| "no answer".into())
 }
 
 // ---------------------------------------------------------------------------
@@ -384,6 +487,36 @@ mod tests {
         assert!(!is_join_code("192.168.1.20"));
         assert_eq!(decode_code(&code).unwrap(), addr);
         assert!(decode_code("lrx1notacode!").is_err());
+    }
+
+    #[test]
+    fn hosts_answer_pings() {
+        // A host with nothing behind it still answers pings.
+        let host = HostTunnel::start(&Identity::generate(), Network::LocalOnly, 1).unwrap();
+        let started = std::time::Instant::now();
+        let code = loop {
+            if let Some(code) = host.code() {
+                break code;
+            }
+            assert!(started.elapsed() < Duration::from_secs(10), "no code");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let pinger = Pinger::start(Network::LocalOnly).unwrap();
+        pinger.ping(&code);
+        let result = loop {
+            if let Some(result) = pinger.result(&code) {
+                break result;
+            }
+            assert!(started.elapsed() < Duration::from_secs(15), "no answer");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let took = result.unwrap();
+        assert!(took < Duration::from_secs(1), "{took:?}");
+        // Nobody was counted as a player.
+        assert_eq!(host.connections(), 0);
+        pinger.ping("lrx1notacode");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(pinger.result("lrx1notacode").unwrap().is_err());
     }
 
     #[test]

@@ -76,6 +76,8 @@ pub struct Platform {
     reporting: Option<(&'static str, String, String)>,
     /// What the Hub said about the last item shared, for the editor's output.
     pub item_status: Option<Result<String, String>>,
+    /// Friends, online status, pings and the game being played.
+    pub social: crate::social::Social,
 }
 
 impl Default for Platform {
@@ -117,6 +119,7 @@ impl Default for Platform {
             report_status: None,
             reporting: None,
             item_status: None,
+            social: crate::social::Social::default(),
         }
     }
 }
@@ -157,12 +160,18 @@ impl Platform {
         }
     }
 
-    fn client(&self) -> HubClient {
+    pub(crate) fn client(&self) -> HubClient {
         HubClient::new(&self.hub_address)
     }
 
     /// Lists a game this editor just started hosting.
     pub fn announce(&mut self, server_id: String, game: String) {
+        // The game picked on the home screen, if that's what is hosted.
+        let (game, game_id) = match self.social.next_game.clone() {
+            Some(next) => (next.title, next.game_id),
+            None => (game, None),
+        };
+        self.social.hosting = Some(server_id.clone());
         let listing = Listing {
             name: format!("{}'s game", self.name.trim()),
             game,
@@ -170,6 +179,7 @@ impl Platform {
             players: 1,
             max_players: 0,
             kind: HostKind::Player,
+            game_id,
         };
         self.announcer = Some(Announcer::start(self.client(), server_id, listing));
     }
@@ -183,7 +193,10 @@ impl Platform {
                 }
                 l.players = joined as u32 + 1;
             }),
-            (None, Some(_)) => self.announcer = None,
+            (None, Some(_)) => {
+                self.announcer = None;
+                self.social.hosting = None;
+            }
             _ => {}
         }
         if let Some(result) = self.fetched_games.lock().unwrap().take() {
@@ -238,6 +251,13 @@ impl Platform {
                 }
                 Err(e) => self.error = Some(e),
             }
+        }
+    }
+
+    /// Looks again when the lists are more than a few seconds old.
+    pub fn refresh_if_old(&mut self) {
+        if self.last_fetch.is_none_or(|t| t.elapsed() > Duration::from_secs(5)) {
+            self.refresh();
         }
     }
 
@@ -603,6 +623,26 @@ impl Platform {
                 None
             }
         }
+    }
+
+    /// The live servers the Hub listed last.
+    pub fn servers(&self) -> &[ServerInfo] {
+        &self.servers
+    }
+
+    /// The published games the Hub listed last.
+    pub fn games(&self) -> &[GameInfo] {
+        &self.games
+    }
+
+    /// Whether a published game is being fetched, and its title.
+    pub fn downloading(&self) -> Option<&str> {
+        self.downloading.as_deref()
+    }
+
+    /// Fetches a published game to play (or host, with `host`).
+    pub fn get_game(&mut self, game: &GameInfo, host: bool) {
+        self.download(game, host);
     }
 
     fn download(&mut self, game: &GameInfo, host: bool) {
