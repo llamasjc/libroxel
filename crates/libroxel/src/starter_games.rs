@@ -465,7 +465,7 @@ end
 
 /// A robot that walks itself (with a script), made like a character.
 fn robot(tree: &mut InstanceTree, at: [f32; 3]) -> InstanceId {
-    use libroxel_engine::character::{BodyColors, Hat, build_rig, pose_rig, wear_hat};
+    use libroxel_engine::character::{BodyColors, Hat, add_joints, build_rig, pose_rig, wear_hat};
     let ws = tree.workspace();
     let model = add(tree, ws, ClassKind::Model, "Robot");
     let root = block(tree, model, "HumanoidRootPart", at, [2.0, 4.0, 1.5], [150, 150, 160]);
@@ -480,6 +480,7 @@ fn robot(tree: &mut InstanceTree, at: [f32; 3]) -> InstanceId {
     for part in limbs.parts().into_iter().chain([head]) {
         material(tree, part, Material::Metal);
     }
+    add_joints(tree, root, head, &limbs);
     pose_rig(tree, root, head, &limbs, Default::default());
     wear_hat(tree, model, Hat::Antenna, Color3::from_rgb8(255, 70, 60));
     add(tree, model, ClassKind::Humanoid, "Humanoid");
