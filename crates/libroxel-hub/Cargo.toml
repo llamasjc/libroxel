@@ -21,6 +21,10 @@ iroh-base = { version = "1.4", default-features = false, features = ["key"] }
 # Passwords: stretched on the player's computer, never sent to the Hub.
 argon2 = "0.5"
 chacha20poly1305 = "0.10"
+# Two-step codes and the bot check for new accounts.
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
 
 [lints]
 workspace = true

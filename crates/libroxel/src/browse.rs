@@ -74,6 +74,17 @@ pub struct Platform {
     password_busy: bool,
     password_done: Slot<String>,
     pub password_status: Option<Result<String, String>>,
+    /// The Hub asked for a two-step code when signing in, typed here.
+    sign_in_code: String,
+    needs_code: bool,
+    /// How the account is kept safe, as the Hub says (only to its owner).
+    security: Option<libroxel_hub::Security>,
+    security_found: Slot<libroxel_hub::Security>,
+    /// Turning two-step sign-in on: the new secret, and a code from the app.
+    two_step_secret: Option<String>,
+    two_step_code: String,
+    two_step_done: Slot<String>,
+    two_step_status: Option<Result<String, String>>,
     /// The catalog: things to wear that people made.
     pub items: Vec<Item>,
     fetched_items: Slot<Vec<Item>>,
@@ -128,6 +139,14 @@ impl Default for Platform {
             password_busy: false,
             password_done: Arc::default(),
             password_status: None,
+            sign_in_code: String::new(),
+            needs_code: false,
+            security: None,
+            security_found: Arc::default(),
+            two_step_secret: None,
+            two_step_code: String::new(),
+            two_step_done: Arc::default(),
+            two_step_status: None,
             items: Vec::new(),
             fetched_items: Arc::default(),
             item_shared: Arc::default(),
@@ -245,13 +264,15 @@ impl Platform {
             self.item_status = Some(result);
             self.last_fetch = None;
         }
-        if let Some(result) = self.account_found.lock().unwrap().take() {
+        let taken = self.account_found.lock().unwrap().take();
+        if let Some(result) = taken {
             self.account_busy = false;
             match result {
                 Ok(Some(profile)) => {
                     self.account_name = profile.name.clone();
                     self.account_about = profile.about.clone();
                     self.account = Some(profile);
+                    self.fetch_security();
                 }
                 Ok(None) => self.account = None,
                 Err(e) => self.account_status = Some(Err(e)),
@@ -265,12 +286,27 @@ impl Platform {
             }
             self.account_status = Some(result);
         }
+        if let Some(Ok(security)) = self.security_found.lock().unwrap().take() {
+            self.security = Some(security);
+        }
+        let taken = self.two_step_done.lock().unwrap().take();
+        if let Some(result) = taken {
+            self.password_busy = false;
+            if result.is_ok() {
+                self.two_step_secret = None;
+                self.two_step_code.clear();
+                self.fetch_security();
+            }
+            self.two_step_status = Some(result);
+        }
         if let Some(result) = self.password_done.lock().unwrap().take() {
             self.password_busy = false;
+            self.needs_code = matches!(&result, Err(e) if e == libroxel_hub::NEEDS_CODE);
             if result.is_ok() {
                 self.password.clear();
                 self.password_again.clear();
                 self.sign_in_password.clear();
+                self.sign_in_code.clear();
                 // A sign-in may have changed whose account this is.
                 self.account_hub = None;
             }
@@ -558,6 +594,7 @@ impl Platform {
         self.account_status = None;
         let client = self.client();
         let (name, about) = (self.account_name.trim().to_owned(), self.account_about.trim().to_owned());
+        let new = self.account.is_none();
         let out = self.account_saved.clone();
         std::thread::spawn(move || {
             let result = crate::identity().and_then(|me| {
@@ -567,6 +604,8 @@ impl Platform {
                     .map_or(0, |d| d.as_secs() as i64);
                 let message = libroxel_hub::account_message(&player_id, &name, &about, &look, time);
                 let account = AccountUpdate {
+                    // Only a new account needs the bot check worked out.
+                    work: new.then(|| libroxel_hub::account_work(&player_id, &name)),
                     signature: me.sign(&message),
                     player_id,
                     name: name.clone(),
@@ -618,9 +657,10 @@ impl Platform {
         self.password_status = None;
         let client = self.client();
         let (name, password) = (self.sign_in_name.trim().to_owned(), self.sign_in_password.clone());
+        let code = Some(self.sign_in_code.trim().to_owned()).filter(|c| !c.is_empty());
         let out = self.password_done.clone();
         std::thread::spawn(move || {
-            let result = client.sign_in(&name, &password).and_then(|key| {
+            let result = client.sign_in(&name, &password, code.as_deref()).and_then(|key| {
                 let me = libroxel_net::Identity::from_secret_bytes(&key);
                 let kept = me
                     .save_replacing(&crate::identity_path())
@@ -637,6 +677,144 @@ impl Platform {
         });
     }
 
+    /// Asks the Hub how this account is kept safe (only its owner may).
+    fn fetch_security(&mut self) {
+        let client = self.client();
+        let out = self.security_found.clone();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| {
+                let id = me.player_id();
+                let time = libroxel_hub_now_ms();
+                client.security(&id, time, &me.sign(&libroxel_hub::security_message(&id, time)))
+            });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    /// Turns two-step sign-in on (with `secret`) or off, with a code from the app.
+    fn change_two_step(&mut self, secret: Option<String>) {
+        if self.password_busy {
+            return;
+        }
+        self.password_busy = true;
+        self.two_step_status = None;
+        let client = self.client();
+        let code = self.two_step_code.trim().to_owned();
+        let out = self.two_step_done.clone();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| {
+                let turning_on = secret.is_some();
+                let mut set = libroxel_hub::TwoStepSet {
+                    player_id: me.player_id(),
+                    secret,
+                    code,
+                    time: libroxel_hub_now_ms() / 1000,
+                    signature: String::new(),
+                };
+                set.signature = me.sign(&libroxel_hub::two_step_message(&set));
+                client.set_two_step(&set)?;
+                Ok(if turning_on {
+                    "Two-step sign-in is on. Signing in on another computer now needs a code from your app."
+                        .to_owned()
+                } else {
+                    "Two-step sign-in is off.".to_owned()
+                })
+            });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    /// Two-step sign-in and recent sign-ins, for an account with a password.
+    fn security_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(security) = self.security.clone() else { return };
+        ui.add_space(10.0);
+        ui.label(RichText::new("Two-step sign-in").strong());
+        if !security.has_password {
+            ui.label(RichText::new("Set a password first.").color(crate::theme::DUST));
+        } else if security.two_step {
+            ui.colored_label(
+                crate::theme::MINT,
+                "On: signing in on another computer needs a code from your app.",
+            );
+            ui.horizontal(|ui| {
+                ui.label("Code from the app");
+                ui.add(egui::TextEdit::singleline(&mut self.two_step_code).char_limit(7).desired_width(70.0));
+                let ready = self.two_step_code.trim().len() >= 6 && !self.password_busy;
+                if ui.add_enabled(ready, egui::Button::new("Turn off")).clicked() {
+                    self.change_two_step(None);
+                }
+            });
+        } else if let Some(secret) = self.two_step_secret.clone() {
+            ui.label(
+                RichText::new(
+                    "Add Libroxel to an authenticator app (Google Authenticator, Authy, 1Password…) with this setup key, then type the 6-digit code it shows.",
+                )
+                .color(crate::theme::DUST),
+            );
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(&secret).monospace().color(crate::theme::CHALK));
+                if ui.small_button("Copy").clicked() {
+                    ui.ctx().copy_text(secret.clone());
+                }
+                if ui
+                    .small_button("Copy link")
+                    .on_hover_text("An otpauth:// link, for apps that take one")
+                    .clicked()
+                {
+                    let link =
+                        libroxel_hub::two_step_link(&secret, self.account_name.trim(), &self.hub_address);
+                    ui.ctx().copy_text(link);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Code from the app");
+                ui.add(egui::TextEdit::singleline(&mut self.two_step_code).char_limit(7).desired_width(70.0));
+                let ready = self.two_step_code.trim().len() >= 6 && !self.password_busy;
+                if ui.add_enabled(ready, egui::Button::new("Turn on")).clicked() {
+                    self.change_two_step(Some(secret.clone()));
+                }
+                if ui.button("Cancel").clicked() {
+                    self.two_step_secret = None;
+                }
+            });
+        } else {
+            ui.label(
+                RichText::new(
+                    "Off. Turn it on so a stolen password alone can't get anyone into your account.",
+                )
+                .color(crate::theme::DUST),
+            );
+            if ui.button("Set up two-step sign-in").clicked() {
+                self.two_step_secret = Some(libroxel_hub::new_two_step_secret());
+                self.two_step_code.clear();
+            }
+        }
+        match &self.two_step_status {
+            Some(Ok(said)) => {
+                ui.colored_label(crate::theme::MINT, said);
+            }
+            Some(Err(why)) => {
+                ui.colored_label(crate::theme::BRICK, why);
+            }
+            None => {}
+        }
+        ui.add_space(6.0);
+        ui.label(RichText::new("Sign-ins on other computers").strong());
+        if security.sign_ins.is_empty() {
+            ui.label(RichText::new("None yet.").color(crate::theme::DUST));
+        }
+        for record in security.sign_ins.iter().take(5) {
+            ui.label(format!("  • {} from {}", ago(record.secs_ago), record.from));
+        }
+        if !security.sign_ins.is_empty() {
+            ui.label(
+                RichText::new("Not you? Set a new password and turn on two-step sign-in.")
+                    .small()
+                    .color(crate::theme::DUST),
+            );
+        }
+    }
+
     /// The password part of the Avatar tab: set one, or sign in with one.
     fn password_ui(&mut self, ui: &mut egui::Ui) {
         ui.add_space(10.0);
@@ -644,7 +822,7 @@ impl Platform {
             ui.label(RichText::new("Password").strong());
             ui.label(
                 RichText::new(
-                    "Set a password to sign in to this account on another computer, or to get it back if this                      one breaks. It is worked into a key on this computer and never sent to the Hub.",
+                    "Set a password to sign in to this account on another computer, or to get it back if this one breaks. It is worked into a key on this computer and never sent to the Hub.",
                 )
                 .color(crate::theme::DUST),
             );
@@ -670,6 +848,7 @@ impl Platform {
             if let Some(problem) = problem.filter(|_| !self.password.is_empty()) {
                 ui.colored_label(crate::theme::SUN, format!("Not yet: {problem}."));
             }
+            self.security_ui(ui);
         }
         let header = if self.account.is_some() {
             "Sign in to a different account"
@@ -682,7 +861,7 @@ impl Platform {
             .show(ui, |ui| {
                 ui.label(
                     RichText::new(
-                        "Sign in with the name and password you set on another computer. This computer then uses                          that account; its own key is kept beside it, so nothing is lost.",
+                        "Sign in with the name and password you set on another computer. This computer then uses that account; its own key is kept beside it, so nothing is lost.",
                     )
                     .color(crate::theme::DUST),
                 );
@@ -693,6 +872,11 @@ impl Platform {
                     ui.label("Password");
                     ui.add(egui::TextEdit::singleline(&mut self.sign_in_password).password(true).char_limit(256));
                     ui.end_row();
+                    if self.needs_code {
+                        ui.label("Code from your app");
+                        ui.add(egui::TextEdit::singleline(&mut self.sign_in_code).char_limit(7));
+                        ui.end_row();
+                    }
                 });
                 ui.horizontal(|ui| {
                     let ready = libroxel_hub::valid_account_name(self.sign_in_name.trim())
@@ -774,6 +958,8 @@ impl Platform {
             ui.label(format!("Your page on this Hub: {} · {games}", profile.name));
             if profile.admin {
                 ui.colored_label(crate::theme::SUN, "You are an admin of this Hub.");
+            } else if profile.verified {
+                ui.colored_label(crate::theme::SKY, "Your account is verified.");
             }
             for game in &profile.games {
                 ui.label(format!(
@@ -1101,4 +1287,19 @@ const REPORT_REASONS: [&str; 4] = [
 /// A small ⚑ button to report a `what` ("game" or "hat").
 fn report_button(ui: &mut egui::Ui, what: &str) -> bool {
     ui.small_button(crate::theme::icon::FLAG).on_hover_text(format!("Report this {what}")).clicked()
+}
+
+fn libroxel_hub_now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+}
+
+/// "3 minutes ago" and the like.
+fn ago(secs: i64) -> String {
+    let (n, unit) = match secs.max(0) {
+        s if s < 60 => return "just now".into(),
+        s if s < 3600 => (s / 60, "minute"),
+        s if s < 86_400 => (s / 3600, "hour"),
+        s => (s / 86_400, "day"),
+    };
+    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
 }

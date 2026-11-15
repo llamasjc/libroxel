@@ -45,6 +45,7 @@ usage:
                                owners (and servers they add by id) may list
                                Official servers
   libroxel hub ban <name> [reason]       ban an account; unban <name> lets it back
+  libroxel hub verify|unverify <name>    give or take away a verified badge
   libroxel hub rename <name> <new name>  rename an account (reserved names such as
                                admin too)
   libroxel help                show this
@@ -212,6 +213,16 @@ fn hub(args: &[String]) -> Result<(), String> {
             println!("{who} is now called {name}.");
             Ok(())
         }
+        ["verify", who] => {
+            libroxel_hub::set_verified(&libroxel_hub::open_db(Some(&data))?, who, true)?;
+            println!("{who} is verified.");
+            Ok(())
+        }
+        ["unverify", who] => {
+            libroxel_hub::set_verified(&libroxel_hub::open_db(Some(&data))?, who, false)?;
+            println!("{who} is no longer verified.");
+            Ok(())
+        }
         ["unban", who] => {
             libroxel_hub::unban(&libroxel_hub::open_db(Some(&data))?, who)?;
             println!("{who} can use this Hub again.");
@@ -219,7 +230,7 @@ fn hub(args: &[String]) -> Result<(), String> {
         }
         _ => {
             Err("usage: libroxel hub [reports | clear <game|item> <id> | remove <game|item> <id> | accounts \
-                  [search] | owners | owner add|remove <who> | ban <who> [reason] | unban <who> | rename <who> <name>]"
+                  [search] | owners | owner add|remove <who> | ban <who> [reason] | unban <who> | rename <who> <name> | verify|unverify <who>]"
                 .into())
         }
     }

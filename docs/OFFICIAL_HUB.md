@@ -72,26 +72,26 @@ built from then on uses it: Online, accounts, friends, publishing and
 `libroxel server`. Players can still type another Hub into Online, and
 `LIBROXEL_HUB` still picks another one, for testing or a LAN party.
 
-## 5. Make yourself the owner
+## 5. Give your account admin powers
 
-Claim your name in the app first, then on the server:
-
-```sh
-libroxel hub --data /var/lib/libroxel/hub.sqlite owner add kai2
-```
-
-Then take the name **admin** (players can't; owners can), either on the
-Avatar tab or from the server:
+Make an account in the app like anyone else, with any name you like. Then, on
+the Hub's computer, make it an owner:
 
 ```sh
-libroxel hub --data /var/lib/libroxel/hub.sqlite rename kai2 admin
+libroxel hub --data /var/lib/libroxel/hub.sqlite owner add <your name>
 ```
 
-Owners are the Hub's admins: their page says so, and servers they host show
-an **Admin** badge instead of "hosted by". Owners' servers are the only ones
-that list as **Official**. To run an
-official game server, start it with `libroxel server game.lrx --official`. It
-prints its id. Add that id as an owner too.
+That's all it takes. Owners are the Hub's admins: their page says so, servers
+they host show an **Admin** badge, and only their servers list as
+**Official**. Nothing in Libroxel is tied to any particular name.
+
+If you'd like, owners can also take names kept back from players, such as
+`admin`, on the Avatar tab (or `libroxel hub rename <your name> admin`). It's
+optional.
+
+To run an official game server, start it with
+`libroxel server game.lrx --official`. It prints its id. Add that id as an
+owner too.
 
 ## Looking after it
 
@@ -105,6 +105,7 @@ can do them over the network:
 | `libroxel hub owner add\|remove <name or id>` | Adds or removes an owner |
 | `libroxel hub ban <name> [reason]` | Bans an account: it can't sign in, host, publish, share, report or befriend anyone, and its page, games and hats stop being listed |
 | `libroxel hub unban <name>` | Lets it back |
+| `libroxel hub verify\|unverify <name>` | Gives or takes away a verified badge |
 | `libroxel hub rename <name> <new name>` | Renames an account, even to a reserved name |
 | `libroxel hub reports` | Lists reported games and hats |
 | `libroxel hub clear <game\|item> <id>` | Lists a reported one again |

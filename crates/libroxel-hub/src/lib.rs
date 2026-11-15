@@ -48,12 +48,17 @@ use serde::{Deserialize, Serialize};
 mod limits;
 mod owner;
 mod password;
+mod security;
 mod social;
 use limits::{Caller, Limit, Limits, too_many};
 pub use owner::{AccountRow, accounts, add_owner, ban, owners, remove_owner, rename, unban};
 pub use password::{
     MIN_PASSWORD, PASSWORD_MEMORY_KIB, PASSWORD_PASSES, PasswordSet, SignIn, SignInSalt, SignedIn,
     password_message, password_problem, seal_password, seal_password_with, sign_in_message,
+};
+pub use security::{
+    NEEDS_CODE, Security, SignInRecord, TwoStepSet, WORK_BITS, account_work, new_two_step_secret,
+    security_message, set_verified, two_step_code, two_step_link, two_step_message,
 };
 pub use social::{
     Friend, FriendAction, FriendChange, FriendState, Friends, PresenceUpdate, friend_message,
@@ -146,7 +151,7 @@ impl HostKind {
 pub struct Heartbeat {
     pub server_id: String,
     pub secret: String,
-    /// The name shown in the list, such as "Kai's obby".
+    /// The name shown in the list, such as "Alice's obby".
     pub name: String,
     /// The game's title.
     pub game: String,
@@ -199,6 +204,9 @@ pub struct ServerInfo {
     /// Whether one of the Hub's owners (its admins) hosts it.
     #[serde(default)]
     pub admin_host: bool,
+    /// Whether whoever hosts it has a verified badge.
+    #[serde(default)]
+    pub host_verified: bool,
 }
 
 /// What `GET /` answers, so a client can check it reached a Hub.
@@ -254,6 +262,9 @@ pub struct AccountUpdate {
     pub time: i64,
     /// [`account_message`] signed with the player's identity key.
     pub signature: String,
+    /// The answer to the bot check ([`account_work`]), needed to make a new account.
+    #[serde(default)]
+    pub work: Option<u64>,
 }
 
 /// What a player signs to change their account.
@@ -402,6 +413,9 @@ pub struct Profile {
     /// Whether they are one of the Hub's owners (its admins).
     #[serde(default)]
     pub admin: bool,
+    /// Whether they have a verified badge (whoever runs the Hub gives them out).
+    #[serde(default)]
+    pub verified: bool,
 }
 
 /// A player found by name.
@@ -594,6 +608,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     social::create_tables(&db)?;
     password::create_tables(&db)?;
     owner::create_tables(&db)?;
+    security::create_tables(&db)?;
     Ok(db)
 }
 
@@ -625,6 +640,8 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/accounts/password", post(password::set_password))
         .route("/accounts/sign-in", post(password::sign_in))
         .route("/accounts/sign-in/{name}", get(password::sign_in_salt))
+        .route("/accounts/two-step", post(security::set_two_step))
+        .route("/accounts/{id}/security", get(security::security))
         .route("/catalog", get(list_items).post(share_item))
         .route("/catalog/{id}", delete(unlist_item))
         .route("/catalog/{id}/wear", post(wear_item))
@@ -896,6 +913,9 @@ async fn update_account(
             StatusCode::CONFLICT,
             format!("{} was someone else's name until recently; it stays theirs for 30 days", account.name),
         ));
+    }
+    if old_name.is_none() && !security::work_done(&account.player_id, &account.name, account.work) {
+        return bad("a new account needs the bot check worked out (update Libroxel)");
     }
     if old_name.is_none() && !limits.take(Limit::NewAccount, &caller.0) {
         return Err(too_many("new accounts"));
@@ -1172,6 +1192,9 @@ async fn profile(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<J
         .map(|rows| rows.filter_map(Result::ok).collect())
         .unwrap_or_default();
     let admin = owner::is_owner(&db, &player_id);
+    let verified = db
+        .query_row(&format!("SELECT {}", security::verified_sql("?1")), params![player_id], |r| r.get(0))
+        .unwrap_or(false);
     Ok(Json(Profile {
         player_id,
         name,
@@ -1179,6 +1202,7 @@ async fn profile(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<J
         look: serde_json::from_str(&look).unwrap_or(serde_json::Value::Null),
         joined_secs_ago: now - created,
         admin,
+        verified,
         games,
     }))
 }
@@ -1199,7 +1223,8 @@ async fn unpublish(
 /// The columns [`server_row`] reads, from `servers`.
 const SERVER_COLUMNS: &str = "server_id, name, game, code, players, max_players, kind, last_seen, game_id,
     (SELECT a.name FROM accounts a WHERE a.player_id = servers.host_id), host_id,
-    EXISTS (SELECT 1 FROM owners o WHERE o.player_id = servers.host_id)";
+    EXISTS (SELECT 1 FROM owners o WHERE o.player_id = servers.host_id),
+    EXISTS (SELECT 1 FROM verified v WHERE v.player_id = servers.host_id)";
 
 fn server_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<ServerInfo> {
     Ok(ServerInfo {
@@ -1215,6 +1240,7 @@ fn server_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<ServerInfo> {
         host: r.get(9)?,
         host_id: r.get(10)?,
         admin_host: r.get(11)?,
+        host_verified: r.get::<_, bool>(12)? || r.get::<_, bool>(11)?,
     })
 }
 
@@ -1565,7 +1591,7 @@ impl HubClient {
     /// Signs in to the account called `name` with its password, and gives
     /// back its identity key (32 bytes) to keep on this computer. The
     /// password is stretched here and never sent. Takes a moment.
-    pub fn sign_in(&self, name: &str, password: &str) -> Result<[u8; 32], String> {
+    pub fn sign_in(&self, name: &str, password: &str, code: Option<&str>) -> Result<[u8; 32], String> {
         let name = name.trim();
         let answer = |r: Result<ureq::http::Response<ureq::Body>, ureq::Error>| {
             let mut r = r.map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))?;
@@ -1587,7 +1613,8 @@ impl HubClient {
         .read_json()
         .map_err(|e| e.to_string())?;
         let time = social::now_ms();
-        let (attempt, seal) = password::sign_in_with(name, password, &salt, time)?;
+        let (mut attempt, seal) = password::sign_in_with(name, password, &salt, time)?;
+        attempt.code = code.map(str::to_owned);
         let signed_in: SignedIn = answer(
             self.agent
                 .post(format!("{}/accounts/sign-in", self.base))
@@ -1600,6 +1627,36 @@ impl HubClient {
         .read_json()
         .map_err(|e| e.to_string())?;
         password::open_sealed(&seal, &signed_in)
+    }
+
+    /// Turns two-step sign-in on or off (see [`TwoStepSet`]).
+    pub fn set_two_step(&self, set: &TwoStepSet) -> Result<(), String> {
+        self.agent
+            .post(format!("{}/accounts/two-step", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(set)
+            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .and_then(|mut r| {
+                if r.status().is_success() {
+                    Ok(())
+                } else {
+                    Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+                }
+            })
+    }
+
+    /// How a player's account is kept safe, with [`security_message`] for
+    /// `time` (milliseconds) signed by that player.
+    pub fn security(&self, player_id: &str, time: i64, signature: &str) -> Result<Security, String> {
+        self.agent
+            .get(format!("{}/accounts/{player_id}/security", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not get your account's security from the Hub at {}: {e}", self.base))
     }
 
     /// A player's page, by player id or account name.

@@ -204,6 +204,13 @@ The first build compiles Bevy and takes a while. After that it is quick.
   hands that copy out only to someone who proves the password. Ten wrong
   passwords for a name lock signing in to it for 15 minutes. Signing in
   keeps this computer's old key beside the new one (`identity.key.old-…`).
+- **Two-step sign-in and alerts:** with a password set, **Set up two-step
+  sign-in** adds Libroxel to an authenticator app (Google Authenticator,
+  Authy, 1Password…); signing in elsewhere then also needs its 6-digit code,
+  and each code works once. The account page lists recent sign-ins on other
+  computers and where they came from. New accounts work out a small puzzle
+  on the player's computer first (a bot check), and whoever runs the Hub
+  hands out verified badges (`libroxel hub verify <name>`).
 - **Names no one else can take:** a name stays yours on that Hub. Names
   that look official (admin, moderator, staff, libroxel…) can't be
   claimed, and a name you give up stays yours to take back for 30 days, so

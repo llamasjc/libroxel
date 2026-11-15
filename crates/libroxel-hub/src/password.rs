@@ -84,6 +84,9 @@ pub struct SignIn {
     /// Milliseconds since 1970.
     pub time: i64,
     pub signature: String,
+    /// The code from the authenticator app, for accounts that use two-step sign-in.
+    #[serde(default)]
+    pub code: Option<String>,
 }
 
 /// What signing in signs.
@@ -189,7 +192,7 @@ pub(crate) fn sign_in_with(
         data_encoding::HEXLOWER.decode(salt.salt.as_bytes()).map_err(|_| "the Hub sent a bad salt")?;
     let keys = stretch(password, &salt_bytes, salt.memory_kib, salt.passes)?;
     let signature = sign(&keys.login, &sign_in_message(name, time));
-    Ok((SignIn { name: name.to_owned(), time, signature }, keys.seal))
+    Ok((SignIn { name: name.to_owned(), time, signature, code: None }, keys.seal))
 }
 
 /// Opens the sealed identity key from a sign-in, checking it is the account's.
@@ -350,7 +353,16 @@ pub(crate) async fn sign_in(
     if crate::owner::is_banned(&db, &player_id) {
         return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
     }
+    match crate::security::check_code(&db, &player_id, attempt.code.as_deref()) {
+        Ok(()) => {}
+        Err(why) if why == crate::security::NEEDS_CODE => return Err((StatusCode::UNAUTHORIZED, why)),
+        Err(why) => {
+            limits.take(Limit::WrongPassword, &attempt.name);
+            return Err((StatusCode::FORBIDDEN, why));
+        }
+    }
     // Each sign-in is used once.
     super::social::fresh(&db, &player_id, "sign in", attempt.time)?;
+    crate::security::record_sign_in(&db, &player_id, &caller.0);
     Ok(Json(SignedIn { player_id, sealed }))
 }
