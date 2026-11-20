@@ -25,6 +25,8 @@ chacha20poly1305 = "0.10"
 hmac = "0.12"
 sha1 = "0.10"
 sha2 = "0.10"
+# So web pages (such as the libroxel.com site) can call the Hub.
+tower-http = { version = "0.6", features = ["cors"] }
 
 [lints]
 workspace = true
