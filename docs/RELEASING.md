@@ -36,6 +36,30 @@ A tag with a hyphen, such as `v0.2.0-beta.1`, is published as a pre-release.
 The official Hub server picks up each new (non-pre-release) release within
 about 10 minutes and updates itself.
 
+## A quick Hub-only release
+
+To get a fix to the Hub server without a whole release of the app, push a
+tag starting `hub-v`:
+
+```sh
+git tag hub-v0.1.2
+git push origin hub-v0.1.2
+```
+
+**Hub release** builds only the Hub (a few minutes) and publishes it without
+making it the latest release, so the app's download links don't change. The
+server takes whichever release carrying the Hub is newest.
+
+## Why releases take a while, and the cache
+
+A full release compiles the whole engine (Bevy, physics, Luau) for Linux,
+Windows and macOS (twice, for Apple silicon and Intel), with every
+optimisation on. Already-built libraries are cached, but GitHub only lets a
+tag's run use caches saved on `main`, not ones an earlier tag saved. So
+**Release** also runs on every push to `main`, without publishing, to keep
+those caches warm: a release tagged soon after a push to `main` then mostly
+rebuilds only Libroxel's own code.
+
 To try the builds without publishing anything, open **Actions → Release → Run
 workflow**. The files are attached to that run as downloadable artifacts.
 
