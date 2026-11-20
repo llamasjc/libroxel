@@ -45,7 +45,9 @@ use axum::{Json, Router};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
+mod cli;
 mod limits;
+pub use cli::{HUB_HELP, cli};
 mod owner;
 mod password;
 mod security;
@@ -71,10 +73,15 @@ pub const DEFAULT_PORT: u16 = 7430;
 /// The one official Hub: where every copy of the app keeps its accounts,
 /// friends, published games and server lists unless told to use another
 /// (`LIBROXEL_HUB`, or the Hub box in Online). `None` means there is no
-/// official Hub yet, and each app runs its own instead.
+/// official Hub, and each app runs its own instead.
 ///
-/// A fork sets its own here, or builds with `LIBROXEL_OFFICIAL_HUB=<url>`.
-pub const OFFICIAL_HUB: Option<&str> = option_env!("LIBROXEL_OFFICIAL_HUB");
+/// A fork sets its own here, or builds with `LIBROXEL_OFFICIAL_HUB=<url>`
+/// (an empty one builds an app with no official Hub).
+pub const OFFICIAL_HUB: Option<&str> = match option_env!("LIBROXEL_OFFICIAL_HUB") {
+    Some(hub) if hub.is_empty() => None,
+    Some(hub) => Some(hub),
+    None => Some("https://hub.libroxel.com"),
+};
 
 /// How a Hub is run.
 #[derive(Debug, Clone, Copy, Default)]
@@ -651,6 +658,18 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/presence", post(social::update_presence))
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
         .layer(axum::middleware::from_fn_with_state(hub.limits.clone(), limits::every_request))
+        // Any web page may call the Hub, as the app does: everything that
+        // changes something is signed, and nothing rides on cookies.
+        .layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::DELETE,
+                ])
+                .allow_headers([axum::http::header::CONTENT_TYPE]),
+        )
         .with_state(hub)
 }
 
