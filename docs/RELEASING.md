@@ -8,6 +8,8 @@ and attaches the builds to a GitHub Release whenever a version tag is pushed.
 | `libroxel-<version>-linux-x86_64.tar.gz` | Linux (x86-64, glibc 2.35+) | the `libroxel` executable |
 | `libroxel-<version>-windows-x86_64.zip` | Windows 10/11 (x86-64) | `libroxel.exe` |
 | `libroxel-<version>-macos-universal.zip` | macOS 11+ (Apple silicon and Intel) | `Libroxel.app` |
+| `libroxel-hub-linux-x86_64` | Linux servers (x86-64) | the Hub on its own, for the official Hub server |
+| `setup-hub.sh`, `update-hub.sh` | | set a Hub server up, and update it (see [OFFICIAL_HUB.md](OFFICIAL_HUB.md)) |
 | `SHA256SUMS.txt` | | checksums of the files above |
 
 Each build is a single file: the built-in pictures and starter games are compiled
@@ -30,6 +32,9 @@ into it, so nothing else needs to sit next to it.
    from the commits since the previous tag.
 
 A tag with a hyphen, such as `v0.2.0-beta.1`, is published as a pre-release.
+
+The official Hub server picks up each new (non-pre-release) release within
+about 10 minutes and updates itself.
 
 To try the builds without publishing anything, open **Actions → Release → Run
 workflow**. The files are attached to that run as downloadable artifacts.
