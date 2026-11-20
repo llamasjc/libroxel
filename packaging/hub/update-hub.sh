@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Updates the Libroxel Hub from the latest GitHub release of the repository
+# Updates the Libroxel Hub from the newest GitHub release (full or Hub-only) of the repository
 # in /etc/libroxel/hub.conf. A timer runs it every 10 minutes; run it by hand
 # with: sudo libroxel-hub-update --now
 #
@@ -26,8 +26,13 @@ auth=()
 # GitHub answers with JSON, or with the file itself for application/octet-stream.
 api() { local accept="$1"; shift; curl -fsSL --retry 3 -H "Accept: $accept" "${auth[@]}" "$@"; }
 
-release="$(api application/vnd.github+json "https://api.github.com/repos/$REPO/releases/latest")" \
+# The newest release that carries the Hub: a full release (v…) or a Hub-only one (hub-v…).
+releases="$(api application/vnd.github+json "https://api.github.com/repos/$REPO/releases?per_page=30")" \
     || { log "could not ask GitHub about $REPO's releases"; exit 1; }
+release="$(jq -c '[.[] | select((.draft | not) and (.prerelease | not))
+    | select(any(.assets[]; .name == "libroxel-hub-linux-x86_64"))]
+    | sort_by(.published_at) | last // empty' <<<"$releases")"
+[ -n "$release" ] || { log "no release of $REPO carries the Hub yet"; exit 0; }
 tag="$(jq -r .tag_name <<<"$release")"
 current="$(cat "$state/release" 2>/dev/null || true)"
 if [ "$tag" = "$current" ]; then

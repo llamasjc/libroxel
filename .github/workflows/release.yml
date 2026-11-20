@@ -3,10 +3,20 @@ name: Release
 # Push a tag like `v0.1.0` to build Libroxel for Linux, Windows and macOS and
 # publish the builds as a GitHub Release. "Run workflow" on the Actions tab
 # builds the same files without publishing, to try a build first.
+#
+# Pushes to main build too, without publishing, only to keep the build
+# cache warm: GitHub lets a tag's run use the caches main saved, but not the
+# ones an earlier tag saved, so without this every release starts cold.
 on:
   push:
     tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
+
+# A newer push to main makes an older warm-up pointless.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -55,6 +65,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: dist-${{ matrix.name }}
+          # Only main's cache can be used by later releases.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
         shell: bash
@@ -109,6 +121,7 @@ jobs:
           name: ${{ matrix.name }}
           path: ${{ env.ASSET }}
           if-no-files-found: error
+          retention-days: 7
 
   hub:
     # The Hub on its own, for the server, and the script that sets it up
@@ -121,6 +134,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: dist-hub
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
         run: |
           cargo build --locked --profile dist -p libroxel-hub --bin libroxel-hub
