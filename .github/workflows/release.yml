@@ -35,10 +35,16 @@ jobs:
           - name: windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-          - name: macos-universal
+          # The Mac app runs on Apple silicon and Intel. The two halves build
+          # side by side, and the mac job joins them into one app.
+          - name: macos-arm64
             os: macos-latest
             target: aarch64-apple-darwin
-            extra_target: x86_64-apple-darwin
+            mac_half: true
+          - name: macos-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            mac_half: true
     steps:
       - uses: actions/checkout@v4
 
@@ -60,7 +66,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.extra_target && format('{0},{1}', matrix.target, matrix.extra_target) || matrix.target }}
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -72,9 +78,6 @@ jobs:
         shell: bash
         run: |
           cargo build --locked --profile dist -p libroxel --target ${{ matrix.target }}
-          if [[ -n "${{ matrix.extra_target }}" ]]; then
-            cargo build --locked --profile dist -p libroxel --target ${{ matrix.extra_target }}
-          fi
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
@@ -98,27 +101,51 @@ jobs:
           7z a -tzip "$dir.zip" "$dir" > /dev/null
           echo "ASSET=$dir.zip" >> "$GITHUB_ENV"
 
-      - name: Package (macOS)
+      - name: Keep the Mac half
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          dir="libroxel-$VERSION-${{ matrix.name }}"
+          mkdir -p half && cp target/${{ matrix.target }}/dist/libroxel half/libroxel-${{ matrix.target }}
+          echo "ASSET=half/libroxel-${{ matrix.target }}" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          # dist-… files go in the release; the Mac halves only feed the mac job.
+          name: ${{ matrix.mac_half && 'half' || 'dist' }}-${{ matrix.name }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+          retention-days: 7
+
+  mac:
+    name: Package (macOS universal)
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: half-*
+          path: half
+          merge-multiple: true
+      - name: Package
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="dev-${GITHUB_SHA::7}"; fi
+          dir="libroxel-$VERSION-macos-universal"
           app="$dir/Libroxel.app"
           mkdir -p "$app/Contents/MacOS"
           # One app that runs natively on both Apple silicon and Intel Macs.
           lipo -create -output "$app/Contents/MacOS/libroxel" \
-            target/${{ matrix.target }}/dist/libroxel \
-            target/${{ matrix.extra_target }}/dist/libroxel
+            half/libroxel-aarch64-apple-darwin half/libroxel-x86_64-apple-darwin
           sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
           # Ad-hoc signature: an unsigned arm64 binary won't launch at all.
           codesign --force --deep --sign - "$app"
           cp README.md LICENSE-MIT LICENSE-APACHE "$dir/"
           ditto -c -k --keepParent "$dir" "$dir.zip"
           echo "ASSET=$dir.zip" >> "$GITHUB_ENV"
-
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}
+          name: dist-macos-universal
           path: ${{ env.ASSET }}
           if-no-files-found: error
           retention-days: 7
@@ -143,20 +170,21 @@ jobs:
           cp packaging/hub/setup-hub.sh packaging/hub/update-hub.sh hub/
       - uses: actions/upload-artifact@v4
         with:
-          name: hub
+          name: dist-hub
           path: hub/*
           if-no-files-found: error
 
   publish:
     name: Publish the release
     if: github.ref_type == 'tag'
-    needs: [build, hub]
+    needs: [build, mac, hub]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: dist-*
           path: dist
           merge-multiple: true
       - name: Checksums

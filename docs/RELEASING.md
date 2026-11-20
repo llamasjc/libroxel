@@ -53,7 +53,7 @@ server takes whichever release carrying the Hub is newest.
 ## Why releases take a while, and the cache
 
 A full release compiles the whole engine (Bevy, physics, Luau) for Linux,
-Windows and macOS (twice, for Apple silicon and Intel), with every
+Windows and macOS (for Apple silicon and Intel, built side by side and joined into one app), with every
 optimisation on. Already-built libraries are cached, but GitHub only lets a
 tag's run use caches saved on `main`, not ones an earlier tag saved. So
 **Release** also runs on every push to `main`, without publishing, to keep
