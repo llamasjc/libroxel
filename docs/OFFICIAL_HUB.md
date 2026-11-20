@@ -16,25 +16,36 @@ the server's IPv4 address.
 
 ## 2. Set it up with one script
 
-Build the Hub-only program (it needs no graphics, so it builds anywhere):
+Each GitHub release carries the Hub for servers (`libroxel-hub-linux-x86_64`)
+and the two scripts that set it up and update it. On the server:
 
 ```sh
-cargo build --release -p libroxel-hub --bin libroxel-hub
+curl -fsSLO https://github.com/<owner>/<repo>/releases/latest/download/setup-hub.sh
+curl -fsSLO https://github.com/<owner>/<repo>/releases/latest/download/update-hub.sh
+sudo bash setup-hub.sh --repo <owner>/<repo> --domain hub.libroxel.com
 ```
 
-Copy it and the setup script to the server, then run the script there:
-
-```sh
-scp target/release/libroxel-hub packaging/hub/setup-hub.sh ubuntu@<server>:
-ssh -t ubuntu@<server> sudo bash setup-hub.sh hub.libroxel.com
-```
+(For a private repository, add `--token <a token that can read it>`, and
+copy the two scripts over with `scp` instead.)
 
 The script installs the Hub as a service that starts on boot and restarts
-if it stops, puts Caddy in front of it for HTTPS (each site has its own file
-in `/etc/caddy/sites`, so a website can sit beside it), opens only SSH, HTTP
-and HTTPS in the firewall, and backs the database up every night (the last
-14 are kept in `/var/lib/libroxel/backups`). Run it again with a newer
-`libroxel-hub` to update; nothing is lost.
+whenever it stops, puts Caddy in front of it for HTTPS (each site has its own
+file in `/etc/caddy/sites`, so a website can sit beside it), opens only SSH,
+HTTP and HTTPS in the firewall, and backs the database up every night (the
+last 14 are kept in `/var/lib/libroxel/backups`).
+
+### Updates
+
+Every 10 minutes the server looks for a new release. When there is one, it
+checks each file against the release's `SHA256SUMS.txt`, backs the database
+up (`backups/before-<tag>.sqlite`), sets itself up again with that release's
+own `setup-hub.sh`, and checks the Hub answers. If it doesn't within 30
+seconds, the old Hub goes back and that release is skipped. Publishing a
+release (see [RELEASING.md](RELEASING.md)) is all it takes.
+
+- Update now: `sudo libroxel-hub-update --now`
+- What happened: `journalctl -u libroxel-hub-update -n 30`
+- Settings (domain, repository, token): `/etc/libroxel/hub.conf`
 
 ## 3. HTTPS and who is calling
 

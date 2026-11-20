@@ -110,10 +110,33 @@ jobs:
           path: ${{ env.ASSET }}
           if-no-files-found: error
 
+  hub:
+    # The Hub on its own, for the server, and the script that sets it up
+    # there. Servers set up with it fetch these from each new release.
+    name: Build (Hub server)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: dist-hub
+      - name: Build
+        run: |
+          cargo build --locked --profile dist -p libroxel-hub --bin libroxel-hub
+          mkdir hub
+          cp target/dist/libroxel-hub hub/libroxel-hub-linux-x86_64
+          cp packaging/hub/setup-hub.sh packaging/hub/update-hub.sh hub/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hub
+          path: hub/*
+          if-no-files-found: error
+
   publish:
     name: Publish the release
     if: github.ref_type == 'tag'
-    needs: build
+    needs: [build, hub]
     runs-on: ubuntu-latest
     permissions:
       contents: write
