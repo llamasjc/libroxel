@@ -82,6 +82,9 @@ pub struct Platform {
     /// The Hub asked for a two-step code when signing in, typed here.
     sign_in_code: String,
     needs_code: bool,
+    /// Why the account in use must set a new password before going on, if it
+    /// signed in with one too easy to guess (read again when None).
+    weak_password: Option<Option<String>>,
     /// How the account is kept safe, as the Hub says (only to its owner).
     security: Option<libroxel_hub::Security>,
     security_found: Slot<libroxel_hub::Security>,
@@ -154,6 +157,7 @@ impl Default for Platform {
             password_done: Arc::default(),
             password_status: None,
             sign_in_code: String::new(),
+            weak_password: None,
             needs_code: false,
             security: None,
             security_found: Arc::default(),
@@ -312,6 +316,7 @@ impl Platform {
                 // A sign-in may have changed whose account this is.
                 self.account_hub = None;
             }
+            self.weak_password = None;
             self.password_status = Some(result);
         }
         if let Some(result) = self.published.lock().unwrap().take() {
@@ -643,6 +648,7 @@ impl Platform {
                     .map_or(0, |d| d.as_secs() as i64);
                 let set = libroxel_hub::seal_password(&me.secret_bytes(), &password, time)?;
                 client.set_password(&set)?;
+                crate::accounts::clear_weak_password();
                 Ok("Password set. Sign in with your name and it on any computer.".to_owned())
             });
             *out.lock().unwrap() = Some(result);
@@ -667,6 +673,11 @@ impl Platform {
                 let kept = me
                     .save_replacing(&crate::identity_path())
                     .map_err(|e| format!("Signed in, but could not save the key here: {e}"))?;
+                // The password typed is checked again here, so an account
+                // with an easy one has to pick a better one to go on.
+                if let Some(why) = libroxel_hub::password_problem(&password, &name) {
+                    crate::accounts::mark_weak_password(&me.player_id(), &why)?;
+                }
                 Ok(match kept {
                     Some(old) => format!(
                         "Signed in as {name}. This computer's old key is kept at {}, in case you need it.",
@@ -943,6 +954,59 @@ impl Platform {
         }
     }
 
+    /// Why the account in use has to set a new password before going on:
+    /// it signed in with one too easy to guess.
+    pub fn weak_password(&mut self) -> Option<String> {
+        self.weak_password.get_or_insert_with(crate::accounts::weak_password).clone()
+    }
+
+    /// The whole page while the account must change its password: a new
+    /// one, typed twice, and nothing else until it is set.
+    pub fn new_password_ui(&mut self, ui: &mut egui::Ui, why: &str) {
+        crate::theme::heading(ui, "Pick a new password");
+        ui.colored_label(
+            crate::theme::AMBER,
+            format!("Your password is too easy to guess ({why}). Set a new one to keep playing."),
+        );
+        ui.label(
+            RichText::new(
+                "Use at least 10 characters that aren't a common password or your name. A few unrelated words work well. It is worked into a key on this computer and never sent to the Hub.",
+            )
+            .color(crate::theme::MUTED),
+        );
+        ui.add_space(8.0);
+        let name = self
+            .account
+            .as_ref()
+            .map(|a| a.name.clone())
+            .unwrap_or_else(|| self.account_name.trim().to_owned());
+        egui::Grid::new("new-password").num_columns(2).show(ui, |ui| {
+            ui.label("New password");
+            ui.add(egui::TextEdit::singleline(&mut self.password).password(true).char_limit(256));
+            ui.end_row();
+            ui.label("Again");
+            ui.add(egui::TextEdit::singleline(&mut self.password_again).password(true).char_limit(256));
+            ui.end_row();
+        });
+        let problem = libroxel_hub::password_problem(&self.password, &name)
+            .or_else(|| (self.password != self.password_again).then(|| "the two don't match".to_owned()));
+        ui.horizontal(|ui| {
+            let ready = problem.is_none() && !self.password_busy;
+            if ui.add_enabled(ready, egui::Button::new("Set password")).clicked() {
+                self.set_password();
+            }
+            if self.password_busy {
+                ui.spinner();
+            }
+        });
+        if let Some(problem) = problem.filter(|_| !self.password.is_empty()) {
+            ui.colored_label(crate::theme::AMBER, format!("Not yet: {problem}."));
+        }
+        if let Some(Err(why)) = &self.password_status {
+            ui.colored_label(crate::theme::RED, why);
+        }
+    }
+
     /// The password part of the Avatar tab: set one, or sign in with one.
     fn password_ui(&mut self, ui: &mut egui::Ui) {
         if self.account.is_some() {
@@ -1044,6 +1108,7 @@ impl Platform {
         self.two_step_secret = None;
         self.password_status = Some(said);
         self.saved_accounts = None;
+        self.weak_password = None;
     }
 
     /// The accounts saved on this computer: switch to one, or sign out.

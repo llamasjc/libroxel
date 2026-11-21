@@ -37,6 +37,34 @@ pub fn sign_out(name: Option<&str>) -> Result<(), String> {
     sign_out_at(&crate::identity_path(), name)
 }
 
+/// Notes that the account `player_id` signed in with a password too easy to
+/// guess (`why`), so the app asks for a new one before anything else.
+pub fn mark_weak_password(player_id: &str, why: &str) -> Result<(), String> {
+    let path = weak_path(&crate::identity_path());
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::write(&path, format!("{player_id}\n{why}"))
+        .map_err(|e| format!("Could not save a note on this computer: {e}"))
+}
+
+/// Why the account in use has to change its password, if it does.
+pub fn weak_password() -> Option<String> {
+    let identity = crate::identity_path();
+    let note = std::fs::read_to_string(weak_path(&identity)).ok()?;
+    let (player_id, why) = note.split_once('\n')?;
+    (load(&identity).ok()?.player_id() == player_id).then(|| why.to_owned())
+}
+
+/// Forgets the note, once the account has a new password.
+pub fn clear_weak_password() {
+    let _ = std::fs::remove_file(weak_path(&crate::identity_path()));
+}
+
+fn weak_path(identity: &Path) -> PathBuf {
+    identity.parent().map(|dir| dir.join("weak-password")).unwrap_or_else(|| PathBuf::from("weak-password"))
+}
+
 fn folder(identity: &Path) -> PathBuf {
     identity.parent().map(|dir| dir.join("accounts")).unwrap_or_else(|| PathBuf::from("accounts"))
 }

@@ -254,10 +254,69 @@ async function signIn(name, keys, code) {
   return { playerId: signedIn.player_id, secret: hex(secret) };
 }
 
+/** Why `password` can't be used, if it can't. Call `loadCommonPasswords` first. */
 function passwordProblem(password, name) {
   if ([...password].length < MIN_PASSWORD) return `A password is at least ${MIN_PASSWORD} characters.`;
   if (utf8(password).length > 256) return 'That password is too long.';
   if (name && password.toLowerCase().includes(name.toLowerCase())) return "A password can't have your name in it.";
+  return weakPassword(password);
+}
+
+// The most used passwords, the same list the app has built in.
+let commonPasswords = null;
+
+async function loadCommonPasswords() {
+  if (commonPasswords) return commonPasswords;
+  let text;
+  try {
+    const response = await fetch('common-passwords.txt');
+    if (!response.ok) throw new Error();
+    text = await response.text();
+  } catch {
+    throw new Error('Could not load the password check. Try again in a moment.');
+  }
+  commonPasswords = new Set(text.split('\n').map((l) => l.trim()).filter(Boolean));
+  return commonPasswords;
+}
+
+// Runs of keys people type as a password, checked both ways round.
+const KEY_RUNS = [
+  '01234567890',
+  'abcdefghijklmnopqrstuvwxyz',
+  'qwertyuiopasdfghjklzxcvbnm',
+  '1qaz2wsx3edc4rfv5tgb6yhn7ujm8ik9ol0p',
+  'qazwsxedcrfvtgbyhnujmikolp',
+  "zaq12wsxcde34rfvbgt56yhnmju78ik,.lo90p;/-['=]",
+];
+
+function unleet(word, one) {
+  const look = { 0: 'o', 1: one, '!': one, '|': one, 3: 'e', 4: 'a', '@': 'a', 5: 's', $: 's', 7: 't', '+': 't', 8: 'b', 9: 'g' };
+  return [...word].map((c) => look[c] || c).join('');
+}
+
+const trimNonLetters = (word) => word.replace(/^\P{L}+|\P{L}+$/gu, '');
+
+/** Why `password` is too easy to guess, if it is (as the app checks it). */
+function weakPassword(password) {
+  const common = commonPasswords || new Set();
+  const lower = password.toLowerCase();
+  if (common.has(lower)) return 'That is one of the most common passwords.';
+  const chars = [...lower];
+  if (new Set(chars).size < 5) return 'That password uses too few different characters.';
+  const n = chars.length;
+  for (let k = 1; k <= n / 2; k++) {
+    if (n % k === 0 && lower === chars.slice(0, k).join('').repeat(n / k)) return 'That password is the same few characters over and over.';
+  }
+  const reversed = chars.reverse().join('');
+  if (KEY_RUNS.some((run) => run.includes(lower) || run.includes(reversed))) return 'That password is a run of keys.';
+  for (const word of [trimNonLetters(lower), lower]) {
+    for (const one of ['i', 'l']) {
+      const plain = unleet(word, one);
+      for (const guess of [plain, trimNonLetters(plain)]) {
+        if ([...guess].length >= 4 && common.has(guess)) return 'That is a common password with a few changes.';
+      }
+    }
+  }
   return null;
 }
 
@@ -589,7 +648,7 @@ function parseRoute() {
   switch (parts[0]) {
     case 'game': return { name: 'game', key: parts.slice(1).join('/') };
     case 'user': return { name: 'user', id: parts[1] };
-    case 'search': case 'friends': case 'avatar': case 'sign-in': case 'create': case 'download': return { name: parts[0] };
+    case 'search': case 'friends': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': return { name: parts[0] };
     default: return { name: 'home' };
   }
 }
@@ -644,8 +703,9 @@ function status(text, kind = '') {
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, search: searchPage, friends: friendsPage, avatar, user, 'sign-in': signInPage, create: createPage, download };
-  const view = views[route.name] || home;
+  const views = { home, game, search: searchPage, friends: friendsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage };
+  // An account that signed in with an easy password sees nothing else until it sets a new one.
+  const view = session?.mustChange ? passwordPage : views[route.name] || home;
   const nodes = [];
   if (flash) {
     nodes.push(status(flash.text, flash.kind || ''));
@@ -661,7 +721,7 @@ function render() {
 
 function titleFor(r) {
   if (r.name === 'game') return entries().find((e) => e.key === r.key)?.title || 'Game';
-  return { home: 'Home', search: 'Search', friends: 'Friends', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download' }[r.name] || 'Libroxel';
+  return { home: 'Home', search: 'Search', friends: 'Friends', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password' }[r.name] || 'Libroxel';
 }
 
 function whereabouts(friend) {
@@ -1151,7 +1211,8 @@ function security() {
   if (securityInfo.error) return add(panel, [status(securityInfo.error, 'error')]);
   add(panel, [
     el('p', { class: 'soft' }, `You are ${session.name}. `,
-      securityInfo.has_password ? 'You have a password, so you can sign in anywhere.' : 'Set a password in the app to sign in on other computers.',
+      securityInfo.has_password ? 'You have a password, so you can sign in anywhere. ' : 'Set a password to sign in on other computers. ',
+      el('a', { href: '#/password' }, securityInfo.has_password ? 'Change your password' : 'Set a password'), '.',
       ' ', securityInfo.two_step ? 'Two-step sign-in is on.' : 'Turn on two-step sign-in in the app, on its Avatar tab, for a code on top of your password.'),
     securityInfo.sign_ins?.length
       ? el('div', {}, el('div', { class: 'caps' }, 'Latest sign-ins'), el('ul', { class: 'signins' }, securityInfo.sign_ins.slice(0, 6).map((s) => el('li', {}, `${ago(s.secs_ago)} from ${s.from}`))))
@@ -1174,6 +1235,48 @@ function accountTabs(current) {
 }
 
 /** Signed in already: say so, and offer to sign out to use another account. */
+/** Setting a new password; the only page while the one used to sign in is too easy. */
+function passwordPage() {
+  if (!session) return signInPage();
+  const forced = session.mustChange;
+  const password = el('input', { type: 'password', autocomplete: 'new-password' });
+  const again = el('input', { type: 'password', autocomplete: 'new-password' });
+  const message = el('div');
+  const go = el('button', { class: 'btn go', type: 'submit' }, icon(ICON.shield), 'Set password');
+  const form = el('form', { class: 'narrow' },
+    el('label', { class: 'field' }, el('span', {}, `New password (at least ${MIN_PASSWORD} characters, not a common one, without your name in it)`), password),
+    el('label', { class: 'field' }, el('span', {}, 'New password again'), again),
+    el('div', { class: 'form-actions' }, go, !forced && el('a', { href: '#/avatar' }, 'Cancel')),
+    message);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const say = (text, kind = 'wait') => message.replaceChildren(status(text, kind));
+    go.disabled = true;
+    try {
+      await loadCommonPasswords();
+      const problem = passwordProblem(password.value, session.name || '') || (password.value !== again.value ? "The passwords don't match." : null);
+      if (problem) throw new Error(problem);
+      say('Locking your account with your new password… (this takes a moment, on purpose)');
+      await setPassword(unhex(session.secret), session.playerId, password.value);
+      const { mustChange, ...rest } = session;
+      saveSession(rest, isRemembered());
+      securityInfo = null;
+      flash = { text: 'Password set. Use it to sign in here and in the app.' };
+      goTo(forced ? '#/' : '#/avatar');
+    } catch (err) {
+      say(err.message, 'error');
+      go.disabled = false;
+    }
+  });
+  return [
+    el('h1', { class: 'title' }, forced ? 'Pick a new password' : 'Change your password'),
+    forced && status(`Your password is too easy to guess: ${forced.charAt(0).toLowerCase()}${forced.slice(1)} Set a new one to keep going.`, 'error'),
+    el('p', { class: 'note' }, 'A few unrelated words work well. Your password never leaves this computer: it is turned into a key here, the same way the app does it.'),
+    form,
+    forced && el('p', {}, el('button', { class: 'link', type: 'button', onclick: () => { saveSession(null); data.friends = null; data.me = null; goTo('#/sign-in'); } }, 'Sign out instead')),
+  ];
+}
+
 function signedInAlready(next) {
   return [
     el('h1', { class: 'title' }, next === 'create' ? 'Make an account' : 'Sign in'),
@@ -1224,15 +1327,19 @@ function signInPage() {
         const n = name.value.trim();
         if (!n || !password.value) throw new Error('Type your name and password.');
         say('Checking your password… (this takes a moment, on purpose)');
-        pending = { name: n, keys: await stretchFor(n, password.value) };
+        await loadCommonPasswords();
+        // Checked again on every sign-in: an easy password has to be changed before going on.
+        const weak = passwordProblem(password.value, n);
+        pending = { name: n, keys: await stretchFor(n, password.value), weak };
       } else say('Signing in…');
       const signed = await signIn(pending.name, pending.keys, needsCode ? code.value.trim() : null);
       const who = (await accountNamed(pending.name).catch(() => null))?.name || pending.name;
-      saveSession({ ...signed, name: who }, remember.checked);
+      const weak = pending.weak;
+      saveSession({ ...signed, name: who, ...(weak ? { mustChange: weak } : {}) }, remember.checked);
       pending = null;
       flash = { text: `Signed in. Welcome back, ${who}!` };
       await refresh();
-      goTo('#/');
+      goTo(weak ? '#/password' : '#/');
     } catch (err) {
       if (err.status === 401 && pending?.keys && !needsCode) {
         render();
@@ -1273,7 +1380,7 @@ function createPage() {
   const go = el('button', { class: 'btn go', type: 'submit' }, icon(ICON.userPlus), 'Make my account');
   const form = el('form', { class: 'narrow' },
     el('label', { class: 'field' }, el('span', {}, 'Name (3 to 20 letters, digits or _, with a letter)'), name),
-    el('label', { class: 'field' }, el('span', {}, `Password (at least ${MIN_PASSWORD} characters, without your name in it)`), password),
+    el('label', { class: 'field' }, el('span', {}, `Password (at least ${MIN_PASSWORD} characters, not a common one, without your name in it)`), password),
     el('label', { class: 'field' }, el('span', {}, 'Password again'), again),
     el('label', { class: 'field' }, el('span', {}, "Email (kept private: we mail it a code to prove it's yours)"), email),
     el('label', { class: 'check' }, remember, 'Keep me signed in on this computer'),
@@ -1283,6 +1390,11 @@ function createPage() {
     e.preventDefault();
     const say = (text, kind = 'wait') => message.replaceChildren(status(text, kind));
     const n = name.value.trim();
+    try {
+      await loadCommonPasswords();
+    } catch (err) {
+      return say(err.message, 'error');
+    }
     const problem = !/^[A-Za-z0-9_]{3,20}$/.test(n) || !/[A-Za-z]/.test(n)
       ? 'A name is 3 to 20 letters, digits or underscores, with at least one letter.'
       : passwordProblem(password.value, n) || (password.value !== again.value ? "The passwords don't match." : null)
