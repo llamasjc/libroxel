@@ -1,14 +1,11 @@
 name: Release
 
 # Push a tag like `v0.1.0` to build Libroxel for Linux, Windows and macOS and
-# publish the builds as a GitHub Release. This doesn't wait for CI: a failing
-# test or lint never stops a release.
+# publish the builds as a GitHub Release. It doesn't wait for CI.
 #
-# A build that fails on one platform doesn't stop the others. The release
-# still comes out with what did build, but it only becomes "Latest" when
-# every installer is on it, and the run is then marked failed so you notice.
-# The download page takes each platform's file from the newest release that
-# has it, so the site always offers a download once any release exists. "Run workflow" on the Actions tab
+# It's all or nothing: the release is only published once every platform
+# has built. If one fails, nothing is published, the previous release stays
+# where it is, and "Re-run failed jobs" finishes the same tag later. "Run workflow" on the Actions tab
 # builds the same files without publishing, to try a build first.
 #
 # Pushes to main build too, without publishing, only to keep the build
@@ -170,29 +167,15 @@ jobs:
   mac:
     name: Package (macOS universal)
     needs: build
-    # Runs even when the Windows or Linux build failed.
-    if: ${{ !cancelled() }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-        continue-on-error: true
         with:
           pattern: half-*
           path: half
           merge-multiple: true
-      - name: Check both Mac halves built
-        id: halves
-        shell: bash
-        run: |
-          if [[ -f half/libroxel-aarch64-apple-darwin && -f half/libroxel-x86_64-apple-darwin ]]; then
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::A Mac build failed, so this release has no Mac app."
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-          fi
       - name: Package
-        if: steps.halves.outputs.ok == 'true'
         shell: bash
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="dev-${GITHUB_SHA::7}"; fi
@@ -229,7 +212,6 @@ jobs:
             "$dir.dmg" "$dir/"
           echo "ASSET=$dir.dmg" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
-        if: steps.halves.outputs.ok == 'true'
         with:
           name: dist-macos-universal
           path: ${{ env.ASSET }}
@@ -262,68 +244,41 @@ jobs:
 
   publish:
     name: Publish the release
-    # Runs even when some builds failed, and publishes what built. Only a
-    # cancelled run, or one where no app built at all, publishes nothing.
-    if: ${{ !cancelled() && github.ref_type == 'tag' }}
+    if: github.ref_type == 'tag'
     needs: [build, mac, hub]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
-        continue-on-error: true
         with:
           pattern: dist-*
           path: dist
           merge-multiple: true
-      - name: See what built
-        id: files
-        shell: bash
+      - name: Check every installer is there
         run: |
-          mkdir -p dist
-          have() { compgen -G "dist/libroxel-*$1" >/dev/null; }
-          missing=()
-          have -windows-x86_64-setup.exe || missing+=("Windows setup wizard")
-          have -macos-universal.dmg || missing+=("Mac .dmg")
-          have -linux-x86_64.AppImage || missing+=("Linux AppImage")
-          if (( ${#missing[@]} == 3 )); then
-            echo "::error::No app built on any platform, so nothing is published. The download page keeps offering the last release."
-            exit 1
-          fi
-          if (( ${#missing[@]} )); then
-            list=$(IFS=,; echo "${missing[*]}")
-            echo "::warning::This release is missing: $list. It is published, but not as Latest."
-            echo "missing=$list" >> "$GITHUB_OUTPUT"
-            echo "complete=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "complete=true" >> "$GITHUB_OUTPUT"
-          fi
+          for end in -windows-x86_64-setup.exe -macos-universal.dmg -linux-x86_64.AppImage -linux-x86_64.deb; do
+            compgen -G "dist/libroxel-*$end" >/dev/null || { echo "::error::Missing libroxel-*$end"; exit 1; }
+          done
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
-      - name: Clear out an earlier try
-        id: earlier
+      - name: Remove drafts from earlier tries
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          # A draft left by an earlier, broken run for this tag is deleted, so
-          # there's only ever one release per tag. If this tag's release is
-          # already public (a re-run to add a missing platform), it is
-          # updated in place and stays public the whole time.
-          releases=$(gh api "repos/$GH_REPO/releases?per_page=100")
-          for id in $(jq -r --arg t "$GITHUB_REF_NAME" '.[] | select(.draft and .tag_name == $t) | .id' <<<"$releases"); do
-            gh api -X DELETE "repos/$GH_REPO/releases/$id"
-          done
-          public=$(jq -r --arg t "$GITHUB_REF_NAME" 'any(.[]; (.draft | not) and .tag_name == $t)' <<<"$releases")
-          echo "public=$public" >> "$GITHUB_OUTPUT"
+          # A draft left behind by a run that stopped halfway would otherwise
+          # sit next to the new one with the same tag.
+          gh api "repos/$GH_REPO/releases?per_page=100" \
+            --jq ".[] | select(.draft and .tag_name == \"$GITHUB_REF_NAME\") | .id" |
+            while read -r id; do gh api -X DELETE "repos/$GH_REPO/releases/$id"; done
       # The release is made as a draft with every file on it, and only
       # then published, all at once: until that moment the download page,
       # the app's update check and Hub servers keep using the last release.
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          draft: ${{ steps.earlier.outputs.public != 'true' }}
-          make_latest: false
+          draft: true
           body: |
             ## Download Libroxel
 
@@ -341,20 +296,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          COMPLETE: ${{ steps.files.outputs.complete }}
         run: |
-          # "Latest" moves only to a release with every installer on it, so
-          # GitHub's Latest badge and releases/latest links never land on a
-          # release that's missing a platform.
-          if [[ "$GITHUB_REF_NAME" != *-* && "$COMPLETE" == true ]]; then latest=true; else latest=false; fi
+          # The app's release is the one download links point at.
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then latest=false; else latest=true; fi
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest=$latest
-          # Check it really is public now, so a draft is never left behind.
           [[ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" == false ]] \
-            || { echo "::error::The release is still a draft."; exit 1; }
-      - name: Say what's missing
-        if: steps.files.outputs.complete == 'false'
-        env:
-          MISSING: ${{ steps.files.outputs.missing }}
-        run: |
-          echo "::error::Published without: $MISSING. Fix the build and push a new tag (or re-run the failed jobs) to add them."
-          exit 1
+            || { echo "::error::The release is still a draft"; exit 1; }
