@@ -311,6 +311,12 @@ The first build compiles Bevy and takes a while. After that it is quick.
     computer's search (alpha-beta with a transposition table, quiescence,
     null moves and late move reductions) shows its depth, score and best
     line as it thinks, beside a bar for who is winning.
+  - **Checkers**, **Connect 4** and **Rey Esquinado** (Kings in the
+    Corner, for 2 to 4 players) are table games made the same way. They
+    share one table server and one screen (`crates/libroxel/src/table_games/`):
+    a menu with a big **Play** button against an Easy, Medium or Hard
+    computer player, or **Find a game** and **Play** buttons to sit down
+    with people in the server. Wins are saved with the game's data.
 - **Undo/redo** with Ctrl+Z and Ctrl+Y. **Save** with Ctrl+S. Games are
   saved as `.lrx` files in `~/Projects/libroxel-games/` by default.
 
