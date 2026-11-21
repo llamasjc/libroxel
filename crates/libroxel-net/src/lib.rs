@@ -214,10 +214,26 @@ pub enum Network {
 }
 
 async fn bind(identity: &Identity, network: Network, alpns: Vec<Vec<u8>>) -> Result<Endpoint, String> {
-    let builder = match network {
+    bind_on(identity, network, alpns, None).await
+}
+
+/// [`bind`], on UDP port `udp_port` when given (a server behind a firewall
+/// opens that port so players reach it directly, not through a relay).
+async fn bind_on(
+    identity: &Identity,
+    network: Network,
+    alpns: Vec<Vec<u8>>,
+    udp_port: Option<u16>,
+) -> Result<Endpoint, String> {
+    let mut builder = match network {
         Network::Internet => Endpoint::builder(presets::N0),
         Network::LocalOnly => Endpoint::builder(presets::Minimal).relay_mode(RelayMode::Disabled),
     };
+    if let Some(port) = udp_port {
+        builder = builder
+            .bind_addr(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)))
+            .map_err(|e| format!("could not use UDP port {port}: {e}"))?;
+    }
     builder
         .secret_key(identity.key.clone())
         .alpns(alpns)
@@ -318,14 +334,26 @@ impl HostTunnel {
     /// Starts handing out a join code for the game on local `game_port`.
     /// The code appears in [`code`](Self::code) within a few seconds.
     pub fn start(identity: &Identity, network: Network, game_port: u16) -> Result<Self, String> {
+        Self::start_on(identity, network, game_port, None)
+    }
+
+    /// [`start`](Self::start), taking players on UDP port `udp_port` when
+    /// given rather than any free one.
+    pub fn start_on(
+        identity: &Identity,
+        network: Network,
+        game_port: u16,
+        udp_port: Option<u16>,
+    ) -> Result<Self, String> {
         let status = Arc::new(Status::default());
         let identity = identity.clone();
         let shared = status.clone();
         let stop = spawn("libroxel-host-net", status.clone(), async move {
-            let endpoint = match bind(&identity, network, vec![ALPN.to_vec(), PING_ALPN.to_vec()]).await {
-                Ok(endpoint) => endpoint,
-                Err(e) => return shared.fail(e),
-            };
+            let endpoint =
+                match bind_on(&identity, network, vec![ALPN.to_vec(), PING_ALPN.to_vec()], udp_port).await {
+                    Ok(endpoint) => endpoint,
+                    Err(e) => return shared.fail(e),
+                };
             *shared.endpoint.lock().unwrap() = Some(endpoint.clone());
             if network == Network::Internet {
                 // Wait for a relay so the code works from anywhere; a code

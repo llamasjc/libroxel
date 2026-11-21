@@ -809,6 +809,8 @@ impl Menu {
             official: false,
             max_players: 0,
             game_id: crate::social::game_ref(&self.game).game_id,
+            udp_port: None,
+            stop_when_empty: None,
         }))
     }
 }

@@ -25,6 +25,7 @@ GITHUB_TOKEN=""
 UPDATE_FROM=releases
 SOURCE_USER=""
 SOURCE_DIR=""
+GAME_SERVERS=yes
 . "$conf"
 [ -n "$REPO" ] || { echo "No REPO in $conf, so there is nothing to update from."; exit 0; }
 
@@ -132,6 +133,28 @@ if [ "$UPDATE_FROM" = source ]; then
     as_user "cd '$dir' && git checkout --quiet main && git reset --quiet --hard origin/main \
         && PATH=\"\$HOME/.cargo/bin:\$PATH\" cargo build --release --locked -p libroxel-hub --bin libroxel-hub"
     cp "$dir/target/release/libroxel-hub" "$dir/packaging/hub/setup-hub.sh" "$dir/packaging/hub/update-hub.sh" "$work/"
+    if [ "$GAME_SERVERS" = yes ]; then
+        # The game server is the whole app, which needs a few libraries to build.
+        if ! dpkg -s libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev pkg-config >/dev/null 2>&1; then
+            log "installing what the game server needs to build"
+            apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+                pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+        fi
+        # Building it takes a few GB of memory: add swap on a small server that has none.
+        memory_kb="$(awk '/MemTotal/ {print $2}' /proc/meminfo)"
+        if [ "$memory_kb" -lt 6000000 ] && [ -z "$(swapon --noheadings)" ] && [ ! -f /swapfile ]; then
+            log "adding 4 GB of swap for building"
+            fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile \
+                && echo '/swapfile none swap sw 0 0' >> /etc/fstab
+        fi
+        jobs=$(( memory_kb / 2000000 )); [ "$jobs" -ge 1 ] || jobs=1
+        log "building the game server (the first time takes a while)"
+        if as_user "cd '$dir' && PATH=\"\$HOME/.cargo/bin:\$PATH\" nice cargo build --release --locked -j $jobs -p libroxel --bin libroxel"; then
+            cp "$dir/target/release/libroxel" "$work/"
+        else
+            log "the game server didn't build; keeping the one there is (if any)"
+        fi
+    fi
     install_hub "$work" "$version"
     exit 0
 fi
@@ -168,4 +191,16 @@ for name in libroxel-hub-linux-x86_64 setup-hub.sh update-hub.sh SHA256SUMS.txt;
 done
 (cd "$work" && grep -E ' (libroxel-hub-linux-x86_64|setup-hub.sh|update-hub.sh)$' SHA256SUMS.txt | sha256sum --check --strict --quiet) \
     || { log "checksums don't match; not installing $tag"; exit 1; }
+# The app, for game servers, from the release's Debian package.
+app="$(jq -r '.assets[] | select(.name | test("^libroxel-.*linux-x86_64\\.deb$")) | .name' <<<"$release" | head -n 1)"
+if [ "$GAME_SERVERS" = yes ] && [ -n "$app" ]; then
+    api application/octet-stream "$(asset_url "$app")" -o "$work/$app"
+    if (cd "$work" && grep -F " $app" SHA256SUMS.txt | sha256sum --check --strict --quiet); then
+        dpkg-deb -x "$work/$app" "$work/app"
+        found="$(find "$work/app" -type f -name libroxel -perm -u+x | head -n 1)"
+        [ -n "$found" ] && cp "$found" "$work/libroxel"
+    else
+        log "the app's checksum doesn't match; leaving game servers as they are"
+    fi
+fi
 install_hub "$work" "$tag"

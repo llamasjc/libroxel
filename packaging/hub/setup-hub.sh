@@ -24,6 +24,11 @@ GITHUB_TOKEN=""
 UPDATE_FROM=releases
 SOURCE_USER=""
 SOURCE_DIR=""
+# Game servers on this computer: Play on a game puts players here.
+GAME_SERVERS=yes
+MAX_GAME_SERVERS=8
+PLAYERS_PER_SERVER=12
+FIRST_UDP_PORT=7500
 [ -f "$conf" ] && . "$conf"
 check=yes
 while [ $# -gt 0 ]; do
@@ -33,6 +38,10 @@ while [ $# -gt 0 ]; do
         --token) GITHUB_TOKEN="$2"; shift 2 ;;
         --no-check) check=no; shift ;;
         --from-source) UPDATE_FROM=source; shift ;;
+        --no-game-servers) GAME_SERVERS=no; shift ;;
+        --game-servers) GAME_SERVERS=yes; shift ;;
+        --max-game-servers) MAX_GAME_SERVERS="$2"; shift 2 ;;
+        --players-per-server) PLAYERS_PER_SERVER="$2"; shift 2 ;;
         -*) echo "unknown option $1"; exit 1 ;;
         *) DOMAIN="$1"; shift ;;
     esac
@@ -62,6 +71,14 @@ GITHUB_TOKEN="$GITHUB_TOKEN"
 UPDATE_FROM="$UPDATE_FROM"
 SOURCE_USER="$SOURCE_USER"
 SOURCE_DIR="$SOURCE_DIR"
+# Game servers the Hub runs on this computer ("yes" or "no"): pressing Play
+# finds one with room or starts one. At most MAX_GAME_SERVERS at once, with
+# PLAYERS_PER_SERVER each, on UDP ports from FIRST_UDP_PORT up (opened in
+# the firewall). Each stops once empty for two minutes.
+GAME_SERVERS="$GAME_SERVERS"
+MAX_GAME_SERVERS="$MAX_GAME_SERVERS"
+PLAYERS_PER_SERVER="$PLAYERS_PER_SERVER"
+FIRST_UDP_PORT="$FIRST_UDP_PORT"
 CONF
 umask 022
 
@@ -93,6 +110,36 @@ if [ -f "$here/update-hub.sh" ]; then
     install -m 755 "$here/update-hub.sh" /usr/local/bin/libroxel-hub-update
 fi
 
+echo "== Game servers"
+game_flags=""
+if [ "$GAME_SERVERS" = yes ]; then
+    # The game server is the Libroxel app itself, run as `libroxel server` with no window.
+    if [ -f "$here/libroxel" ]; then
+        install -m 755 "$here/libroxel" /usr/local/bin/libroxel.new
+        mv -f /usr/local/bin/libroxel.new /usr/local/bin/libroxel
+    fi
+    if [ -x /usr/local/bin/libroxel ]; then
+        # What the app needs to run, even with no screen (sound and input libraries).
+        if ! ldconfig -p | grep -q 'libasound.so.2' || ! ldconfig -p | grep -q 'libudev.so.1'; then
+            apt-get update -q
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -q libudev1 \
+                || true
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -q libasound2t64 2>/dev/null \
+                || DEBIAN_FRONTEND=noninteractive apt-get install -y -q libasound2
+        fi
+        install -d -o libroxel -g libroxel -m 750 /var/lib/libroxel/game-servers
+        game_flags="--game-servers /usr/local/bin/libroxel --game-server-dir /var/lib/libroxel/game-servers"
+        game_flags="$game_flags --max-game-servers $MAX_GAME_SERVERS --players-per-server $PLAYERS_PER_SERVER"
+        game_flags="$game_flags --first-udp-port $FIRST_UDP_PORT"
+        echo "Up to $MAX_GAME_SERVERS game servers of $PLAYERS_PER_SERVER players each."
+    else
+        echo "No libroxel app here yet, so no game servers: Play falls back to players hosting."
+        echo "(libroxel-hub-update installs it: from source it builds it, from releases it unpacks it.)"
+    fi
+else
+    echo "Off (GAME_SERVERS=no in $conf): players host every game themselves."
+fi
+
 echo "== Mail settings in /etc/libroxel/mail.conf (for email codes)"
 if [ ! -f /etc/libroxel/mail.conf ]; then
     install -m 600 /dev/null /etc/libroxel/mail.conf
@@ -120,7 +167,8 @@ StartLimitIntervalSec=0
 User=libroxel
 Group=libroxel
 EnvironmentFile=-/etc/libroxel/mail.conf
-ExecStart=/usr/local/bin/libroxel-hub --port 7430 --data /var/lib/libroxel/hub.sqlite --behind-proxy
+ExecStart=/usr/local/bin/libroxel-hub --port 7430 --data /var/lib/libroxel/hub.sqlite --behind-proxy $game_flags
+Environment=HOME=/var/lib/libroxel
 Restart=always
 RestartSec=2
 NoNewPrivileges=yes
@@ -128,6 +176,11 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 ReadWritePaths=/var/lib/libroxel
+# Game servers are the Hub's children. Restarting the Hub (as every update
+# does) leaves them running, so nobody is thrown out of a game; each stops
+# on its own once empty. If memory runs short, a game server goes first.
+KillMode=process
+OOMPolicy=continue
 
 [Install]
 WantedBy=multi-user.target
@@ -191,10 +244,16 @@ $DOMAIN {
 }
 CADDY
 
-echo "== Firewall: SSH, HTTP and HTTPS only"
+echo "== Firewall: SSH, HTTP and HTTPS, and UDP for game servers"
 ufw allow OpenSSH >/dev/null
 ufw allow 80/tcp >/dev/null
 ufw allow 443/tcp >/dev/null
+if [ -n "$game_flags" ]; then
+    # Two ports for each server, so a restarted one never waits on its old port.
+    last_udp_port=$((FIRST_UDP_PORT + 2 * MAX_GAME_SERVERS - 1))
+    ufw allow "$FIRST_UDP_PORT:$last_udp_port/udp" >/dev/null
+    echo "Game servers take players on UDP $FIRST_UDP_PORT-$last_udp_port."
+fi
 ufw --force enable >/dev/null
 
 # Shortcut for looking after it: sudo libroxel-admin accounts, owners, ban…

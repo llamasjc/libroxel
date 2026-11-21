@@ -44,6 +44,8 @@ pub struct HomeState {
     confirm_unfriend: Option<String>,
     /// A `libroxel://` link from the website, acted on once the lists are in.
     pub launch: Option<crate::url_handler::PendingLaunch>,
+    /// The game (its key) Play is finding a server for on the Hub.
+    finding_for: Option<String>,
 }
 
 /// Where a game on the home screen comes from.
@@ -487,9 +489,13 @@ fn server_row(ui: &mut egui::Ui, platform: &mut Platform, server: &ServerInfo, t
                         libroxel_hub::HostKind::Player => theme::LINK,
                         libroxel_hub::HostKind::Official => theme::AMBER,
                     };
-                    ui.label(
-                        RichText::new(format!("{} server", server.kind.label())).small().color(kind_colour),
-                    );
+                    let kind = if server.hub_server { "Libroxel" } else { server.kind.label() };
+                    ui.label(RichText::new(format!("{kind} server")).small().color(kind_colour))
+                        .on_hover_text(if server.hub_server {
+                            "Runs on Libroxel's own servers, so it's there whoever is playing"
+                        } else {
+                            "Someone runs this one themselves"
+                        });
                     // Only an account the Hub checked; the server's name is whatever the host typed.
                     if server.admin_host {
                         ui.label(RichText::new("Admin").small().strong().color(theme::AMBER))
@@ -540,6 +546,44 @@ fn server_row(ui: &mut egui::Ui, platform: &mut Platform, server: &ServerInfo, t
     join
 }
 
+/// Play: into a friend's server if one has room, otherwise onto one of the
+/// Hub's own servers (it finds one with room or starts one). Only on a Hub
+/// that runs none does Play fall back to players' servers, or hosting here.
+fn press_play(state: &mut HomeState, platform: &mut Platform, entry: &Entry, name: &str) -> Option<Pick> {
+    let with_friends = entry
+        .servers
+        .iter()
+        .filter(|s| !full(s) && !platform.social.friends_in(&s.server_id).is_empty())
+        .max_by_key(|s| platform.social.friends_in(&s.server_id).len());
+    if let Some(server) = with_friends {
+        return Some(Pick::Join { code: server.code.clone(), name: name.to_owned() });
+    }
+    if !entry.hostable() {
+        // Only known from players' servers: join one of those.
+        return best_server(platform, &entry.servers)
+            .map(|s| Pick::Join { code: s.code.clone(), name: name.to_owned() });
+    }
+    state.finding_for = Some(entry.key.clone());
+    platform.find_server(&entry.key, &entry.title);
+    None
+}
+
+/// What Play came to once the Hub answered: the server to join, or (on a
+/// Hub with no servers of its own) the old way: the busiest server with
+/// room, else a new one here.
+fn found(state: &mut HomeState, platform: &mut Platform, list: &[Entry], name: &str) -> Option<Pick> {
+    let answer = platform.take_found()?;
+    let key = state.finding_for.take()?;
+    if let Some(code) = answer {
+        return Some(Pick::Join { code, name: name.to_owned() });
+    }
+    let entry = list.iter().find(|e| e.key == key)?;
+    match best_server(platform, &entry.servers) {
+        Some(server) => Some(Pick::Join { code: server.code.clone(), name: name.to_owned() }),
+        None => host(entry, platform),
+    }
+}
+
 /// The server to drop someone into when they press Play: one with friends
 /// in it first, then the busiest with room.
 fn best_server<'a>(platform: &Platform, servers: &'a [ServerInfo]) -> Option<&'a ServerInfo> {
@@ -568,10 +612,7 @@ fn follow_link(state: &mut HomeState, platform: &mut Platform, list: &[Entry], n
     };
     state.view = View::Game(key);
     match pending.launch {
-        Launch::Play(_) => match best_server(platform, &entry.servers) {
-            Some(server) => Some(Pick::Join { code: server.code.clone(), name: name.to_owned() }),
-            None => host(entry, platform),
-        },
+        Launch::Play(_) => press_play(state, platform, entry, name),
         _ => host(entry, platform),
     }
 }
@@ -626,6 +667,9 @@ pub fn home_tab(
     let list = entries(platform);
     if let Some(launched) = follow_link(state, platform, &list, name) {
         return Some(launched);
+    }
+    if let Some(joining) = found(state, platform, &list, name) {
+        return Some(joining);
     }
     if let View::Game(key) = state.view.clone() {
         match list.iter().find(|e| e.key == key) {
@@ -788,36 +832,46 @@ fn game_page(
                 }
             });
             ui.add_space(16.0);
-            let best = best_server(platform, &entry.servers).cloned();
-            let can_play = best.is_some() || entry.hostable();
+            let can_play = entry.hostable() || best_server(platform, &entry.servers).is_some();
+            let busy = platform.downloading().is_some() || platform.finding_server().is_some();
             ui.horizontal(|ui| {
                 let play = ui
-                    .add_enabled_ui(can_play && platform.downloading().is_none(), |ui| {
+                    .add_enabled_ui(can_play && !busy, |ui| {
                         theme::block_button(ui, theme::Kind::Go, icon::PLAY, "      Play      ", 52.0)
                     })
                     .inner;
-                let hint = match &best {
-                    Some(server) => format!("Joins {}", server.name),
-                    None if entry.hostable() => {
-                        "No servers yet: starts one here that friends can join".into()
-                    }
-                    None => "Nobody is hosting it right now".into(),
+                let hint = if entry.hostable() {
+                    "Puts you on a Libroxel server of this game (with your friends, if they're playing)"
+                } else {
+                    "Joins the busiest server with room"
                 };
                 if play.on_hover_text(hint).clicked() {
-                    pick = match best {
-                        Some(server) => Some(Pick::Join { code: server.code.clone(), name: name.to_owned() }),
-                        None => host(entry, platform),
-                    };
+                    pick = press_play(state, platform, entry, name);
                 }
                 ui.add_space(10.0);
                 if entry.hostable()
-                    && theme::block_button(ui, theme::Kind::Plain, icon::BROADCAST, "New server", 52.0)
-                        .on_hover_text("Host your own server of this game; it shows on this list")
+                    && theme::block_button(ui, theme::Kind::Plain, icon::BROADCAST, "Host it myself", 52.0)
+                        .on_hover_text(
+                            "Run a server of this game on your own computer instead; it shows on this list",
+                        )
                         .clicked()
                 {
                     pick = host(entry, platform);
                 }
             });
+            if platform.finding_server().is_some() && state.finding_for.as_deref() == Some(entry.key.as_str())
+            {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Finding you a server…");
+                    if ui.small_button("Cancel").clicked() {
+                        platform.stop_finding();
+                        state.finding_for = None;
+                    }
+                });
+            } else if let Some(why) = &platform.find_error {
+                ui.colored_label(theme::RED, format!("{why} You can also host it yourself."));
+            }
             if let Some(title) = platform.downloading() {
                 ui.horizontal(|ui| {
                     ui.spinner();
