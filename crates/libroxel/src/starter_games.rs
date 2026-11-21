@@ -788,6 +788,15 @@ mod tests {
             assert!(gap < 14.0, "track {track} closes: {gap}");
             let boxes: usize = value(&session, "#workspace.Race.Track.Boxes:GetChildren()").parse().unwrap();
             assert!(boxes >= 12, "track {track} has item boxes");
+            // Boost pads' arrows (drawn toward the pad's +X) point down the road.
+            let worst = format!(
+                "(function() local T = require(game.ReplicatedStorage.Kart.Tracks) local s = {samples} \
+                local worst = 1 for _, pad in workspace.Race.Track.Pads:GetChildren() do \
+                local i = T.locateAnywhere(s, pad.Position) \
+                worst = math.min(worst, pad.CFrame.RightVector:Dot(s[i].t)) end return worst end)()"
+            );
+            let worst: f32 = value(&session, &worst).parse().unwrap();
+            assert!(worst > 0.9, "track {track}'s boost arrows point along the road: {worst}");
         }
         assert!(errors(&mut session).is_empty(), "{:?}", errors(&mut session));
     }

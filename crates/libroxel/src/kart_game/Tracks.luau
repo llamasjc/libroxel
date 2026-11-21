@@ -443,10 +443,13 @@ function Tracks.build(index, parent)
 	for _, pad in track.pads do
 		local p, t, n = Tracks.pointAt(samples, pad[1] * samples.length)
 		local at = p + n * pad[2] + Vector3.new(0, 0.3, 0)
+		-- A decal on top draws the picture's right-hand side toward the
+		-- part's +X, and the arrow picture points right, so the pad is
+		-- turned a quarter for its +X to run down the road.
 		local plate = part(pads, {
 			Name = "BoostPad",
-			Size = Vector3.new(9, 0.2, 12),
-			CFrame = CFrame.lookAt(at, at + t),
+			Size = Vector3.new(12, 0.2, 9),
+			CFrame = CFrame.lookAt(at, at + t) * CFrame.Angles(0, math.pi / 2, 0),
 			Color = Color3.fromRGB(255, 150, 30),
 			Material = Enum.Material.Neon,
 			CanCollide = false,
