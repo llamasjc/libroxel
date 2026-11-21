@@ -1320,40 +1320,82 @@ function platform() {
 }
 
 const REPO = (document.querySelector('meta[name="libroxel-repo"]')?.content || '').trim();
-let release = null; // The newest release's files, once GitHub has said.
+let release = null; // Every published release with the app in it, once GitHub has said.
 
-/** Asks GitHub for the newest release that has the app in it, once. */
+// Each download, newest file name first. The older names are what releases
+// were called before the installers, so an older release still counts.
+const APP_FILES = {
+  windows: ['-windows-x86_64-setup.exe', '-windows-x86_64.zip'],
+  macos: ['-macos-universal.dmg', '-macos-universal.zip'],
+  linux: ['-linux-x86_64.AppImage', '-linux-x86_64.run', '-linux-x86_64.tar.gz'],
+  deb: ['-linux-x86_64.deb'],
+};
+const RELEASES_KEY = 'libroxel-releases';
+const appAsset = (r, ends) => {
+  for (const end of ends) {
+    const a = (r.assets || []).find((x) => x.name.startsWith('libroxel-') && x.name.endsWith(end));
+    if (a) return a;
+  }
+  return null;
+};
+const hasApp = (r) => ['windows', 'macos', 'linux'].some((k) => appAsset(r, APP_FILES[k]));
+
+/**
+ * Asks GitHub for the releases, once. Each download then comes from the
+ * newest release that has that file, so a release that is missing a
+ * platform (its build failed) never hides an older one that has it. Drafts
+ * are never used, pre-releases only when there is nothing else, and the
+ * last good answer is kept in case GitHub can't be asked (it allows 60
+ * questions an hour from each address).
+ */
 function loadRelease() {
   if (release || !/^[\w.-]+\/[\w.-]+$/.test(REPO)) return;
   release = { loading: true };
-  const hasApp = (r) => (r.assets || []).some((a) => /^libroxel-.*-(windows-x86_64-setup\.exe|macos-universal\.dmg|linux-x86_64\.AppImage)$/.test(a.name));
+  const keep = (list) => list
+    .filter((x) => !x.draft && hasApp(x))
+    .map((x) => ({ tag: x.tag_name, prerelease: !!x.prerelease, published_at: x.published_at,
+      assets: (x.assets || []).map((a) => ({ name: a.name, browser_download_url: a.browser_download_url })) }))
+    .sort((x, y) => (x.prerelease - y.prerelease) || (new Date(y.published_at) - new Date(x.published_at)));
   fetch(`https://api.github.com/repos/${REPO}/releases?per_page=30`, { headers: { Accept: 'application/vnd.github+json' } })
     .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`GitHub answered ${r.status}`))))
     .then((list) => {
-      // Newest first; leave out drafts, pre-releases and releases without the app (like Hub-only ones).
-      const r = list.filter((x) => !x.draft && !x.prerelease && hasApp(x))
-        .sort((x, y) => new Date(y.published_at) - new Date(x.published_at))[0];
-      if (!r) throw new Error('none');
-      release = { tag: r.tag_name, assets: r.assets || [] };
+      const releases = keep(Array.isArray(list) ? list : []);
+      if (!releases.length) throw new Error('none');
+      release = { releases, tag: releases[0].tag };
+      try { localStorage.setItem(RELEASES_KEY, JSON.stringify(releases)); } catch { /* private window */ }
     })
-    .catch((e) => { release = { error: e.message }; })
+    .catch((e) => {
+      let saved = null;
+      try { saved = JSON.parse(localStorage.getItem(RELEASES_KEY) || 'null'); } catch { /* none */ }
+      release = Array.isArray(saved) && saved.length ? { releases: saved, tag: saved[0].tag } : { error: e.message };
+    })
     .finally(() => route.name === 'download' && render());
+}
+
+/** The newest release that has this download, and the file in it. */
+function findDownload(ends) {
+  for (const r of release?.releases || []) {
+    const asset = appAsset(r, ends);
+    if (asset) return { tag: r.tag, url: asset.browser_download_url };
+  }
+  return null;
 }
 
 function download() {
   const mine = platform();
   loadRelease();
   const builds = [
-    { id: 'windows', name: 'Windows', file: 'libroxel-windows-x86_64-setup.exe', ends: '-windows-x86_64-setup.exe', about: 'Windows 10 or 11. Open the setup wizard and press Next until it\'s done. Libroxel then sits in the Start menu. If SmartScreen warns you, choose More info, then Run anyway.' },
-    { id: 'macos', name: 'macOS', file: 'libroxel-macos-universal.dmg', ends: '-macos-universal.dmg', about: 'macOS 11 or newer. Open it and drag Libroxel onto the Applications folder. The first time, right-click Libroxel in Applications and choose Open.' },
-    { id: 'linux', name: 'Linux', file: 'libroxel-linux-x86_64.AppImage', ends: '-linux-x86_64.AppImage', about: 'Any x86-64 Linux with Vulkan. Make the file executable (right-click, Properties, Allow running as a program) and open it. It adds itself to your app menu.',
-      alt: { label: '.deb for Debian and Ubuntu', file: 'libroxel-linux-x86_64.deb', ends: '-linux-x86_64.deb' } },
+    { id: 'windows', name: 'Windows', file: 'libroxel-windows-x86_64-setup.exe', ends: APP_FILES.windows, about: 'Windows 10 or 11. Open the setup wizard and press Next until it\'s done. Libroxel then sits in the Start menu. If SmartScreen warns you, choose More info, then Run anyway.' },
+    { id: 'macos', name: 'macOS', file: 'libroxel-macos-universal.dmg', ends: APP_FILES.macos, about: 'macOS 11 or newer. Open it and drag Libroxel onto the Applications folder. The first time, right-click Libroxel in Applications and choose Open.' },
+    { id: 'linux', name: 'Linux', file: 'libroxel-linux-x86_64.AppImage', ends: APP_FILES.linux, about: 'Any x86-64 Linux with Vulkan. Make the file executable (right-click, Properties, Allow running as a program) and open it. It adds itself to your app menu.',
+      alt: { label: '.deb for Debian and Ubuntu', file: 'libroxel-linux-x86_64.deb', ends: APP_FILES.deb } },
   ].sort((a, b) => (b.id === mine) - (a.id === mine));
-  // From the repository's newest release when there is one, else from this server.
-  const link = (b) => {
-    if (!REPO) return `downloads/${b.file}`;
-    const asset = release?.assets?.find((a) => a.name.startsWith('libroxel-') && a.name.endsWith(b.ends));
-    return asset ? asset.browser_download_url : null;
+  // From the newest release that has this file, else from this server.
+  const link = (b) => (REPO ? findDownload(b.ends)?.url || null : `downloads/${b.file}`);
+  // Shown on a download that comes from an older release than the newest.
+  const olderTag = (b) => {
+    const found = REPO ? findDownload(b.ends) : null;
+    return found && found.tag !== release?.tag ? found.tag.replace(/^v/, '') : null;
   };
   const out = [
     el('h1', { class: 'title' }, 'Download Libroxel'),
@@ -1370,6 +1412,7 @@ function download() {
     return el('div', { class: `download${b.id === mine ? ' mine' : ''}` },
       el('h3', {}, b.name, b.id === mine ? el('span', { class: 'caps', style: 'margin-left:8px;color:var(--green)' }, 'Your computer') : null),
       el('p', {}, b.about),
+      olderTag(b) ? el('p', { class: 'soft' }, `Version ${olderTag(b)}: the newest version isn't out for ${b.name} yet.`) : null,
       href
         ? el('a', { class: `btn small${b.id === mine ? ' go' : ''}`, href }, icon(ICON.download), 'Download')
         : el('button', { class: 'btn small', disabled: true }, icon(ICON.download), REPO && release?.loading ? 'Download' : 'Not out yet'),
