@@ -46,6 +46,13 @@ pub struct Platform {
     downloading: Option<String>,
     downloaded: Slot<Downloaded>,
     download_error: Option<String>,
+    /// Play, asking the Hub for one of its own servers: the game's title,
+    /// and the join code once there is one (`None`: the Hub runs none).
+    finding: Option<String>,
+    found: Slot<Option<String>>,
+    stop_finding: Arc<std::sync::atomic::AtomicBool>,
+    /// Why the Hub couldn't find a server, shown on the game's page.
+    pub find_error: Option<String>,
     /// Publishing this editor's game: what the Hub said, once it has.
     publishing: bool,
     published: Slot<String>,
@@ -123,6 +130,10 @@ impl Default for Platform {
             downloading: None,
             downloaded: Arc::default(),
             download_error: None,
+            finding: None,
+            found: Arc::default(),
+            stop_finding: Arc::default(),
+            find_error: None,
             publishing: false,
             published: Arc::default(),
             publish_status: None,
@@ -1203,6 +1214,69 @@ impl Platform {
     /// Whether a published game is being fetched, and its title.
     pub fn downloading(&self) -> Option<&str> {
         self.downloading.as_deref()
+    }
+
+    /// Play: asks the Hub for one of its own servers of `game_id` (it finds
+    /// one with room or starts one), in the background. The answer comes
+    /// from [`take_found`](Self::take_found).
+    pub fn find_server(&mut self, game_id: &str, title: &str) {
+        if self.finding.is_some() {
+            return;
+        }
+        self.finding = Some(title.to_owned());
+        self.find_error = None;
+        *self.found.lock().unwrap() = None;
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.stop_finding = stop.clone();
+        let client = self.client();
+        let request =
+            libroxel_hub::PlayRequest { game_id: game_id.to_owned(), ticket: libroxel_hub::new_secret() };
+        let out = self.found.clone();
+        std::thread::spawn(move || {
+            let started = Instant::now();
+            let result = loop {
+                if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                match client.play(&request) {
+                    Ok(None) => break Ok(None),
+                    Ok(Some(answer)) if answer.code.is_some() => break Ok(answer.code),
+                    Ok(Some(_)) if started.elapsed() > Duration::from_secs(90) => {
+                        break Err("The server took too long to start. Try again in a minute.".to_owned());
+                    }
+                    Ok(Some(_)) => std::thread::sleep(Duration::from_millis(1500)),
+                    Err(e) => break Err(e),
+                }
+            };
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    /// The title of the game a server is being found for, while it is.
+    pub fn finding_server(&self) -> Option<&str> {
+        self.finding.as_deref()
+    }
+
+    /// Stops waiting for a server.
+    pub fn stop_finding(&mut self) {
+        self.stop_finding.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.finding = None;
+    }
+
+    /// What finding a server came to, once it has: `Some(Some(code))` to
+    /// join, `Some(None)` when the Hub runs no servers of its own. Errors
+    /// land in [`find_error`](Self::find_error).
+    pub fn take_found(&mut self) -> Option<Option<String>> {
+        self.finding.as_ref()?;
+        let result = self.found.lock().unwrap().take()?;
+        self.finding = None;
+        match result {
+            Ok(code) => Some(code),
+            Err(e) => {
+                self.find_error = Some(e);
+                None
+            }
+        }
     }
 
     /// Fetches a published game to play (or host, with `host`).

@@ -95,6 +95,36 @@ provider; [Resend](https://resend.com) is free for 3,000 mails a month:
    is set up, the Hub keeps the emails people give but sends no codes, and
    doesn't insist on one.
 
+### Game servers
+
+The Hub runs the games players join, on its own computer. Pressing **Play**
+on a game asks the Hub for a server: it puts the player on the fullest of
+its servers for that game that still has room, or starts a new one
+(`libroxel server --game <id>`, the app with no window) and the app waits a
+few seconds for it. When a server fills up the Hub starts the next one early,
+and each server stops on its own once nobody has been in it for two minutes.
+Players join friends' servers first, and anyone can still press **Host it
+myself** to run a server on their own computer.
+
+The setup script turns this on: it installs the app as
+`/usr/local/bin/libroxel` (built from source, or unpacked from the release),
+and opens UDP ports 7500 and up so players connect straight to the server
+instead of through a relay. The settings are in `/etc/libroxel/hub.conf`:
+
+| Setting | What it does |
+| --- | --- |
+| `GAME_SERVERS` | `yes`, or `no` to leave hosting to players |
+| `MAX_GAME_SERVERS` | the most at once (default 8); size it to the server's memory |
+| `PLAYERS_PER_SERVER` | players on each one (default 12) |
+| `FIRST_UDP_PORT` | the first UDP port (default 7500; two per server are opened) |
+
+Change them, then `sudo libroxel-hub-update --now` (or run
+`setup-hub.sh` again). Updating the Hub doesn't throw anyone out of a game:
+running servers carry on, and new ones use the new version. Each server's
+log is in `/var/lib/libroxel/game-servers/<game>.log`; `journalctl -u
+libroxel-hub` says when servers start and stop. If your provider has a
+firewall of its own, open the same UDP ports there too.
+
 ## 3. HTTPS and who is calling
 
 Players' passwords never leave their computers, and every change is signed,

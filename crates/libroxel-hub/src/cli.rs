@@ -12,6 +12,15 @@ pub const HUB_HELP: &str = "\
       --behind-proxy           a web server here (such as Caddy) passes players
                                on: listen only on this computer, and trust it
                                for their addresses
+      --game-servers <program> run game servers here: Play on a game finds or
+                               starts one (<program> is the libroxel app, run
+                               as `libroxel server`)
+      --max-game-servers <n>   at most this many at once (default 8)
+      --players-per-server <n> players on each (default 12)
+      --first-udp-port <n>     servers use UDP ports from here up (default 7500)
+      --stop-empty-after <s>   a server stops once empty this long (default 120)
+      --game-server-dir <dir>  their keys and logs (default: game-servers next
+                               to --data)
   reports                      list reported games and hats (and which are hidden)
   clear <game|item> <id>       say a reported one is fine: list it again
   remove <game|item> <id>      take one down for good
@@ -68,14 +77,45 @@ impl Flags {
 
 /// Runs `libroxel-hub …` with `args` after the program's name. `default_data` is where the Hub keeps its data without `--data`.
 pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
-    let flags = Flags::parse(args, &["--port", "--data"])?;
+    let flags = Flags::parse(
+        args,
+        &[
+            "--port",
+            "--data",
+            "--game-servers",
+            "--game-server-dir",
+            "--max-game-servers",
+            "--players-per-server",
+            "--first-udp-port",
+            "--stop-empty-after",
+        ],
+    )?;
+    let port = flags.number("--port", crate::DEFAULT_PORT)?;
+    let data = flags.get("--data").map_or_else(|| default_data.to_path_buf(), PathBuf::from);
+    let fleet = match flags.get("--game-servers") {
+        None => None,
+        Some(program) => {
+            let dir = flags
+                .get("--game-server-dir")
+                .map_or_else(|| data.parent().unwrap_or(Path::new(".")).join("game-servers"), PathBuf::from);
+            let usual = crate::FleetOptions::new(PathBuf::from(program), dir);
+            Some(crate::FleetOptions {
+                max_servers: flags.number("--max-game-servers", usual.max_servers)?,
+                players_per_server: flags.number("--players-per-server", usual.players_per_server)?,
+                first_udp_port: flags.number("--first-udp-port", usual.first_udp_port)?,
+                stop_when_empty: std::time::Duration::from_secs(
+                    flags.number("--stop-empty-after", usual.stop_when_empty.as_secs())?,
+                ),
+                ..usual
+            })
+        }
+    };
     let options = crate::HubOptions {
         behind_proxy: flags.has("--behind-proxy"),
         mail: crate::Mail::from_env()?,
+        fleet,
         ..Default::default()
     };
-    let port = flags.number("--port", crate::DEFAULT_PORT)?;
-    let data = flags.get("--data").map_or_else(|| default_data.to_path_buf(), PathBuf::from);
     let words: Vec<&str> = flags.rest.iter().map(String::as_str).collect();
     match words.as_slice() {
         [] => {

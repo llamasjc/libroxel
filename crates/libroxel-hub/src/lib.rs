@@ -47,6 +47,8 @@ use serde::{Deserialize, Serialize};
 
 mod cli;
 mod email;
+mod fleet;
+pub use fleet::{FleetOptions, PlayAnswer, PlayRequest};
 mod limits;
 pub use cli::{HUB_HELP, cli};
 mod owner;
@@ -109,6 +111,9 @@ pub struct HubOptions {
     /// How it mails codes to prove emails ([`Mail::from_env`] for the
     /// `LIBROXEL_SMTP_*` settings).
     pub mail: Mail,
+    /// Game servers it runs itself, so Play sends players to this Hub's
+    /// computer (see [`FleetOptions`]). `None`: only players host.
+    pub fleet: Option<FleetOptions>,
 }
 
 /// How often hosts should announce themselves.
@@ -233,6 +238,9 @@ pub struct ServerInfo {
     /// Whether whoever hosts it has a verified badge.
     #[serde(default)]
     pub host_verified: bool,
+    /// Whether the Hub runs it on its own computer (see [`FleetOptions`]).
+    #[serde(default)]
+    pub hub_server: bool,
 }
 
 /// What `GET /` answers, so a client can check it reached a Hub.
@@ -528,6 +536,13 @@ struct Hub {
     db: Db,
     limits: Arc<Limits>,
     mail: Arc<Mail>,
+    fleet: Option<Arc<fleet::Fleet>>,
+}
+
+impl FromRef<Hub> for Option<Arc<fleet::Fleet>> {
+    fn from_ref(hub: &Hub) -> Option<Arc<fleet::Fleet>> {
+        hub.fleet.clone()
+    }
 }
 
 impl FromRef<Hub> for Arc<Mail> {
@@ -645,6 +660,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     owner::create_tables(&db)?;
     security::create_tables(&db)?;
     email::create_tables(&db)?;
+    fleet::create_tables(&db)?;
     Ok(db)
 }
 
@@ -661,7 +677,18 @@ pub fn router(db: Connection) -> Router {
 pub fn router_with(db: Connection, options: HubOptions) -> Router {
     let limits =
         Arc::new(Limits { trust_proxy: options.behind_proxy, off: options.no_limits, ..Limits::default() });
-    let hub = Hub { db: Arc::new(Mutex::new(db)), limits, mail: Arc::new(options.mail) };
+    let fleet = options.fleet.map(|o| Arc::new(fleet::Fleet::new(o)));
+    let hub = Hub { db: Arc::new(Mutex::new(db)), limits, mail: Arc::new(options.mail), fleet };
+    // Look after the Hub's own game servers every few seconds.
+    if let (Some(fleet), Ok(runtime)) = (hub.fleet.clone(), tokio::runtime::Handle::try_current()) {
+        let db = hub.db.clone();
+        runtime.spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                fleet.tidy(&db.lock().unwrap());
+            }
+        });
+    }
     // Only publishing carries a whole place; everything else is small.
     let big = axum::extract::DefaultBodyLimit::max(MAX_PLACE * 2 + 64 * 1024);
     Router::new()
@@ -669,6 +696,7 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/servers", get(list_servers))
         .route("/servers/heartbeat", post(heartbeat))
         .route("/servers/{id}", delete(remove_server))
+        .route("/play", post(play))
         .route("/games", get(list_games).post(publish).layer(big))
         .route("/games/{id}", get(game_info).delete(unpublish))
         .route("/games/{id}/place", get(download))
@@ -1310,7 +1338,8 @@ async fn unpublish(
 const SERVER_COLUMNS: &str = "server_id, name, game, code, players, max_players, kind, last_seen, game_id,
     (SELECT a.name FROM accounts a WHERE a.player_id = servers.host_id), host_id,
     EXISTS (SELECT 1 FROM owners o WHERE o.player_id = servers.host_id),
-    EXISTS (SELECT 1 FROM verified v WHERE v.player_id = servers.host_id)";
+    EXISTS (SELECT 1 FROM verified v WHERE v.player_id = servers.host_id),
+    EXISTS (SELECT 1 FROM fleet f WHERE f.server_id = servers.server_id)";
 
 fn server_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<ServerInfo> {
     Ok(ServerInfo {
@@ -1327,6 +1356,7 @@ fn server_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<ServerInfo> {
         host_id: r.get(10)?,
         admin_host: r.get(11)?,
         host_verified: r.get::<_, bool>(12)? || r.get::<_, bool>(11)?,
+        hub_server: r.get(13)?,
     })
 }
 
@@ -1384,7 +1414,9 @@ async fn heartbeat(
     }
     // Only the Hub's owners (and servers they trust) list Official servers.
     let kind = match beat.kind {
-        HostKind::Official if !host_id.as_deref().is_some_and(|id| owner::is_owner(&db, id)) => {
+        HostKind::Official
+            if !host_id.as_deref().is_some_and(|id| owner::is_owner(&db, id) || fleet::is_fleet(&db, id)) =>
+        {
             HostKind::Community
         }
         kind => kind,
@@ -1413,6 +1445,30 @@ async fn heartbeat(
     )
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Play: finds or starts one of the Hub's own servers of a game (see
+/// [`FleetOptions`]). A Hub that runs none answers 404, and the app falls
+/// back to the server list.
+async fn play(
+    State(db): State<Db>,
+    State(fleet): State<Option<Arc<fleet::Fleet>>>,
+    Json(request): Json<PlayRequest>,
+) -> Result<Json<PlayAnswer>, (StatusCode, String)> {
+    let Some(fleet) = fleet else {
+        return Err((StatusCode::NOT_FOUND, "this Hub doesn't run game servers".into()));
+    };
+    let db = db.lock().unwrap();
+    fleet.play(&db, &request).map(Json).map_err(|e| match e {
+        fleet::PlayError::BadRequest(why) => (StatusCode::BAD_REQUEST, why.to_owned()),
+        fleet::PlayError::UnknownGame => (StatusCode::NOT_FOUND, "the Hub doesn't know that game".into()),
+        fleet::PlayError::Busy => {
+            (StatusCode::SERVICE_UNAVAILABLE, "every game server is busy; try again in a minute".into())
+        }
+        fleet::PlayError::Failed => {
+            (StatusCode::BAD_GATEWAY, "the Hub couldn't start a server of that game".into())
+        }
+    })
 }
 
 async fn remove_server(
@@ -1464,6 +1520,8 @@ pub fn start_with(
         std::net::TcpListener::bind(addr).map_err(|e| format!("could not start the Hub on {addr}: {e}"))?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
+    let mut options = options;
+    fleet_finds(&mut options, addr);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .thread_name("libroxel-hub")
@@ -1488,8 +1546,18 @@ pub fn start_with(
     Ok(RunningHub { addr, _stop: stop })
 }
 
+/// Tells the Hub's own game servers where to find it: on this computer, at
+/// `addr`'s port.
+fn fleet_finds(options: &mut HubOptions, addr: SocketAddr) {
+    if let Some(fleet) = options.fleet.as_mut().filter(|f| f.hub_url.is_empty()) {
+        fleet.hub_url = format!("http://127.0.0.1:{}", addr.port());
+    }
+}
+
 /// Runs a Hub on `addr` until Ctrl+C, printing what it does.
 pub fn run(addr: SocketAddr, db_path: &Path, options: HubOptions) -> Result<(), String> {
+    let mut options = options;
+    fleet_finds(&mut options, addr);
     let db = open_db(Some(db_path))?;
     let runtime =
         tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
@@ -1498,6 +1566,15 @@ pub fn run(addr: SocketAddr, db_path: &Path, options: HubOptions) -> Result<(), 
             .await
             .map_err(|e| format!("could not start the Hub on {addr}: {e}"))?;
         println!("Libroxel Hub listening on http://{addr} (data in {})", db_path.display());
+        if let Some(fleet) = &options.fleet {
+            println!(
+                "Running up to {} game servers of {} players with {} (UDP ports from {})",
+                fleet.max_servers,
+                fleet.players_per_server,
+                fleet.program.display(),
+                fleet.first_udp_port
+            );
+        }
         if options.behind_proxy {
             println!("Trusting X-Forwarded-For from a web server on this computer for who is calling.");
         }
@@ -1612,6 +1689,29 @@ impl HubClient {
 }
 
 impl HubClient {
+    /// Asks the Hub for one of its own servers of a game to play on (see
+    /// [`PlayAnswer`]). `Ok(None)`: this Hub runs no game servers.
+    pub fn play(&self, request: &PlayRequest) -> Result<Option<PlayAnswer>, String> {
+        let mut response = self
+            .agent
+            .post(format!("{}/play", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(request)
+            .map_err(|e| format!("could not reach the Hub: {e}"))?;
+        if response.status().is_success() {
+            return response.body_mut().read_json().map(Some).map_err(|e| e.to_string());
+        }
+        let status = response.status().as_u16();
+        let why = response.body_mut().read_to_string().unwrap_or_default();
+        // Hubs from before game servers don't know /play at all.
+        if status == 404 && (why.trim().is_empty() || why.contains("doesn't run game servers")) {
+            return Ok(None);
+        }
+        Err(if why.trim().is_empty() { format!("the Hub said {status}") } else { why })
+    }
+
     /// Published games, most played first, matching `search` if given.
     pub fn games(&self, search: &str) -> Result<Vec<GameInfo>, String> {
         self.agent
@@ -1639,6 +1739,17 @@ impl HubClient {
                     Err(format!("the Hub did not take it: {why}"))
                 }
             })
+    }
+
+    /// One published game.
+    pub fn game(&self, game_id: &str) -> Result<GameInfo, String> {
+        self.agent
+            .get(format!("{}/games/{game_id}", self.base))
+            .call()
+            .map_err(|e| format!("could not find the game: {e}"))?
+            .body_mut()
+            .read_json()
+            .map_err(|e| e.to_string())
     }
 
     /// A published game's saved place.

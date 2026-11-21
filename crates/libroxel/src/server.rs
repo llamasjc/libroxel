@@ -19,6 +19,8 @@ Libroxel: build, play and host games.
 usage:
   libroxel [game.lrx]          open the app (or the editor on that game)
   libroxel server <game.lrx>   host a game with no window
+  libroxel server --game <id>  host a published game (or starter:<name>) from
+                               the Hub, with no window
       --port <n>               game port on this network (default 7420)
       --name <text>            name shown in Online (default: the file name)
       --no-hub                 don't list it on the Hub (join codes still work)
@@ -27,6 +29,10 @@ usage:
       --max-players <n>        players the list shows as the limit (0: none)
       --game-id <id>           put it on that game's server list (a published
                                game's id, or starter:<name>)
+      --key <file>             the server's identity (default: next to the game)
+      --udp-port <n>           take players on this UDP port (open it in the
+                               firewall so they connect directly)
+      --stop-when-empty <s>    stop once nobody has been in it for s seconds
   libroxel help                show this
 ";
 
@@ -100,25 +106,76 @@ pub fn data_dir() -> PathBuf {
 }
 
 fn server(args: &[String]) -> Result<(), String> {
-    let flags = Flags::parse(args, &["--port", "--name", "--max-players", "--game-id"])?;
-    let Some(path) = flags.rest.first() else {
-        return Err("usage: libroxel server <game.lrx> (see libroxel help)".into());
+    let flags = Flags::parse(
+        args,
+        &[
+            "--port",
+            "--name",
+            "--max-players",
+            "--game-id",
+            "--game",
+            "--key",
+            "--udp-port",
+            "--stop-when-empty",
+        ],
+    )?;
+    let hub = if flags.has("--no-hub") { HubUse::None } else { HubUse::usual() };
+    let (game, text, key, game_id) = match (flags.rest.first(), flags.get("--game")) {
+        (Some(path), _) => {
+            let text = std::fs::read_to_string(path).map_err(|e| format!("could not read {path}: {e}"))?;
+            let game = Path::new(path)
+                .file_stem()
+                .map_or("Untitled game".into(), |s| s.to_string_lossy().into_owned());
+            (game, text, Path::new(path).with_file_name("server-identity.key"), flags.get("--game-id"))
+        }
+        (None, Some(id)) => {
+            let (game, text) = game_by_id(id, &hub)?;
+            (game, text, data_dir().join("server-identity.key"), Some(id))
+        }
+        (None, None) => return Err("usage: libroxel server <game.lrx> (see libroxel help)".into()),
     };
-    let text = std::fs::read_to_string(path).map_err(|e| format!("could not read {path}: {e}"))?;
-    let game =
-        Path::new(path).file_stem().map_or("Untitled game".into(), |s| s.to_string_lossy().into_owned());
+    let stop_when_empty: u64 = flags.number("--stop-when-empty", 0)?;
     let settings = ServerSettings {
         name: flags.get("--name").map_or_else(|| game.clone(), str::to_owned),
         game,
         text,
-        key: Path::new(path).with_file_name("server-identity.key"),
+        key: flags.get("--key").map_or(key, PathBuf::from),
         port: flags.number("--port", DEFAULT_PORT)?,
-        hub: if flags.has("--no-hub") { HubUse::None } else { HubUse::usual() },
+        hub,
         official: flags.has("--official"),
         max_players: flags.number("--max-players", 0u32)?,
-        game_id: flags.get("--game-id").map(str::to_owned),
+        game_id: game_id.map(str::to_owned),
+        udp_port: flags
+            .get("--udp-port")
+            .map(|p| p.parse())
+            .transpose()
+            .map_err(|_| "--udp-port needs a number")?,
+        stop_when_empty: (stop_when_empty > 0).then(|| Duration::from_secs(stop_when_empty)),
     };
+    if settings.stop_when_empty.is_some() {
+        // A server that comes and goes: if the computer runs short of
+        // memory, stop one of these before anything else.
+        let _ = std::fs::write("/proc/self/oom_score_adj", "500");
+    }
     run(settings, &mut |line| println!("{line}"), &AtomicBool::new(false))
+}
+
+/// A game's title and saved place by its id: a starter game, or a published
+/// one fetched from the Hub.
+fn game_by_id(id: &str, hub: &HubUse) -> Result<(String, String), String> {
+    if let Some(name) = id.strip_prefix("starter:") {
+        let game = crate::starter_games::starter(name).ok_or(format!("there is no starter game {name}"))?;
+        let text = place::save(&(game.build)()).map_err(|e| format!("could not save {name}: {e}"))?;
+        return Ok((game.name.to_owned(), text));
+    }
+    // From the Hub even when this server isn't listed on it.
+    let address = match hub {
+        HubUse::At(address) => address.clone(),
+        HubUse::None => libroxel_hub::hub_address(),
+    };
+    let client = HubClient::new(&address);
+    let info = client.game(id)?;
+    Ok((info.title, client.download(id)?))
 }
 
 /// Whether a server lists itself on the Hub.
@@ -153,11 +210,27 @@ pub struct ServerSettings {
     /// Which game it is, so it shows on that game's server list (a
     /// published game's id, or `starter:<name>`).
     pub game_id: Option<String>,
+    /// The UDP port players reach it on; `None` picks any free one.
+    pub udp_port: Option<u16>,
+    /// Stop once nobody has been in it for this long.
+    pub stop_when_empty: Option<Duration>,
 }
 
 /// Hosts a game with no window until `stop` is set, telling `say` what happens.
 pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicBool) -> Result<(), String> {
-    let ServerSettings { game, name, text, key, port, hub, official, max_players, game_id } = settings;
+    let ServerSettings {
+        game,
+        name,
+        text,
+        key,
+        port,
+        hub,
+        official,
+        max_players,
+        game_id,
+        udp_port,
+        stop_when_empty,
+    } = settings;
     let (tree, report) = place::load(&text).map_err(|e| format!("could not load {game}: {e}"))?;
     for warning in report.warnings {
         say(format!("warning: {warning}"));
@@ -165,7 +238,9 @@ pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicB
     let mut session = PlaySession::host(Rc::new(RefCell::new(tree)), port, None, false)?;
     let identity =
         Identity::load_or_create(&key).map_err(|e| format!("could not load {}: {e}", key.display()))?;
-    let tunnel = HostTunnel::start(&identity, Network::Internet, port)?;
+    // Port 0 picks a free one: the tunnel needs the one it got.
+    let port = session.host_address().map_or(port, |a| a.port());
+    let tunnel = HostTunnel::start_on(&identity, Network::Internet, port, udp_port)?;
     say(format!("Hosting {game} on port {port}. Getting a join code…"));
 
     let hub = match hub {
@@ -198,8 +273,17 @@ pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicB
     let mut next = Instant::now();
     let mut announced = false;
     let mut hub_said = None;
+    let mut empty_since = Instant::now();
     while !stop.load(Ordering::Relaxed) {
         session.step(frame.as_secs_f32(), CharacterInput::default());
+        if session.joined_count() > 0 {
+            empty_since = Instant::now();
+        } else if let Some(wait) = stop_when_empty
+            && empty_since.elapsed() >= wait
+        {
+            say(format!("Nobody has played for {} seconds; stopping.", wait.as_secs()));
+            break;
+        }
         if !announced {
             if let Some(code) = tunnel.code() {
                 say(format!("Join code (paste it into Join, or find this server in Browse):\n\n{code}\n"));
