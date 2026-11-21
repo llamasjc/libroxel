@@ -273,7 +273,7 @@ impl Platform {
         });
     }
 
-    /// Looks for people by name (not this player).
+    /// Looks for people by name (this player too, shown as them).
     pub fn find_people(&mut self) {
         let search = self.social.people_search.trim().to_owned();
         self.social.people_for = search.clone();
@@ -283,11 +283,8 @@ impl Platform {
         }
         let client = self.client();
         let out = self.social.people_slot.clone();
-        let me = self.account.as_ref().map(|a| a.player_id.clone());
         std::thread::spawn(move || {
-            let result = client
-                .people(&search)
-                .map(|people| people.into_iter().filter(|p| Some(&p.player_id) != me.as_ref()).collect());
+            let result = client.people(&search);
             *out.lock().unwrap() = Some(result);
         });
     }

@@ -257,6 +257,7 @@ label.field span { display: block; margin-bottom: 4px; }
 .subhead { font: 600 19px var(--display); margin: 0 0 12px; color: var(--heading); }
 .subhead.sun { color: var(--amber); }
 .search { display: flex; gap: 10px; margin-bottom: 10px; }
+.search-results { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 10px 24px; align-items: start; margin-top: 8px; }
 
 /* --- Avatar ----------------------------------------------------------------- */
 
@@ -308,6 +309,7 @@ footer a { color: var(--heading); text-decoration: underline; }
   .who .name { min-width: 0; }
   main { margin: 12px 8px; padding: 18px 14px 40px; }
   .columns { grid-template-columns: 1fr; }
+  .search-results { grid-template-columns: 1fr; }
   .games { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .server { flex-wrap: wrap; }
   .server .what { flex-basis: calc(100% - 70px); }
