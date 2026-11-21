@@ -1,4 +1,4 @@
--- Rey Esquinado (Kings in the Corner), for 2 to 4 players with one
+-- Kings in the Corner, for 2 to 4 players with one
 -- 52-card deck.
 --
 -- Each player gets 7 cards and four cards go face up beside the draw pile,
@@ -21,8 +21,8 @@
 
 local Rules = {}
 
-Rules.NAME = "ReyEsquinado"
-Rules.TITLE = "Rey Esquinado"
+Rules.NAME = "KingsInTheCorner"
+Rules.TITLE = "Kings in the Corner"
 Rules.MIN_SEATS = 2
 Rules.MAX_SEATS = 4
 Rules.LEVELS = { "Easy", "Medium", "Hard" }

@@ -1,4 +1,4 @@
--- The Rey Esquinado screen: a green card table with the draw pile in the
+-- The Kings in the Corner screen: a green card table with the draw pile in the
 -- middle, four side piles round it and the corners for the Kings. Your
 -- hand is along the bottom. Click a card, then the pile to put it on. To
 -- move a whole side pile, click it, then the pile it goes on.
@@ -21,7 +21,7 @@ local SEAT_COLOURS = {
 }
 
 local ui = Screen.new(script.Parent, folder, {
-	title = "Rey Esquinado",
+	title = "Kings in the Corner",
 	tagline = "Kings in the corners: be the first to play every card",
 	levels = Rules.LEVELS,
 	level = 2,

@@ -1,5 +1,5 @@
 -- The table server shared by the table games (checkers, Connect 4 and
--- Rey Esquinado). It seats people at tables, fills seats with computer
+-- Kings in the Corner). It seats people at tables, fills seats with computer
 -- players, pairs people who are looking for a game, sends and answers
 -- challenges, referees every move through the game's Rules module and
 -- counts everyone's wins.

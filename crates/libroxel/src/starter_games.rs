@@ -40,10 +40,10 @@ pub const STARTER_GAMES: &[StarterGame] = &[
         build: connect_four,
     },
     StarterGame {
-        name: "Rey Esquinado",
+        name: "Kings in the Corner",
         symbol: crate::theme::icon::CROWN,
-        about: "The card game with the Kings in the corners, for 2 to 4",
-        build: rey_esquinado,
+        about: "Be first to play every card. For 2 to 4 players",
+        build: kings_in_the_corner,
     },
     StarterGame {
         name: "Tag",
@@ -200,12 +200,12 @@ pub fn connect_four() -> InstanceTree {
     )
 }
 
-/// Rey Esquinado (Kings in the Corner), for two to four players.
-pub fn rey_esquinado() -> InstanceTree {
+/// Kings in the Corner, the card game, for two to four players.
+pub fn kings_in_the_corner() -> InstanceTree {
     table_game(
-        "ReyEsquinado",
-        include_str!("table_games/rey/Rules.luau"),
-        include_str!("table_games/rey/Client.luau"),
+        "KingsInTheCorner",
+        include_str!("table_games/kings_corner/Rules.luau"),
+        include_str!("table_games/kings_corner/Client.luau"),
     )
 }
 
@@ -438,7 +438,7 @@ mod tests {
             assert!(!ending.contains("unfinished"), "{ending}");
         }
         for (seats, levels) in [(2, "1, 3"), (3, "2, 2, 3"), (4, "1, 2, 3, 2")] {
-            for ending in bots_play(rey_esquinado, seats, levels, 5) {
+            for ending in bots_play(kings_in_the_corner, seats, levels, 5) {
                 assert!(!ending.contains("unfinished"), "{ending}");
             }
         }
@@ -527,8 +527,8 @@ mod tests {
     }
 
     #[test]
-    fn rey_esquinado_rules() {
-        let mut session = start_on(rey_esquinado(), true).unwrap();
+    fn kings_in_the_corner_rules() {
+        let mut session = start_on(kings_in_the_corner(), true).unwrap();
         steps(&mut session, 3);
         let rules = "local Rules = require(game.ReplicatedStorage.TableGame.Rules)";
         // The deal: 7 each, the first player draws one, four on the sides.
@@ -558,7 +558,7 @@ mod tests {
         for (build, screen) in [
             (checkers as fn() -> InstanceTree, "CheckersScreen"),
             (connect_four, "ConnectFourScreen"),
-            (rey_esquinado, "ReyEsquinadoScreen"),
+            (kings_in_the_corner, "KingsInTheCornerScreen"),
         ] {
             let mut session = start_on(build(), true).unwrap();
             steps(&mut session, 10);
