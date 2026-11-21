@@ -54,7 +54,11 @@ overflow-checks = false
 # The builds attached to GitHub Releases: `cargo build --profile dist`.
 [profile.dist]
 inherits = "release"
-lto = "thin"
+# No link-time optimization: with a warm cache it made each release build
+# about 4 minutes longer per platform (5 min instead of 1.5). Generic Bevy
+# code is compiled into our own crates anyway, so little speed is lost; set
+# lto = "thin" again to trade build time for the last few percent.
+lto = false
 codegen-units = 1
 strip = true
 
