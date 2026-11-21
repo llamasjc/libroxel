@@ -3,10 +3,12 @@
 # the Hub as a service that always runs, HTTPS with Caddy, a firewall,
 # nightly backups, and updates from GitHub releases.
 #
-#   sudo bash setup-hub.sh --repo <owner>/<repo> [--domain hub.libroxel.com]
+#   sudo bash setup-hub.sh --repo <owner>/<repo> [--domain hub.libroxel.com] [--from-source]
 #
 # With a libroxel-hub (or libroxel-hub-linux-x86_64) next to this script it
-# installs that one; otherwise it downloads the latest release. Run it again
+# installs that one. Otherwise, with --from-source it builds main on this
+# server (and keeps doing so whenever main changes), or else it downloads
+# the latest release. Run it again
 # any time: accounts and everything else stay. The domain must already point
 # at this server, so Caddy can get its HTTPS certificate.
 set -euo pipefail
@@ -19,6 +21,9 @@ conf=/etc/libroxel/hub.conf
 DOMAIN=hub.libroxel.com
 REPO=""
 GITHUB_TOKEN=""
+UPDATE_FROM=releases
+SOURCE_USER=""
+SOURCE_DIR=""
 [ -f "$conf" ] && . "$conf"
 check=yes
 while [ $# -gt 0 ]; do
@@ -27,6 +32,7 @@ while [ $# -gt 0 ]; do
         --repo) REPO="$2"; shift 2 ;;
         --token) GITHUB_TOKEN="$2"; shift 2 ;;
         --no-check) check=no; shift ;;
+        --from-source) UPDATE_FROM=source; shift ;;
         -*) echo "unknown option $1"; exit 1 ;;
         *) DOMAIN="$1"; shift ;;
     esac
@@ -48,8 +54,14 @@ cat > "$conf" <<CONF
 DOMAIN="$DOMAIN"
 # The GitHub repository whose releases the Hub updates from (owner/name).
 REPO="$REPO"
-# Only for a private repository: a token that can read its releases.
+# Only for a private repository: a token that can read it.
 GITHUB_TOKEN="$GITHUB_TOKEN"
+# How updates come: "releases" (GitHub releases) or "source" (build main on
+# this server, as SOURCE_USER in SOURCE_DIR). Switch with
+# sudo libroxel-hub-update --from-source or --from-releases.
+UPDATE_FROM="$UPDATE_FROM"
+SOURCE_USER="$SOURCE_USER"
+SOURCE_DIR="$SOURCE_DIR"
 CONF
 umask 022
 
@@ -64,6 +76,10 @@ if [ -z "$binary" ]; then
         || curl -fsSL "https://raw.githubusercontent.com/$REPO/main/packaging/hub/update-hub.sh" \
             -o /usr/local/bin/libroxel-hub-update
     chmod 755 /usr/local/bin/libroxel-hub-update
+    if [ "$UPDATE_FROM" = source ]; then
+        echo "No libroxel-hub here: building main of $REPO on this server."
+        exec /usr/local/bin/libroxel-hub-update --from-source ${SOURCE_DIR:+"$SOURCE_DIR"}
+    fi
     echo "No libroxel-hub here: fetching the latest release of $REPO."
     exec /usr/local/bin/libroxel-hub-update --now
 fi
@@ -123,10 +139,10 @@ Persistent=true
 WantedBy=timers.target
 UNIT
 
-echo "== Updates: every 10 minutes, look for a new GitHub release"
+echo "== Updates: every 10 minutes, look for a new version on GitHub"
 cat > /etc/systemd/system/libroxel-hub-update.service <<UNIT
 [Unit]
-Description=Update the Libroxel Hub from its latest GitHub release
+Description=Update the Libroxel Hub from GitHub
 After=network-online.target
 Wants=network-online.target
 
@@ -187,7 +203,11 @@ for _ in $(seq 1 30); do
     if curl -fsS "https://$DOMAIN/" >/dev/null 2>&1; then
         curl -fsS "https://$DOMAIN/"; echo
         echo "Done: the Hub is live at https://$DOMAIN"
-        [ -n "$REPO" ] && echo "It updates itself from the releases of $REPO."
+        if [ -n "$REPO" ] && [ "$UPDATE_FROM" = source ]; then
+            echo "It builds and installs $REPO's main branch whenever it changes."
+        elif [ -n "$REPO" ]; then
+            echo "It updates itself from the releases of $REPO."
+        fi
         exit 0
     fi
     sleep 4

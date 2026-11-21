@@ -16,36 +16,49 @@ the server's IPv4 address.
 
 ## 2. Set it up with one script
 
-Each GitHub release carries the Hub for servers (`libroxel-hub-linux-x86_64`)
-and the two scripts that set it up and update it. On the server:
+The server builds the Hub itself from the repository's `main` branch, so a
+change only has to be pushed, with no release to wait for. On the server:
+
+```sh
+git clone https://github.com/<owner>/<repo>.git ~/libroxel
+sudo bash ~/libroxel/packaging/hub/setup-hub.sh --repo <owner>/<repo> --domain hub.libroxel.com --from-source
+```
+
+The first build takes a few minutes (it installs Rust for your user the
+first time). The script installs the Hub as a service that starts on boot
+and restarts whenever it stops, puts Caddy in front of it for HTTPS (each
+site has its own file in `/etc/caddy/sites`, so a website can sit beside
+it), opens only SSH, HTTP and HTTPS in the firewall, and backs the database
+up every night (the last 14 are kept in `/var/lib/libroxel/backups`).
+
+For a private repository, add `--token <a token that can read it>`.
+
+### Updates
+
+Every 10 minutes the server looks at `main` on GitHub. When it has changed,
+it builds it in `~/libroxel`, backs the database up
+(`backups/before-main-<commit>.sqlite`), sets itself up again with that
+version's own `setup-hub.sh`, and checks the Hub answers. If it doesn't
+within 30 seconds, the old Hub goes back and that version is skipped.
+`~/libroxel` always matches `main`, so don't keep changes of your own there.
+
+- Update now: `sudo libroxel-hub-update --now`
+- What happened: `journalctl -u libroxel-hub-update -n 30`
+- Settings (domain, repository, token, how it updates): `/etc/libroxel/hub.conf`
+
+#### Or from GitHub releases
+
+To install only releases instead (built by GitHub, checked against each
+release's `SHA256SUMS.txt`, nothing to build on the server; see
+[RELEASING.md](RELEASING.md)), run `sudo libroxel-hub-update --from-releases`.
+`sudo libroxel-hub-update --from-source` switches back. A fresh server can
+also start from a release:
 
 ```sh
 curl -fsSLO https://github.com/<owner>/<repo>/releases/latest/download/setup-hub.sh
 curl -fsSLO https://github.com/<owner>/<repo>/releases/latest/download/update-hub.sh
 sudo bash setup-hub.sh --repo <owner>/<repo> --domain hub.libroxel.com
 ```
-
-(For a private repository, add `--token <a token that can read it>`, and
-copy the two scripts over with `scp` instead.)
-
-The script installs the Hub as a service that starts on boot and restarts
-whenever it stops, puts Caddy in front of it for HTTPS (each site has its own
-file in `/etc/caddy/sites`, so a website can sit beside it), opens only SSH,
-HTTP and HTTPS in the firewall, and backs the database up every night (the
-last 14 are kept in `/var/lib/libroxel/backups`).
-
-### Updates
-
-Every 10 minutes the server looks for a new release. When there is one, it
-checks each file against the release's `SHA256SUMS.txt`, backs the database
-up (`backups/before-<tag>.sqlite`), sets itself up again with that release's
-own `setup-hub.sh`, and checks the Hub answers. If it doesn't within 30
-seconds, the old Hub goes back and that release is skipped. Publishing a
-release (see [RELEASING.md](RELEASING.md)) is all it takes.
-
-- Update now: `sudo libroxel-hub-update --now`
-- What happened: `journalctl -u libroxel-hub-update -n 30`
-- Settings (domain, repository, token): `/etc/libroxel/hub.conf`
 
 ## 3. HTTPS and who is calling
 

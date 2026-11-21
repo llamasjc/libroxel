@@ -204,6 +204,11 @@ The first build compiles Bevy and takes a while. After that it is quick.
   hands that copy out only to someone who proves the password. Ten wrong
   passwords for a name lock signing in to it for 15 minutes. Signing in
   keeps this computer's old key beside the new one (`identity.key.old-…`).
+- **More than one account:** **Sign out** at the top of **Your account**
+  starts a new, empty account to claim another name or sign in with. Every
+  account you've used is kept on this computer (in `accounts/` beside
+  `identity.key`), and a **Switch to …** button swaps between them, no
+  password needed.
 - **Two-step sign-in and alerts:** with a password set, **Set up two-step
   sign-in** adds Libroxel to an authenticator app (Google Authenticator,
   Authy, 1Password…); signing in elsewhere then also needs its 6-digit code,

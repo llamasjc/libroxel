@@ -1,0 +1,124 @@
+//! Accounts saved on this computer, so a player can sign out and switch
+//! between them without typing a password each time.
+//!
+//! The account in use is the identity key at [`crate::identity_path`]. Each
+//! account that has a name on a Hub is also kept in an `accounts` folder
+//! beside it, as `<player id>.key` with its name in `<player id>.name`.
+
+use std::path::{Path, PathBuf};
+
+use libroxel_net::Identity;
+
+/// An account saved on this computer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Saved {
+    pub player_id: String,
+    pub name: String,
+}
+
+/// Keeps the account in use, named `name`, among the saved ones.
+pub fn remember(name: &str) -> Result<(), String> {
+    remember_at(&crate::identity_path(), name)
+}
+
+/// The accounts saved on this computer, by name.
+pub fn saved() -> Vec<Saved> {
+    saved_at(&crate::identity_path())
+}
+
+/// Uses the saved account `player_id` from now on.
+pub fn switch_to(player_id: &str) -> Result<(), String> {
+    switch_at(&crate::identity_path(), player_id)
+}
+
+/// Stops using the account in use (it stays saved, named `name`, if it has
+/// a name) and starts a new, empty one: to make another account or sign in.
+pub fn sign_out(name: Option<&str>) -> Result<(), String> {
+    sign_out_at(&crate::identity_path(), name)
+}
+
+fn folder(identity: &Path) -> PathBuf {
+    identity.parent().map(|dir| dir.join("accounts")).unwrap_or_else(|| PathBuf::from("accounts"))
+}
+
+fn load(identity: &Path) -> Result<Identity, String> {
+    Identity::load_or_create(identity).map_err(|e| format!("Could not load your identity: {e}"))
+}
+
+fn remember_at(identity: &Path, name: &str) -> Result<(), String> {
+    let me = load(identity)?;
+    let dir = folder(identity);
+    let id = me.player_id();
+    let failed = |e: std::io::Error| format!("Could not save the account: {e}");
+    me.save_over(&dir.join(format!("{id}.key"))).map_err(failed)?;
+    std::fs::write(dir.join(format!("{id}.name")), name).map_err(failed)
+}
+
+fn saved_at(identity: &Path) -> Vec<Saved> {
+    let mut found: Vec<Saved> = std::fs::read_dir(folder(identity))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension()? != "key" {
+                return None;
+            }
+            let player_id = path.file_stem()?.to_str()?.to_owned();
+            let name = std::fs::read_to_string(path.with_extension("name")).unwrap_or_default();
+            let name = if name.trim().is_empty() { player_id.clone() } else { name.trim().to_owned() };
+            Some(Saved { player_id, name })
+        })
+        .collect();
+    found.sort_by_key(|s| s.name.to_ascii_lowercase());
+    found
+}
+
+fn switch_at(identity: &Path, player_id: &str) -> Result<(), String> {
+    let bytes = std::fs::read(folder(identity).join(format!("{player_id}.key")))
+        .map_err(|e| format!("That account isn't saved here any more: {e}"))?;
+    let bytes: [u8; 32] =
+        bytes.as_slice().try_into().map_err(|_| "That saved account is damaged.".to_owned())?;
+    let account = Identity::from_secret_bytes(&bytes);
+    if account.player_id() != player_id {
+        return Err("That saved account is damaged.".into());
+    }
+    account.save_over(identity).map_err(|e| format!("Could not switch accounts: {e}"))
+}
+
+fn sign_out_at(identity: &Path, name: Option<&str>) -> Result<(), String> {
+    if let Some(name) = name {
+        remember_at(identity, name)?;
+    }
+    Identity::generate().save_over(identity).map_err(|e| format!("Could not sign out: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signing_out_keeps_the_account_to_switch_back_to() {
+        let dir = std::env::temp_dir().join(format!("libroxel-switch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let identity = dir.join("identity.key");
+        let admin = load(&identity).unwrap().player_id();
+        remember_at(&identity, "Admin").unwrap();
+
+        // Sign out: a new, empty identity is in use; Admin stays saved.
+        sign_out_at(&identity, Some("Admin")).unwrap();
+        let fresh = load(&identity).unwrap().player_id();
+        assert_ne!(fresh, admin);
+        remember_at(&identity, "llamas").unwrap();
+        let names: Vec<_> = saved_at(&identity).into_iter().map(|s| s.name).collect();
+        assert_eq!(names, ["Admin", "llamas"]);
+
+        // Switch back and forth.
+        switch_at(&identity, &admin).unwrap();
+        assert_eq!(load(&identity).unwrap().player_id(), admin);
+        switch_at(&identity, &fresh).unwrap();
+        assert_eq!(load(&identity).unwrap().player_id(), fresh);
+        assert!(switch_at(&identity, "nobody").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

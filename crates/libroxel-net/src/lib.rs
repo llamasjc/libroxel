@@ -126,6 +126,20 @@ impl Identity {
         Ok(kept)
     }
 
+    /// Saves this identity at `path`, over whatever is there (for keys
+    /// kept somewhere else too, such as accounts saved on this computer).
+    pub fn save_over(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(".new");
+        let new = path.with_file_name(name);
+        let _ = std::fs::remove_file(&new);
+        write_private(&new, &self.key.to_bytes())?;
+        std::fs::rename(&new, path)
+    }
+
     /// The player's permanent ID: their public key, as text.
     pub fn player_id(&self) -> String {
         self.key.public().to_string()

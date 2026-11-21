@@ -14,6 +14,7 @@
 //! cargo run -p libroxel -- my_game.lrx  # edit a saved place
 //! ```
 
+mod accounts;
 mod browse;
 mod debugging;
 mod file_picker;
