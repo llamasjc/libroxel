@@ -8,6 +8,8 @@
   <string>Libroxel</string>
   <key>CFBundleIdentifier</key>
   <string>org.libroxel.app</string>
+  <key>CFBundleIconFile</key>
+  <string>libroxel</string>
   <key>CFBundleExecutable</key>
   <string>libroxel</string>
   <key>CFBundlePackageType</key>

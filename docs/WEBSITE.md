@@ -97,7 +97,7 @@ updates did.
 
 **Downloads** come from the repository's newest GitHub release: the Download
 page asks GitHub for it and links each platform's installer
-(`…-windows-x86_64-setup.exe`, `…-macos-universal.dmg`, `…-linux-x86_64.run`,
+(`…-windows-x86_64-setup.exe`, `…-macos-universal.dmg`, `…-linux-x86_64.AppImage`,
 and `…-linux-x86_64.deb` beside it). Before the first release it
 says there's nothing to download yet. Without `--repo`, it links to
 `/var/www/libroxel/downloads/libroxel-windows-x86_64-setup.exe` and so on instead,

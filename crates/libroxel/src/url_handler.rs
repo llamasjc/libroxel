@@ -93,7 +93,8 @@ pub fn register() {
 #[cfg(target_os = "linux")]
 fn register_now() -> Result<(), String> {
     use std::path::PathBuf;
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    // The AppImage itself when it runs from one, which stays put.
+    let exe = crate::command::app_path().map_err(|e| e.to_string())?;
     let dir = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
