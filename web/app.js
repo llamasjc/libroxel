@@ -43,11 +43,8 @@ const ICON = {
 
 // The app's colours, for drawing.
 const C = {
-  card: [255, 255, 255], grass: [146, 210, 104], grassEdge: [92, 160, 64],
   portrait: [190, 226, 250],
 };
-// The bright colours game pictures are tinted with (menu.rs `tint`).
-const TINTS = [[255, 140, 40], [92, 196, 62], [30, 170, 230], [255, 196, 40], [160, 110, 240], [240, 84, 140]];
 
 // The Avatar tab's colours (crates/libroxel/src/menu.rs) and hats.
 const SKINS = [[255, 224, 196], [238, 196, 160], [222, 172, 128], [196, 140, 96], [160, 108, 72], [118, 78, 52], [86, 56, 38], [120, 200, 120]];
@@ -110,16 +107,14 @@ function crypto_random(n) {
 }
 const rgb = ([r, g, b]) => `rgb(${r}, ${g}, ${b})`;
 const shade = (c, f) => c.map((v) => Math.min(255, Math.floor(v * f + 0.5)));
-const lerp = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
 const nowSecs = () => Math.floor(Date.now() / 1000);
 
-/** FNV-1a over the UTF-8 bytes, as the app picks a game's colour and scene. */
+/** FNV-1a over the UTF-8 bytes, as the app makes a game's picture. */
 function fnv(text) {
   let h = 2166136261;
   for (const b of utf8(text)) h = Math.imul(h ^ b, 16777619) >>> 0;
   return h;
 }
-const tint = (title) => TINTS[fnv(title) % TINTS.length];
 
 /** The app's seed for a name's usual look (64-bit wrapping arithmetic). */
 function seed(name) {
@@ -463,32 +458,53 @@ function bestServer(servers) {
 // Pictures: game scenes and avatars, drawn the way the app draws them
 // ---------------------------------------------------------------------------
 
-function diorama(width, height, cx, cy, unit, title) {
-  const colour = tint(title);
-  const hash = fnv(title);
-  const [dx, dy] = [unit * 0.866, unit * 0.5];
-  const at = (x, y, z) => `${(cx + (x - y) * dx).toFixed(2)},${(cy + (x + y) * dy - z * unit).toFixed(2)}`;
-  const poly = (points, fill, stroke) =>
-    svg('polygon', { points: points.join(' '), fill: rgb(fill), ...(stroke ? { stroke: rgb(stroke), 'stroke-width': 1 } : {}) });
-  const shapes = [];
-  const g = (x, y) => at(x, y, 0.6);
-  shapes.push(poly([g(-1.7, -1.7), g(1.7, -1.7), g(1.7, 1.7), g(-1.7, 1.7)], C.grass, C.grassEdge));
-  const cells = [];
-  for (let x = 0; x < 3; x++) for (let y = 0; y < 3; y++) cells.push([x, y]);
-  cells.sort((a, b) => a[0] + a[1] - (b[0] + b[1]));
-  for (const [gx, gy] of cells) {
-    const bits = (hash >>> ((gx * 3 + gy) * 2)) & 3;
-    const high = gx === 1 && gy === 1 ? 2 : Math.max(bits - 1, 0);
-    for (let z = 0; z < high; z++) {
-      const c = z + 1 === high ? colour : lerp(colour, C.card, 0.35);
-      const [x, y, zz] = [gx - 1.5, gy - 1.5, 0.6 + z];
-      const top = [at(x, y, zz + 1), at(x + 1, y, zz + 1), at(x + 1, y + 1, zz + 1), at(x, y + 1, zz + 1)];
-      const left = [at(x, y + 1, zz + 1), at(x + 1, y + 1, zz + 1), at(x + 1, y + 1, zz), at(x, y + 1, zz)];
-      const right = [at(x + 1, y, zz + 1), at(x + 1, y + 1, zz + 1), at(x + 1, y + 1, zz), at(x + 1, y, zz)];
-      shapes.push(poly(left, shade(c, 0.78)), poly(right, shade(c, 0.55)), poly(top, c));
+/**
+ * A game's picture from its id, the way GitHub makes default profile
+ * pictures: a 5×5 grid of blocks mirrored left to right, in one colour.
+ * The app makes the same one (`blocks` in crates/libroxel/src/menu.rs).
+ */
+function blocks(id) {
+  let h = fnv(id);
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b) >>> 0;
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35) >>> 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  let bits = h & 0x7fff;
+  let ones = 0;
+  for (let i = 0; i < 15; i++) ones += (bits >>> i) & 1;
+  if (ones < 5) bits ^= 0x7fff;
+  const cells = new Array(25).fill(false);
+  for (let i = 0; i < 15; i++) {
+    if ((bits >>> i) & 1) {
+      const [col, row] = [Math.floor(i / 5), i % 5];
+      cells[row * 5 + col] = true;
+      cells[row * 5 + 4 - col] = true;
     }
   }
-  return svg('svg', { viewBox: `0 0 ${width} ${height}`, class: 'scene', 'aria-hidden': 'true' }, ...shapes);
+  return { cells, colour: hsl((h >>> 15) % 360, 0.6, 0.45 + ((h >>> 28) / 15) * 0.1) };
+}
+
+function hsl(h, s, l) {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const [r, g, b] = [[c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x]][Math.min(Math.floor(h / 60), 5)];
+  const m = l - c / 2;
+  return [r, g, b].map((v) => Math.round((v + m) * 255));
+}
+
+const pictureColour = (id) => blocks(id).colour;
+
+/** A game's picture: its blocks on light grey in the middle, a block of margin round them. */
+function gamePicture(width, height, id) {
+  const { cells, colour } = blocks(id);
+  const cell = Math.min(width, height) / 7;
+  const [x0, y0] = [(width - cell * 5) / 2, (height - cell * 5) / 2];
+  const shapes = [svg('rect', { width, height, fill: 'rgb(240, 240, 240)' })];
+  cells.forEach((on, i) => {
+    if (on) shapes.push(svg('rect', { x: x0 + cell * (i % 5), y: y0 + cell * Math.floor(i / 5), width: cell, height: cell, fill: rgb(colour) }));
+  });
+  return svg('svg', { viewBox: `0 0 ${width} ${height}`, class: 'scene', 'shape-rendering': 'crispEdges', 'aria-hidden': 'true' }, ...shapes);
 }
 
 const usualLook = (name) => ({
@@ -782,8 +798,8 @@ function gameCard(entry) {
   else meta = el('div', { class: 'meta idle' }, `By ${entry.by}`);
   return el('a', { class: 'game', href: `#/game/${encodeURIComponent(entry.key)}` },
     el('div', { class: 'pic' },
-      diorama(188, 150, 94, 78, 13, entry.title),
-      el('span', { class: 'badge', style: `background:${rgb(tint(entry.title))}` }, icon(entry.symbol)),
+      gamePicture(188, 150, entry.key),
+      el('span', { class: 'badge', style: `background:${rgb(pictureColour(entry.key))}` }, icon(entry.symbol)),
       inside.length ? el('span', { class: 'faces' }, inside.slice(0, 3).map((f) => portrait(f.look, f.name, 26))) : null),
     el('h3', {}, entry.title),
     meta);
@@ -813,7 +829,7 @@ function game() {
   const out = [
     back,
     el('div', { class: 'hero' },
-      el('div', { class: 'pic' }, diorama(440, 248, 220, 142, 34, entry.title)),
+      el('div', { class: 'pic' }, gamePicture(440, 248, entry.key)),
       el('div', {},
         el('h1', {}, entry.title),
         by,
@@ -856,7 +872,7 @@ function serverRow(server, entry) {
     ? el('span', {}, `Hosted by ${server.host}`, server.admin_host && el('span', { class: 'tag admin', style: 'margin-left:6px' }, 'Admin'), server.host_verified && el('span', { class: 'tag verified', style: 'margin-left:6px' }, 'Verified'))
     : null;
   return el('div', { class: `server${inside.length ? ' friends' : ''}` },
-    el('div', { class: 'mini' }, diorama(52, 52, 26, 30, 6, entry.title)),
+    el('div', { class: 'mini' }, gamePicture(52, 52, entry.key)),
     el('div', { class: 'what' },
       el('b', {}, server.name),
       el('small', {},

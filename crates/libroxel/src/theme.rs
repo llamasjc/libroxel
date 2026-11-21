@@ -546,28 +546,6 @@ fn paint_bubbles_over(painter: &egui::Painter, rect: Rect, strength: f32) {
     }
 }
 
-/// A small sky with bubbles over `rect`, for the picture on a game's tile.
-pub fn paint_bubbles(painter: &egui::Painter, rect: Rect) {
-    gradient(
-        painter,
-        rect,
-        0.0,
-        &[
-            (0.0, Color32::from_rgb(76, 158, 226)),
-            (0.7, Color32::from_rgb(178, 222, 248)),
-            (1.0, Color32::from_rgb(214, 240, 222)),
-        ],
-    );
-    radial(
-        painter,
-        Pos2::new(rect.max.x - rect.width() * 0.2, rect.min.y),
-        rect.width() * 0.55,
-        Color32::from_rgba_unmultiplied(255, 255, 255, 110),
-        Color32::from_rgba_unmultiplied(255, 255, 255, 0),
-    );
-    paint_bubbles_over(painter, rect, 0.8);
-}
-
 /// A sheet of tinted glass over `rect`: the tint fading downwards, a
 /// bright gloss over its upper half, a dark outer rim and a white inner
 /// one, the way light catches the edge of a pane.
