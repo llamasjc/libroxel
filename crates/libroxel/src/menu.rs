@@ -182,33 +182,32 @@ fn subheading(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).font(theme::display(17.0)).color(theme::TEXT));
 }
 
-/// A game's picture, worked out from its id the way GitHub makes default
-/// profile pictures: a 5×5 grid of blocks mirrored left to right, in one
-/// colour. Returns which blocks are filled and the colour. The website
-/// makes the same picture for the same id (`blocks` in web/app.js), so the
-/// two must stay in step.
-pub(crate) fn blocks(id: &str) -> ([bool; 25], Color32) {
+/// A game's picture, worked out from its id: a cluster of cubes on a 4×4
+/// patch of grass, seen from above a corner. Each column's height comes
+/// from the id and the cluster is mirrored along the diagonal, so it looks
+/// the same on the left and the right. Returns the heights (row by row)
+/// and the cubes' one colour. The website makes the same picture for the
+/// same id (`blocks` in web/app.js), so the two must stay in step.
+pub(crate) fn blocks(id: &str) -> ([u8; 16], Color32) {
     let mut h = id.bytes().fold(2_166_136_261u32, |h, b| (h ^ b as u32).wrapping_mul(16_777_619));
     h ^= h >> 16;
     h = h.wrapping_mul(0x85eb_ca6b);
     h ^= h >> 13;
     h = h.wrapping_mul(0xc2b2_ae35);
     h ^= h >> 16;
-    let mut bits = h & 0x7fff;
-    if bits.count_ones() < 5 {
-        bits ^= 0x7fff;
-    }
-    let mut cells = [false; 25];
-    for i in 0..15 {
-        if bits >> i & 1 == 1 {
-            let (col, row) = (i / 5, i % 5);
-            cells[row * 5 + col] = true;
-            cells[row * 5 + 4 - col] = true;
+    let mut heights = [0u8; 16];
+    let mut bit = 0;
+    for y in 0..4 {
+        for x in y..4 {
+            let v = (h >> bit & 3) as usize;
+            bit += 2;
+            let inner = (1..3).contains(&x) && (1..3).contains(&y);
+            let high = if inner { [1, 2, 2, 3][v] } else { [0, 0, 1, 2][v] };
+            heights[y * 4 + x] = high;
+            heights[x * 4 + y] = high;
         }
     }
-    let hue = ((h >> 15) % 360) as f64;
-    let light = 0.45 + (h >> 28) as f64 / 15.0 * 0.1;
-    (cells, hsl(hue, 0.6, light))
+    (heights, hsl((h >> 20) as f64 % 360.0, 0.6, 0.55))
 }
 
 /// The colour of a game's [`blocks`].
@@ -232,18 +231,72 @@ fn hsl(h: f64, s: f64, l: f64) -> Color32 {
     Color32::from_rgb(v(r), v(g), v(b))
 }
 
-/// Paints a game's [`blocks`] over `rect`: a light grey ground with the
-/// grid in the middle, a block of margin round it.
-pub(crate) fn paint_blocks(painter: &egui::Painter, rect: egui::Rect, corner: f32, id: &str) {
-    let (cells, colour) = blocks(id);
-    painter.rect_filled(rect, corner, Color32::from_rgb(240, 240, 240));
-    let side = rect.width().min(rect.height());
-    let cell = side / 7.0;
-    let grid = egui::Rect::from_center_size(rect.center(), egui::vec2(cell * 5.0, cell * 5.0));
-    for (i, _) in cells.iter().enumerate().filter(|(_, on)| **on) {
-        let min = grid.min + egui::vec2(cell * (i % 5) as f32, cell * (i / 5) as f32);
-        // A hair bigger, so blocks side by side meet without a seam.
-        painter.rect_filled(egui::Rect::from_min_size(min, egui::vec2(cell, cell)).expand(0.3), 0.0, colour);
+/// A colour darkened to `k` of itself, for a cube's sides.
+fn darker(c: Color32, k: f32) -> Color32 {
+    let m = |v: u8| (v as f32 * k + 0.5).floor().min(255.0) as u8;
+    Color32::from_rgb(m(c.r()), m(c.g()), m(c.b()))
+}
+
+/// Paints a game's [`blocks`] over `rect`: a little sky, the grass and the
+/// cubes, as big as fits in the middle.
+pub(crate) fn paint_blocks(painter: &egui::Painter, rect: egui::Rect, id: &str) {
+    let (heights, colour) = blocks(id);
+    theme::paint_bubbles(&painter.with_clip_rect(rect.shrink(0.5)), rect);
+    let unit = (rect.width() / 8.0).min(rect.height() / 7.5);
+    let (dx, dy) = (unit * 0.866, unit * 0.5);
+    let base = rect.center() + egui::vec2(0.0, unit * 0.6);
+    let at =
+        |x: f32, y: f32, z: f32| egui::pos2(base.x + (x - y) * dx, base.y + (x + y - 4.0) * dy - z * unit);
+    let face = |points: [egui::Pos2; 4], fill: Color32| {
+        painter.add(egui::Shape::convex_polygon(points.to_vec(), fill, egui::Stroke::NONE));
+    };
+    // The grass under the cubes.
+    let (lo, hi) = (-0.25, 4.25);
+    painter.add(egui::Shape::convex_polygon(
+        vec![at(lo, lo, 0.0), at(hi, lo, 0.0), at(hi, hi, 0.0), at(lo, hi, 0.0)],
+        Color32::from_rgb(146, 210, 104),
+        egui::Stroke::new(1.0, Color32::from_rgb(92, 160, 64)),
+    ));
+    // Back to front, bottom to top.
+    let (left, right) = (darker(colour, 0.78), darker(colour, 0.55));
+    for sum in 0..7 {
+        for y in 0..4 {
+            let x = sum - y;
+            if !(0..4).contains(&x) {
+                continue;
+            }
+            let (fx, fy) = (x as f32, y as f32);
+            for z in 0..heights[y as usize * 4 + x as usize] {
+                let z = z as f32;
+                face(
+                    [
+                        at(fx, fy + 1.0, z + 1.0),
+                        at(fx + 1.0, fy + 1.0, z + 1.0),
+                        at(fx + 1.0, fy + 1.0, z),
+                        at(fx, fy + 1.0, z),
+                    ],
+                    left,
+                );
+                face(
+                    [
+                        at(fx + 1.0, fy, z + 1.0),
+                        at(fx + 1.0, fy + 1.0, z + 1.0),
+                        at(fx + 1.0, fy + 1.0, z),
+                        at(fx + 1.0, fy, z),
+                    ],
+                    right,
+                );
+                face(
+                    [
+                        at(fx, fy, z + 1.0),
+                        at(fx + 1.0, fy, z + 1.0),
+                        at(fx + 1.0, fy + 1.0, z + 1.0),
+                        at(fx, fy + 1.0, z + 1.0),
+                    ],
+                    colour,
+                );
+            }
+        }
     }
 }
 
@@ -276,7 +329,7 @@ fn card(
     }
     theme::gradient(&painter, face, 8.0, &[(0.0, Color32::WHITE), (1.0, Color32::from_rgb(236, 244, 252))]);
     let picture = egui::Rect::from_min_size(face.min, egui::vec2(face.width(), 112.0)).shrink(4.0);
-    paint_blocks(&painter, picture, 5.0, id);
+    paint_blocks(&painter, picture, id);
     painter.rect_stroke(
         picture,
         5,
@@ -1026,15 +1079,31 @@ mod tests {
     /// The same pictures the website makes for these ids.
     #[test]
     fn blocks_match_the_website() {
-        for (id, cells, colour) in [
-            ("starter:Chess", "1101110101110111010111111", [66, 208, 196]),
-            ("starter:Kart race", "0111011011111111010110101", [46, 154, 184]),
-            ("abc123", "1010101110011100010001010", [55, 205, 170]),
-        ] {
+        for (id, heights, colour) in WEBSITE {
             let (got, c) = blocks(id);
-            let got: String = got.iter().map(|&on| if on { '1' } else { '0' }).collect();
-            assert_eq!(got, cells, "{id}");
+            assert_eq!(got, heights, "{id}");
             assert_eq!([c.r(), c.g(), c.b()], colour, "{id}");
         }
     }
+
+    /// Every picture has cubes in the middle and looks the same from the
+    /// left and the right.
+    #[test]
+    fn blocks_are_mirrored() {
+        for id in ["starter:Chess", "x", "", "a long game id 1234"] {
+            let (h, _) = blocks(id);
+            for y in 0..4 {
+                for x in 0..4 {
+                    assert_eq!(h[y * 4 + x], h[x * 4 + y]);
+                }
+            }
+            assert!(h[5] > 0 && h[10] > 0);
+        }
+    }
+
+    const WEBSITE: [(&str, [u8; 16], [u8; 3]); 3] = [
+        ("starter:Chess", [2, 2, 2, 1, 2, 2, 2, 1, 2, 2, 3, 2, 1, 1, 2, 0], [71, 198, 209]),
+        ("starter:Kart race", [0, 0, 0, 0, 0, 3, 2, 0, 0, 2, 2, 0, 0, 0, 0, 0], [71, 92, 209]),
+        ("abc123", [0, 0, 0, 2, 0, 2, 3, 2, 0, 3, 1, 2, 2, 2, 2, 2], [209, 71, 87]),
+    ];
 }
