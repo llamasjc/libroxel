@@ -41,6 +41,7 @@ usage:
 pub fn dispatch(args: &[String]) -> bool {
     let result = match args.first().map(String::as_str) {
         Some("server") => server(&args[1..]),
+        Some("starters") => starters(),
         Some("help" | "--help" | "-h") => {
             print!("{HELP}");
             Ok(())
@@ -120,6 +121,10 @@ fn server(args: &[String]) -> Result<(), String> {
         ],
     )?;
     let hub = if flags.has("--no-hub") { HubUse::None } else { HubUse::usual() };
+    crate::hub_assets::start(&match &hub {
+        HubUse::At(address) => address.clone(),
+        HubUse::None => libroxel_hub::hub_address(),
+    });
     let (game, text, key, game_id) = match (flags.rest.first(), flags.get("--game")) {
         (Some(path), _) => {
             let text = std::fs::read_to_string(path).map_err(|e| format!("could not read {path}: {e}"))?;
@@ -160,20 +165,36 @@ fn server(args: &[String]) -> Result<(), String> {
     run(settings, &mut |line| println!("{line}"), &AtomicBool::new(false))
 }
 
+fn starters() -> Result<(), String> {
+    let games = crate::starter_games::STARTER_GAMES
+        .iter()
+        .map(|game| {
+            let place =
+                place::save(&(game.build)()).map_err(|e| format!("could not save {}: {e}", game.name))?;
+            Ok(libroxel_hub::StarterPlace { name: game.name.to_owned(), about: game.about.to_owned(), place })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    println!("{}", libroxel_instance::serde_json::to_string(&games).map_err(|e| e.to_string())?);
+    Ok(())
+}
+
 /// A game's title and saved place by its id: a starter game, or a published
 /// one fetched from the Hub.
 fn game_by_id(id: &str, hub: &HubUse) -> Result<(String, String), String> {
-    if let Some(name) = id.strip_prefix("starter:") {
-        let game = crate::starter_games::starter(name).ok_or(format!("there is no starter game {name}"))?;
-        let text = place::save(&(game.build)()).map_err(|e| format!("could not save {name}: {e}"))?;
-        return Ok((game.name.to_owned(), text));
-    }
     // From the Hub even when this server isn't listed on it.
     let address = match hub {
         HubUse::At(address) => address.clone(),
         HubUse::None => libroxel_hub::hub_address(),
     };
     let client = HubClient::new(&address);
+    if let Some(name) = id.strip_prefix("starter:") {
+        if let Ok(text) = client.official_place(name) {
+            return Ok((name.to_owned(), text));
+        }
+        let game = crate::starter_games::starter(name).ok_or(format!("there is no starter game {name}"))?;
+        let text = place::save(&(game.build)()).map_err(|e| format!("could not save {name}: {e}"))?;
+        return Ok((game.name.to_owned(), text));
+    }
     let info = client.game(id)?;
     Ok((info.title, client.download(id)?))
 }

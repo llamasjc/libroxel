@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use bevy_egui::egui::{self, RichText};
 use libroxel_hub::{
-    AccountUpdate, Announcer, GameInfo, HostKind, HostSigner, HubClient, Item, Listing, NewItem, Profile,
-    Publish, Report, ServerInfo,
+    AccountUpdate, Announcer, GameInfo, HostKind, HostSigner, HubClient, Item, Listing, NewItem,
+    OfficialGame, Profile, Publish, Report, ServerInfo,
 };
 use libroxel_instance::serde_json::{self, Value as Json, json};
 
@@ -42,6 +42,8 @@ pub struct Platform {
     games: Vec<GameInfo>,
     games_error: Option<String>,
     fetched_games: Slot<Vec<GameInfo>>,
+    official: Vec<OfficialGame>,
+    fetched_official: Slot<Vec<OfficialGame>>,
     /// A published game being fetched to play, and its title.
     downloading: Option<String>,
     downloaded: Slot<Downloaded>,
@@ -130,6 +132,8 @@ impl Default for Platform {
             games: Vec::new(),
             games_error: None,
             fetched_games: Arc::default(),
+            official: Vec::new(),
+            fetched_official: Arc::default(),
             downloading: None,
             downloaded: Arc::default(),
             download_error: None,
@@ -246,6 +250,9 @@ impl Platform {
                 Err(e) => self.games_error = Some(e),
             }
         }
+        if let Some(Ok(official)) = self.fetched_official.lock().unwrap().take() {
+            self.official = official;
+        }
         if let Some(Ok(items)) = self.fetched_items.lock().unwrap().take() {
             self.items = items;
         }
@@ -353,9 +360,11 @@ impl Platform {
         let out = self.fetched.clone();
         let games = self.fetched_games.clone();
         let items = self.fetched_items.clone();
+        let official = self.fetched_official.clone();
         std::thread::spawn(move || {
             *out.lock().unwrap() = Some(client.servers(&search));
             *games.lock().unwrap() = Some(client.games(&search));
+            *official.lock().unwrap() = Some(client.official());
             *items.lock().unwrap() = Some(client.catalog(""));
         });
     }
@@ -372,6 +381,13 @@ impl Platform {
         let author = self.name.trim().to_owned();
         let out = self.published.clone();
         std::thread::spawn(move || {
+            let place = match crate::hub_assets::upload(&client, &place) {
+                Ok(place) => place,
+                Err(e) => {
+                    *out.lock().unwrap() = Some(Err(e));
+                    return;
+                }
+            };
             let hub = client.url().to_owned();
             let mut known = read_published();
             let mine = known.get(&key).filter(|m| m["hub"] == hub.as_str());
@@ -1344,6 +1360,26 @@ impl Platform {
         }
     }
 
+    pub fn official(&self) -> &[OfficialGame] {
+        &self.official
+    }
+
+    pub fn get_official(&mut self, game: &OfficialGame, host: bool) {
+        if self.downloading.is_some() {
+            return;
+        }
+        self.downloading = Some(game.name.clone());
+        self.download_error = None;
+        let client = self.client();
+        let game = game.clone();
+        let out = self.downloaded.clone();
+        std::thread::spawn(move || {
+            let result =
+                crate::hub_assets::get_official(&client, &game).map(|path| Downloaded { path, host });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
     /// Fetches a published game to play (or host, with `host`).
     pub fn get_game(&mut self, game: &GameInfo, host: bool) {
         self.download(game, host);
@@ -1356,19 +1392,25 @@ impl Platform {
         self.downloading = Some(game.title.clone());
         self.download_error = None;
         let client = self.client();
-        let (id, title) = (game.game_id.clone(), game.title.clone());
+        let (id, title, version) = (game.game_id.clone(), game.title.clone(), game.version);
         let out = self.downloaded.clone();
         std::thread::spawn(move || {
-            let result = client.download(&id).and_then(|text| {
-                let dir = data_dir().join("downloads");
-                let safe: String =
-                    title.chars().map(|c| if c.is_alphanumeric() || c == ' ' { c } else { '_' }).collect();
-                let path = dir.join(format!("{} ({id}).lrx", safe.trim()));
-                std::fs::create_dir_all(&dir)
-                    .and_then(|_| std::fs::write(&path, text))
-                    .map_err(|e| format!("could not keep the game: {e}"))?;
+            let dir = data_dir().join("downloads");
+            let safe: String =
+                title.chars().map(|c| if c.is_alphanumeric() || c == ' ' { c } else { '_' }).collect();
+            let path = dir.join(format!("{} ({id}).lrx", safe.trim()));
+            let stamp = dir.join(format!("{id}.version"));
+            let cached = path.exists()
+                && std::fs::read_to_string(&stamp).is_ok_and(|v| v.trim() == version.to_string());
+            let result = if cached {
                 Ok(Downloaded { path, host })
-            });
+            } else {
+                client.download(&id).and_then(|text| {
+                    crate::hub_assets::write(&path, &text)?;
+                    let _ = std::fs::write(&stamp, version.to_string());
+                    Ok(Downloaded { path, host })
+                })
+            };
             *out.lock().unwrap() = Some(result);
         });
     }

@@ -45,6 +45,11 @@ use axum::{Json, Router};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
+mod assets;
+pub use assets::{
+    ASSET_PREFIX, MAX_ASSET, OfficialGame, StarterPlace, asset_hash, official, official_from, set_official,
+    valid_hash,
+};
 mod cli;
 mod email;
 mod fleet;
@@ -661,6 +666,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     security::create_tables(&db)?;
     email::create_tables(&db)?;
     fleet::create_tables(&db)?;
+    assets::create_tables(&db)?;
     Ok(db)
 }
 
@@ -700,6 +706,15 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/games", get(list_games).post(publish).layer(big))
         .route("/games/{id}", get(game_info).delete(unpublish))
         .route("/games/{id}/place", get(download))
+        .route("/assets/missing", post(assets::missing_assets))
+        .route(
+            "/assets/{hash}",
+            get(assets::get_asset)
+                .post(assets::put_asset)
+                .layer(axum::extract::DefaultBodyLimit::max(MAX_ASSET + 1024)),
+        )
+        .route("/official", get(assets::list_official))
+        .route("/official/{name}", get(assets::official_place))
         .route("/accounts", get(find_people).post(update_account))
         .route("/accounts/{id}", get(profile))
         .route("/accounts/password", post(password::set_password))
@@ -1559,6 +1574,12 @@ pub fn run(addr: SocketAddr, db_path: &Path, options: HubOptions) -> Result<(), 
     let mut options = options;
     fleet_finds(&mut options, addr);
     let db = open_db(Some(db_path))?;
+    if let Some(fleet) = &options.fleet {
+        match official_from(&fleet.program).and_then(|games| set_official(&db, &games).map(|_| games.len())) {
+            Ok(n) => println!("{n} official games from {}", fleet.program.display()),
+            Err(e) => println!("No official games from {}: {e}", fleet.program.display()),
+        }
+    }
     let runtime =
         tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
     runtime.block_on(async move {

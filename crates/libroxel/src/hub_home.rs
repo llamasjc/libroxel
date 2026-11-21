@@ -52,6 +52,7 @@ pub struct HomeState {
 #[derive(Clone)]
 enum Source {
     Starter(&'static str),
+    Official(Box<libroxel_hub::OfficialGame>),
     Published(Box<GameInfo>),
     /// Only known from servers that run it.
     Live,
@@ -96,6 +97,20 @@ fn entries(platform: &Platform) -> Vec<Entry> {
             servers: Vec::new(),
         })
         .collect();
+    for game in platform.official() {
+        match list.iter_mut().find(|e| e.title == game.name) {
+            Some(entry) => entry.about = game.about.clone(),
+            None => list.push(Entry {
+                key: starter_id(&game.name),
+                title: game.name.clone(),
+                by: "Libroxel".into(),
+                about: game.about.clone(),
+                symbol: icon::GAME_CONTROLLER,
+                source: Source::Official(Box::new(game.clone())),
+                servers: Vec::new(),
+            }),
+        }
+    }
     for game in platform.games() {
         list.push(Entry {
             key: game.game_id.clone(),
@@ -618,7 +633,17 @@ fn follow_link(state: &mut HomeState, platform: &mut Platform, list: &[Entry], n
 /// Starts a new server of `entry` on this computer, with friends welcome.
 fn host(entry: &Entry, platform: &mut Platform) -> Option<Pick> {
     match &entry.source {
-        Source::Starter(name) => Some(Pick::Host(Game::Starter(name))),
+        Source::Starter(name) => match platform.official().iter().find(|g| g.name == *name).cloned() {
+            Some(game) => {
+                platform.get_official(&game, true);
+                None
+            }
+            None => Some(Pick::Host(Game::Starter(name))),
+        },
+        Source::Official(game) => {
+            platform.get_official(game, true);
+            None
+        }
         Source::Published(game) => {
             platform.get_game(game, true);
             None

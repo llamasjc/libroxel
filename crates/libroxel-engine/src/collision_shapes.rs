@@ -91,7 +91,7 @@ pub fn shape(shape: u32) -> Option<Arc<Shape>> {
 
 fn build(name: &str) -> Option<Vec<Piece>> {
     let lower = name.to_ascii_lowercase();
-    if lower.ends_with(".obj") {
+    if lower.ends_with(".obj") && !lower.starts_with(crate::pictures::HUB_ASSET) {
         let companion = format!("{}.collision.obj", &name[..name.len() - 4]);
         if let Some(bytes) = crate::pictures::bytes_for(&companion)
             && let Some(pieces) = from_groups(&String::from_utf8_lossy(&bytes))

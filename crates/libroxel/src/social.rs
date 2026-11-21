@@ -41,6 +41,10 @@ pub fn game_ref(game: &Game) -> GameRef {
     match game {
         Game::Starter(name) => GameRef { title: (*name).to_owned(), game_id: Some(starter_id(name)) },
         Game::Blank => GameRef { title: game.label(), game_id: None },
+        Game::File(path) if path.parent().is_some_and(|dir| dir.ends_with("official")) => {
+            let name = game.label();
+            GameRef { game_id: Some(starter_id(&name)), title: name }
+        }
         Game::File(path) => {
             let stem = game.label();
             // Published games are kept as "Title (id).lrx" in downloads.
