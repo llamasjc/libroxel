@@ -19,7 +19,9 @@
 //! and when `LIBROXEL_NO_COMMAND` is set. A file at the link's place that
 //! isn't a link to a Libroxel app is left alone.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 
 /// The lines added to a shell's startup file to put `~/.local/bin` on PATH.
 #[cfg(unix)]

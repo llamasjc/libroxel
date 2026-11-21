@@ -29,7 +29,9 @@ bevy = { version = "0.20", default-features = false, features = ["3d", "audio", 
 rapier3d = "0.36"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# "deny" rather than "forbid" so the one Windows call that needs it can say
+# #[allow(unsafe_code)] right where it is.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
