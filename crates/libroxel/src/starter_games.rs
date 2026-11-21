@@ -48,6 +48,24 @@ pub const STARTER_GAMES: &[StarterGame] = &[
         about: "The card game with the Kings in the corners, for 2 to 4",
         build: rey_esquinado,
     },
+    StarterGame {
+        name: "Tag",
+        symbol: crate::theme::icon::PERSON_SIMPLE_RUN,
+        about: "Don't be It when the clock runs out",
+        build: crate::party_games::tag,
+    },
+    StarterGame {
+        name: "Hide and seek",
+        symbol: crate::theme::icon::EYE_CLOSED,
+        about: "Hide round the houses, or find everyone",
+        build: crate::party_games::hide_and_seek,
+    },
+    StarterGame {
+        name: "Battle royale",
+        symbol: crate::theme::icon::SWORD,
+        about: "Last one standing as the storm closes in",
+        build: crate::party_games::battle_royale,
+    },
 ];
 
 /// Finds a starter game by name.

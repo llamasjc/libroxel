@@ -809,6 +809,7 @@ fn new_npc(tree: &mut InstanceTree, ground: libroxel_instance::Vec3) -> Option<I
         pants: Color3::from_rgb8(90, 90, 100),
     };
     let (head, limbs) = libroxel_engine::character::build_rig(tree, model, colors);
+    libroxel_engine::character::add_joints(tree, root, head, &limbs);
     libroxel_engine::character::pose_rig(tree, root, head, &limbs, Default::default());
     let humanoid = tree.create(ClassKind::Humanoid, names::character::HUMANOID).ok()?;
     tree.set_parent(humanoid, Some(model)).ok()?;
