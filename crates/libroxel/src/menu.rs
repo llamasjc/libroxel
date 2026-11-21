@@ -353,6 +353,10 @@ impl Menu {
         ui.scope_builder(egui::UiBuilder::new().max_rect(page), |ui| {
             egui::ScrollArea::vertical().id_salt("home-page").auto_shrink([false, false]).show(ui, |ui| {
                 let name = self.name.trim().to_owned();
+                if let Some(why) = platform.weak_password() {
+                    platform.new_password_ui(ui, &why);
+                    return;
+                }
                 pick = match self.tab {
                     Tab::Home => {
                         crate::hub_home::home_tab(&mut self.home, ui, platform, &name, &mut self.tab)

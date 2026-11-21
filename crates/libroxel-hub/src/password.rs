@@ -129,6 +129,84 @@ pub fn password_problem(password: &str, name: &str) -> Option<String> {
     if !name.is_empty() && password.to_ascii_lowercase().contains(&name.to_ascii_lowercase()) {
         return Some("a password can't have your name in it".into());
     }
+    weak_password(password)
+}
+
+/// The most used passwords (from SecLists), one a line, in lower case.
+/// The website keeps the same list in `web/common-passwords.txt`.
+pub const COMMON_PASSWORDS: &str = include_str!("common-passwords.txt");
+
+/// Runs of keys people type as a password, checked both ways round.
+const RUNS: [&str; 6] = [
+    "01234567890",
+    "abcdefghijklmnopqrstuvwxyz",
+    "qwertyuiopasdfghjklzxcvbnm",
+    "1qaz2wsx3edc4rfv5tgb6yhn7ujm8ik9ol0p",
+    "qazwsxedcrfvtgbyhnujmikolp",
+    "zaq12wsxcde34rfvbgt56yhnmju78ik,.lo90p;/-['=]",
+];
+
+fn common() -> &'static std::collections::HashSet<&'static str> {
+    static SET: std::sync::OnceLock<std::collections::HashSet<&'static str>> = std::sync::OnceLock::new();
+    SET.get_or_init(|| COMMON_PASSWORDS.lines().map(str::trim).filter(|l| !l.is_empty()).collect())
+}
+
+/// `word` with look-alike digits and symbols read as letters (`p@ssw0rd`
+/// is `password`); `one` is the letter a `1` stands for.
+fn unleet(word: &str, one: char) -> String {
+    word.chars()
+        .map(|c| match c {
+            '0' => 'o',
+            '1' | '!' | '|' => one,
+            '3' => 'e',
+            '4' | '@' => 'a',
+            '5' | '$' => 's',
+            '7' | '+' => 't',
+            '8' => 'b',
+            '9' => 'g',
+            c => c,
+        })
+        .collect()
+}
+
+/// Why `password` is too easy to guess, if it is: one of the most common
+/// passwords, one of those with digits or symbols round it or letters
+/// swapped for look-alikes, a run of keys, or the same few characters over
+/// and over. Checked when a password is set and again on every sign-in.
+pub fn weak_password(password: &str) -> Option<String> {
+    let lower = password.to_lowercase();
+    let common = common();
+    if common.contains(lower.as_str()) {
+        return Some("that is one of the most common passwords".into());
+    }
+    let chars: Vec<char> = lower.chars().collect();
+    let mut distinct = chars.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    if distinct.len() < 5 {
+        return Some("that password uses too few different characters".into());
+    }
+    let n = chars.len();
+    if (1..=n / 2).any(|k| n.is_multiple_of(k) && chars.chunks(k).all(|c| c == &chars[..k])) {
+        return Some("that password is the same few characters over and over".into());
+    }
+    let reversed: String = lower.chars().rev().collect();
+    if RUNS.iter().any(|run| run.contains(lower.as_str()) || run.contains(reversed.as_str())) {
+        return Some("that password is a run of keys".into());
+    }
+    // The letters in the middle, without the digits and symbols round them.
+    let core = lower.trim_matches(|c: char| !c.is_alphabetic());
+    for word in [core, lower.as_str()] {
+        for one in ['i', 'l'] {
+            let plain = unleet(word, one);
+            let bare = plain.trim_matches(|c: char| !c.is_alphabetic());
+            for guess in [plain.as_str(), bare] {
+                if guess.chars().count() >= 4 && common.contains(guess) {
+                    return Some("that is a common password with a few changes".into());
+                }
+            }
+        }
+    }
     None
 }
 
@@ -365,4 +443,48 @@ pub(crate) async fn sign_in(
     super::social::fresh(&db, &player_id, "sign in", attempt.time)?;
     crate::security::record_sign_in(&db, &player_id, &caller.0);
     Ok(Json(SignedIn { player_id, sealed }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn common_and_easy_passwords_are_turned_away() {
+        for weak in [
+            "password",
+            "Password123",
+            "password1234",
+            "P@ssw0rd2024!",
+            "1234567890",
+            "qwertyuiop",
+            "0987654321",
+            "iloveyou!!!",
+            "aaaaaaaaaaaa",
+            "abcabcabcabc",
+            "passwordpassword",
+            "!!Football99",
+            "monkey123456",
+        ] {
+            assert!(password_problem(weak, "").is_some(), "{weak} got through");
+        }
+    }
+
+    #[test]
+    fn good_passwords_get_through() {
+        for good in ["correct horse battery", "Dragonfly-Sunset-42", "tq8#Lm2vZr!p", "blue kettle on mars"] {
+            assert_eq!(password_problem(good, "jose"), None, "{good}");
+        }
+    }
+
+    #[test]
+    fn short_or_named_passwords_are_turned_away() {
+        assert!(password_problem("x7#kP2", "").is_some());
+        assert!(password_problem("my name is Jose_99!", "jose").is_some());
+    }
+
+    #[test]
+    fn the_website_has_the_same_list() {
+        assert_eq!(COMMON_PASSWORDS, include_str!("../../../web/common-passwords.txt"));
+    }
 }

@@ -59,7 +59,7 @@ use limits::{Caller, Limit, Limits, too_many};
 pub use owner::{AccountRow, accounts, add_owner, ban, owners, remove_owner, rename, unban};
 pub use password::{
     MIN_PASSWORD, PASSWORD_MEMORY_KIB, PASSWORD_PASSES, PasswordSet, SignIn, SignInSalt, SignedIn,
-    password_message, password_problem, seal_password, seal_password_with, sign_in_message,
+    password_message, password_problem, seal_password, seal_password_with, sign_in_message, weak_password,
 };
 pub use security::{
     NEEDS_CODE, Security, SignInRecord, TwoStepSet, WORK_BITS, account_work, new_two_step_secret,
