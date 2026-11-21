@@ -989,6 +989,11 @@ impl Platform {
         }
     }
 
+    /// Whether the lists have come in from the Hub at least once.
+    pub fn listed(&self) -> bool {
+        self.last_fetch.is_some() && !self.fetching
+    }
+
     /// The live servers the Hub listed last.
     pub fn servers(&self) -> &[ServerInfo] {
         &self.servers

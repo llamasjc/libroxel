@@ -6,7 +6,8 @@
 //! Play to test it with a character. Stop puts everything back.
 //!
 //! A game file (or `--sample`) on the command line skips the home screen
-//! and opens it in the editor.
+//! and opens it in the editor. A `libroxel://` link (from Play on the
+//! website) opens the home screen and joins or starts that game.
 //!
 //! ```text
 //! cargo run                             # the home screen
@@ -32,6 +33,7 @@ mod terrain_tools;
 mod theme;
 mod touch;
 mod ui;
+mod url_handler;
 mod viewport;
 mod viewport_frame;
 
@@ -281,10 +283,20 @@ fn main() {
     if server::dispatch(&args) {
         return;
     }
+    // Play buttons on the website open this copy of the app.
+    url_handler::register();
     let mut editor = Editor { platform: browse::Platform::start(), ..Editor::default() };
     let mut notes = Vec::new();
     let tree = match args.first().cloned() {
         Some(flag) if flag == "--sample" => templates::sample_obby(),
+        Some(link) if url_handler::is_link(&link) => {
+            editor.menu.open = true;
+            match url_handler::parse(&link) {
+                Some(launch) => editor.menu.home.launch = Some(url_handler::PendingLaunch::new(launch)),
+                None => eprintln!("note: this copy of Libroxel doesn't understand the link {link}"),
+            }
+            templates::blank()
+        }
         Some(path) => match open::open(std::path::Path::new(&path)) {
             Ok(opened) => {
                 if opened.imported {

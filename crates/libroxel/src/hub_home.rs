@@ -42,6 +42,8 @@ pub struct HomeState {
     pub hide_full: bool,
     /// The friend whose card is open on the Friends tab.
     confirm_unfriend: Option<String>,
+    /// A `libroxel://` link from the website, acted on once the lists are in.
+    pub launch: Option<crate::url_handler::PendingLaunch>,
 }
 
 /// Where a game on the home screen comes from.
@@ -518,6 +520,33 @@ fn best_server<'a>(platform: &Platform, servers: &'a [ServerInfo]) -> Option<&'a
         .max_by_key(|s| (platform.social.friends_in(&s.server_id).len(), s.players))
 }
 
+/// Acts on a `libroxel://` link from the website: joins a server, or opens
+/// a game's page and plays or hosts it, once the Hub's lists are in (a
+/// published game's page needs them). Links for games the Hub doesn't list
+/// give up after a while and leave the player on Home.
+fn follow_link(state: &mut HomeState, platform: &mut Platform, list: &[Entry], name: &str) -> Option<Pick> {
+    use crate::url_handler::Launch;
+    let pending = state.launch.take()?;
+    let key = match &pending.launch {
+        Launch::Join(code) => return Some(Pick::Join { code: code.clone(), name: name.to_owned() }),
+        Launch::Play(key) | Launch::Host(key) => key.clone(),
+    };
+    let Some(entry) = list.iter().find(|e| e.key == key).filter(|_| platform.listed()) else {
+        if pending.since.elapsed() < std::time::Duration::from_secs(15) {
+            state.launch = Some(pending);
+        }
+        return None;
+    };
+    state.view = View::Game(key);
+    match pending.launch {
+        Launch::Play(_) => match best_server(platform, &entry.servers) {
+            Some(server) => Some(Pick::Join { code: server.code.clone(), name: name.to_owned() }),
+            None => host(entry, platform),
+        },
+        _ => host(entry, platform),
+    }
+}
+
 /// Starts a new server of `entry` on this computer, with friends welcome.
 fn host(entry: &Entry, platform: &mut Platform) -> Option<Pick> {
     match &entry.source {
@@ -566,6 +595,9 @@ pub fn home_tab(
         pick = Some(if done.host { Pick::Host(game) } else { Pick::Play(game) });
     }
     let list = entries(platform);
+    if let Some(launched) = follow_link(state, platform, &list, name) {
+        return Some(launched);
+    }
     if let View::Game(key) = state.view.clone() {
         match list.iter().find(|e| e.key == key) {
             Some(entry) => return game_page(state, ui, platform, entry, name).or(pick),
