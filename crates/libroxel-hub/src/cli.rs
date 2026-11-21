@@ -71,7 +71,7 @@ impl Flags {
 /// `hub`. `default_data` is where the Hub keeps its data without `--data`.
 pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
     let flags = Flags::parse(args, &["--port", "--data"])?;
-    let options = crate::HubOptions { behind_proxy: flags.has("--behind-proxy") };
+    let options = crate::HubOptions { behind_proxy: flags.has("--behind-proxy"), ..Default::default() };
     let port = flags.number("--port", crate::DEFAULT_PORT)?;
     let data = flags.get("--data").map_or_else(|| default_data.to_path_buf(), PathBuf::from);
     let words: Vec<&str> = flags.rest.iter().map(String::as_str).collect();

@@ -118,6 +118,16 @@ fn one_computer_can_only_make_a_few_accounts_an_hour() {
 }
 
 #[test]
+fn a_demo_hub_has_no_limits() {
+    let options = libroxel_hub::HubOptions { no_limits: true, ..Default::default() };
+    let running = libroxel_hub::start_with("127.0.0.1:0".parse().unwrap(), None, options).unwrap();
+    let hub = HubClient::new(&running.url());
+    for i in 0..12u8 {
+        claim(&hub, &[40 + i; 32], &format!("pretend{i}"), time()).unwrap();
+    }
+}
+
+#[test]
 fn the_server_list_shows_who_really_hosts() {
     let running = start("127.0.0.1:0".parse().unwrap(), None).unwrap();
     let hub = HubClient::new(&running.url());

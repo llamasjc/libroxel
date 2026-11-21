@@ -60,11 +60,16 @@ pub(crate) struct Limits {
     /// Whether a web server on this computer passes callers on, saying who
     /// they are in `X-Forwarded-For`.
     pub(crate) trust_proxy: bool,
+    /// Every limit switched off (see [`crate::HubOptions::no_limits`]).
+    pub(crate) off: bool,
 }
 
 impl Limits {
     /// Counts one more for `who`, and whether that is still allowed.
     pub(crate) fn take(&self, limit: Limit, who: &str) -> bool {
+        if self.off {
+            return true;
+        }
         let (most, every) = limit.rule();
         let now = Instant::now();
         let mut windows = self.windows.lock().unwrap();
@@ -85,6 +90,9 @@ impl Limits {
 
     /// Whether `who` is over `limit` right now, without counting anything.
     pub(crate) fn over(&self, limit: Limit, who: &str) -> bool {
+        if self.off {
+            return false;
+        }
         let (most, every) = limit.rule();
         let windows = self.windows.lock().unwrap();
         windows

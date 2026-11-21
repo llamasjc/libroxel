@@ -83,7 +83,13 @@ fn main() {
     let port: u16 = std::env::args().nth(1).and_then(|p| p.parse().ok()).unwrap_or(7431);
     let data = std::env::temp_dir().join(format!("libroxel-hub-demo-{port}.sqlite"));
     let _ = std::fs::remove_file(&data);
-    let running = libroxel_hub::start(([0, 0, 0, 0], port).into(), Some(&data)).expect("the Hub starts");
+    let running = libroxel_hub::start_with(
+        ([0, 0, 0, 0], port).into(),
+        Some(&data),
+        // Every pretend player signs up from this one computer.
+        libroxel_hub::HubOptions { no_limits: true, ..Default::default() },
+    )
+    .expect("the Hub starts");
     let hub = HubClient::new(&format!("127.0.0.1:{port}"));
     println!("Demo Hub on {}", running.url());
 

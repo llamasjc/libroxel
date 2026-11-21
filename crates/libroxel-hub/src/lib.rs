@@ -90,6 +90,10 @@ pub struct HubOptions {
     /// HTTPS), so trust that server's `X-Forwarded-For` for who is calling.
     /// Without it, every caller would share one rate limit.
     pub behind_proxy: bool,
+    /// No rate limits at all: for a demo or tests on one computer, where
+    /// every pretend player calls from the same address. Never for a Hub
+    /// others use.
+    pub no_limits: bool,
 }
 
 /// How often hosts should announce themselves.
@@ -628,7 +632,8 @@ pub fn router(db: Connection) -> Router {
 
 /// [`router`], run the way `options` says.
 pub fn router_with(db: Connection, options: HubOptions) -> Router {
-    let limits = Arc::new(Limits { trust_proxy: options.behind_proxy, ..Limits::default() });
+    let limits =
+        Arc::new(Limits { trust_proxy: options.behind_proxy, off: options.no_limits, ..Limits::default() });
     let hub = Hub { db: Arc::new(Mutex::new(db)), limits };
     // Only publishing carries a whole place; everything else is small.
     let big = axum::extract::DefaultBodyLimit::max(MAX_PLACE * 2 + 64 * 1024);
@@ -1386,6 +1391,15 @@ impl RunningHub {
 
 /// Starts a Hub on `addr` in a background thread (port 0 picks a free one).
 pub fn start(addr: SocketAddr, db_path: Option<&Path>) -> Result<RunningHub, String> {
+    start_with(addr, db_path, HubOptions::default())
+}
+
+/// [`start`], run as `options` say.
+pub fn start_with(
+    addr: SocketAddr,
+    db_path: Option<&Path>,
+    options: HubOptions,
+) -> Result<RunningHub, String> {
     let db = open_db(db_path)?;
     let listener =
         std::net::TcpListener::bind(addr).map_err(|e| format!("could not start the Hub on {addr}: {e}"))?;
@@ -1403,7 +1417,7 @@ pub fn start(addr: SocketAddr, db_path: Option<&Path>) -> Result<RunningHub, Str
         .spawn(move || {
             runtime.block_on(async move {
                 let Ok(listener) = tokio::net::TcpListener::from_std(listener) else { return };
-                let app = router(db).into_make_service_with_connect_info::<SocketAddr>();
+                let app = router_with(db, options).into_make_service_with_connect_info::<SocketAddr>();
                 let _ = axum::serve(listener, app)
                     .with_graceful_shutdown(async {
                         let _ = stopped.await;
