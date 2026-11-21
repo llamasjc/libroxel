@@ -91,14 +91,11 @@ fn a_hub_cannot_ask_for_weakly_stretched_passwords() {
 }
 
 #[test]
-fn official_looking_names_are_kept_and_given_up_names_are_held() {
+fn names_ignore_case_and_given_up_names_are_held() {
     let running = start("127.0.0.1:0".parse().unwrap(), None).unwrap();
     let hub = HubClient::new(&running.url());
     let (ana, eve) = ([1u8; 32], [2u8; 32]);
     let now = time();
-    for name in ["Admin", "moderator_1", "LibroxelTeam", "official"] {
-        assert!(claim(&hub, &eve, name, now).unwrap_err().contains("kept"), "{name}");
-    }
     claim(&hub, &ana, "Ana", now).unwrap();
     assert!(claim(&hub, &eve, "ANA", now).unwrap_err().contains("already has"));
     // Ana renames; her old name stays hers for a while, so no one can pass for her.
@@ -172,14 +169,16 @@ fn whoever_runs_the_hub_bans_accounts_and_names_its_owners() {
     claim(&hub, &alice, "alice2", now).unwrap();
     claim(&hub, &eve, "eve", now).unwrap();
     let db = open_db(Some(&path)).unwrap();
-    // Players can't be "admin"; the Hub's owner can.
-    assert!(claim(&hub, &alice, "admin", now + 1).unwrap_err().contains("kept"));
-    add_owner(&db, "alice2").unwrap();
-    claim(&hub, &alice, "admin", now + 2).unwrap();
+    // Any name is first come, first served, "admin" too, whatever the case.
+    claim(&hub, &alice, "Admin", now + 1).unwrap();
+    assert!(claim(&hub, &eve, "ADMIN", now + 1).unwrap_err().contains("already has"));
+    // Owners are made on the Hub's computer, whatever their name.
+    assert!(!hub.profile("admin").unwrap().unwrap().admin);
+    add_owner(&db, "admin").unwrap();
     let page = hub.profile("admin").unwrap().unwrap();
     assert!(page.admin && page.player_id == player_id_of(&alice));
     assert!(!hub.profile("eve").unwrap().unwrap().admin);
-    // Or straight from the Hub's computer.
+    // Renaming from the Hub's computer.
     libroxel_hub::rename(&db, "admin", "alice2").unwrap();
     libroxel_hub::rename(&db, "alice2", "Admin").unwrap();
     assert!(libroxel_hub::rename(&db, "eve", "admin").is_err());
@@ -313,4 +312,41 @@ fn new_accounts_need_the_bot_check_and_whoever_runs_the_hub_verifies_people() {
     assert!(!hub.profile("Famous").unwrap().unwrap().verified);
     drop(running);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn accounts_are_numbered_in_the_order_they_joined() {
+    let dir = std::env::temp_dir().join(format!("libroxel-numbers-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("hub.sqlite");
+    let running = start("127.0.0.1:0".parse().unwrap(), Some(&path)).unwrap();
+    let hub = HubClient::new(&running.url());
+    let now = time();
+    claim(&hub, &[1u8; 32], "Admin", now).unwrap();
+    claim(&hub, &[2u8; 32], "llamas", now).unwrap();
+    claim(&hub, &[3u8; 32], "eve", now).unwrap();
+    // Renaming keeps the number.
+    claim(&hub, &[1u8; 32], "Boss", now + 1).unwrap();
+    let number = |who: &str| hub.profile(who).unwrap().unwrap().number;
+    assert_eq!((number("Boss"), number("llamas"), number("eve")), (0, 1, 2));
+    // Profiles open by number, as profile links do.
+    assert_eq!(hub.profile("1").unwrap().unwrap().name, "llamas");
+    assert_eq!(hub.profile("2").unwrap().unwrap().name, "eve");
+    assert!(hub.profile("3").unwrap().is_none());
+    assert_eq!(hub.people("lla").unwrap()[0].number, 1);
+    // A bare number can't be a name.
+    assert!(claim(&hub, &[4u8; 32], "123", now).is_err());
+    drop(running);
+
+    // A Hub from before numbers numbers its accounts in the order they joined.
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch("DROP INDEX accounts_number; UPDATE accounts SET number = NULL;").unwrap();
+    db.execute("UPDATE accounts SET created = created + 100 WHERE name = 'Boss'", []).unwrap();
+    drop(db);
+    let running = start("127.0.0.1:0".parse().unwrap(), Some(&path)).unwrap();
+    let hub = HubClient::new(&running.url());
+    let number = |who: &str| hub.profile(who).unwrap().unwrap().number;
+    assert_eq!((number("llamas"), number("eve"), number("Boss")), (0, 1, 2));
+    claim(&hub, &[5u8; 32], "newcomer", time()).unwrap();
+    assert_eq!(number("newcomer"), 3);
 }

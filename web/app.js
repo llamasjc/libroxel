@@ -602,7 +602,7 @@ function tabs() {
   if (session) {
     who.replaceChildren(
       el('span', { class: 'caps' }, 'Playing as'),
-      el('a', { class: 'name', href: `#/user/${session.playerId}` }, session.name || 'You'),
+      el('a', { class: 'name', href: `#/user/${data.me?.number ?? session.playerId}` }, session.name || 'You'),
       el('button', { class: 'chip iconbtn', title: 'Sign out', onclick: signOut }, icon(ICON.signOut)),
     );
   } else {
@@ -675,7 +675,7 @@ function home() {
       list.map((f) => {
         const [where, colour] = whereabouts(f);
         const dot = f.online ? (f.game ? 'var(--sky)' : 'var(--mint)') : null;
-        const tile = el('a', { class: 'friend-tile', href: f.server ? '#' : `#/user/${f.player_id}`, title: f.server ? `Join ${f.name}` : f.name },
+        const tile = el('a', { class: 'friend-tile', href: f.server ? '#' : `#/user/${f.number ?? f.player_id}`, title: f.server ? `Join ${f.name}` : f.name },
           el('div', { class: 'face' }, portrait(f.look, f.name, 78), dot && el('span', { class: 'dot', style: `background:${dot}` })),
           el('b', {}, f.name),
           el('small', { style: `color:${colour}` }, where));
@@ -830,7 +830,7 @@ function friendsPage() {
     const text = friend.online && friend.game ? `Playing ${friend.game}${friend.server ? ` on ${friend.server.name}` : ''}` : where;
     left.push(el('div', { class: 'person' },
       portrait(friend.look, friend.name, 44),
-      el('div', { class: 'what' }, el('a', { href: `#/user/${friend.player_id}` }, el('b', {}, friend.name)), el('small', { style: `color:${colour}` }, text)),
+      el('div', { class: 'what' }, el('a', { href: `#/user/${friend.number ?? friend.player_id}` }, el('b', {}, friend.name)), el('small', { style: `color:${colour}` }, text)),
       el('div', { class: 'buttons' },
         friend.server && el('button', { class: 'btn go small', onclick: () => joinServer(friend.server) }, icon(ICON.signIn), 'Join'),
         el('button', {
@@ -849,7 +849,7 @@ function friendsPage() {
     for (const p of f.incoming) {
       right.push(el('div', { class: 'person' },
         portrait(null, p.name, 44),
-        el('div', { class: 'what' }, el('a', { href: `#/user/${p.player_id}` }, el('b', {}, p.name)), el('small', { class: 'soft' }, 'Wants to be your friend')),
+        el('div', { class: 'what' }, el('a', { href: `#/user/${p.number ?? p.player_id}` }, el('b', {}, p.name)), el('small', { class: 'soft' }, 'Wants to be your friend')),
         el('div', { class: 'buttons' },
           el('button', { class: 'btn go small', onclick: () => changeFriend(p.player_id, 'add', `You and ${p.name} are friends now.`) }, icon(ICON.check), 'Accept'),
           el('button', { class: 'chip', onclick: () => changeFriend(p.player_id, 'remove', `Declined ${p.name}'s request.`) }, 'Decline'))));
@@ -886,7 +886,7 @@ function friendsPage() {
       else action = el('button', { class: 'btn go small', onclick: () => changeFriend(p.player_id, 'add', asking ? `You and ${p.name} are friends now.` : `Friend request sent to ${p.name}.`) }, icon(ICON.userPlus), asking ? 'Accept' : 'Add');
       right.push(el('div', { class: 'person' },
         portrait(null, p.name, 44),
-        el('div', { class: 'what' }, el('a', { href: `#/user/${p.player_id}` }, el('b', {}, p.name)), el('small', { class: asked ? '' : 'soft', style: asked ? 'color:var(--sky)' : '' }, asked ? 'Request sent' : p.about || '')),
+        el('div', { class: 'what' }, el('a', { href: `#/user/${p.number ?? p.player_id}` }, el('b', {}, p.name)), el('small', { class: asked ? '' : 'soft', style: asked ? 'color:var(--sky)' : '' }, asked ? 'Request sent' : p.about || '')),
         el('div', { class: 'buttons' }, action)));
     }
   }
@@ -934,7 +934,7 @@ function user() {
       portrait(p.look, p.name, 84),
       el('div', {},
         el('h1', {}, p.name, ' ', p.admin && el('span', { class: 'tag admin' }, 'Admin'), ' ', p.verified && el('span', { class: 'tag verified' }, 'Verified')),
-        el('div', { class: 'soft' }, days < 1 ? 'Joined today' : `Joined ${ago(p.joined_secs_ago)}`),
+        el('div', { class: 'soft' }, `#${p.number ?? 0} · `, days < 1 ? 'Joined today' : `Joined ${ago(p.joined_secs_ago)}`),
         action && el('div', { style: 'margin-top:8px' }, action))),
     p.about && el('div', { class: 'about' }, p.about),
     el('h2', { class: 'section' }, `Games (${p.games.length})`),
@@ -1093,7 +1093,7 @@ function signInPage() {
 
 function createPage() {
   if (session) return signInPage();
-  const name = el('input', { type: 'text', autocomplete: 'username', maxlength: 20, pattern: '[A-Za-z0-9_]{3,20}' });
+  const name = el('input', { type: 'text', autocomplete: 'username', maxlength: 20, pattern: '[A-Za-z0-9_]*[A-Za-z][A-Za-z0-9_]*' });
   const password = el('input', { type: 'password', autocomplete: 'new-password' });
   const again = el('input', { type: 'password', autocomplete: 'new-password' });
   const remember = el('input', { type: 'checkbox', checked: true });
@@ -1110,8 +1110,8 @@ function createPage() {
     e.preventDefault();
     const say = (text, kind = 'wait') => message.replaceChildren(status(text, kind));
     const n = name.value.trim();
-    const problem = !/^[A-Za-z0-9_]{3,20}$/.test(n)
-      ? 'A name is 3 to 20 letters, digits or underscores.'
+    const problem = !/^[A-Za-z0-9_]{3,20}$/.test(n) || !/[A-Za-z]/.test(n)
+      ? 'A name is 3 to 20 letters, digits or underscores, with at least one letter.'
       : passwordProblem(password.value, n) || (password.value !== again.value ? "The passwords don't match." : null);
     if (problem) return say(problem, 'error');
     go.disabled = true;

@@ -83,9 +83,18 @@ That's all it takes. Owners are the Hub's admins: their page says so, servers
 they host show an **Admin** badge, and only their servers list as
 **Official**. Nothing in Libroxel is tied to any particular name.
 
-If you'd like, owners can also take names kept back from players, such as
-`admin`, on the Avatar tab (or `sudo libroxel-admin rename <your name> admin`). It's
-optional.
+Names are first come, first served, whatever the case, so make your
+account (for example `Admin`) before you open the Hub to players. Accounts
+are numbered in the order they joined: the first one is 0, the next 1, and
+so on, and profile links use the number (`/accounts/0` on the Hub,
+`libroxel.com/#/user/0` on the website). To start the numbers over on a Hub
+nobody uses yet, stop it, delete its database and start it again:
+
+```sh
+sudo systemctl stop libroxel-hub
+sudo rm /var/lib/libroxel/hub.sqlite
+sudo systemctl start libroxel-hub
+```
 
 To run an official game server, start it with
 `libroxel server game.lrx --official`. It prints its id. Add that id as an
@@ -104,7 +113,7 @@ can do them over the network:
 | `libroxel hub ban <name> [reason]` | Bans an account: it can't sign in, host, publish, share, report or befriend anyone, and its page, games and hats stop being listed |
 | `libroxel hub unban <name>` | Lets it back |
 | `libroxel hub verify\|unverify <name>` | Gives or takes away a verified badge |
-| `libroxel hub rename <name> <new name>` | Renames an account, even to a reserved name |
+| `libroxel hub rename <name> <new name>` | Renames an account |
 | `libroxel hub reports` | Lists reported games and hats |
 | `libroxel hub clear <game\|item> <id>` | Lists a reported one again |
 | `libroxel hub remove <game\|item> <id>` | Takes one down for good |
