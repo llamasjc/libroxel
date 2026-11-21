@@ -486,7 +486,7 @@ impl Platform {
                 "Hats people made and shared. To make one, build it from parts in the editor, select its \
                  model and use Model > Share as hat.",
             )
-            .color(crate::theme::DUST),
+            .color(crate::theme::MUTED),
         );
         if let Some(hat) = wearing {
             ui.horizontal(|ui| {
@@ -568,10 +568,10 @@ impl Platform {
     fn show_report_status(&self, ui: &mut egui::Ui) {
         match &self.report_status {
             Some(Ok(said)) => {
-                ui.colored_label(crate::theme::MINT, said);
+                ui.colored_label(crate::theme::GREEN, said);
             }
             Some(Err(why)) => {
-                ui.colored_label(crate::theme::BRICK, why);
+                ui.colored_label(crate::theme::RED, why);
             }
             None => {}
         }
@@ -737,10 +737,10 @@ impl Platform {
         ui.add_space(10.0);
         ui.label(RichText::new("Two-step sign-in").strong());
         if !security.has_password {
-            ui.label(RichText::new("Set a password first.").color(crate::theme::DUST));
+            ui.label(RichText::new("Set a password first.").color(crate::theme::MUTED));
         } else if security.two_step {
             ui.colored_label(
-                crate::theme::MINT,
+                crate::theme::GREEN,
                 "On: signing in on another computer needs a code from your app.",
             );
             ui.horizontal(|ui| {
@@ -756,10 +756,10 @@ impl Platform {
                 RichText::new(
                     "Add Libroxel to an authenticator app (Google Authenticator, Authy, 1Password…) with this setup key, then type the 6-digit code it shows.",
                 )
-                .color(crate::theme::DUST),
+                .color(crate::theme::MUTED),
             );
             ui.horizontal(|ui| {
-                ui.label(RichText::new(&secret).monospace().color(crate::theme::CHALK));
+                ui.label(RichText::new(&secret).monospace().color(crate::theme::TEXT));
                 if ui.small_button("Copy").clicked() {
                     ui.ctx().copy_text(secret.clone());
                 }
@@ -789,7 +789,7 @@ impl Platform {
                 RichText::new(
                     "Off. Turn it on so a stolen password alone can't get anyone into your account.",
                 )
-                .color(crate::theme::DUST),
+                .color(crate::theme::MUTED),
             );
             if ui.button("Set up two-step sign-in").clicked() {
                 self.two_step_secret = Some(libroxel_hub::new_two_step_secret());
@@ -798,17 +798,17 @@ impl Platform {
         }
         match &self.two_step_status {
             Some(Ok(said)) => {
-                ui.colored_label(crate::theme::MINT, said);
+                ui.colored_label(crate::theme::GREEN, said);
             }
             Some(Err(why)) => {
-                ui.colored_label(crate::theme::BRICK, why);
+                ui.colored_label(crate::theme::RED, why);
             }
             None => {}
         }
         ui.add_space(6.0);
         ui.label(RichText::new("Sign-ins on other computers").strong());
         if security.sign_ins.is_empty() {
-            ui.label(RichText::new("None yet.").color(crate::theme::DUST));
+            ui.label(RichText::new("None yet.").color(crate::theme::MUTED));
         }
         for record in security.sign_ins.iter().take(5) {
             ui.label(format!("  • {} from {}", ago(record.secs_ago), record.from));
@@ -817,7 +817,7 @@ impl Platform {
             ui.label(
                 RichText::new("Not you? Set a new password and turn on two-step sign-in.")
                     .small()
-                    .color(crate::theme::DUST),
+                    .color(crate::theme::MUTED),
             );
         }
     }
@@ -831,7 +831,7 @@ impl Platform {
                 RichText::new(
                     "Set a password to sign in to this account on another computer, or to get it back if this one breaks. It is worked into a key on this computer and never sent to the Hub.",
                 )
-                .color(crate::theme::DUST),
+                .color(crate::theme::MUTED),
             );
             egui::Grid::new("account-password").num_columns(2).show(ui, |ui| {
                 ui.label("New password");
@@ -853,7 +853,7 @@ impl Platform {
                 }
             });
             if let Some(problem) = problem.filter(|_| !self.password.is_empty()) {
-                ui.colored_label(crate::theme::SUN, format!("Not yet: {problem}."));
+                ui.colored_label(crate::theme::AMBER, format!("Not yet: {problem}."));
             }
             self.security_ui(ui);
         }
@@ -870,7 +870,7 @@ impl Platform {
                     RichText::new(
                         "Sign in with the name and password you set on another computer. This computer then uses that account; its own key is kept beside it, so nothing is lost.",
                     )
-                    .color(crate::theme::DUST),
+                    .color(crate::theme::MUTED),
                 );
                 egui::Grid::new("account-sign-in-grid").num_columns(2).show(ui, |ui| {
                     ui.label("Name");
@@ -899,10 +899,10 @@ impl Platform {
             });
         match &self.password_status {
             Some(Ok(said)) => {
-                ui.colored_label(crate::theme::MINT, said);
+                ui.colored_label(crate::theme::GREEN, said);
             }
             Some(Err(why)) => {
-                ui.colored_label(crate::theme::BRICK, why);
+                ui.colored_label(crate::theme::RED, why);
             }
             None => {}
         }
@@ -974,7 +974,7 @@ impl Platform {
                  It belongs to the identity key on this computer; set a password below to use it elsewhere too.",
                 self.hub_address
             ))
-            .color(crate::theme::DUST),
+            .color(crate::theme::MUTED),
         );
         self.switch_ui(ui);
         ui.add_space(6.0);
@@ -1003,16 +1003,16 @@ impl Platform {
         });
         if !name.is_empty() && !valid {
             ui.colored_label(
-                crate::theme::SUN,
+                crate::theme::AMBER,
                 "A name is 3 to 20 letters, digits or underscores, with at least one letter.",
             );
         }
         match &self.account_status {
             Some(Ok(said)) => {
-                ui.colored_label(crate::theme::MINT, said);
+                ui.colored_label(crate::theme::GREEN, said);
             }
             Some(Err(why)) => {
-                ui.colored_label(crate::theme::BRICK, why);
+                ui.colored_label(crate::theme::RED, why);
             }
             None => {}
         }
@@ -1024,9 +1024,9 @@ impl Platform {
             };
             ui.label(format!("Your page on this Hub: {} (#{}) · {games}", profile.name, profile.number));
             if profile.admin {
-                ui.colored_label(crate::theme::SUN, "You are an admin of this Hub.");
+                ui.colored_label(crate::theme::AMBER, "You are an admin of this Hub.");
             } else if profile.verified {
-                ui.colored_label(crate::theme::SKY, "Your account is verified.");
+                ui.colored_label(crate::theme::LINK, "Your account is verified.");
             }
             for game in &profile.games {
                 ui.label(format!(
@@ -1111,7 +1111,7 @@ impl Platform {
             self.refresh();
         }
         if let Some(error) = &self.games_error {
-            ui.colored_label(crate::theme::BRICK, error);
+            ui.colored_label(crate::theme::RED, error);
         } else if self.games.is_empty() {
             ui.label(if self.fetching {
                 "Looking…"
@@ -1120,7 +1120,7 @@ impl Platform {
             });
         }
         if let Some(error) = &self.download_error {
-            ui.colored_label(crate::theme::BRICK, error);
+            ui.colored_label(crate::theme::RED, error);
         }
         if let Some(title) = &self.downloading {
             ui.horizontal(|ui| {
@@ -1222,7 +1222,7 @@ impl Platform {
         }
         let mut join = None;
         if let Some(error) = &self.error {
-            ui.colored_label(crate::theme::BRICK, error);
+            ui.colored_label(crate::theme::RED, error);
         } else if self.servers.is_empty() {
             ui.label(if self.fetching {
                 "Looking…"
