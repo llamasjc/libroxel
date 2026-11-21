@@ -972,9 +972,9 @@ fn session_status(
             }
             if let Some(Tunnel::Host(tunnel)) = &editor.tunnel {
                 if let Some(code) = tunnel.code() {
-                    let copy = ui
-                        .button(format!("{}  Copy join code", icon::COPY))
-                        .on_hover_text(format!("Friends anywhere paste this into Join:\n{code}"));
+                    let copy = ui.button(format!("{}  Copy join code", icon::COPY)).on_hover_text(
+                        "Friends anywhere paste it into Join. It isn't shown here, so it stays off streams.",
+                    );
                     if copy.clicked() {
                         ui.ctx().copy_text(code);
                     }
@@ -1103,7 +1103,8 @@ fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>
                 .on_hover_text("Join a game another computer hosts")
                 .clicked()
             {
-                editor.dialog = Some(Dialog::Join { address: "127.0.0.1".into(), name: "Player".into() });
+                editor.dialog =
+                    Some(Dialog::Join { address: String::new(), name: editor.platform.player_name() });
             }
             if theme::tool_button(ui, icon::GLOBE_HEMISPHERE_WEST, "Browse", false)
                 .on_hover_text("Find games being hosted right now")
@@ -2443,10 +2444,10 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
             |ui| {
                 egui::Grid::new("join").num_columns(2).show(ui, |ui| {
                     ui.label("Join code or address");
-                    ui.add(egui::TextEdit::singleline(address).hint_text("lrx1… or 192.168.1.20"));
+                    theme::hidden_field(ui, address, "lrx1… or 192.168.1.20", 220.0);
                     ui.end_row();
-                    ui.label("Your name");
-                    ui.add(egui::TextEdit::singleline(name).char_limit(20));
+                    ui.label("Playing as");
+                    ui.label(egui::RichText::new(name.trim()).strong());
                     ui.end_row();
                 });
                 ui.label(format!(
@@ -2479,11 +2480,10 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
         egui::Window::new("Publish").collapsible(false).resizable(false).default_width(400.0).show(
             ctx,
             |ui| {
-                ui.label(format!(
-                    "Puts this game on the Hub at {}, so anyone using that Hub finds it Online and can play \
-                 it, even when you're away. Publishing again puts out a new version.",
-                    editor.platform.hub_address
-                ));
+                ui.label(
+                    "Puts this game on Libroxel, so anyone finds it Online and can play it, even when \
+                     you're away. Publishing again puts out a new version.",
+                );
                 egui::Grid::new("publish").num_columns(2).show(ui, |ui| {
                     ui.label("Title");
                     ui.add(egui::TextEdit::singleline(title).char_limit(60));
@@ -2545,10 +2545,10 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
                 ui.label("Or edit a game someone else shares. Its game replaces the one open here.");
                 egui::Grid::new("edit-together").num_columns(2).show(ui, |ui| {
                     ui.label("Join code or address");
-                    ui.add(egui::TextEdit::singleline(address).hint_text("lrx1… or 192.168.1.20"));
+                    theme::hidden_field(ui, address, "lrx1… or 192.168.1.20", 220.0);
                     ui.end_row();
-                    ui.label("Your name");
-                    ui.add(egui::TextEdit::singleline(name).char_limit(20));
+                    ui.label("Playing as");
+                    ui.label(egui::RichText::new(name.trim()).strong());
                     ui.end_row();
                 });
                 ui.label(format!("Without a port, {} is used.", libroxel_engine::coedit::EDIT_PORT));
@@ -2693,7 +2693,7 @@ fn together_status(ui: &mut egui::Ui, coedit: &libroxel_engine::coedit::CoEdit, 
             if let Some(code) = tunnel.code() {
                 let copy = ui
                     .button(format!("{}  Copy edit code", icon::COPY))
-                    .on_hover_text(format!("Friends anywhere paste this into Edit together:\n{code}"));
+                    .on_hover_text("Friends anywhere paste it into Edit together. It isn't shown here, so it stays off streams.");
                 if copy.clicked() {
                     ui.ctx().copy_text(code);
                 }
@@ -3038,6 +3038,9 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             editor.history.tick(f64::INFINITY, false);
             editor.edit_snapshot = Some(engine.tree.borrow().clone());
             let saved = std::fs::read_to_string(data_path(editor)).ok();
+            // You play as your account's name, in play tests and games you host.
+            let me = editor.platform.account.as_ref().map(|a| a.name.clone());
+            libroxel_engine::session::set_local_player_name(me.as_deref());
             let (started, what) = match &action {
                 Action::Host => (
                     PlaySession::host(
@@ -3049,7 +3052,8 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     "Hosting".to_owned(),
                 ),
                 Action::Join { address, name } if libroxel_net::is_join_code(address) => {
-                    let name = if name.is_empty() { "Player" } else { name.as_str() };
+                    let name =
+                        me.as_deref().unwrap_or(if name.is_empty() { "Player" } else { name.as_str() });
                     let tunnel = crate::identity().and_then(|me| {
                         libroxel_net::JoinTunnel::start(&me, libroxel_net::Network::Internet, address)
                     });
@@ -3066,7 +3070,8 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     }
                 }
                 Action::Join { address, name } => {
-                    let name = if name.is_empty() { "Player" } else { name.as_str() };
+                    let name =
+                        me.as_deref().unwrap_or(if name.is_empty() { "Player" } else { name.as_str() });
                     // The session says where it is joining.
                     (PlaySession::join(engine.tree.clone(), address, name), String::new())
                 }
@@ -4093,7 +4098,8 @@ fn test_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
                 .on_hover_text("Join a game another computer hosts")
                 .clicked()
             {
-                editor.dialog = Some(Dialog::Join { address: "127.0.0.1".into(), name: "Player".into() });
+                editor.dialog =
+                    Some(Dialog::Join { address: String::new(), name: editor.platform.player_name() });
             }
             if theme::ribbon_button(ui, icon::GLOBE_HEMISPHERE_WEST, "Browse", false)
                 .on_hover_text("Find games being hosted right now")
@@ -4108,7 +4114,7 @@ fn test_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
                     .on_hover_text("Share this game so others can edit it with you, or join someone's")
                     .clicked()
                 {
-                    let name = editor.menu.name.trim().to_owned();
+                    let name = editor.platform.player_name();
                     editor.dialog = Some(Dialog::EditTogether { address: String::new(), name });
                 }
             } else if theme::ribbon_button(ui, icon::USERS_THREE, "Stop sharing", true).clicked() {

@@ -27,9 +27,7 @@ const HUB = (() => {
 
 // The starter games built into the app (crates/libroxel/src/starter_games.rs).
 const STARTER_GAMES = [
-  { name: 'Sample obby', symbol: '', about: 'An obby with coins, TNT and a rover' },
   { name: 'Kart race', symbol: '', about: 'Three laps round the track in a kart' },
-  { name: 'Coin rush', symbol: '', about: 'Beat a robot to the coins before time runs out' },
 ];
 
 const ICON = {
@@ -178,7 +176,7 @@ async function api(path, { method = 'GET', body, query } = {}) {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
-    throw new HubError(0, `Could not reach the Hub at ${HUB}.`);
+    throw new HubError(0, 'Could not reach the Hub. Check your connection and try again.');
   }
   const text = await response.text();
   if (!response.ok) {
@@ -232,7 +230,7 @@ async function stretch(password, saltHex, memoryKib, passes) {
 async function stretchFor(name, password) {
   const salt = await api(`/accounts/sign-in/${encodeURIComponent(name)}`);
   const safe = salt.memory_kib >= 19 * 1024 && salt.memory_kib <= 1024 * 1024 && salt.passes >= 2 && salt.passes <= 10;
-  if (!safe) throw new Error('This Hub asks for unsafe password settings.');
+  if (!safe) throw new Error('The Hub asks for unsafe password settings.');
   return stretch(password, salt.salt, salt.memory_kib, salt.passes);
 }
 
@@ -597,21 +595,25 @@ function tabs() {
   const tab = (name, glyph, label, href) =>
     el('a', { class: `tab${route.name === name ? ' active' : ''}`, href }, icon(glyph), label);
   document.getElementById('tabs').replaceChildren(
-    tab('home', ICON.house, 'Home', '#/'),
-    tab('search', ICON.search, 'Search', '#/search'),
     tab('friends', ICON.users, 'Friends', '#/friends'),
     tab('avatar', ICON.shirt, 'Avatar', '#/avatar'),
     tab('download', ICON.download, 'Download', '#/download'),
   );
+  // The mark is Home, as in the app.
+  document.getElementById('brand')?.classList.toggle('active', route.name === 'home');
   const who = document.getElementById('who');
+  // Search sits at the right, by who you play as, as in the app.
+  const search = el('a', { class: `tab iconbtn${route.name === 'search' ? ' active' : ''}`, href: '#/search', title: 'Search for players and games' }, icon(ICON.search));
   if (session) {
     who.replaceChildren(
+      search,
       el('span', { class: 'caps' }, 'Playing as'),
       el('a', { class: 'name', href: `#/user/${data.me?.number ?? session.playerId}` }, session.name || 'You'),
       el('button', { class: 'chip iconbtn', title: 'Sign out', onclick: signOut }, icon(ICON.signOut)),
     );
   } else {
     who.replaceChildren(
+      search,
       el('a', { class: 'chip', href: '#/create' }, 'Make an account'),
       el('a', { class: 'btn go small', href: '#/sign-in' }, icon(ICON.signIn), 'Sign in'),
     );
@@ -732,7 +734,7 @@ function game() {
   const entry = entries().find((e) => e.key === route.key);
   const back = el('a', { class: 'back', href: '#/' }, icon(ICON.left), 'Home');
   if (!entry) {
-    return [back, data.loaded ? el('div', { class: 'empty' }, "That game isn't on this Hub (any more).") : el('p', { class: 'soft' }, 'Loading…')];
+    return [back, data.loaded ? el('div', { class: 'empty' }, "That game isn't here (any more).") : el('p', { class: 'soft' }, 'Loading…')];
   }
   const best = bestServer(entry.servers);
   const hostable = entry.source !== 'live';
@@ -830,7 +832,7 @@ function peopleSearch(placeholder, alsoGames = false) {
   if (search.busy) out.push(el('p', { class: 'soft' }, 'Looking…'));
   if (!search.results) return out;
   const people = alsoGames ? [el('h2', { class: 'subhead' }, 'Players')] : [];
-  if (!search.results.length) people.push(el('p', { class: 'soft' }, `No one called “${search.text}” on this Hub.`));
+  if (!search.results.length) people.push(el('p', { class: 'soft' }, `Nobody called “${search.text}”.`));
   for (const p of search.results) people.push(personResult(p));
   if (!alsoGames) return [...out, ...people];
   const needle = search.text.toLowerCase();
@@ -841,7 +843,7 @@ function peopleSearch(placeholder, alsoGames = false) {
       el('div', {}, people),
       el('div', {},
         el('h2', { class: 'subhead' }, 'Games'),
-        games.length ? el('div', { class: 'games' }, games.map(gameCard)) : el('p', { class: 'soft' }, `No games called “${search.text}” on this Hub.`))),
+        games.length ? el('div', { class: 'games' }, games.map(gameCard)) : el('p', { class: 'soft' }, `No games called “${search.text}”.`))),
   ];
 }
 
@@ -875,7 +877,7 @@ function personResult(p) {
 function searchPage() {
   return [
     el('h1', { class: 'title' }, 'Search'),
-    el('p', { class: 'note' }, 'Find players and games on this Hub.'),
+    el('p', { class: 'note' }, 'Find players and games.'),
     ...peopleSearch("A player's name or a game", true),
   ];
 }
@@ -969,7 +971,7 @@ function user() {
       .finally(() => route.name === 'user' && route.id === id && render());
     return [back, el('p', { class: 'soft' }, 'Loading…')];
   }
-  if (known.missing) return [back, el('div', { class: 'empty' }, 'There is no one with that id on this Hub.')];
+  if (known.missing) return [back, el('div', { class: 'empty' }, 'There is nobody with that id.')];
   const p = known;
   const isMe = session?.playerId === p.player_id;
   const f = data.friends;
@@ -1094,7 +1096,7 @@ async function sendEmailCode(address) {
   const signature = signText(secretKey(), `libroxel email\n${session.playerId}\n${email}\n${time}`);
   try {
     const sent = await api('/accounts/email', { method: 'POST', body: { player_id: session.playerId, email, time, signature } });
-    emailMessage = { text: sent.verified ? `${email} is already proved.` : sent.sent ? `We sent a code to ${email}. Type it below.` : `Saved ${email}. (This Hub can't send mail, so there's no code.)` };
+    emailMessage = { text: sent.verified ? `${email} is already proved.` : sent.sent ? `We sent a code to ${email}. Type it below.` : `Saved ${email}. (The Hub can't send mail yet, so there's no code.)` };
     securityInfo = null;
   } catch (e) {
     emailMessage = { text: e.message, kind: 'error' };
@@ -1145,7 +1147,7 @@ function security() {
   if (securityInfo.loading) return add(panel, [el('p', { class: 'soft' }, 'Loading…')]);
   if (securityInfo.error) return add(panel, [status(securityInfo.error, 'error')]);
   add(panel, [
-    el('p', { class: 'soft' }, `You are ${session.name} on ${HUB.replace(/^https?:\/\//, '')}. `,
+    el('p', { class: 'soft' }, `You are ${session.name}. `,
       securityInfo.has_password ? 'You have a password, so you can sign in anywhere.' : 'Set a password in the app to sign in on other computers.',
       ' ', securityInfo.two_step ? 'Two-step sign-in is on.' : 'Turn on two-step sign-in in the app, on its Avatar tab, for a code on top of your password.'),
     securityInfo.sign_ins?.length
@@ -1324,7 +1326,7 @@ let release = null; // The newest release's files, once GitHub has said.
 function loadRelease() {
   if (release || !/^[\w.-]+\/[\w.-]+$/.test(REPO)) return;
   release = { loading: true };
-  const hasApp = (r) => (r.assets || []).some((a) => /^libroxel-.*-(windows-x86_64\.zip|macos-universal\.zip|linux-x86_64\.tar\.gz)$/.test(a.name));
+  const hasApp = (r) => (r.assets || []).some((a) => /^libroxel-.*-(windows-x86_64-setup\.exe|macos-universal\.dmg|linux-x86_64\.run)$/.test(a.name));
   fetch(`https://api.github.com/repos/${REPO}/releases?per_page=30`, { headers: { Accept: 'application/vnd.github+json' } })
     .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`GitHub answered ${r.status}`))))
     .then((list) => {
@@ -1342,9 +1344,10 @@ function download() {
   const mine = platform();
   loadRelease();
   const builds = [
-    { id: 'windows', name: 'Windows', file: 'libroxel-windows-x86_64.zip', ends: '-windows-x86_64.zip', about: 'Windows 10 or 11. Unzip and open libroxel.exe. If SmartScreen warns you, choose More info, then Run anyway.' },
-    { id: 'macos', name: 'macOS', file: 'libroxel-macos-universal.zip', ends: '-macos-universal.zip', about: 'macOS 11 or newer. Unzip, then right-click Libroxel.app and choose Open the first time.' },
-    { id: 'linux', name: 'Linux', file: 'libroxel-linux-x86_64.tar.gz', ends: '-linux-x86_64.tar.gz', about: 'x86-64 with Vulkan. Unpack it and run ./libroxel once, so Play links on this site open it.' },
+    { id: 'windows', name: 'Windows', file: 'libroxel-windows-x86_64-setup.exe', ends: '-windows-x86_64-setup.exe', about: 'Windows 10 or 11. Open the installer and follow it. If SmartScreen warns you, choose More info, then Run anyway.' },
+    { id: 'macos', name: 'macOS', file: 'libroxel-macos-universal.dmg', ends: '-macos-universal.dmg', about: 'macOS 11 or newer. Open it and drag Libroxel to Applications, then right-click Libroxel there and choose Open the first time.' },
+    { id: 'linux', name: 'Linux', file: 'libroxel-linux-x86_64.run', ends: '-linux-x86_64.run', about: 'x86-64 with Vulkan, any distribution. Run sh on the file you downloaded to install it.',
+      alt: { label: '.deb for Debian and Ubuntu', file: 'libroxel-linux-x86_64.deb', ends: '-linux-x86_64.deb' } },
   ].sort((a, b) => (b.id === mine) - (a.id === mine));
   // From the repository's newest release when there is one, else from this server.
   const link = (b) => {
@@ -1369,12 +1372,13 @@ function download() {
       el('p', {}, b.about),
       href
         ? el('a', { class: `btn small${b.id === mine ? ' go' : ''}`, href }, icon(ICON.download), 'Download')
-        : el('button', { class: 'btn small', disabled: true }, icon(ICON.download), REPO && release?.loading ? 'Download' : 'Not out yet'));
+        : el('button', { class: 'btn small', disabled: true }, icon(ICON.download), REPO && release?.loading ? 'Download' : 'Not out yet'),
+      b.alt && link(b.alt) ? el('p', { class: 'soft' }, 'Or the ', el('a', { href: link(b.alt) }, b.alt.label), '.') : null);
   })));
   out.push(
     el('h2', { class: 'section' }, 'Then press Play here'),
     el('ol', { class: 'steps' },
-      el('li', {}, 'Open Libroxel once after downloading it. That tells your computer that Play buttons on this site open Libroxel.'),
+      el('li', {}, 'Install Libroxel and open it once. That tells your computer that Play buttons on this site open Libroxel, and typing libroxel in a terminal opens it too.'),
       el('li', {}, 'Come back here, pick a game, and press Play. Your browser may ask whether to open Libroxel: say yes (and tick Always allow, if it offers).'),
       el('li', {}, 'Sign in to the app with the same name and password as here, so your friends see you.')),
   );
@@ -1397,4 +1401,4 @@ setInterval(() => {
   if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
   refresh().then(render);
 }, 20000);
-document.getElementById('hub-name').textContent = HUB.replace(/^https?:\/\//, '');
+

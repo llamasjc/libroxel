@@ -67,9 +67,9 @@ pub fn new_two_step_secret() -> String {
 }
 
 /// The link an authenticator app reads (as a QR code, or pasted) to add the account.
-pub fn two_step_link(secret: &str, name: &str, hub: &str) -> String {
-    let hub = hub.split("://").last().unwrap_or(hub).trim_end_matches('/');
-    format!("otpauth://totp/Libroxel:{name}?secret={secret}&issuer=Libroxel%20({hub})&digits=6&period=30")
+pub fn two_step_link(secret: &str, name: &str, _hub: &str) -> String {
+    // There's one Hub, so the authenticator app just says Libroxel.
+    format!("otpauth://totp/Libroxel:{name}?secret={secret}&issuer=Libroxel&digits=6&period=30")
 }
 
 fn code_at(secret: &[u8], step: i64) -> String {
@@ -161,7 +161,7 @@ pub(crate) async fn set_two_step(
     }
     let db = db.lock().unwrap();
     if crate::owner::is_banned(&db, &set.player_id) {
-        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+        return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
     }
     let internal = |e: rusqlite::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     match &set.secret {
@@ -331,7 +331,7 @@ pub fn set_verified(db: &Connection, who: &str, verified: bool) -> Result<(), St
         })
         .optional()
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("there is no account called {who} on this Hub"))?;
+        .ok_or_else(|| format!("there is no account called {who}"))?;
     let sql = if verified {
         "INSERT OR IGNORE INTO verified (player_id, since) VALUES (?1, ?2)"
     } else {

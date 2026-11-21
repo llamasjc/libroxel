@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Libroxel
+Comment=Make and play 3D games with friends
+Exec=libroxel %u
+Terminal=false
+Categories=Game;Development;
+MimeType=x-scheme-handler/libroxel;

@@ -96,10 +96,11 @@ options to change them. `journalctl -u libroxel-site-update` shows what the
 updates did.
 
 **Downloads** come from the repository's newest GitHub release: the Download
-page asks GitHub for it and links each platform's file (`…-windows-x86_64.zip`,
-`…-macos-universal.zip`, `…-linux-x86_64.tar.gz`). Before the first release it
+page asks GitHub for it and links each platform's installer
+(`…-windows-x86_64-setup.exe`, `…-macos-universal.dmg`, `…-linux-x86_64.run`,
+and `…-linux-x86_64.deb` beside it). Before the first release it
 says there's nothing to download yet. Without `--repo`, it links to
-`/var/www/libroxel/downloads/libroxel-windows-x86_64.zip` and so on instead,
+`/var/www/libroxel/downloads/libroxel-windows-x86_64-setup.exe` and so on instead,
 for files you put there yourself.
 
 Without GitHub, put a `web/` folder next to `setup-site.sh` and run it without

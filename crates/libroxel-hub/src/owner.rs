@@ -1,7 +1,7 @@
 //! What whoever runs the Hub can do: name its **owners** (the only accounts
 //! that may list Official servers) and **ban** accounts.
 //!
-//! These are run on the Hub's own computer (`libroxel hub owners`, `ban`
+//! These are run on the Hub's own computer (`libroxel-hub owners`, `ban`
 //! and so on), straight on its database, so no one can do them over the
 //! network.
 
@@ -54,7 +54,7 @@ fn resolve(db: &Connection, who: &str) -> Result<String, String> {
     match found {
         Some(id) => Ok(id),
         None if who.parse::<iroh_base::PublicKey>().is_ok() => Ok(who.to_owned()),
-        None => Err(format!("there is no account called {who} on this Hub")),
+        None => Err(format!("there is no account called {who}")),
     }
 }
 

@@ -104,11 +104,11 @@ impl CoEdit {
         let address = with_port_for_edits(address);
         let target: SocketAddr = address
             .to_socket_addrs()
-            .map_err(|e| format!("could not find {address}: {e}"))?
+            .map_err(|e| format!("could not find that address: {e}"))?
             .next()
-            .ok_or_else(|| format!("could not find {address}"))?;
+            .ok_or_else(|| "could not find that address".to_owned())?;
         let stream = TcpStream::connect_timeout(&target, Duration::from_secs(5))
-            .map_err(|e| format!("could not reach {address}: {e}"))?;
+            .map_err(|e| format!("could not reach the host: {e}"))?;
         let mut conn = Conn::new(stream).map_err(|e| e.to_string())?;
         conn.send(&json!({ "t": "hello", "name": name, "version": EDIT_PROTOCOL }));
         conn.flush();
@@ -123,7 +123,7 @@ impl CoEdit {
                 welcomed: false,
                 reported: false,
             })),
-            log: vec![format!("👥 Joining {address} to edit together")],
+            log: vec!["👥 Joining to edit together".to_owned()],
         })
     }
 

@@ -885,9 +885,22 @@ pub fn hot_track(painter: &egui::Painter, rect: Rect, strong: bool) {
 /// A tab along the home screen's glass bar: a bright glass pill while
 /// it's the open one, a faint one under the pointer.
 pub fn tab(ui: &mut egui::Ui, glyph: &str, label: &str, on: bool) -> Response {
-    let font = display(15.0);
-    let galley = ui.painter().layout_no_wrap(format!("{glyph}  {label}"), font, TEXT);
-    let size = Vec2::new(galley.size().x + 30.0, 40.0);
+    let text = if label.is_empty() { glyph.to_owned() } else { format!("{glyph}  {label}") };
+    tab_with(ui, &text, on, label.is_empty())
+}
+
+/// How wide [`tab`] draws a tab, so a bar can tell whether its tabs fit.
+pub fn tab_width(ui: &egui::Ui, glyph: &str, label: &str) -> f32 {
+    let text = if label.is_empty() { glyph.to_owned() } else { format!("{glyph}  {label}") };
+    let (size, padding) = if label.is_empty() { (17.0, 22.0) } else { (15.0, 30.0) };
+    (ui.painter().layout_no_wrap(text, display(size), TEXT).size().x + padding).max(40.0)
+}
+
+fn tab_with(ui: &mut egui::Ui, text: &str, on: bool, icon_only: bool) -> Response {
+    let font = display(if icon_only { 17.0 } else { 15.0 });
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, TEXT);
+    let padding = if icon_only { 22.0 } else { 30.0 };
+    let size = Vec2::new((galley.size().x + padding).max(40.0), 40.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let painter = ui.painter();
     let pill = rect.shrink2(Vec2::new(1.0, 3.0));
@@ -987,19 +1000,86 @@ pub fn paint_logo(painter: &egui::Painter, at: Pos2, size: f32) {
     painter.line_segment([c, bottom], Stroke::new(1.0, see_through(255, 255, 255, 90)));
 }
 
-/// The mark and the name side by side.
-pub fn wordmark(ui: &mut egui::Ui, height: f32) -> Response {
-    let galley = ui.painter().layout_no_wrap("Libroxel".into(), display_bold(height * 0.78), HEADING);
-    let size = Vec2::new(height + 10.0 + galley.size().x, height);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
-    paint_logo(ui.painter(), rect.min, height);
-    glow_text(
-        ui.painter(),
-        Pos2::new(rect.min.x + height + 10.0, rect.center().y - galley.size().y / 2.0),
-        galley,
-        HEADING,
-    );
+/// The Libroxel mark as a button, for Home: it sits in a glossy pill
+/// like a picked tab while `on`, and lights up under the pointer.
+pub fn logo_button(ui: &mut egui::Ui, on: bool) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(52.0, 44.0), Sense::click());
+    let painter = ui.painter();
+    let pill = rect.shrink2(Vec2::new(1.0, 2.0));
+    if on {
+        let shadow =
+            egui::Shadow { offset: [0, 0], blur: 16, spread: 0, color: see_through(160, 220, 255, 200) };
+        painter.add(shadow.as_shape(pill, CornerRadius::same(9)));
+        glossy(
+            painter,
+            pill,
+            9.0,
+            (
+                Color32::from_rgb(250, 253, 255),
+                Color32::from_rgb(196, 228, 250),
+                Color32::from_rgb(70, 130, 190),
+            ),
+            false,
+            false,
+        );
+    } else if response.hovered() {
+        glass(painter, pill, 9.0, Color32::from_rgba_unmultiplied(220, 240, 255, 110));
+    }
+    let size = 32.0;
+    paint_logo(painter, rect.center() - Vec2::splat(size / 2.0), size);
+    response.on_hover_text("Home").on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A box for a join code or an address. What's typed is hidden like a
+/// password until Show is pressed, so a stream or a screenshot doesn't give
+/// an IP away.
+pub fn hidden_field(ui: &mut egui::Ui, text: &mut String, hint: &str, width: f32) -> Response {
+    let id = ui.next_auto_id().with("shown");
+    let mut shown = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    let response = ui
+        .horizontal(|ui| {
+            let field = ui
+                .add(egui::TextEdit::singleline(text).hint_text(hint).password(!shown).desired_width(width));
+            let (glyph, tip) =
+                if shown { (icon::EYE_SLASH, "Hide it again") } else { (icon::EYE, "Show IP") };
+            if ui.small_button(glyph).on_hover_text(tip).clicked() {
+                shown = !shown;
+            }
+            field
+        })
+        .inner;
+    ui.data_mut(|d| d.insert_temp(id, shown));
     response
+}
+
+/// Shows `text` (a join code, or something with an IP in it) as dots
+/// until Show IP is pressed, with a Copy button that works either way.
+pub fn hidden_text(
+    ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    label: &str,
+    text: &str,
+) {
+    let id = ui.id().with(("hidden", id_salt));
+    let mut shown = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    ui.horizontal(|ui| {
+        ui.label(label);
+        if shown {
+            let short: String = text.chars().take(28).collect();
+            let more = if text.chars().count() > 28 { "…" } else { "" };
+            ui.label(RichText::new(format!("{short}{more}")).monospace());
+        } else {
+            ui.label(RichText::new("••••••••••••").monospace().color(MUTED));
+        }
+        let (word, tip) = if shown { ("Hide", "Hide it again") } else { ("Show IP", "Show it on screen") };
+        if ui.small_button(word).on_hover_text(tip).clicked() {
+            shown = !shown;
+        }
+        if ui.small_button(format!("{}  Copy", icon::COPY)).clicked() {
+            ui.ctx().copy_text(text.to_owned());
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(id, shown));
 }
 
 /// A glossy little orb, for status lights and badges.

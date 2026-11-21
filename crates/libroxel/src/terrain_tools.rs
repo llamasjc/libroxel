@@ -96,6 +96,7 @@ pub fn hill(voxels: &mut Voxels, centre: Vec3, radius: f32, height: f32, seed: u
 
 /// A square pool of water `depth` deep on the ground at `centre`, `2 * half`
 /// cells across inside, with a rim of rock steps to climb in by.
+#[cfg(test)]
 pub fn pool(voxels: &mut Voxels, centre: Vec3, half: i32, depth: i32) {
     let (cx, base, cz) = (centre.x.floor() as i32, centre.y.floor() as i32, centre.z.floor() as i32);
     let outer = half + depth;

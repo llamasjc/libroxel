@@ -19,8 +19,26 @@ pub const RESPAWN_DELAY: f32 = 5.0;
 /// place's scripts get to run first, and one that turns
 /// `CharacterAutoLoads` off in that time spawns the character itself.
 pub const FIRST_SPAWN_DELAY: f32 = 0.5;
-/// The name of the local player.
+/// The name of the local player, unless [`set_local_player_name`] gave
+/// another (the app uses the player's account name).
 pub const LOCAL_PLAYER_NAME: &str = "Player1";
+
+thread_local! {
+    static LOCAL_NAME: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Names this computer's player in the sessions this thread starts from now
+/// on (play tests and hosted games), such as the account's name. `None`
+/// (or a blank name) goes back to [`LOCAL_PLAYER_NAME`].
+pub fn set_local_player_name(name: Option<&str>) {
+    let name = name.map(str::trim).filter(|n| !n.is_empty()).map(str::to_owned);
+    LOCAL_NAME.with(|local| *local.borrow_mut() = name);
+}
+
+/// Who this computer's player is in a session started now.
+pub fn local_player_name() -> String {
+    LOCAL_NAME.with(|local| local.borrow().clone()).unwrap_or_else(|| LOCAL_PLAYER_NAME.to_owned())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
@@ -289,7 +307,7 @@ impl PlaySession {
         let errors = session.runtime.run_tree_scripts();
         session.collect(errors);
         if with_character {
-            session.add_player(LOCAL_PLAYER_NAME, false);
+            session.add_player(&local_player_name(), false);
         }
         Ok(session)
     }

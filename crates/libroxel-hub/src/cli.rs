@@ -1,29 +1,28 @@
 //! The Hub's command line: running it, and looking after it from its own
-//! computer. `libroxel hub` and the Hub-only `libroxel-hub` program both
-//! use it.
+//! computer, for the `libroxel-hub` program on the Hub's server.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-/// What `libroxel hub help` prints.
+/// What `libroxel-hub help` prints.
 pub const HUB_HELP: &str = "\
-  hub                          run a Hub
+  (nothing)                    run the Hub
       --port <n>               Hub port (default 7430)
       --data <file>            where the Hub keeps its data
       --behind-proxy           a web server here (such as Caddy) passes players
                                on: listen only on this computer, and trust it
                                for their addresses
-  hub reports                  list reported games and hats (and which are hidden)
-  hub clear <game|item> <id>   say a reported one is fine: list it again
-  hub remove <game|item> <id>  take one down for good
-  hub accounts [search]        list accounts
-  hub owners                   list the Hub's owners (its admins)
-  hub owner add|remove <name or player id>
+  reports                      list reported games and hats (and which are hidden)
+  clear <game|item> <id>       say a reported one is fine: list it again
+  remove <game|item> <id>      take one down for good
+  accounts [search]            list accounts
+  owners                       list the Hub's owners (its admins)
+  owner add|remove <name or player id>
                                owners are the Hub's admins and may list
                                Official servers
-  hub ban <name> [reason]      ban an account; unban <name> lets it back
-  hub verify|unverify <name>   give or take away a verified badge
-  hub rename <name> <new name> rename an account
+  ban <name> [reason]          ban an account; unban <name> lets it back
+  verify|unverify <name>       give or take away a verified badge
+  rename <name> <new name>     rename an account
 ";
 
 struct Flags {
@@ -67,8 +66,7 @@ impl Flags {
     }
 }
 
-/// Runs `libroxel hub …` (or `libroxel-hub …`) with `args` after the word
-/// `hub`. `default_data` is where the Hub keeps its data without `--data`.
+/// Runs `libroxel-hub …` with `args` after the program's name. `default_data` is where the Hub keeps its data without `--data`.
 pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
     let flags = Flags::parse(args, &["--port", "--data"])?;
     let options = crate::HubOptions {
@@ -150,7 +148,7 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
         }
         ["owner", "add", who] => {
             let id = crate::add_owner(&crate::open_db(Some(&data))?, who)?;
-            println!("{who} ({id}) is an owner of this Hub.");
+            println!("{who} ({id}) is an owner of the Hub.");
             Ok(())
         }
         ["owner", "remove", who] => {
@@ -181,11 +179,11 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
         }
         ["unban", who] => {
             crate::unban(&crate::open_db(Some(&data))?, who)?;
-            println!("{who} can use this Hub again.");
+            println!("{who} can use Libroxel again.");
             Ok(())
         }
         _ => {
-            Err("usage: libroxel hub [reports | clear <game|item> <id> | remove <game|item> <id> | accounts \
+            Err("usage: libroxel-hub [reports | clear <game|item> <id> | remove <game|item> <id> | accounts \
                   [search] | owners | owner add|remove <who> | ban <who> [reason] | unban <who> | rename <who> <name> | verify|unverify <who>]"
                 .into())
         }

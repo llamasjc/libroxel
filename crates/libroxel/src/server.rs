@@ -1,7 +1,6 @@
-//! `libroxel server` and `libroxel hub`: the windowless parts of the app.
+//! `libroxel server`: the windowless part of the app.
 
 use std::cell::RefCell;
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,45 +17,24 @@ pub const HELP: &str = "\
 Libroxel: build, play and host games.
 
 usage:
-  libroxel [game.lrx]          open the editor (and its built-in Hub)
-  libroxel --sample            open the editor with the sample obby
+  libroxel [game.lrx]          open the app (or the editor on that game)
   libroxel server <game.lrx>   host a game with no window
       --port <n>               game port on this network (default 7420)
-      --name <text>            name shown in Browse (default: the file name)
-      --hub <address>          list the game on that Hub (default: the official
-                               Hub, or one run here if there is none)
-      --no-hub                 do not run or use a Hub
-      --official               list it as an official server (the last resort;
-                               the Hub's owners must trust this server)
+      --name <text>            name shown in Online (default: the file name)
+      --no-hub                 don't list it on the Hub (join codes still work)
+      --official               list it as an official server (the Hub's owners
+                               must trust this server)
       --max-players <n>        players the list shows as the limit (0: none)
       --game-id <id>           put it on that game's server list (a published
                                game's id, or starter:<name>)
-  libroxel hub                 run only a Hub
-      --port <n>               Hub port (default 7430)
-      --data <file>            where the Hub keeps its list
-      --behind-proxy           a web server here (such as Caddy) passes players
-                               on; trust it for their addresses
-  libroxel hub reports         list reported games and hats (and which are hidden)
-  libroxel hub clear <game|item> <id>    say a reported one is fine: list it again
-  libroxel hub remove <game|item> <id>   take one down for good
-  libroxel hub accounts [search]         list accounts
-  libroxel hub owners                    list the Hub's owners
-  libroxel hub owner add|remove <name or player id>
-                               owners (and servers they add by id) may list
-                               Official servers
-  libroxel hub ban <name> [reason]       ban an account; unban <name> lets it back
-  libroxel hub verify|unverify <name>    give or take away a verified badge
-  libroxel hub rename <name> <new name>  rename an account (reserved names such as
-                               admin too)
   libroxel help                show this
 ";
 
-/// Handles `server`, `hub` and `help`. Returns `false` when the arguments
+/// Handles `server` and `help`. Returns `false` when the arguments
 /// are for the editor.
 pub fn dispatch(args: &[String]) -> bool {
     let result = match args.first().map(String::as_str) {
         Some("server") => server(&args[1..]),
-        Some("hub") => hub(&args[1..]),
         Some("help" | "--help" | "-h") => {
             print!("{HELP}");
             Ok(())
@@ -121,12 +99,8 @@ pub fn data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".libroxel"))
 }
 
-fn hub(args: &[String]) -> Result<(), String> {
-    libroxel_hub::cli(args, &data_dir().join("hub.sqlite"))
-}
-
 fn server(args: &[String]) -> Result<(), String> {
-    let flags = Flags::parse(args, &["--port", "--name", "--hub", "--max-players", "--game-id"])?;
+    let flags = Flags::parse(args, &["--port", "--name", "--max-players", "--game-id"])?;
     let Some(path) = flags.rest.first() else {
         return Err("usage: libroxel server <game.lrx> (see libroxel help)".into());
     };
@@ -139,13 +113,7 @@ fn server(args: &[String]) -> Result<(), String> {
         text,
         key: Path::new(path).with_file_name("server-identity.key"),
         port: flags.number("--port", DEFAULT_PORT)?,
-        hub: if flags.has("--no-hub") {
-            HubUse::None
-        } else if let Some(address) = flags.get("--hub") {
-            HubUse::At(address.to_owned())
-        } else {
-            HubUse::usual()
-        },
+        hub: if flags.has("--no-hub") { HubUse::None } else { HubUse::usual() },
         official: flags.has("--official"),
         max_players: flags.number("--max-players", 0u32)?,
         game_id: flags.get("--game-id").map(str::to_owned),
@@ -153,22 +121,17 @@ fn server(args: &[String]) -> Result<(), String> {
     run(settings, &mut |line| println!("{line}"), &AtomicBool::new(false))
 }
 
-/// Which Hub a server lists itself on.
+/// Whether a server lists itself on the Hub.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HubUse {
-    /// Run one here (or use the one this computer already runs).
-    Own,
     At(String),
     None,
 }
 
 impl HubUse {
-    /// The Hub `LIBROXEL_HUB` names, else the official Hub, else one run here.
+    /// The Hub: [`libroxel_hub::hub_address`].
     pub fn usual() -> Self {
-        match std::env::var("LIBROXEL_HUB").ok().filter(|a| !a.trim().is_empty()) {
-            Some(address) => HubUse::At(address),
-            None => libroxel_hub::OFFICIAL_HUB.map_or(HubUse::Own, |hub| HubUse::At(hub.to_owned())),
-        }
+        HubUse::At(libroxel_hub::hub_address())
     }
 }
 
@@ -205,37 +168,14 @@ pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicB
     let tunnel = HostTunnel::start(&identity, Network::Internet, port)?;
     say(format!("Hosting {game} on port {port}. Getting a join code…"));
 
-    // A Hub of our own unless told to use another one (or none).
-    let mut _own_hub = None;
     let hub = match hub {
         HubUse::None => None,
         HubUse::At(address) => Some(HubClient::new(&address)),
-        HubUse::Own => {
-            let hub_port = libroxel_hub::DEFAULT_PORT;
-            match libroxel_hub::start(
-                SocketAddr::from(([0, 0, 0, 0], hub_port)),
-                Some(&data_dir().join("hub.sqlite")),
-            ) {
-                Ok(running) => {
-                    say(format!(
-                        "Running a Hub on port {hub_port}: players add this computer's address in Browse."
-                    ));
-                    let client = HubClient::new(&running.url());
-                    _own_hub = Some(running);
-                    Some(client)
-                }
-                Err(_) => {
-                    // Usually another Hub on this computer already has the port.
-                    say("Listing it on the Hub this computer already runs.".into());
-                    Some(HubClient::new(&format!("127.0.0.1:{hub_port}")))
-                }
-            }
-        }
     };
     let kind = if official { HostKind::Official } else { HostKind::Community };
     if official {
         say(format!(
-            "This server's id is {}. On the Hub's computer, `libroxel hub owner add <that id>` lets it list as Official.",
+            "This server's id is {}. A Hub owner running `libroxel-hub owner add <that id>` on the Hub's server lets it list as Official.",
             identity.player_id()
         ));
     }

@@ -83,23 +83,51 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          dir="libroxel-$VERSION-${{ matrix.name }}"
-          mkdir "$dir"
-          cp target/${{ matrix.target }}/dist/libroxel "$dir/"
-          cp README.md LICENSE-MIT LICENSE-APACHE "$dir/"
-          tar -czf "$dir.tar.gz" "$dir"
-          echo "ASSET=$dir.tar.gz" >> "$GITHUB_ENV"
+          # Two installers: a .run any Linux can use (it installs for you
+          # alone, no password), and a .deb for Debian and Ubuntu.
+          name="libroxel-$VERSION-${{ matrix.name }}"
+          mkdir -p payload/libroxel
+          cp target/${{ matrix.target }}/dist/libroxel packaging/linux/install.sh payload/libroxel/
+          cp README.md LICENSE-MIT LICENSE-APACHE payload/libroxel/
+          tar -czf payload.tar.gz -C payload libroxel
+          cat packaging/linux/installer-header.sh payload.tar.gz > "$name.run"
+          chmod +x "$name.run"
+
+          deb="deb/libroxel"
+          mkdir -p "$deb/DEBIAN" "$deb/usr/lib/libroxel" "$deb/usr/bin" "$deb/usr/share/applications" "$deb/usr/share/doc/libroxel"
+          # Debian versions start with a digit: dev-1a2b3c4 becomes 0~dev~1a2b3c4.
+          debver="${VERSION//[^0-9A-Za-z.+~]/~}"
+          [[ "$debver" =~ ^[0-9] ]] || debver="0~$debver"
+          sed "s/@VERSION@/$debver/" packaging/linux/deb/control > "$deb/DEBIAN/control"
+          install -m 755 target/${{ matrix.target }}/dist/libroxel "$deb/usr/lib/libroxel/libroxel"
+          ln -s ../lib/libroxel/libroxel "$deb/usr/bin/libroxel"
+          cp packaging/linux/libroxel.desktop "$deb/usr/share/applications/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$deb/usr/share/doc/libroxel/"
+          dpkg-deb --root-owner-group --build "$deb" "$name.deb"
+
+          mkdir dist && mv "$name.run" "$name.deb" dist/
+          echo "ASSET=dist/*" >> "$GITHUB_ENV"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          dir="libroxel-$VERSION-${{ matrix.name }}"
-          mkdir "$dir"
-          cp target/${{ matrix.target }}/dist/libroxel.exe "$dir/"
-          cp README.md LICENSE-MIT LICENSE-APACHE "$dir/"
-          7z a -tzip "$dir.zip" "$dir" > /dev/null
-          echo "ASSET=$dir.zip" >> "$GITHUB_ENV"
+          # An installer, not a bare libroxel.exe: it adds Libroxel to the
+          # Start menu, to PATH (so `libroxel` works in a terminal) and to
+          # libroxel:// links, and can be uninstalled from Settings.
+          src="target/${{ matrix.target }}/dist"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$src/"
+          if ! command -v iscc >/dev/null; then
+            if [[ -x "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" ]]; then
+              export PATH="$PATH:/c/Program Files (x86)/Inno Setup 6"
+            else
+              choco install innosetup --no-progress -y
+              export PATH="$PATH:/c/Program Files (x86)/Inno Setup 6"
+            fi
+          fi
+          name="libroxel-$VERSION-${{ matrix.name }}-setup"
+          iscc "/DVersion=$VERSION" "/DSource=$(cygpath -w "$PWD/$src")" "/DOutput=$name" "/O$(cygpath -w "$PWD")" packaging/windows/libroxel.iss
+          echo "ASSET=$name.exe" >> "$GITHUB_ENV"
 
       - name: Keep the Mac half
         if: runner.os == 'macOS'
@@ -141,8 +169,10 @@ jobs:
           # Ad-hoc signature: an unsigned arm64 binary won't launch at all.
           codesign --force --deep --sign - "$app"
           cp README.md LICENSE-MIT LICENSE-APACHE "$dir/"
-          ditto -c -k --keepParent "$dir" "$dir.zip"
-          echo "ASSET=$dir.zip" >> "$GITHUB_ENV"
+          # A disk image to drag the app into Applications from.
+          ln -s /Applications "$dir/Applications"
+          hdiutil create -volname Libroxel -srcfolder "$dir" -ov -format UDZO "$dir.dmg"
+          echo "ASSET=$dir.dmg" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
         with:
           name: dist-macos-universal
@@ -189,19 +219,31 @@ jobs:
           merge-multiple: true
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      # The release is made as a draft with every file on it, and only
+      # then published, all at once: until that moment the download page,
+      # the app's update check and Hub servers keep using the last release.
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          draft: true
           body: |
             ## Download Libroxel
 
-            - **Windows:** `libroxel-…-windows-x86_64.zip`, unzip and open `libroxel.exe`
-            - **Mac** (Apple silicon and Intel): `libroxel-…-macos-universal.zip`, unzip, then right-click `Libroxel.app` and choose Open the first time
-            - **Linux:** `libroxel-…-linux-x86_64.tar.gz`, unpack and run `./libroxel`
+            - **Windows:** `libroxel-…-windows-x86_64-setup.exe`, open it to install
+            - **Mac** (Apple silicon and Intel): `libroxel-…-macos-universal.dmg`, open it and drag Libroxel to Applications, then right-click it there and choose Open the first time
+            - **Linux:** `libroxel-…-linux-x86_64.run` for any Linux (`sh libroxel-…-linux-x86_64.run`), or `libroxel-…-linux-x86_64.deb` for Debian and Ubuntu
 
-            The other files (`libroxel-hub-linux-x86_64`, `setup-hub.sh`, `update-hub.sh`) are for running a Hub server.
+            After installing, typing `libroxel` in a new terminal opens it.
+
+            The other files (`libroxel-hub-linux-x86_64`, `setup-hub.sh`, `update-hub.sh`) are for the Hub's server.
           generate_release_notes: true
-          # The app's release is the one download links point at.
-          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
           # Tags like v0.2.0-beta.1 become pre-releases.
           prerelease: ${{ contains(github.ref_name, '-') }}
+      - name: Publish it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # The app's release is the one download links point at.
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then latest=false; else latest=true; fi
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest=$latest

@@ -5,14 +5,15 @@ and attaches the builds to a GitHub Release whenever a version tag is pushed.
 
 | File | Platform | What's inside |
 | --- | --- | --- |
-| `libroxel-<version>-linux-x86_64.tar.gz` | Linux (x86-64, glibc 2.35+) | the `libroxel` executable |
-| `libroxel-<version>-windows-x86_64.zip` | Windows 10/11 (x86-64) | `libroxel.exe` |
-| `libroxel-<version>-macos-universal.zip` | macOS 11+ (Apple silicon and Intel) | `Libroxel.app` |
+| `libroxel-<version>-windows-x86_64-setup.exe` | Windows 10/11 (x86-64) | an installer: Start menu, PATH, `libroxel://` links, uninstall from Settings |
+| `libroxel-<version>-macos-universal.dmg` | macOS 11+ (Apple silicon and Intel) | `Libroxel.app`, to drag into Applications |
+| `libroxel-<version>-linux-x86_64.run` | Linux (x86-64, glibc 2.35+) | an installer for any distribution: `sh` it, no password needed |
+| `libroxel-<version>-linux-x86_64.deb` | Debian and Ubuntu | the same app as a package (`sudo apt install ./…deb`) |
 | `libroxel-hub-linux-x86_64` | Linux servers (x86-64) | the Hub on its own, for the official Hub server |
 | `setup-hub.sh`, `update-hub.sh` | | set a Hub server up, and update it (see [OFFICIAL_HUB.md](OFFICIAL_HUB.md)) |
 | `SHA256SUMS.txt` | | checksums of the files above |
 
-Each build is a single file: the built-in pictures and starter games are compiled
+Each installer holds a single program: the built-in pictures and starter games are compiled
 into it, so nothing else needs to sit next to it.
 
 ## Publishing a release
@@ -75,3 +76,22 @@ push the tag again.
 - Code signing for Windows and notarization for macOS (both need paid
   certificates; add them as repository secrets when there are some).
 - Linux and Windows builds for ARM.
+
+## Nothing changes until a release is finished
+
+The release is made as a draft, every file is put on it, and only then is it
+published, in one step. Until then the website's Download page, the app's
+download links and Hub servers keep using the release before it, so a
+half-finished release is never what anyone gets. If a build fails, nothing
+is published at all.
+
+## The `libroxel` command
+
+Each installer makes `libroxel` in a terminal open the app: the Windows
+installer adds the app's folder to the user's PATH, the `.deb` puts it in
+`/usr/bin`, and the `.run` links it into `~/.local/bin` (adding that folder
+to PATH in `~/.bashrc`, `~/.zshrc` or `~/.profile` if needed). A Mac app
+dragged to Applications links itself when it first opens (into
+`/usr/local/bin` if that's writable, otherwise `~/.local/bin`), and **More
+→ Add the libroxel command** on the home screen puts it in `/usr/local/bin`
+with the Mac's password.

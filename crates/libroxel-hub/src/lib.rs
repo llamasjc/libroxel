@@ -3,8 +3,8 @@
 //!
 //! The Hub never runs a game or carries its traffic: hosts announce
 //! themselves every few seconds with a [`Heartbeat`], and a host that stops
-//! announcing drops off the list. Anyone can run a Hub (`libroxel hub`);
-//! it keeps its data in one SQLite file.
+//! announcing drops off the list. There is one Hub, run on a server with
+//! the `libroxel-hub` program; it keeps its data in one SQLite file.
 //!
 //! A Hub also keeps **published** games: whole saved places that anyone
 //! who reaches the Hub can download and play, or host for friends, with no
@@ -71,22 +71,29 @@ pub use social::{
 /// The port a Hub listens on unless told otherwise.
 pub const DEFAULT_PORT: u16 = 7430;
 
-/// The one official Hub: where every copy of the app keeps its accounts,
-/// friends, published games and server lists unless told to use another
-/// (`LIBROXEL_HUB`, or the Hub box in Online). `None` means there is no
-/// official Hub, and each app runs its own instead.
+/// The Hub: the one place every copy of the app keeps its accounts,
+/// friends, published games and server lists. There is only one.
 ///
-/// A fork sets its own here, or builds with `LIBROXEL_OFFICIAL_HUB=<url>`
-/// (an empty one builds an app with no official Hub).
-pub const OFFICIAL_HUB: Option<&str> = match option_env!("LIBROXEL_OFFICIAL_HUB") {
-    Some(hub) if hub.is_empty() => None,
-    Some(hub) => Some(hub),
-    None => Some("https://hub.libroxel.com"),
+/// A fork sets its own here, or builds with `LIBROXEL_OFFICIAL_HUB=<url>`.
+pub const OFFICIAL_HUB: &str = match option_env!("LIBROXEL_OFFICIAL_HUB") {
+    Some(hub) if !hub.is_empty() => hub,
+    _ => "https://hub.libroxel.com",
 };
 
 pub use email::{
     EmailCode, EmailSent, EmailSet, Mail, SmtpSettings, email_code_message, email_message, valid_email,
 };
+
+/// Where the app finds the Hub: [`OFFICIAL_HUB`], unless `LIBROXEL_HUB`
+/// names another address (for trying a Hub out on one computer, such as
+/// the demo Hub or tests).
+pub fn hub_address() -> String {
+    std::env::var("LIBROXEL_HUB")
+        .ok()
+        .map(|a| a.trim().to_owned())
+        .filter(|a| !a.is_empty())
+        .unwrap_or_else(|| OFFICIAL_HUB.to_owned())
+}
 
 /// How a Hub is run.
 #[derive(Debug, Clone, Default)]
@@ -845,7 +852,7 @@ async fn publish(
     };
     let db = db.lock().unwrap();
     if author_id.as_deref().is_some_and(|id| crate::owner::is_banned(&db, id)) {
-        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+        return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
     }
     let now = now();
     let title = clip(&game.title);
@@ -933,7 +940,7 @@ fn save_account(
     }
     let db = db.lock().unwrap();
     if crate::owner::is_banned(&db, &account.player_id) {
-        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+        return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
     }
     let internal = |e: rusqlite::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     let last: Option<(i64, String)> = db
@@ -1039,7 +1046,7 @@ async fn share_item(
     }
     let db = db.lock().unwrap();
     if crate::owner::is_banned(&db, &item.creator_id) {
-        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+        return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
     }
     let item_id = new_game_id();
     db.execute(
@@ -1147,7 +1154,7 @@ async fn report(
     }
     let db = db.lock().unwrap();
     if crate::owner::is_banned(&db, &report.reporter_id) {
-        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+        return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
     }
     let table = if report.kind == "game" { "games WHERE game_id" } else { "items WHERE item_id" };
     let exists: Option<i64> = db
@@ -1373,7 +1380,7 @@ async fn heartbeat(
         _ => None,
     };
     if host_id.as_deref().is_some_and(|id| owner::is_banned(&db, id)) {
-        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+        return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
     }
     // Only the Hub's owners (and servers they trust) list Official servers.
     let kind = match beat.kind {
@@ -1500,10 +1507,7 @@ pub fn run(addr: SocketAddr, db_path: &Path, options: HubOptions) -> Result<(), 
             }
             _ => println!("No mail settings (LIBROXEL_SMTP_HOST): emails are kept, but no codes are sent."),
         }
-        println!(
-            "Point players at it with the Hub address in Browse, or LIBROXEL_HUB=http://<this computer>:{}",
-            addr.port()
-        );
+        println!("Try it from an app on this computer with LIBROXEL_HUB=http://127.0.0.1:{}", addr.port());
         axum::serve(listener, router_with(db, options).into_make_service_with_connect_info::<SocketAddr>())
             .with_graceful_shutdown(async {
                 let _ = tokio::signal::ctrl_c().await;
@@ -1564,7 +1568,7 @@ impl HubClient {
             .get(&self.base)
             .call()
             .and_then(|mut r| r.body_mut().read_json())
-            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .map_err(|e| format!("could not reach the Hub: {e}"))
     }
 
     /// Live servers, community hosts first, matching `search` if given.
@@ -1574,7 +1578,7 @@ impl HubClient {
             .query("q", search)
             .call()
             .and_then(|mut r| r.body_mut().read_json())
-            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .map_err(|e| format!("could not reach the Hub: {e}"))
     }
 
     /// The live servers running one game (see [`Heartbeat::game_id`]).
@@ -1584,7 +1588,7 @@ impl HubClient {
             .query("game_id", game_id)
             .call()
             .and_then(|mut r| r.body_mut().read_json())
-            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .map_err(|e| format!("could not reach the Hub: {e}"))
     }
 
     /// Announces a host; repeat every [`HEARTBEAT_EVERY`].
@@ -1593,7 +1597,7 @@ impl HubClient {
             .post(format!("{}/servers/heartbeat", self.base))
             .send_json(beat)
             .map(|_| ())
-            .map_err(|e| format!("the Hub at {} did not take the announcement: {e}", self.base))
+            .map_err(|e| format!("the Hub did not take the announcement: {e}"))
     }
 
     /// Takes a host off the list straight away.
@@ -1615,7 +1619,7 @@ impl HubClient {
             .query("q", search)
             .call()
             .and_then(|mut r| r.body_mut().read_json())
-            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .map_err(|e| format!("could not reach the Hub: {e}"))
     }
 
     /// Publishes a game, or a new version of one.
@@ -1626,7 +1630,7 @@ impl HubClient {
             .http_status_as_error(false)
             .build()
             .send_json(game)
-            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .map_err(|e| format!("could not reach the Hub: {e}"))
             .and_then(|mut r| {
                 if r.status().is_success() {
                     r.body_mut().read_json().map_err(|e| e.to_string())
@@ -1654,7 +1658,7 @@ impl HubClient {
             .http_status_as_error(false)
             .build()
             .send_json(account)
-            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .map_err(|e| format!("could not reach the Hub: {e}"))
             .and_then(|mut r| {
                 if r.status().is_success() {
                     Ok(())
@@ -1672,7 +1676,7 @@ impl HubClient {
             .http_status_as_error(false)
             .build()
             .send_json(set)
-            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .map_err(|e| format!("could not reach the Hub: {e}"))
             .and_then(|mut r| {
                 if r.status().is_success() {
                     Ok(())
@@ -1688,7 +1692,7 @@ impl HubClient {
     pub fn sign_in(&self, name: &str, password: &str, code: Option<&str>) -> Result<[u8; 32], String> {
         let name = name.trim();
         let answer = |r: Result<ureq::http::Response<ureq::Body>, ureq::Error>| {
-            let mut r = r.map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))?;
+            let mut r = r.map_err(|e| format!("could not reach the Hub: {e}"))?;
             if r.status().is_success() {
                 Ok(r)
             } else {
@@ -1731,7 +1735,7 @@ impl HubClient {
             .http_status_as_error(false)
             .build()
             .send_json(set)
-            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .map_err(|e| format!("could not reach the Hub: {e}"))
             .and_then(|mut r| {
                 if r.status().is_success() {
                     Ok(())
@@ -1750,7 +1754,7 @@ impl HubClient {
             .query("signature", signature)
             .call()
             .and_then(|mut r| r.body_mut().read_json())
-            .map_err(|e| format!("could not get your account's security from the Hub at {}: {e}", self.base))
+            .map_err(|e| format!("could not get your account's security from the Hub: {e}"))
     }
 
     /// Gives the account an email, which mails it a code (see [`Self::verify_email`]).
@@ -1761,7 +1765,7 @@ impl HubClient {
             .http_status_as_error(false)
             .build()
             .send_json(set)
-            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .map_err(|e| format!("could not reach the Hub: {e}"))
             .and_then(|mut r| {
                 if r.status().is_success() {
                     r.body_mut().read_json().map_err(|e| e.to_string())
@@ -1779,7 +1783,7 @@ impl HubClient {
             .http_status_as_error(false)
             .build()
             .send_json(code)
-            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .map_err(|e| format!("could not reach the Hub: {e}"))
             .and_then(|mut r| {
                 if r.status().is_success() {
                     Ok(())
@@ -1798,7 +1802,7 @@ impl HubClient {
             .http_status_as_error(false)
             .build()
             .call()
-            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))?;
+            .map_err(|e| format!("could not reach the Hub: {e}"))?;
         let mut result = result;
         match result.status().as_u16() {
             404 => Ok(None),
@@ -1817,7 +1821,7 @@ impl HubClient {
             .http_status_as_error(false)
             .build()
             .send_json(item)
-            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .map_err(|e| format!("could not reach the Hub: {e}"))
             .and_then(|mut r| {
                 if r.status().is_success() {
                     r.body_mut().read_json().map_err(|e| e.to_string())
@@ -1834,7 +1838,7 @@ impl HubClient {
             .query("q", search)
             .call()
             .and_then(|mut r| r.body_mut().read_json())
-            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .map_err(|e| format!("could not reach the Hub: {e}"))
     }
 
     /// Counts someone putting an item on.
@@ -1872,7 +1876,7 @@ impl HubClient {
             .query("q", search)
             .call()
             .and_then(|mut r| r.body_mut().read_json())
-            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .map_err(|e| format!("could not reach the Hub: {e}"))
     }
 
     /// Sends, accepts, declines or ends a friendship.
@@ -1883,7 +1887,7 @@ impl HubClient {
             .http_status_as_error(false)
             .build()
             .send_json(change)
-            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .map_err(|e| format!("could not reach the Hub: {e}"))
             .and_then(|mut r| {
                 if r.status().is_success() {
                     r.body_mut().read_json().map_err(|e| e.to_string())
@@ -1902,7 +1906,7 @@ impl HubClient {
             .query("signature", signature)
             .call()
             .and_then(|mut r| r.body_mut().read_json())
-            .map_err(|e| format!("could not get your friends from the Hub at {}: {e}", self.base))
+            .map_err(|e| format!("could not get your friends from the Hub: {e}"))
     }
 
     /// Says whether this player is online and what they are playing.
@@ -1911,7 +1915,7 @@ impl HubClient {
             .post(format!("{}/presence", self.base))
             .send_json(update)
             .map(|_| ())
-            .map_err(|e| format!("the Hub at {} did not take your status: {e}", self.base))
+            .map_err(|e| format!("the Hub did not take your status: {e}"))
     }
 
     /// Takes a published game down.
@@ -2015,7 +2019,7 @@ impl Announcer {
                         let result = hub.heartbeat(&beat);
                         sent |= result.is_ok();
                         *status.lock().unwrap() = Some(match result {
-                            Ok(()) => format!("Listed on {}", hub.url()),
+                            Ok(()) => "Listed on the Hub".to_owned(),
                             Err(e) => e,
                         });
                         HEARTBEAT_EVERY
@@ -2040,7 +2044,7 @@ impl Announcer {
         change(&mut self.listing.lock().unwrap());
     }
 
-    /// The last thing the Hub said, such as "Listed on http://…".
+    /// The last thing the Hub said, such as "Listed on the Hub".
     pub fn status(&self) -> Option<String> {
         self.status.lock().unwrap().clone()
     }
