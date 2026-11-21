@@ -285,38 +285,26 @@ pub fn account_message(
     format!("libroxel account\n{player_id}\n{name}\n{about}\n{look}\n{time}").into_bytes()
 }
 
-/// Whether `name` can be an account's name.
+/// Whether `name` can be an account's name: 3 to 20 letters, digits or
+/// underscores, with at least one letter (a bare number is an account number).
 pub fn valid_account_name(name: &str) -> bool {
-    (3..=20).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    (3..=20).contains(&name.len())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && name.chars().any(|c| c.is_ascii_alphabetic())
 }
 
-/// Names no player can claim, so no one passes for whoever runs the Hub.
-const RESERVED_NAMES: &[&str] = &[
-    "admin",
-    "administrator",
-    "mod",
-    "moderator",
-    "staff",
-    "support",
-    "official",
-    "system",
-    "owner",
-    "hub",
-    "server",
-    "root",
-    "help",
-    "everyone",
-    "nobody",
-    "someone",
-    "player",
-    "guest",
-];
-
-/// Whether `name` is kept back from players (whatever the case).
-pub fn reserved_account_name(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    let bare = name.trim_matches(|c: char| c == '_' || c.is_ascii_digit());
-    RESERVED_NAMES.contains(&bare) || bare.starts_with("libroxel")
+/// Gives every account without a number the next ones, in the order they joined.
+fn number_accounts(db: &Connection) -> rusqlite::Result<()> {
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS accounts_number ON accounts(number)", [])?;
+    let next: i64 = db.query_row("SELECT COALESCE(MAX(number), -1) + 1 FROM accounts", [], |r| r.get(0))?;
+    let unnumbered: Vec<String> = db
+        .prepare("SELECT player_id FROM accounts WHERE number IS NULL ORDER BY created, rowid")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (i, id) in unnumbered.iter().enumerate() {
+        db.execute("UPDATE accounts SET number = ?2 WHERE player_id = ?1", params![id, next + i as i64])?;
+    }
+    Ok(())
 }
 
 /// How long a name someone gave up stays theirs to take back, in seconds.
@@ -410,6 +398,10 @@ pub struct Reported {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Profile {
     pub player_id: String,
+    /// Their account number: 0 for the first account made on this Hub, 1
+    /// for the next, and so on. Profile links use it.
+    #[serde(default)]
+    pub number: u64,
     pub name: String,
     pub about: String,
     pub look: serde_json::Value,
@@ -429,6 +421,9 @@ pub struct Profile {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Person {
     pub player_id: String,
+    /// Their account number (see [`Profile::number`]).
+    #[serde(default)]
+    pub number: u64,
     pub name: String,
     pub about: String,
 }
@@ -612,6 +607,9 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     let _ = db.execute("ALTER TABLE servers ADD COLUMN game_id TEXT", []);
     // Hubs from before signed hosts.
     let _ = db.execute("ALTER TABLE servers ADD COLUMN host_id TEXT", []);
+    // Hubs from before account numbers: number everyone in the order they joined.
+    let _ = db.execute("ALTER TABLE accounts ADD COLUMN number INTEGER", []);
+    number_accounts(&db).map_err(|e| format!("could not number the Hub's accounts: {e}"))?;
     social::create_tables(&db)?;
     password::create_tables(&db)?;
     owner::create_tables(&db)?;
@@ -908,10 +906,6 @@ async fn update_account(
     }
     let old_name = last.map(|(_, name)| name);
     let renaming = !old_name.as_ref().is_some_and(|old| old.eq_ignore_ascii_case(&account.name));
-    // The Hub's owners may take them: "admin" can be whoever runs it.
-    if renaming && reserved_account_name(&account.name) && !owner::is_owner(&db, &account.player_id) {
-        return bad("that name is kept for whoever runs the Hub");
-    }
     let taken: Option<String> = db
         .query_row("SELECT player_id FROM accounts WHERE name = ?1", params![account.name], |r| r.get(0))
         .optional()
@@ -949,7 +943,8 @@ async fn update_account(
     }
     db.execute("DELETE FROM released_names WHERE name = ?1", params![account.name]).map_err(internal)?;
     db.execute(
-        "INSERT INTO accounts (player_id, name, about, look, signed_at, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "INSERT INTO accounts (player_id, name, about, look, signed_at, created, number)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, (SELECT COALESCE(MAX(number), -1) + 1 FROM accounts))
          ON CONFLICT(player_id) DO UPDATE SET name = ?2, about = ?3, look = ?4, signed_at = ?5",
         params![account.player_id, account.name, about, look, account.time, now],
     )
@@ -1171,14 +1166,19 @@ async fn find_people(State(db): State<Db>, Query(query): Query<ListQuery>) -> Js
     let pattern = format!("%{}%", query.q.unwrap_or_default().trim().replace(['%', '_'], ""));
     let mut statement = db
         .prepare(&format!(
-            "SELECT player_id, name, about FROM accounts WHERE name LIKE ?1 AND NOT {}
+            "SELECT player_id, name, about, number FROM accounts WHERE name LIKE ?1 AND NOT {}
              ORDER BY name LIMIT 100",
             owner::banned_sql("accounts.player_id")
         ))
         .expect("the people query is valid");
     let rows = statement
         .query_map(params![pattern], |r| {
-            Ok(Person { player_id: r.get(0)?, name: r.get(1)?, about: r.get(2)? })
+            Ok(Person {
+                player_id: r.get(0)?,
+                name: r.get(1)?,
+                about: r.get(2)?,
+                number: r.get::<_, i64>(3)? as u64,
+            })
         })
         .map(|rows| rows.filter_map(Result::ok).collect())
         .unwrap_or_default();
@@ -1188,19 +1188,21 @@ async fn find_people(State(db): State<Db>, Query(query): Query<ListQuery>) -> Js
 async fn profile(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<Json<Profile>, StatusCode> {
     let db = db.lock().unwrap();
     let now = now();
-    let found: Option<(String, String, String, String, i64)> = db
+    // An account number (names always have a letter), a player id or a name.
+    let number: Option<i64> = id.parse().ok();
+    let found: Option<(String, i64, String, String, String, i64)> = db
         .query_row(
             &format!(
-                "SELECT player_id, name, about, look, created FROM accounts
-                 WHERE (player_id = ?1 OR name = ?1) AND NOT {}",
+                "SELECT player_id, number, name, about, look, created FROM accounts
+                 WHERE (player_id = ?1 OR name = ?1 OR number = ?2) AND NOT {}",
                 owner::banned_sql("accounts.player_id")
             ),
-            params![id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            params![id, number],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
         )
         .optional()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let (player_id, name, about, look, created) = found.ok_or(StatusCode::NOT_FOUND)?;
+    let (player_id, number, name, about, look, created) = found.ok_or(StatusCode::NOT_FOUND)?;
     let mut statement = db
         .prepare(&format!(
             "SELECT {GAME_COLUMNS} FROM {GAMES} WHERE g.author_id = ?1 ORDER BY g.plays DESC, g.updated DESC"
@@ -1216,6 +1218,7 @@ async fn profile(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<J
         .unwrap_or(false);
     Ok(Json(Profile {
         player_id,
+        number: number as u64,
         name,
         about,
         look: serde_json::from_str(&look).unwrap_or(serde_json::Value::Null),

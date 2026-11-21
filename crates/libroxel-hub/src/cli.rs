@@ -19,11 +19,11 @@ pub const HUB_HELP: &str = "\
   hub accounts [search]        list accounts
   hub owners                   list the Hub's owners (its admins)
   hub owner add|remove <name or player id>
-                               owners may list Official servers and take names
-                               such as admin
+                               owners are the Hub's admins and may list
+                               Official servers
   hub ban <name> [reason]      ban an account; unban <name> lets it back
   hub verify|unverify <name>   give or take away a verified badge
-  hub rename <name> <new name> rename an account (reserved names too)
+  hub rename <name> <new name> rename an account
 ";
 
 struct Flags {

@@ -146,8 +146,7 @@ pub fn ban(db: &Connection, who: &str, reason: &str) -> Result<String, String> {
     Ok(id)
 }
 
-/// Renames `who` to `name`, whatever the rules for players say (a
-/// reserved name such as "admin" too). The old name is freed.
+/// Renames `who` to `name`, if no one else has it. The old name is freed.
 pub fn rename(db: &Connection, who: &str, name: &str) -> Result<String, String> {
     if !super::valid_account_name(name) {
         return Err("a name is 3 to 20 letters, digits or underscores".into());

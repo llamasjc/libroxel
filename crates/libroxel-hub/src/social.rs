@@ -117,6 +117,9 @@ pub fn presence_message(update: &PresenceUpdate) -> Vec<u8> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Friend {
     pub player_id: String,
+    /// Their account number (see [`crate::Profile::number`]).
+    #[serde(default)]
+    pub number: u64,
     pub name: String,
     /// How their avatar looks, as the app saves it.
     pub look: serde_json::Value,
@@ -343,38 +346,62 @@ pub(crate) async fn list_friends(
         let mut statement = db.prepare(sql).map_err(internal)?;
         statement
             .query_map(params![id], |r| {
-                Ok(Person { player_id: r.get(0)?, name: r.get(1)?, about: r.get(2)? })
+                Ok(Person {
+                    player_id: r.get(0)?,
+                    name: r.get(1)?,
+                    about: r.get(2)?,
+                    number: r.get::<_, i64>(3)? as u64,
+                })
             })
             .map(|rows| rows.filter_map(Result::ok).collect())
             .map_err(internal)
     };
     let incoming = people(
-        "SELECT a.player_id, a.name, a.about FROM friends f JOIN accounts a ON a.player_id = f.from_id
+        "SELECT a.player_id, a.name, a.about, a.number FROM friends f JOIN accounts a ON a.player_id = f.from_id
          WHERE f.to_id = ?1 AND f.accepted = 0 ORDER BY f.since DESC",
     )?;
     let outgoing = people(
-        "SELECT a.player_id, a.name, a.about FROM friends f JOIN accounts a ON a.player_id = f.to_id
+        "SELECT a.player_id, a.name, a.about, a.number FROM friends f JOIN accounts a ON a.player_id = f.to_id
          WHERE f.from_id = ?1 AND f.accepted = 0 ORDER BY f.since DESC",
     )?;
     let mut statement = db
         .prepare(
-            "SELECT a.player_id, a.name, a.look, p.online, p.game, p.game_id, p.server_id, p.last_seen
+            "SELECT a.player_id, a.name, a.look, p.online, p.game, p.game_id, p.server_id, p.last_seen, a.number
              FROM friends f
              JOIN accounts a ON a.player_id = CASE WHEN f.from_id = ?1 THEN f.to_id ELSE f.from_id END
              LEFT JOIN presence p ON p.player_id = a.player_id
              WHERE (f.from_id = ?1 OR f.to_id = ?1) AND f.accepted = 1",
         )
         .map_err(internal)?;
-    type Row =
-        (String, String, String, Option<bool>, Option<String>, Option<String>, Option<String>, Option<i64>);
+    type Row = (
+        String,
+        String,
+        String,
+        Option<bool>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        i64,
+    );
     let rows: Vec<Row> = statement
         .query_map(params![id], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+                r.get(7)?,
+                r.get(8)?,
+            ))
         })
         .map(|rows| rows.filter_map(Result::ok).collect())
         .map_err(internal)?;
     let mut friends = Vec::new();
-    for (player_id, name, look, online, game, game_id, server_id, last_seen) in rows {
+    for (player_id, name, look, online, game, game_id, server_id, last_seen, number) in rows {
         let online = online == Some(true) && last_seen.is_some_and(|t| t >= alive);
         let server = match (&server_id, online) {
             (Some(server_id), true) => db
@@ -389,6 +416,7 @@ pub(crate) async fn list_friends(
         };
         friends.push(Friend {
             player_id,
+            number: number as u64,
             name,
             look: serde_json::from_str(&look).unwrap_or(serde_json::Value::Null),
             online,

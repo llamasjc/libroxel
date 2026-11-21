@@ -211,9 +211,10 @@ The first build compiles Bevy and takes a while. After that it is quick.
   computers and where they came from. New accounts work out a small puzzle
   on the player's computer first (a bot check), and whoever runs the Hub
   hands out verified badges (`libroxel hub verify <name>`).
-- **Names no one else can take:** a name stays yours on that Hub. Names
-  that look official (admin, moderator, staff, libroxel…) can't be
-  claimed, and a name you give up stays yours to take back for 30 days, so
+- **Names no one else can take:** a name stays yours on that Hub, whatever
+  the case (`Admin`, `admin` and `ADMIN` are one name). Every account also
+  gets a number in the order it joined, starting at 0, and profile links
+  use it. A name you give up stays yours to take back for 30 days, so
   no one can rename into it and pass for you. One address can make 5
   accounts an hour, and every address is limited in how fast it calls the
   Hub, publishes, shares and reports.

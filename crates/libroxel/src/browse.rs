@@ -938,7 +938,10 @@ impl Platform {
             }
         });
         if !name.is_empty() && !valid {
-            ui.colored_label(crate::theme::SUN, "A name is 3 to 20 letters, digits or underscores.");
+            ui.colored_label(
+                crate::theme::SUN,
+                "A name is 3 to 20 letters, digits or underscores, with at least one letter.",
+            );
         }
         match &self.account_status {
             Some(Ok(said)) => {
@@ -955,7 +958,7 @@ impl Platform {
                 1 => "1 published game".to_owned(),
                 n => format!("{n} published games"),
             };
-            ui.label(format!("Your page on this Hub: {} · {games}", profile.name));
+            ui.label(format!("Your page on this Hub: {} (#{}) · {games}", profile.name, profile.number));
             if profile.admin {
                 ui.colored_label(crate::theme::SUN, "You are an admin of this Hub.");
             } else if profile.verified {
