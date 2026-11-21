@@ -85,7 +85,7 @@ jobs:
 
           deb="deb/libroxel"
           mkdir -p "$deb/DEBIAN" "$deb/usr/lib/libroxel" "$deb/usr/bin" "$deb/usr/share/applications" "$deb/usr/share/doc/libroxel"
-          debver="${VERSION//[^0-9A-Za-z.+~]/~}"
+          debver="${VERSION//[^0-9A-Za-z.+~]/\~}"
           [[ "$debver" =~ ^[0-9] ]] || debver="0~$debver"
           sed "s/@VERSION@/$debver/" packaging/linux/deb/control > "$deb/DEBIAN/control"
           install -m 755 "$bin" "$deb/usr/lib/libroxel/libroxel"
