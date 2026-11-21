@@ -2,8 +2,8 @@
 //! starter games in `starter_games` are built from.
 
 use libroxel_instance::{
-    ClassKind, Color3, EnumValue, InstanceId, InstanceTree, Material, NormalId, PartShape, Property,
-    PropertyValue, Vec3,
+    ClassKind, Color3, EnumValue, InstanceId, InstanceTree, Material, PartShape, Property, PropertyValue,
+    Vec3,
 };
 
 /// Builds a go-kart standing on the ground at `at`, facing `yaw` degrees
@@ -82,29 +82,6 @@ pub(crate) fn shape(tree: &mut InstanceTree, id: InstanceId, shape: PartShape) {
 
 pub(crate) fn orient(tree: &mut InstanceTree, id: InstanceId, degrees: [f32; 3]) {
     set(tree, id, Property::Orientation, PropertyValue::Vec3(Vec3::new(degrees[0], degrees[1], degrees[2])));
-}
-
-/// Puts a picture on one side of `part`: a decal, or a texture tiled every `tile` studs.
-pub(crate) fn picture(
-    tree: &mut InstanceTree,
-    part: InstanceId,
-    name: &str,
-    face: NormalId,
-    tile: Option<f32>,
-) -> InstanceId {
-    let class = if tile.is_some() { ClassKind::Texture } else { ClassKind::Decal };
-    let id = add(tree, part, class, class_name_of(class));
-    set(tree, id, Property::Texture, PropertyValue::String(format!("libroxel://{name}")));
-    set(tree, id, Property::Face, PropertyValue::Enum(EnumValue::NormalId(face)));
-    if let Some(tile) = tile {
-        set(tree, id, Property::StudsPerTileU, PropertyValue::Number(tile as f64));
-        set(tree, id, Property::StudsPerTileV, PropertyValue::Number(tile as f64));
-    }
-    id
-}
-
-fn class_name_of(class: ClassKind) -> &'static str {
-    libroxel_script::names::class_name(class)
 }
 
 pub(crate) fn script(tree: &mut InstanceTree, parent: InstanceId, name: &str, source: &str) -> InstanceId {

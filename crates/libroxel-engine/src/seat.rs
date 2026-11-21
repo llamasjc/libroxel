@@ -1,6 +1,6 @@
 //! Seats and vehicles. A character that touches a `Seat` or `VehicleSeat`
-//! sits in it: it is held on the seat (moving with it) until it jumps, a
-//! script sets `Humanoid.Sit` to false, or the seat goes away. While the
+//! sits in it: it is held on the seat (moving with it) until it jumps
+//! (unless its `JumpPower` is 0), a script sets `Humanoid.Sit` to false, or the seat goes away. While the
 //! player sits in a vehicle seat, the movement keys set its `Throttle` and
 //! `Steer`, and every vehicle seat drives the assembly it is welded into.
 
@@ -108,6 +108,10 @@ impl Seating {
         let (Some(character), Some(seat)) = (character, self.seat) else { return (input, None) };
         let alive = !character.is_dead(tree);
         let told_to_stand = tree.get_bool(character.humanoid, Property::Sit) == Some(false);
+        // A humanoid that can't jump can't jump out of its seat either, so a
+        // game can keep players in their karts and use Space for itself.
+        let can_hop_out = tree.get_number(character.humanoid, Property::JumpPower).is_none_or(|p| p > 0.0);
+        let input = CharacterInput { jump: input.jump && can_hop_out, ..input };
         if !alive || !usable(tree, seat) || told_to_stand || input.jump {
             let change = self.stand(tree, character);
             // Jump clear of the seat.
