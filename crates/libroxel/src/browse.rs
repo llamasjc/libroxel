@@ -65,6 +65,8 @@ pub struct Platform {
     account_busy: bool,
     pub account: Option<Profile>,
     pub account_status: Option<Result<String, String>>,
+    /// Accounts saved on this computer to switch between (read again when None).
+    saved_accounts: Option<Vec<crate::accounts::Saved>>,
     /// A password being set for the account, typed twice.
     password: String,
     password_again: String,
@@ -128,6 +130,7 @@ impl Default for Platform {
             account_about: String::new(),
             account_hub: None,
             account_found: Arc::default(),
+            saved_accounts: None,
             account_saved: Arc::default(),
             account_busy: false,
             account: None,
@@ -269,6 +272,10 @@ impl Platform {
             self.account_busy = false;
             match result {
                 Ok(Some(profile)) => {
+                    // Kept on this computer, to switch back to after signing out.
+                    if crate::accounts::remember(&profile.name).is_ok() {
+                        self.saved_accounts = None;
+                    }
                     self.account_name = profile.name.clone();
                     self.account_about = profile.about.clone();
                     self.account = Some(profile);
@@ -901,6 +908,62 @@ impl Platform {
         }
     }
 
+    /// Forgets everything about the account in use, after switching or
+    /// signing out, so the new one is looked up afresh.
+    fn account_changed(&mut self, said: Result<String, String>) {
+        self.account = None;
+        self.account_name.clear();
+        self.account_about.clear();
+        self.account_hub = None;
+        self.account_status = None;
+        self.security = None;
+        self.two_step_secret = None;
+        self.password_status = Some(said);
+        self.saved_accounts = None;
+    }
+
+    /// The accounts saved on this computer: switch to one, or sign out.
+    fn switch_ui(&mut self, ui: &mut egui::Ui) {
+        let saved = self.saved_accounts.get_or_insert_with(crate::accounts::saved).clone();
+        let current = self.account.as_ref().map(|a| a.player_id.clone());
+        let others: Vec<_> = saved.iter().filter(|s| Some(&s.player_id) != current.as_ref()).collect();
+        if others.is_empty() && self.account.is_none() {
+            return;
+        }
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            if let Some(account) = &self.account {
+                ui.label(RichText::new(format!("Signed in as {}", account.name)).strong());
+            } else {
+                ui.label(RichText::new("Not signed in").strong());
+            }
+            let mut picked = None;
+            for other in &others {
+                if ui.button(format!("Switch to {}", other.name)).clicked() {
+                    picked = Some((other.player_id.clone(), other.name.clone()));
+                }
+            }
+            if let Some((id, name)) = picked {
+                let said = crate::accounts::switch_to(&id).map(|()| format!("Switched to {name}."));
+                self.account_changed(said);
+            }
+            if let Some(name) = self.account.as_ref().map(|a| a.name.clone())
+                && ui
+                    .button("Sign out")
+                    .on_hover_text(
+                        "Make another account or sign in to one. This account stays saved on this computer, \
+                         so you can switch back to it.",
+                    )
+                    .clicked()
+            {
+                let said = crate::accounts::sign_out(Some(&name)).map(|()| {
+                    format!("Signed out of {name}. Claim a new name below, or sign in to another account.")
+                });
+                self.account_changed(said);
+            }
+        });
+    }
+
     /// The account part of the Avatar tab. `look` is the avatar as saved.
     pub fn account_ui(&mut self, ui: &mut egui::Ui, look: Json) {
         self.look_up_account();
@@ -913,6 +976,7 @@ impl Platform {
             ))
             .color(crate::theme::DUST),
         );
+        self.switch_ui(ui);
         ui.add_space(6.0);
         egui::Grid::new("account").num_columns(2).show(ui, |ui| {
             ui.label("Name");
