@@ -1,29 +1,12 @@
 name: Release
 
-# Push a tag like `v0.1.0` to build Libroxel for Linux, Windows and macOS and
-# publish the builds as a GitHub Release. It doesn't wait for CI.
-#
-# It's all or nothing: the release is only published once every platform
-# has built. If one fails, nothing is published, the previous release stays
-# where it is, and "Re-run failed jobs" finishes the same tag later.
-# "Run workflow" on the Actions tab builds the same files without
-# publishing, to try a build first.
-#
-# Pushes to main build too, without publishing, only to keep the build
-# cache warm: GitHub lets a tag's run use the caches main saved, but not the
-# ones an earlier tag saved, so without this every release starts cold.
 on:
   push:
     tags: ["v*"]
     branches: [main]
-    # Changes that can't affect the build don't need a warm-up. (Tags
-    # always build: GitHub ignores these filters for tag pushes.)
     paths-ignore: ["web/**", "docs/**", "**.md", "packaging/web/**"]
   workflow_dispatch:
 
-# A newer push to main cancels an older warm-up build, since it's pointless
-# now. Tag runs are never cancelled: each version finishes and gets
-# published, and pushing the same tag again waits for the first run.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: ${{ github.ref_type == 'branch' }}
@@ -46,12 +29,11 @@ jobs:
             os: windows-latest
             target: x86_64-pc-windows-msvc
     env:
-      # rust-lld links the big Windows exe in seconds instead of minutes.
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
     steps:
       - uses: actions/checkout@v4
 
-      - name: Pick the version
+      - name: Set version
         shell: bash
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
@@ -60,7 +42,7 @@ jobs:
             echo "VERSION=dev-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
           fi
 
-      - name: Install Linux system dependencies
+      - name: Install dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -74,7 +56,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: dist-${{ matrix.name }}
-          # Only main's cache can be used by later releases.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
@@ -82,14 +63,10 @@ jobs:
         run: |
           cargo build --locked --profile dist -p libroxel --target ${{ matrix.target }}
 
-      - name: Package (Linux)
+      - name: Build AppImage and .deb
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          # Two downloads, each with the Libroxel icon and an app menu
-          # entry: an AppImage that runs on any Linux (download, make it
-          # executable, open it; it adds itself to the menu and the
-          # `libroxel` command the first time), and a .deb for Debian and Ubuntu.
           name="libroxel-$VERSION-${{ matrix.name }}"
           bin="target/${{ matrix.target }}/dist/libroxel"
 
@@ -108,7 +85,6 @@ jobs:
 
           deb="deb/libroxel"
           mkdir -p "$deb/DEBIAN" "$deb/usr/lib/libroxel" "$deb/usr/bin" "$deb/usr/share/applications" "$deb/usr/share/doc/libroxel"
-          # Debian versions start with a digit: dev-1a2b3c4 becomes 0~dev~1a2b3c4.
           debver="${VERSION//[^0-9A-Za-z.+~]/~}"
           [[ "$debver" =~ ^[0-9] ]] || debver="0~$debver"
           sed "s/@VERSION@/$debver/" packaging/linux/deb/control > "$deb/DEBIAN/control"
@@ -124,14 +100,10 @@ jobs:
           mkdir dist && mv "$name.AppImage" "$name.deb" dist/
           echo "ASSET=dist/*" >> "$GITHUB_ENV"
 
-      - name: Package (Windows)
+      - name: Build installer
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          # A setup wizard, not a bare libroxel.exe: with the Libroxel icon,
-          # it adds Libroxel to the Start menu (and the desktop), to PATH (so
-          # `libroxel` works in a terminal) and to libroxel:// links, and
-          # it's in Settings > Apps to uninstall.
           src="target/${{ matrix.target }}/dist"
           cp README.md LICENSE-MIT LICENSE-APACHE "$src/"
           if ! command -v iscc >/dev/null; then
@@ -145,8 +117,6 @@ jobs:
           name="libroxel-$VERSION-${{ matrix.name }}-setup"
           numeric=$(echo "$VERSION" | grep -oE '^[0-9]+(\.[0-9]+){0,3}' || true)
           numeric="${numeric:-0}.0.0.0"; numeric=$(echo "$numeric" | cut -d. -f1-4)
-          # Git Bash turns arguments that start with / into Windows paths, so
-          # "/DVersion=..." reached iscc as a second script file. Stop that.
           export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
           iscc "/DVersion=$VERSION" "/DNumericVersion=$numeric" "/DSource=$(cygpath -w "$PWD/$src")" "/DOutput=$name" "/O$(cygpath -w "$PWD")" "$(cygpath -w packaging/windows/libroxel.iss)"
           echo "ASSET=$name.exe" >> "$GITHUB_ENV"
@@ -158,10 +128,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # The Mac app runs on Apple silicon and Intel. The two halves build side by
-  # side, and the mac job joins them into one app. They're a job of their own
-  # so the Mac packaging starts as soon as they're done, without waiting for
-  # the slower Windows build.
   mac-half:
     name: Build (${{ matrix.name }})
     runs-on: macos-latest
@@ -184,7 +150,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
         run: cargo build --locked --profile dist -p libroxel --target ${{ matrix.target }}
-      - name: Keep the Mac half
+      - name: Copy binary
         run: |
           mkdir -p half && cp target/${{ matrix.target }}/dist/libroxel half/libroxel-${{ matrix.target }}
       - uses: actions/upload-artifact@v4
@@ -205,30 +171,24 @@ jobs:
           pattern: half-*
           path: half
           merge-multiple: true
-      - name: Package
+      - name: Build .dmg
         shell: bash
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="dev-${GITHUB_SHA::7}"; fi
           dir="libroxel-$VERSION-macos-universal"
           app="$dir/Libroxel.app"
           mkdir -p "$app/Contents/MacOS"
-          # One app that runs natively on both Apple silicon and Intel Macs.
           lipo -create -output "$app/Contents/MacOS/libroxel" \
             half/libroxel-aarch64-apple-darwin half/libroxel-x86_64-apple-darwin
           sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
-          # The app's icon, made from the icon pictures in packaging/icons.
           mkdir -p "$app/Contents/Resources" libroxel.iconset
           for size in 16 32 128 256 512; do
             cp "packaging/icons/libroxel-$size.png" "libroxel.iconset/icon_${size}x${size}.png"
             cp "packaging/icons/libroxel-$((size * 2)).png" "libroxel.iconset/icon_${size}x${size}@2x.png"
           done
           iconutil -c icns libroxel.iconset -o "$app/Contents/Resources/libroxel.icns"
-          # Ad-hoc signature: an unsigned arm64 binary won't launch at all.
           codesign --force --deep --sign - "$app"
-          # The usual Mac disk image: the app beside an Applications folder
-          # on a picture that says to drag one onto the other.
           tiffutil -cathidpicheck packaging/macos/dmg-background.png packaging/macos/dmg-background@2x.png -out background.tiff
-          # Skip Homebrew's own update, which takes longer than the install.
           HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install create-dmg
           create-dmg \
             --volname "Libroxel" \
@@ -250,8 +210,6 @@ jobs:
           retention-days: 7
 
   hub:
-    # The Hub on its own, for the server, and the script that sets it up
-    # there. Servers set up with it fetch these from each new release.
     name: Build (Hub server)
     runs-on: ubuntu-22.04
     steps:
@@ -274,7 +232,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish the release
+    name: Publish
     if: github.ref_type == 'tag'
     needs: [build, mac, hub]
     runs-on: ubuntu-latest
@@ -286,26 +244,21 @@ jobs:
           pattern: dist-*
           path: dist
           merge-multiple: true
-      - name: Check every installer is there
+      - name: Check files
         run: |
           for end in -windows-x86_64-setup.exe -macos-universal.dmg -linux-x86_64.AppImage -linux-x86_64.deb; do
             compgen -G "dist/libroxel-*$end" >/dev/null || { echo "::error::Missing libroxel-*$end"; exit 1; }
           done
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
-      - name: Remove drafts from earlier tries
+      - name: Delete old drafts
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          # A draft left behind by a run that stopped halfway would otherwise
-          # sit next to the new one with the same tag.
           gh api "repos/$GH_REPO/releases?per_page=100" \
             --jq ".[] | select(.draft and .tag_name == \"$GITHUB_REF_NAME\") | .id" |
             while read -r id; do gh api -X DELETE "repos/$GH_REPO/releases/$id"; done
-      # The release is made as a draft with every file on it, and only
-      # then published, all at once: until that moment the download page,
-      # the app's update check and Hub servers keep using the last release.
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
@@ -321,15 +274,12 @@ jobs:
 
             The other files (`libroxel-hub-linux-x86_64`, `setup-hub.sh`, `update-hub.sh`) are for the Hub's server.
           generate_release_notes: true
-          # Tags like v0.2.0-beta.1 become pre-releases.
           prerelease: ${{ contains(github.ref_name, '-') }}
-      - name: Publish it
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          # Latest goes to the highest version, not to whichever run finished
-          # last: if v0.1.1 finishes after v0.1.2, v0.1.2 stays Latest.
           latest=true
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then
             latest=false
