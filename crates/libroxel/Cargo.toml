@@ -22,7 +22,6 @@ libroxel-engine.workspace = true
 libroxel-net.workspace = true
 libroxel-rbx.workspace = true
 libroxel-hub = { path = "../libroxel-hub", version = "0.0.1" }
-libroxel-chess = { path = "../libroxel-chess", version = "0.0.1" }
 bevy.workspace = true
 bevy_egui = { version = "0.43", default-features = false, features = ["render", "default_fonts", "manage_clipboard"] }
 transform-gizmo-egui = "0.11"

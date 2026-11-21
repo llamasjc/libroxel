@@ -1590,7 +1590,7 @@ fn properties(
             "Put one inside a part to show a PNG picture on one Face of it. A Decal stretches the \
              picture over the whole side; a Texture repeats it every StudsPerTileU by StudsPerTileV \
              studs. Texture is a file name, found like an ImageLabel's; libroxel://smile, star, arrow, \
-             checker and coin are built in. Color3 tints it.",
+             checker, coin and chess pieces (chess-wk to chess-bp) are built in. Color3 tints it.",
         ),
         ClassKind::BodyColors => Some(
             "Put one in a character (StarterCharacter, or from a script on CharacterAdded) to colour \

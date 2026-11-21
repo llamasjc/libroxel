@@ -9,7 +9,6 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-libroxel-chess = { path = "../libroxel-chess", version = "0.0.1" }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time", "sync", "signal"] }
 rusqlite = { version = "0.42", features = ["bundled"] }

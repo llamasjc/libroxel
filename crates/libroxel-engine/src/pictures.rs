@@ -4,7 +4,8 @@
 //! given to [`set_folders`] (the editor gives the game file's folder, an
 //! `images` folder beside it and the games folder's `images` folder); a full
 //! path is used as it is. Names starting with `libroxel://` are pictures
-//! built into Libroxel: `coin`, `smile`, `star`, `arrow` and `checker`.
+//! built into Libroxel: `coin`, `smile`, `star`, `arrow`, `checker`, and
+//! chess pieces named `chess-` then `w` or `b` then `k`, `q`, `r`, `b`, `n` or `p`.
 //!
 //! Games brought in from Roblox Studio name their files by asset number
 //! (`rbxassetid://123`, or a web address ending `?id=123`). Those are
@@ -29,6 +30,18 @@ pub const PICTURES: &[(&str, &[u8])] = &[
     ("star", include_bytes!("../assets/star.png")),
     ("arrow", include_bytes!("../assets/arrow.png")),
     ("checker", include_bytes!("../assets/checker.png")),
+    ("chess-wk", include_bytes!("../assets/chess-wk.png")),
+    ("chess-wq", include_bytes!("../assets/chess-wq.png")),
+    ("chess-wr", include_bytes!("../assets/chess-wr.png")),
+    ("chess-wb", include_bytes!("../assets/chess-wb.png")),
+    ("chess-wn", include_bytes!("../assets/chess-wn.png")),
+    ("chess-wp", include_bytes!("../assets/chess-wp.png")),
+    ("chess-bk", include_bytes!("../assets/chess-bk.png")),
+    ("chess-bq", include_bytes!("../assets/chess-bq.png")),
+    ("chess-br", include_bytes!("../assets/chess-br.png")),
+    ("chess-bb", include_bytes!("../assets/chess-bb.png")),
+    ("chess-bn", include_bytes!("../assets/chess-bn.png")),
+    ("chess-bp", include_bytes!("../assets/chess-bp.png")),
 ];
 
 static FOLDERS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
@@ -158,8 +171,10 @@ mod tests {
         for (name, _) in PICTURES {
             let bytes = bytes_for(&format!("{BUILT_IN}{name}")).expect("built in");
             let (size, pixels) = decode_png(&bytes).expect("decodes");
-            assert_eq!(size, [64, 64], "{name}");
-            assert_eq!(pixels.len(), 64 * 64 * 4);
+            // Pictures are square: 64 pixels, or 128 for the chess pieces.
+            let side = if name.starts_with("chess-") { 128 } else { 64 };
+            assert_eq!(size, [side, side], "{name}");
+            assert_eq!(pixels.len(), side * side * 4);
         }
         // The coin's corners are see-through and its middle is gold.
         let (_, pixels) = decode_png(PICTURES[0].1).unwrap();

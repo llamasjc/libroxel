@@ -17,12 +17,20 @@ pub struct StarterGame {
 }
 
 /// Every starter game, in the order the home screen shows them.
-pub const STARTER_GAMES: &[StarterGame] = &[StarterGame {
-    name: "Kart race",
-    symbol: crate::theme::icon::STEERING_WHEEL,
-    about: "Three laps round the track in a kart",
-    build: kart_race,
-}];
+pub const STARTER_GAMES: &[StarterGame] = &[
+    StarterGame {
+        name: "Kart race",
+        symbol: crate::theme::icon::STEERING_WHEEL,
+        about: "Three laps round the track in a kart",
+        build: kart_race,
+    },
+    StarterGame {
+        name: "Chess",
+        symbol: crate::theme::icon::HORSE,
+        about: "Chess against eight computer players or anyone in the server",
+        build: chess,
+    },
+];
 
 /// Finds a starter game by name.
 pub fn starter(name: &str) -> Option<&'static StarterGame> {
@@ -281,6 +289,38 @@ pub fn kart_race() -> InstanceTree {
     tree
 }
 
+/// Chess, made only of GUI objects and scripts: a rules module and a
+/// computer player shared through ReplicatedStorage, a server script that
+/// referees games, pairs players and runs the clocks, and a screen script
+/// that draws the board. Nobody gets a character; the screen covers the world.
+pub fn chess() -> InstanceTree {
+    let mut tree = InstanceTree::new();
+    let players = tree.service(ClassKind::Players).expect("every tree has Players");
+    set(&mut tree, players, Property::CharacterAutoLoads, PropertyValue::Bool(false));
+    let ws = tree.workspace();
+    block(&mut tree, ws, "Baseplate", [0.0, -0.5, 0.0], [64.0, 1.0, 64.0], [99, 140, 88]);
+    spawn_at(&mut tree, ws, [0.0, 0.5, 0.0]);
+
+    let storage = tree.service(ClassKind::ReplicatedStorage).expect("every tree has storage");
+    let shared = add(&mut tree, storage, ClassKind::Folder, "Chess");
+    code(&mut tree, shared, ClassKind::ModuleScript, "Rules", include_str!("chess_game/Rules.luau"));
+    code(&mut tree, shared, ClassKind::ModuleScript, "Engine", include_str!("chess_game/Engine.luau"));
+    add(&mut tree, shared, ClassKind::RemoteEvent, "Action");
+    add(&mut tree, shared, ClassKind::RemoteEvent, "State");
+
+    let server = tree.service(ClassKind::ServerScriptService).expect("every tree has ServerScriptService");
+    script(&mut tree, server, "ChessServer", include_str!("chess_game/Server.luau"));
+
+    let starter_gui = tree.service(ClassKind::StarterGui).expect("every tree has StarterGui");
+    let screen = add(&mut tree, starter_gui, ClassKind::ScreenGui, "ChessScreen");
+    // The screen covers the whole window, under the top bar too.
+    tree.set_extra(screen, "IgnoreGuiInset", Some(PropertyValue::Bool(true)))
+        .expect("screen GUIs take extras");
+    code(&mut tree, screen, ClassKind::LocalScript, "ChessClient", include_str!("chess_game/Client.luau"));
+    tree.drain_changes();
+    tree
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,6 +380,153 @@ mod tests {
         assert_eq!(value(&session, "game.Players.Player1.leaderstats.Laps.Value"), "1");
         assert_ne!(value(&session, "game.Players.Player1.leaderstats.Best.Value"), "0");
         assert!(errors(&mut session).is_empty());
+    }
+
+    fn steps(session: &mut libroxel_engine::session::PlaySession, frames: usize) {
+        for _ in 0..frames {
+            session.step(1.0 / 60.0, CharacterInput::default());
+        }
+    }
+
+    #[test]
+    fn chess_rules_count_moves_right() {
+        let mut session = start_on(chess(), true).unwrap();
+        steps(&mut session, 5);
+        let rules = "require(game.ReplicatedStorage.Chess.Rules)";
+        assert_eq!(value(&session, &format!("{rules}.new():perft(3)")), "8902");
+        let tricky = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
+        assert_eq!(value(&session, &format!("{rules}.fromFen('{tricky}'):perft(2)")), "2039");
+        assert!(errors(&mut session).is_empty(), "{:?}", errors(&mut session));
+    }
+
+    #[test]
+    fn chess_against_the_computer() {
+        let mut session = start_on(chess(), true).unwrap();
+        steps(&mut session, 10);
+        // The screen is built: the board's 64 squares and the lobby.
+        let gui = "game.Players.Player1.PlayerGui.ChessScreen";
+        // 64 squares, the result card, the promotion picker, a corner and an outline.
+        assert_eq!(value(&session, &format!("#{gui}.BoardColumn.Board:GetChildren()")), "68");
+        assert_eq!(value(&session, &format!("{gui}.Panel.Lobby.Visible")), "true");
+        let act = |session: &mut libroxel_engine::session::PlaySession, action: &str| {
+            session
+                .runtime()
+                .run("act", &format!("game.ReplicatedStorage.Chess.Action:FireServer({action})"))
+                .unwrap();
+        };
+        act(&mut session, r#""playBot", { level = 2, control = "none", colour = "white" }"#);
+        steps(&mut session, 5);
+        assert_eq!(value(&session, &format!("{gui}.Panel.Game.Visible")), "true");
+        assert_eq!(
+            value(&session, &format!("{gui}.BoardColumn.Board.e2.Piece.Image")),
+            "libroxel://chess-wp"
+        );
+        // An illegal move is refused; a legal one is answered by the computer.
+        act(&mut session, r#""move", { game = "1", uci = "e2e5" }"#);
+        steps(&mut session, 5);
+        assert_eq!(
+            value(&session, &format!("{gui}.BoardColumn.Board.e2.Piece.Image")),
+            "libroxel://chess-wp"
+        );
+        act(&mut session, r#""move", { game = "1", uci = "e2e4" }"#);
+        steps(&mut session, 150);
+        assert_eq!(
+            value(&session, &format!("{gui}.BoardColumn.Board.e4.Piece.Image")),
+            "libroxel://chess-wp"
+        );
+        // One row in the move list (beside the list's rounded corner), with both moves.
+        let moves = format!("{gui}.Panel.Game.Moves");
+        assert_eq!(value(&session, &format!("#{moves}:GetChildren()")), "2");
+        let answer = format!("{moves}:FindFirstChildOfClass('TextLabel'):GetChildren()[3].Text");
+        assert_ne!(value(&session, &answer), "", "the computer answered");
+        assert_eq!(
+            value(&session, &format!("{gui}.BoardColumn.BottomPlayer.PlayerName.Text")),
+            "Player1  (1200)"
+        );
+        // Taking back undoes both.
+        act(&mut session, r#""takeback""#);
+        steps(&mut session, 5);
+        assert_eq!(
+            value(&session, &format!("{gui}.BoardColumn.Board.e2.Piece.Image")),
+            "libroxel://chess-wp"
+        );
+        // Resigning ends it; back in the lobby the board is cleared for the next game.
+        act(&mut session, r#""move", { game = "1", uci = "d2d4" }"#);
+        steps(&mut session, 150);
+        act(&mut session, r#""resign""#);
+        steps(&mut session, 5);
+        assert_eq!(value(&session, &format!("{gui}.BoardColumn.Board.Result.Visible")), "true");
+        assert_eq!(value(&session, &format!("{gui}.BoardColumn.Board.Result.Title.Text")), "You lose");
+        act(&mut session, r#""leave""#);
+        steps(&mut session, 5);
+        assert_eq!(value(&session, &format!("{gui}.Panel.Lobby.Visible")), "true");
+        assert!(errors(&mut session).is_empty(), "{:?}", errors(&mut session));
+    }
+
+    #[test]
+    fn chess_between_two_computers() {
+        use libroxel_engine::PlaySession;
+        use std::{cell::RefCell, rc::Rc};
+        let mut host = PlaySession::host(Rc::new(RefCell::new(chess())), 0, None, true).unwrap();
+        let port = host.host_address().unwrap().port();
+        let mut guest = PlaySession::join(
+            Rc::new(RefCell::new(InstanceTree::new())),
+            &format!("127.0.0.1:{port}"),
+            "Bea",
+        )
+        .unwrap();
+        let gui = "game.Players.LocalPlayer.PlayerGui:FindFirstChild('ChessScreen')";
+        let until = |host: &mut PlaySession, guest: &mut PlaySession, check: &str, want: &str| {
+            for _ in 0..900 {
+                host.step(1.0 / 60.0, CharacterInput::default());
+                guest.step(1.0 / 60.0, CharacterInput::default());
+                if value(guest, check) == want {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            panic!("gave up waiting for {check} to be {want}: it is {}", value(guest, check));
+        };
+        // The guest's screen comes up, and lists the host's player in the lobby.
+        let lobby = format!("{gui} and {gui}.Panel.Lobby.people:FindFirstChildOfClass('ScrollingFrame')");
+        let listed = format!("(function() local list = {lobby} return list and #list:GetChildren() end)()");
+        until(&mut host, &mut guest, &listed, "1");
+        // Both look for a 5+0 game, and are paired.
+        let act = |session: &PlaySession, action: &str| {
+            session
+                .runtime()
+                .run("act", &format!("game.ReplicatedStorage.Chess.Action:FireServer({action})"))
+                .unwrap();
+        };
+        act(&host, r#""seek", { control = "5+0" }"#);
+        act(&guest, r#""seek", { control = "5+0" }"#);
+        until(&mut host, &mut guest, &format!("{gui}.Panel.Game.Visible"), "true");
+        assert_eq!(value(&host, &format!("{gui}.Panel.Game.Visible")), "true");
+        assert_eq!(value(&guest, &format!("{gui}.BoardColumn.BottomPlayer.PlayerName.Text")), "Bea  (1200)");
+        // White moves, and the guest's board shows it.
+        let guest_is_white = value(&guest, &format!("{gui}.Panel.Game.Status.Text")) == "Your move";
+        act(if guest_is_white { &guest } else { &host }, r#""move", { game = "1", uci = "e2e4" }"#);
+        until(
+            &mut host,
+            &mut guest,
+            &format!("{gui}.BoardColumn.Board.e4.Piece.Image"),
+            "libroxel://chess-wp",
+        );
+        act(if guest_is_white { &host } else { &guest }, r#""move", { game = "1", uci = "e7e5" }"#);
+        until(
+            &mut host,
+            &mut guest,
+            &format!("{gui}.BoardColumn.Board.e5.Piece.Image"),
+            "libroxel://chess-bp",
+        );
+        // Black resigns: white wins and the ratings move.
+        act(if guest_is_white { &host } else { &guest }, r#""resign""#);
+        let title = format!("{gui}.BoardColumn.Board.Result.Title.Text");
+        until(&mut host, &mut guest, &title, if guest_is_white { "You win!" } else { "You lose" });
+        let rating = "game.Players.LocalPlayer.leaderstats.Rating.Value";
+        until(&mut host, &mut guest, rating, if guest_is_white { "1220" } else { "1180" });
+        assert!(errors(&mut host).is_empty(), "{:?}", errors(&mut host));
+        assert!(errors(&mut guest).is_empty(), "{:?}", errors(&mut guest));
     }
 
     /// Drives the first kart off the grid with the throttle held and
