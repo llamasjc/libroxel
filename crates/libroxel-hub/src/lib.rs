@@ -45,11 +45,17 @@ use axum::{Json, Router};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
+mod chess;
 mod cli;
 mod email;
 mod fleet;
 pub use fleet::{FleetOptions, PlayAnswer, PlayRequest};
 mod limits;
+pub use chess::{
+    CHESS_PHRASES, ChessAction, ChessChallenge, ChessChat, ChessGame, ChessHistoryEntry, ChessLeader,
+    ChessLobby, ChessPlayer, ChessProfile, ChessRating, ChessRequest, ChessSeek, FIRST_MOVE_MS, GONE_MS,
+    chess_message,
+};
 pub use cli::{HUB_HELP, cli};
 mod owner;
 mod password;
@@ -656,6 +662,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     let _ = db.execute("ALTER TABLE accounts ADD COLUMN number INTEGER", []);
     number_accounts(&db).map_err(|e| format!("could not number the Hub's accounts: {e}"))?;
     social::create_tables(&db)?;
+    chess::create_tables(&db)?;
     password::create_tables(&db)?;
     owner::create_tables(&db)?;
     security::create_tables(&db)?;
@@ -716,6 +723,11 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/friends", post(social::change_friend))
         .route("/friends/{id}", get(social::list_friends))
         .route("/presence", post(social::update_presence))
+        .route("/chess", post(chess::chess))
+        .route("/chess/live", get(chess::live))
+        .route("/chess/leaderboard", get(chess::leaderboard))
+        .route("/chess/games/{id}", get(chess::game))
+        .route("/chess/players/{id}", get(chess::profile))
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
         .layer(axum::middleware::from_fn_with_state(hub.limits.clone(), limits::every_request))
         // Any web page may call the Hub, as the app does: everything that
@@ -2030,6 +2042,60 @@ impl HubClient {
     }
 
     /// Takes a published game down.
+    /// Does something in chess (see [`ChessAction`]) and returns the
+    /// player's lobby as it is afterwards.
+    pub fn chess(&self, request: &ChessRequest) -> Result<ChessLobby, String> {
+        self.agent
+            .post(format!("{}/chess", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(request)
+            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .and_then(|mut r| {
+                if r.status().is_success() {
+                    r.body_mut().read_json().map_err(|e| e.to_string())
+                } else {
+                    Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+                }
+            })
+    }
+
+    fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> Result<T, String> {
+        let mut request = self.agent.get(format!("{}{path}", self.base));
+        for (k, v) in query {
+            request = request.query(*k, *v);
+        }
+        request
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+    }
+
+    /// One chess game, for watching.
+    pub fn chess_game(&self, game_id: &str) -> Result<ChessGame, String> {
+        self.get_json(&format!("/chess/games/{game_id}"), &[])
+    }
+
+    /// Chess games being played right now, strongest first.
+    pub fn chess_live(&self) -> Result<Vec<ChessGame>, String> {
+        self.get_json("/chess/live", &[])
+    }
+
+    /// The best chess players in a category (`bullet`, `blitz`, `rapid`, `classical`).
+    pub fn chess_leaderboard(&self, category: &str) -> Result<Vec<ChessLeader>, String> {
+        self.get_json("/chess/leaderboard", &[("category", category)])
+    }
+
+    /// A player's chess ratings and recent games.
+    pub fn chess_profile(&self, player_id: &str) -> Result<ChessProfile, String> {
+        self.get_json(&format!("/chess/players/{player_id}"), &[])
+    }
+
     pub fn unpublish(&self, game_id: &str, secret: &str) -> Result<(), String> {
         self.agent
             .delete(format!("{}/games/{game_id}", self.base))

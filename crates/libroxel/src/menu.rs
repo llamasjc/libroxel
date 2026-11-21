@@ -82,6 +82,7 @@ pub enum Tab {
     Create,
     Host,
     Avatar,
+    Chess,
 }
 
 /// What the home screen remembers.
@@ -106,6 +107,8 @@ pub struct Menu {
     picker: crate::file_picker::Picker,
     /// What the Home and Friends tabs remember.
     pub home: crate::hub_home::HomeState,
+    /// The Chess tab.
+    pub chess: crate::chess::ChessScreen,
 }
 
 impl Default for Menu {
@@ -125,6 +128,7 @@ impl Default for Menu {
             look: None,
             picker: crate::file_picker::Picker::default(),
             home: crate::hub_home::HomeState::default(),
+            chess: crate::chess::ChessScreen::default(),
         }
     }
 }
@@ -350,6 +354,18 @@ impl Menu {
         theme::frosted_pane(ui.painter(), pane);
         let page = pane.shrink2(egui::vec2(22.0, 18.0));
         let mut pick = None;
+        // Chess keeps an eye on challenges and games on every tab.
+        self.chess.tick(platform, self.tab == Tab::Chess);
+        if self.tab == Tab::Chess {
+            if let Some(crate::chess::Ask::ClaimName) = self.chess.show(&mut ui, page, platform) {
+                self.tab = Tab::Avatar;
+            }
+            platform.name = self.name.trim().to_owned();
+            return None;
+        }
+        if self.chess.toast(ctx, platform) {
+            self.tab = Tab::Chess;
+        }
         ui.scope_builder(egui::UiBuilder::new().max_rect(page), |ui| {
             egui::ScrollArea::vertical().id_salt("home-page").auto_shrink([false, false]).show(ui, |ui| {
                 let name = self.name.trim().to_owned();
@@ -368,6 +384,7 @@ impl Menu {
                     Tab::Online => self.online_tab(ui, platform),
                     Tab::Create => self.create_tab(ui),
                     Tab::Host => self.host_tab(ui),
+                    Tab::Chess => None,
                     Tab::Avatar => {
                         egui::ScrollArea::vertical()
                             .id_salt("avatar")
@@ -816,12 +833,13 @@ impl Menu {
 }
 
 /// The tabs along the top bar, after the mark (which is Home).
-const TOP_TABS: [(Tab, &str, &str); 5] = [
+const TOP_TABS: [(Tab, &str, &str); 6] = [
     (Tab::Play, theme::icon::PLAY, "Play"),
     (Tab::Online, theme::icon::GLOBE_HEMISPHERE_WEST, "Online"),
     (Tab::Friends, theme::icon::USERS, "Friends"),
     (Tab::Create, theme::icon::HAMMER, "Create"),
     (Tab::Avatar, theme::icon::T_SHIRT, "Avatar"),
+    (Tab::Chess, theme::icon::HORSE, "Chess"),
 ];
 
 /// The pages in the top bar's More menu.

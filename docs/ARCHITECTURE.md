@@ -142,6 +142,20 @@
   one assembly ignore each other, and after the step each carried part is
   put back at its offset from the root. The offset is taken when the part
   joins, or again if a script moved it since.
+- **Chess** is its own crate, `libroxel-chess`, with no other
+  dependencies: the board (squares 0 to 63 from a1), move generation
+  checked against standard perft counts, notation, FEN and PGN, how games
+  end, clocks, Elo ratings, and the computer players (alpha-beta with
+  iterative deepening, quiescence and a transposition table; weaker
+  players look less far and misjudge on purpose). The Hub
+  (`libroxel-hub/src/chess.rs`) uses the same crate to check every move of
+  an online game and keeps the clocks itself: a game stores its moves and
+  each side's time left, and the side to move's clock is worked out from
+  when the last move came. Every player action is one signed request to
+  `POST /chess`, answered with that player's whole lobby; the app's Chess
+  tab (`chess.rs`, pieces in `chess_pieces.rs`) sends them from one thread
+  so their signed times always go up, and asks again about once a second
+  while a game is on.
 - **Speed.** Physics uses a broadphase: in worlds of more than 64 parts,
   each box (grown by how far it can move this step) goes into a grid of
   8-stud cells, and parts are only compared with others sharing a cell;
