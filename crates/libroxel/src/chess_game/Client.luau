@@ -1,7 +1,10 @@
--- The chess screen: the board, the players' clocks, the computer's
--- thoughts, the move list and the lobby where you pick who to play.
--- Everything here is made of GUI objects; the server decides what is
--- allowed and this script only shows it and passes on your clicks.
+-- The chess screen: the board, the players' clocks, the move list and the
+-- lobby where you pick who to play. Everything here is made of GUI
+-- objects; the server decides what is allowed and this script only shows
+-- it and passes on your clicks.
+--
+-- The lobby always keeps its big Play button pinned to the bottom of the
+-- side panel, so it can't be pushed off a small screen.
 
 local Players = game:GetService("Players")
 local storage = game:GetService("ReplicatedStorage")
@@ -24,22 +27,29 @@ for _, kind in { Enum.CoreGuiType.PlayerList, Enum.CoreGuiType.Backpack, Enum.Co
 end
 
 ------------------------------------------------------------------------
--- Looks.
+-- Looks: a plain dark chess-site style with a green and cream board.
 
-local INK = Color3.fromRGB(20, 45, 75)
-local SOFT_INK = Color3.fromRGB(70, 100, 130)
-local WHITE = Color3.fromRGB(255, 255, 255)
-local LIGHT_SQUARE = Color3.fromRGB(226, 240, 250)
-local DARK_SQUARE = Color3.fromRGB(104, 158, 204)
-local LAST_LIGHT = Color3.fromRGB(246, 238, 150)
-local LAST_DARK = Color3.fromRGB(200, 196, 96)
-local PICKED = Color3.fromRGB(130, 220, 150)
-local CHECKED = Color3.fromRGB(255, 110, 100)
-local HINTED = Color3.fromRGB(120, 200, 255)
-local GREEN = Color3.fromRGB(70, 190, 90)
-local BLUE = Color3.fromRGB(60, 150, 235)
-local RED = Color3.fromRGB(225, 85, 80)
-local GREY = Color3.fromRGB(150, 170, 190)
+local BACKGROUND = Color3.fromRGB(49, 46, 43)
+local PANEL = Color3.fromRGB(38, 36, 33)
+local CARD = Color3.fromRGB(60, 58, 55)
+local CARD_PICKED = Color3.fromRGB(72, 86, 58)
+local TEXT = Color3.fromRGB(255, 255, 255)
+local MUTED = Color3.fromRGB(176, 174, 170)
+local LIGHT_SQUARE = Color3.fromRGB(235, 236, 208)
+local DARK_SQUARE = Color3.fromRGB(119, 149, 86)
+local LAST_LIGHT = Color3.fromRGB(245, 246, 130)
+local LAST_DARK = Color3.fromRGB(185, 202, 67)
+local PICKED = Color3.fromRGB(246, 246, 105)
+local CHECKED = Color3.fromRGB(235, 97, 80)
+local HINTED = Color3.fromRGB(120, 180, 230)
+local GREEN = Color3.fromRGB(129, 182, 76)
+local GREY = Color3.fromRGB(70, 68, 65)
+local RED = Color3.fromRGB(200, 70, 60)
+local ORANGE = Color3.fromRGB(220, 140, 50)
+
+-- Space at the top. The screen already starts under the app's own bar.
+local TOP = 14
+local PANEL_WIDTH = 380
 
 local function make(class, props, parent)
 	local object = Instance.new(class)
@@ -51,25 +61,14 @@ local function make(class, props, parent)
 end
 
 local function round(object, radius)
-	make("UICorner", { CornerRadius = UDim.new(0, radius or 10) }, object)
-	return object
-end
-
-local function outline(object, colour, thickness, transparency)
-	make("UIStroke", { Color = colour or WHITE, Thickness = thickness or 1, Transparency = transparency or 0.3 }, object)
-	return object
-end
-
--- A glassy shine from top to bottom.
-local function shine(object, top, bottom)
-	make("UIGradient", { Color = ColorSequence.new(top or WHITE, bottom or Color3.fromRGB(200, 215, 230)), Rotation = 90 }, object)
+	make("UICorner", { CornerRadius = UDim.new(0, radius or 6) }, object)
 	return object
 end
 
 local function label(parent, props)
 	local base = {
 		BackgroundTransparency = 1,
-		TextColor3 = INK,
+		TextColor3 = TEXT,
 		TextSize = 16,
 		Text = "",
 		TextXAlignment = Enum.TextXAlignment.Left,
@@ -80,40 +79,29 @@ local function label(parent, props)
 	return make("TextLabel", base, parent)
 end
 
--- A glossy Aero button.
+-- A flat button.
 local function button(parent, text, colour, props)
 	local b = make("TextButton", {
 		Text = text,
-		TextColor3 = WHITE,
-		TextSize = 17,
-		BackgroundColor3 = colour or BLUE,
+		TextColor3 = TEXT,
+		TextSize = 16,
+		BackgroundColor3 = colour or GREY,
+		AutoButtonColor = true,
 		Size = UDim2.new(0, 120, 0, 38),
 	}, parent)
 	for key, value in props or {} do
 		b[key] = value
 	end
-	round(b, 10)
-	shine(b, WHITE, Color3.fromRGB(175, 195, 215))
-	outline(b, WHITE, 1, 0.4)
+	round(b, 6)
 	return b
 end
 
--- A frosted glass panel.
-local function glass(parent, props)
-	local p = make("Frame", {
-		BackgroundColor3 = WHITE,
-		BackgroundTransparency = 0.12,
-	}, parent)
-	for key, value in props do
-		p[key] = value
-	end
-	round(p, 16)
-	outline(p, WHITE, 1.5, 0.2)
-	make("UIGradient", {
-		Color = ColorSequence.new(WHITE, Color3.fromRGB(215, 232, 245)),
-		Rotation = 90,
-	}, p)
-	return p
+-- The big green button.
+local function bigButton(parent, text, props)
+	local b = button(parent, text, GREEN, props)
+	b.RichText = true
+	b.TextSize = 24
+	return b
 end
 
 local function clockText(ms)
@@ -129,117 +117,97 @@ local function controlText(control)
 end
 
 ------------------------------------------------------------------------
--- The sky behind everything, with a few bubbles.
+-- The background.
 
-local sky = make("Frame", {
-	Name = "Sky",
+make("Frame", {
+	Name = "Background",
 	Size = UDim2.fromScale(1, 1),
-	BackgroundColor3 = WHITE,
+	BackgroundColor3 = BACKGROUND,
 	BorderSizePixel = 0,
 	ZIndex = 0,
 }, screen)
-make("UIGradient", {
-	Color = ColorSequence.new(Color3.fromRGB(196, 238, 255), Color3.fromRGB(46, 128, 205)),
-	Rotation = 90,
-}, sky)
-for _, bubble in {
-	{ 0.66, 0.06, 120 }, { 0.92, 0.78, 160 }, { 0.6, 0.86, 70 }, { 0.04, 0.9, 90 }, { 0.97, 0.2, 60 },
-} do
-	local b = make("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(bubble[1], bubble[2]),
-		Size = UDim2.fromOffset(bubble[3], bubble[3]),
-		BackgroundColor3 = WHITE,
-		BackgroundTransparency = 0.82,
-		ZIndex = 0,
-	}, sky)
-	round(b, bubble[3] // 2)
-	outline(b, WHITE, 2, 0.5)
-end
 
 ------------------------------------------------------------------------
--- The board column: a player card, the board with its evaluation bar,
--- and another player card.
+-- The board column: a player strip, the board with its evaluation bar,
+-- and another player strip. It is centred in the space left of the panel.
 
 local column = make("Frame", {
 	Name = "BoardColumn",
-	AnchorPoint = Vector2.new(0, 0.5),
-	Position = UDim2.new(0, 24, 0.5, 22),
-	Size = UDim2.new(0.62, 0, 0.9, 0),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.new(0.5, -(PANEL_WIDTH / 2 + 8), 0.5, (TOP - 16) / 2),
+	Size = UDim2.new(1, -(PANEL_WIDTH + 48), 1, -(TOP + 16)),
 	BackgroundTransparency = 1,
 }, screen)
 make("UIAspectRatioConstraint", { AspectRatio = 0.86 }, column)
 
+local BOARD_X = 0.035
 local function playerCard(name, y)
-	local card = glass(column, {
+	local card = make("Frame", {
 		Name = name,
-		Position = UDim2.new(0.055, 0, y, 0),
-		Size = UDim2.new(0.945, 0, 0.082, 0),
-	})
+		Position = UDim2.new(BOARD_X, 0, y, 0),
+		Size = UDim2.new(1 - BOARD_X, 0, 0.075, 0),
+		BackgroundTransparency = 1,
+	}, column)
 	local dot = make("Frame", {
 		Name = "Dot",
 		AnchorPoint = Vector2.new(0, 0.5),
-		Position = UDim2.new(0, 12, 0.5, 0),
-		Size = UDim2.fromOffset(34, 34),
-		BackgroundColor3 = BLUE,
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.fromOffset(38, 38),
+		BackgroundColor3 = CARD,
 	}, card)
-	round(dot, 17)
-	shine(dot)
-	outline(dot, WHITE, 2, 0.1)
-	label(dot, { Name = "Letter", Size = UDim2.fromScale(1, 1), Text = "", TextColor3 = WHITE, TextSize = 18, TextXAlignment = Enum.TextXAlignment.Center })
-	label(card, { Name = "PlayerName", Position = UDim2.new(0, 56, 0, 4), Size = UDim2.new(0.5, 0, 0.55, 0), TextSize = 19, Text = "" })
-	label(card, { Name = "Detail", Position = UDim2.new(0, 56, 0.5, 0), Size = UDim2.new(0.6, 0, 0.45, 0), TextSize = 14, TextColor3 = SOFT_INK })
+	round(dot, 4)
+	label(dot, { Name = "Letter", Size = UDim2.fromScale(1, 1), Text = "", TextSize = 20, TextXAlignment = Enum.TextXAlignment.Center })
+	label(card, { Name = "PlayerName", Position = UDim2.new(0, 48, 0.08, 0), Size = UDim2.new(0.6, 0, 0.48, 0), TextSize = 17 })
+	label(card, { Name = "Detail", Position = UDim2.new(0, 48, 0.52, 0), Size = UDim2.new(0.6, 0, 0.4, 0), TextSize = 13, TextColor3 = MUTED })
 	local clock = make("TextLabel", {
 		Name = "Clock",
 		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -10, 0.5, 0),
-		Size = UDim2.new(0, 120, 0.76, 0),
-		BackgroundColor3 = Color3.fromRGB(30, 50, 75),
-		TextColor3 = WHITE,
+		Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.new(0, 120, 0.8, 0),
+		BackgroundColor3 = CARD,
+		TextColor3 = TEXT,
 		TextSize = 26,
 		Text = "",
 	}, card)
-	round(clock, 8)
+	round(clock, 4)
 	return card
 end
 
 local topCard = playerCard("TopPlayer", 0)
-local bottomCard = playerCard("BottomPlayer", 0.918)
+local bottomCard = playerCard("BottomPlayer", 0.925)
 
 local evalBar = make("Frame", {
 	Name = "EvalBar",
-	Position = UDim2.new(0, 0, 0.09, 0),
-	Size = UDim2.new(0.034, 0, 0.82, 0),
-	BackgroundColor3 = Color3.fromRGB(30, 40, 60),
+	Position = UDim2.new(0, 0, 0.085, 0),
+	Size = UDim2.new(0.022, 0, 0.83, 0),
+	BackgroundColor3 = Color3.fromRGB(64, 61, 57),
 	ClipsDescendants = true,
 }, column)
-round(evalBar, 6)
-outline(evalBar, WHITE, 1.5, 0.2)
+round(evalBar, 3)
 local evalFill = make("Frame", {
 	Name = "White",
 	AnchorPoint = Vector2.new(0, 1),
 	Position = UDim2.fromScale(0, 1),
 	Size = UDim2.fromScale(1, 0.5),
-	BackgroundColor3 = Color3.fromRGB(240, 248, 255),
+	BackgroundColor3 = Color3.fromRGB(240, 240, 240),
 }, evalBar)
-round(evalFill, 6)
 local evalText = label(column, {
 	Name = "EvalText",
-	Position = UDim2.new(0, 0, 0.912, 0),
-	Size = UDim2.new(0.05, 0, 0.03, 0),
-	TextSize = 13,
-	TextColor3 = WHITE,
+	Position = UDim2.new(0, -14, 0.918, 0),
+	Size = UDim2.new(0, 50, 0.02, 0),
+	TextSize = 11,
+	TextColor3 = MUTED,
 	TextXAlignment = Enum.TextXAlignment.Center,
 })
 
 local boardFrame = make("Frame", {
 	Name = "Board",
-	Position = UDim2.new(0.055, 0, 0.09, 0),
-	Size = UDim2.new(0.945, 0, 0.82, 0),
-	BackgroundColor3 = Color3.fromRGB(40, 70, 110),
+	Position = UDim2.new(BOARD_X, 0, 0.085, 0),
+	Size = UDim2.new(1 - BOARD_X, 0, 0.83, 0),
+	BackgroundColor3 = DARK_SQUARE,
+	ClipsDescendants = true,
 }, column)
-round(boardFrame, 8)
-outline(boardFrame, WHITE, 3, 0.15)
+round(boardFrame, 4)
 
 -- Squares by board square number (see Rules), each with its piece picture
 -- and a dot for where the picked piece can go.
@@ -257,7 +225,7 @@ for _, sq in Rules.SQUARES do
 		Name = "Piece",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromScale(0.92, 0.92),
+		Size = UDim2.fromScale(0.9, 0.9),
 		BackgroundTransparency = 1,
 		Image = "",
 		ZIndex = 3,
@@ -266,9 +234,9 @@ for _, sq in Rules.SQUARES do
 		Name = "Dot",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromScale(0.3, 0.3),
-		BackgroundColor3 = Color3.fromRGB(30, 80, 60),
-		BackgroundTransparency = 0.55,
+		Size = UDim2.fromScale(0.32, 0.32),
+		BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+		BackgroundTransparency = 0.82,
 		Visible = false,
 		ZIndex = 4,
 	}, square)
@@ -283,7 +251,7 @@ for _, sq in Rules.SQUARES do
 		ZIndex = 4,
 	}, square)
 	round(ring, 100)
-	outline(ring, Color3.fromRGB(30, 80, 60), 5, 0.45)
+	make("UIStroke", { Color = Color3.fromRGB(0, 0, 0), Thickness = 5, Transparency = 0.8 }, ring)
 	local fileText = label(square, {
 		Name = "File",
 		AnchorPoint = Vector2.new(1, 1),
@@ -307,31 +275,33 @@ for _, sq in Rules.SQUARES do
 end
 
 -- The card over the board when a game ends, and the promotion picker.
-local resultCard = glass(boardFrame, {
+local resultCard = make("Frame", {
 	Name = "Result",
 	AnchorPoint = Vector2.new(0.5, 0.5),
 	Position = UDim2.fromScale(0.5, 0.5),
-	Size = UDim2.fromScale(0.62, 0.36),
+	Size = UDim2.fromScale(0.6, 0.38),
+	BackgroundColor3 = PANEL,
 	Visible = false,
 	ZIndex = 8,
-	BackgroundTransparency = 0,
-})
-local resultTitle = label(resultCard, { Name = "Title", Position = UDim2.new(0, 0, 0.08, 0), Size = UDim2.new(1, 0, 0.28, 0), TextSize = 30, TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 9 })
-local resultReason = label(resultCard, { Name = "Reason", Position = UDim2.new(0, 0, 0.36, 0), Size = UDim2.new(1, 0, 0.16, 0), TextSize = 18, TextColor3 = SOFT_INK, TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 9 })
-local resultRating = label(resultCard, { Name = "Rating", Position = UDim2.new(0, 0, 0.52, 0), Size = UDim2.new(1, 0, 0.14, 0), TextSize = 16, TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 9 })
-local resultRematch = button(resultCard, "Rematch", GREEN, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(0.48, 0, 0.72, 0), Size = UDim2.new(0.4, 0, 0.2, 0), ZIndex = 9 })
-local resultLobby = button(resultCard, "New game", BLUE, { Position = UDim2.new(0.52, 0, 0.72, 0), Size = UDim2.new(0.4, 0, 0.2, 0), ZIndex = 9 })
-local resultClose = button(resultCard, "×", GREY, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -8, 0, 8), Size = UDim2.fromOffset(30, 30), TextSize = 20, ZIndex = 9 })
+}, boardFrame)
+round(resultCard, 10)
+local resultTitle = label(resultCard, { Name = "Title", Position = UDim2.new(0, 0, 0.08, 0), Size = UDim2.new(1, 0, 0.24, 0), TextSize = 32, TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 9 })
+local resultReason = label(resultCard, { Name = "Reason", Position = UDim2.new(0, 0, 0.33, 0), Size = UDim2.new(1, 0, 0.13, 0), TextSize = 17, TextColor3 = MUTED, TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 9 })
+local resultRating = label(resultCard, { Name = "Rating", Position = UDim2.new(0, 0, 0.47, 0), Size = UDim2.new(1, 0, 0.12, 0), TextSize = 16, TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 9 })
+local resultLobby = bigButton(resultCard, "<b>New game</b>", { Position = UDim2.new(0.06, 0, 0.64, 0), Size = UDim2.new(0.42, 0, 0.26, 0), TextSize = 20, ZIndex = 9 })
+local resultRematch = button(resultCard, "Rematch", GREY, { Position = UDim2.new(0.52, 0, 0.64, 0), Size = UDim2.new(0.42, 0, 0.26, 0), TextSize = 18, ZIndex = 9 })
+local resultClose = button(resultCard, "×", PANEL, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -6, 0, 6), Size = UDim2.fromOffset(30, 30), TextSize = 22, TextColor3 = MUTED, ZIndex = 9 })
 
-local promotionCard = glass(boardFrame, {
+local promotionCard = make("Frame", {
 	Name = "Promotion",
 	AnchorPoint = Vector2.new(0.5, 0.5),
 	Position = UDim2.fromScale(0.5, 0.5),
 	Size = UDim2.fromScale(0.56, 0.2),
+	BackgroundColor3 = PANEL,
 	Visible = false,
 	ZIndex = 8,
-	BackgroundTransparency = 0,
-})
+}, boardFrame)
+round(promotionCard, 10)
 label(promotionCard, { Text = "Promote to", Position = UDim2.new(0, 0, 0, 4), Size = UDim2.new(1, 0, 0.22, 0), TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 9 })
 local promotionChoices = {}
 for i, letter in { "q", "r", "b", "n" } do
@@ -343,50 +313,100 @@ for i, letter in { "q", "r", "b", "n" } do
 		Image = "",
 		ZIndex = 9,
 	}, promotionCard)
-	round(choice, 8)
+	round(choice, 6)
 	promotionChoices[letter] = choice
 end
 
 ------------------------------------------------------------------------
 -- The side panel: the lobby, or the game you are in.
 
-local panel = glass(screen, {
+local panel = make("Frame", {
 	Name = "Panel",
-	AnchorPoint = Vector2.new(1, 0.5),
-	Position = UDim2.new(1, -24, 0.5, 22),
-	Size = UDim2.new(0.34, 0, 0.9, 0),
-})
-make("UISizeConstraint", { MinSize = Vector2.new(330, 400), MaxSize = Vector2.new(560, 2000) }, panel)
+	AnchorPoint = Vector2.new(1, 0),
+	Position = UDim2.new(1, -16, 0, TOP),
+	Size = UDim2.new(0, PANEL_WIDTH, 1, -(TOP + 16)),
+	BackgroundColor3 = PANEL,
+}, screen)
+round(panel, 8)
 
-local title = label(panel, { Name = "Title", Position = UDim2.new(0, 20, 0, 12), Size = UDim2.new(1, -40, 0, 34), TextSize = 28, Text = "Libroxel Chess" })
-local myLine = label(panel, { Name = "Me", Position = UDim2.new(0, 20, 0, 46), Size = UDim2.new(1, -40, 0, 22), TextSize = 15, TextColor3 = SOFT_INK })
+local title = label(panel, { Name = "Title", Position = UDim2.new(0, 18, 0, 12), Size = UDim2.new(1, -36, 0, 32), TextSize = 26, RichText = true, Text = "<b>Chess</b>" })
+local myLine = label(panel, { Name = "Me", Position = UDim2.new(0, 18, 0, 44), Size = UDim2.new(1, -36, 0, 20), TextSize = 14, TextColor3 = MUTED })
 
 local lobbyPage = make("Frame", { Name = "Lobby", Position = UDim2.new(0, 0, 0, 76), Size = UDim2.new(1, 0, 1, -76), BackgroundTransparency = 1 }, panel)
 local gamePage = make("Frame", { Name = "Game", Position = UDim2.new(0, 0, 0, 76), Size = UDim2.new(1, 0, 1, -76), BackgroundTransparency = 1, Visible = false }, panel)
 
--- Lobby tabs.
+-- Lobby tabs, as one row of plain words with a line under the chosen one.
 local tabs = {}
+local tabLines = {}
 local tabPages = {}
 local currentTab = "computer"
-for i, info in { { "computer", "Computer" }, { "people", "People" }, { "watch", "Watch" } } do
-	local tab = button(lobbyPage, info[2], GREY, {
+local TAB_NAMES = { { "computer", "Play the computer" }, { "people", "Play a person" }, { "watch", "Watch" } }
+local TAB_WIDTHS = { 0.42, 0.36, 0.22 }
+local tabX = 0
+for i, info in TAB_NAMES do
+	local tab = make("TextButton", {
 		Name = info[1] .. "Tab",
-		Position = UDim2.new((i - 1) / 3, if i == 1 then 20 else 6, 0, 0),
-		Size = UDim2.new(1 / 3, if i == 2 then -12 else -26, 0, 36),
-		TextSize = 16,
-	})
+		Text = info[2],
+		TextSize = 15,
+		TextColor3 = MUTED,
+		BackgroundTransparency = 1,
+		AutoButtonColor = false,
+		Position = UDim2.new(tabX, if i == 1 then 18 else 0, 0, 0),
+		Size = UDim2.new(TAB_WIDTHS[i], if i == 1 then -18 elseif i == 3 then -18 else 0, 0, 38),
+	}, lobbyPage)
+	tabLines[info[1]] = make("Frame", {
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 0, 1, 0),
+		Size = UDim2.new(1, 0, 0, 3),
+		BackgroundColor3 = GREEN,
+		BorderSizePixel = 0,
+	}, tab)
+	tabX += TAB_WIDTHS[i]
 	tabs[info[1]] = tab
 	tabPages[info[1]] = make("Frame", {
 		Name = info[1],
-		Position = UDim2.new(0, 20, 0, 50),
-		Size = UDim2.new(1, -40, 1, -64),
+		Position = UDim2.new(0, 0, 0, 46),
+		Size = UDim2.new(1, 0, 1, -46),
 		BackgroundTransparency = 1,
 		Visible = false,
 	}, lobbyPage)
 end
+make("Frame", { Name = "TabRule", Position = UDim2.new(0, 18, 0, 38), Size = UDim2.new(1, -36, 0, 1), BackgroundColor3 = CARD, BorderSizePixel = 0 }, lobbyPage)
+
+-- Each lobby page: a scrolling area for the choices, and the main button
+-- pinned to the bottom so it always shows.
+local FOOTER = 92
+local function pageParts(page)
+	local body = make("ScrollingFrame", {
+		Name = "Choices",
+		Position = UDim2.new(0, 18, 0, 0),
+		Size = UDim2.new(1, -30, 1, -FOOTER),
+		BackgroundTransparency = 1,
+		ScrollBarThickness = 6,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+	}, page)
+	local footer = make("Frame", {
+		Name = "Footer",
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 0, 1, 0),
+		Size = UDim2.new(1, 0, 0, FOOTER),
+		BackgroundColor3 = Color3.fromRGB(33, 31, 29),
+	}, page)
+	round(footer, 8)
+	return body, footer
+end
 
 local function sectionTitle(parent, text, y)
-	return label(parent, { Position = UDim2.new(0, 0, 0, y), Size = UDim2.new(1, 0, 0, 22), Text = text, TextSize = 15, TextColor3 = SOFT_INK })
+	return label(parent, { Position = UDim2.new(0, 0, 0, y), Size = UDim2.new(1, 0, 0, 22), Text = text, TextSize = 14, TextColor3 = MUTED })
+end
+
+-- A row of choices like the clocks or the colours.
+local function chip(parent, text, i, count, y)
+	return button(parent, text, CARD, {
+		Position = UDim2.new((i - 1) / count, 2, 0, y),
+		Size = UDim2.new(1 / count, -4, 0, 36),
+		TextSize = 15,
+	})
 end
 
 -- Time controls, shared by the computer and people tabs.
@@ -397,159 +417,169 @@ local controlButtons = { computer = {}, people = {} }
 local function controlRow(parent, which, y)
 	sectionTitle(parent, "Clock", y)
 	for i, control in CONTROLS do
-		local b = button(parent, controlText(control), GREY, {
-			Position = UDim2.new((i - 1) / 6, 2, 0, y + 24),
-			Size = UDim2.new(1 / 6, -4, 0, 34),
-			TextSize = 14,
-		})
-		controlButtons[which][control] = b
+		controlButtons[which][control] = chip(parent, if control == "none" then "None" else control, i, #CONTROLS, y + 24)
 	end
 end
 
--- The computer tab: pick an opponent, a clock and a colour.
+-- The computer tab: pick an opponent, a clock and a colour, then Play.
 local computerPage = tabPages.computer
-sectionTitle(computerPage, "Opponent", 0)
-local bots = make("Frame", { Position = UDim2.new(0, 0, 0, 24), Size = UDim2.new(1, 0, 0, 4 * 66), BackgroundTransparency = 1 }, computerPage)
-local chosenBot = 4
+local computerBody, computerFooter = pageParts(computerPage)
+sectionTitle(computerBody, "Opponent", 0)
+local ROW = 52
+local chosenBot = 3
 local botButtons = {}
 for i, bot in Engine.BOTS do
 	local b = make("TextButton", {
 		Name = bot.name,
 		Text = "",
-		Position = UDim2.new(((i - 1) % 2) * 0.5, 2, 0, ((i - 1) // 2) * 66),
-		Size = UDim2.new(0.5, -4, 0, 60),
-		BackgroundColor3 = WHITE,
-		BackgroundTransparency = 0.2,
-	}, bots)
-	round(b, 10)
-	outline(b, WHITE, 1, 0.3)
-	local face = make("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 8, 0.5, 0), Size = UDim2.fromOffset(38, 38), BackgroundColor3 = bot.colour }, b)
-	round(face, 19)
-	shine(face)
-	outline(face, WHITE, 2, 0.1)
-	label(face, { Size = UDim2.fromScale(1, 1), Text = string.sub(bot.name, 1, 1), TextColor3 = WHITE, TextSize = 20, TextXAlignment = Enum.TextXAlignment.Center })
-	label(b, { Position = UDim2.new(0, 54, 0, 6), Size = UDim2.new(1, -60, 0, 22), Text = bot.name .. "  <font color=\"#5a7896\">" .. bot.rating .. "</font>", RichText = true, TextSize = 17 })
-	label(b, { Position = UDim2.new(0, 54, 0, 28), Size = UDim2.new(1, -60, 0, 28), Text = bot.about, TextSize = 12, TextColor3 = SOFT_INK, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top })
-	botButtons[i] = b
+		Position = UDim2.new(((i - 1) % 2) * 0.5, 2, 0, 24 + ((i - 1) // 2) * (ROW + 6)),
+		Size = UDim2.new(0.5, -4, 0, ROW),
+		BackgroundColor3 = CARD,
+		AutoButtonColor = true,
+	}, computerBody)
+	round(b, 6)
+	local face = make("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 8, 0.5, 0), Size = UDim2.fromOffset(34, 34), BackgroundColor3 = bot.colour }, b)
+	round(face, 4)
+	label(face, { Size = UDim2.fromScale(1, 1), Text = string.sub(bot.name, 1, 1), TextColor3 = Color3.fromRGB(30, 30, 30), TextSize = 18, TextXAlignment = Enum.TextXAlignment.Center })
+	label(b, { Position = UDim2.new(0, 50, 0, 7), Size = UDim2.new(1, -54, 0, 20), Text = bot.name, TextSize = 16 })
+	label(b, { Position = UDim2.new(0, 50, 0, 27), Size = UDim2.new(1, -54, 0, 18), Text = "Rating " .. bot.rating, TextSize = 13, TextColor3 = MUTED })
+	local edge = make("UIStroke", { Color = GREEN, Thickness = 2, Transparency = 1 }, b)
+	botButtons[i] = { button = b, edge = edge }
 end
-controlRow(computerPage, "computer", 4 * 66 + 34)
-local colourY = 4 * 66 + 34 + 70
-sectionTitle(computerPage, "Play as", colourY)
+local botsBottom = 24 + 4 * (ROW + 6)
+local botAbout = label(computerBody, { Position = UDim2.new(0, 2, 0, botsBottom), Size = UDim2.new(1, -4, 0, 20), TextSize = 13, TextColor3 = MUTED, Text = "" })
+controlRow(computerBody, "computer", botsBottom + 30)
+local colourY = botsBottom + 30 + 72
+sectionTitle(computerBody, "Play as", colourY)
 local chosenColour = "random"
 local colourButtons = {}
 for i, colour in { "white", "random", "black" } do
-	colourButtons[colour] = button(computerPage, ({ white = "White", random = "Either", black = "Black" })[colour], GREY, {
-		Position = UDim2.new((i - 1) / 3, 2, 0, colourY + 24),
-		Size = UDim2.new(1 / 3, -4, 0, 34),
-		TextSize = 15,
-	})
+	colourButtons[colour] = chip(computerBody, ({ white = "White", random = "Random", black = "Black" })[colour], i, 3, colourY + 24)
 end
-local playBotButton = button(computerPage, "Play", GREEN, {
-	Position = UDim2.new(0, 0, 0, colourY + 74),
-	Size = UDim2.new(1, 0, 0, 50),
-	TextSize = 22,
+computerBody.CanvasSize = UDim2.new(0, 0, 0, colourY + 24 + 44)
+local playBotButton = bigButton(computerFooter, "<b>Play</b>", {
+	Name = "PlayButton",
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.new(1, -36, 0, 60),
 })
 
 -- The people tab: look for a game, challenge someone, answer challenges.
 local peoplePage = tabPages.people
-controlRow(peoplePage, "people", 0)
-local seekButton = button(peoplePage, "Find a game", GREEN, { Position = UDim2.new(0, 0, 0, 68), Size = UDim2.new(1, 0, 0, 46), TextSize = 20 })
-sectionTitle(peoplePage, "Challenges", 126)
-local challengeList = make("Frame", { Position = UDim2.new(0, 0, 0, 150), Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1 }, peoplePage)
-local playersTitle = sectionTitle(peoplePage, "Players here", 160)
+local peopleBody, peopleFooter = pageParts(peoplePage)
+peopleBody.ScrollBarThickness = 0
+controlRow(peopleBody, "people", 0)
+sectionTitle(peopleBody, "Challenges", 76)
+local challengeList = make("Frame", { Position = UDim2.new(0, 0, 0, 100), Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1 }, peopleBody)
+local playersTitle = sectionTitle(peopleBody, "Players here", 140)
 local playerList = make("ScrollingFrame", {
-	Position = UDim2.new(0, 0, 0, 184),
-	Size = UDim2.new(1, 0, 1, -184),
+	Position = UDim2.new(0, 0, 0, 164),
+	Size = UDim2.new(1, 0, 1, -164),
 	BackgroundTransparency = 1,
 	ScrollBarThickness = 6,
 	CanvasSize = UDim2.new(0, 0, 0, 0),
-}, peoplePage)
+}, peopleBody)
+local seekButton = bigButton(peopleFooter, "<b>Find a game</b>", {
+	Name = "FindButton",
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.new(1, -36, 0, 60),
+	TextSize = 22,
+})
 
 -- The watch tab: games going on in this server.
 local watchPage = tabPages.watch
-sectionTitle(watchPage, "Games being played now", 0)
 local liveList = make("ScrollingFrame", {
-	Position = UDim2.new(0, 0, 0, 26),
-	Size = UDim2.new(1, 0, 1, -26),
+	Position = UDim2.new(0, 18, 0, 0),
+	Size = UDim2.new(1, -30, 1, -12),
 	BackgroundTransparency = 1,
 	ScrollBarThickness = 6,
 	CanvasSize = UDim2.new(0, 0, 0, 0),
 }, watchPage)
 
 -- The game page.
-local gameTitle = label(gamePage, { Name = "Status", Position = UDim2.new(0, 20, 0, 0), Size = UDim2.new(1, -40, 0, 28), TextSize = 20 })
-local gameSub = label(gamePage, { Name = "Sub", Position = UDim2.new(0, 20, 0, 28), Size = UDim2.new(1, -40, 0, 20), TextSize = 14, TextColor3 = SOFT_INK })
+local gameTitle = label(gamePage, { Name = "Status", Position = UDim2.new(0, 18, 0, 0), Size = UDim2.new(1, -36, 0, 28), TextSize = 21 })
+local gameSub = label(gamePage, { Name = "Sub", Position = UDim2.new(0, 18, 0, 28), Size = UDim2.new(1, -36, 0, 20), TextSize = 14, TextColor3 = MUTED })
 
 local thoughts = make("Frame", {
 	Name = "Thoughts",
-	Position = UDim2.new(0, 20, 0, 56),
-	Size = UDim2.new(1, -40, 0, 96),
-	BackgroundColor3 = WHITE,
+	Position = UDim2.new(0, 18, 0, 58),
+	Size = UDim2.new(1, -36, 0, 92),
+	BackgroundColor3 = Color3.fromRGB(30, 29, 27),
 }, gamePage)
-round(thoughts, 12)
-make("UIGradient", { Color = ColorSequence.new(Color3.fromRGB(70, 130, 200), Color3.fromRGB(20, 50, 100)), Rotation = 90 }, thoughts)
-outline(thoughts, Color3.fromRGB(150, 210, 255), 1, 0.4)
-local thoughtsTitle = label(thoughts, { Position = UDim2.new(0, 12, 0, 6), Size = UDim2.new(1, -24, 0, 20), TextSize = 14, TextColor3 = Color3.fromRGB(170, 220, 255), Text = "Engine" })
-local thoughtsScore = label(thoughts, { Position = UDim2.new(0, 12, 0, 26), Size = UDim2.new(0.4, 0, 0, 34), TextSize = 30, TextColor3 = WHITE, Text = "0.00" })
-local thoughtsStats = label(thoughts, { Position = UDim2.new(0.38, 0, 0, 28), Size = UDim2.new(0.62, -12, 0, 32), TextSize = 13, TextColor3 = Color3.fromRGB(200, 225, 250), TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top })
-local thoughtsLine = label(thoughts, { Position = UDim2.new(0, 12, 0, 62), Size = UDim2.new(1, -24, 0, 30), TextSize = 14, TextColor3 = WHITE, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top })
+round(thoughts, 6)
+local thoughtsTitle = label(thoughts, { Position = UDim2.new(0, 12, 0, 6), Size = UDim2.new(1, -24, 0, 18), TextSize = 13, TextColor3 = MUTED, Text = "Engine" })
+local thoughtsScore = label(thoughts, { Position = UDim2.new(0, 12, 0, 24), Size = UDim2.new(0.4, 0, 0, 32), TextSize = 28, Text = "0.00" })
+local thoughtsStats = label(thoughts, { Position = UDim2.new(0.38, 0, 0, 27), Size = UDim2.new(0.62, -12, 0, 32), TextSize = 12, TextColor3 = MUTED, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top })
+local thoughtsLine = label(thoughts, { Position = UDim2.new(0, 12, 0, 60), Size = UDim2.new(1, -24, 0, 28), TextSize = 13, TextColor3 = Color3.fromRGB(220, 218, 214), TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top })
 
 local movesBox = make("ScrollingFrame", {
 	Name = "Moves",
-	Position = UDim2.new(0, 20, 0, 162),
-	Size = UDim2.new(1, -40, 1, -330),
-	BackgroundColor3 = WHITE,
-	BackgroundTransparency = 0.1,
+	Position = UDim2.new(0, 18, 0, 160),
+	Size = UDim2.new(1, -36, 1, -340),
+	BackgroundColor3 = Color3.fromRGB(30, 29, 27),
 	ScrollBarThickness = 6,
 	CanvasSize = UDim2.new(0, 0, 0, 0),
 }, gamePage)
-round(movesBox, 10)
+round(movesBox, 6)
 
-local drawBanner = make("Frame", { Name = "DrawOffer", Position = UDim2.new(0, 20, 1, -164), Size = UDim2.new(1, -40, 0, 40), BackgroundColor3 = Color3.fromRGB(255, 240, 200), Visible = false }, gamePage)
-round(drawBanner, 10)
-local drawText = label(drawBanner, { Position = UDim2.new(0, 10, 0, 0), Size = UDim2.new(0.5, 0, 1, 0), TextSize = 15, Text = "Draw offered" })
-local acceptDraw = button(drawBanner, "Accept", GREEN, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -96, 0.5, 0), Size = UDim2.fromOffset(84, 30), TextSize = 14 })
-local declineDraw = button(drawBanner, "Decline", RED, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(84, 30), TextSize = 14 })
+local drawBanner = make("Frame", { Name = "DrawOffer", Position = UDim2.new(0, 18, 1, -172), Size = UDim2.new(1, -36, 0, 42), BackgroundColor3 = Color3.fromRGB(90, 76, 40), Visible = false }, gamePage)
+round(drawBanner, 6)
+local drawText = label(drawBanner, { Position = UDim2.new(0, 10, 0, 0), Size = UDim2.new(0.5, 0, 1, 0), TextSize = 14, Text = "Draw offered" })
+local acceptDraw = button(drawBanner, "Accept", GREEN, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -92, 0.5, 0), Size = UDim2.fromOffset(80, 30), TextSize = 14 })
+local declineDraw = button(drawBanner, "Decline", GREY, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(80, 30), TextSize = 14 })
 
-local actions = make("Frame", { Name = "Actions", Position = UDim2.new(0, 20, 1, -118), Size = UDim2.new(1, -40, 0, 40), BackgroundTransparency = 1 }, gamePage)
+local actions = make("Frame", { Name = "Actions", Position = UDim2.new(0, 18, 1, -122), Size = UDim2.new(1, -36, 0, 42), BackgroundTransparency = 1 }, gamePage)
 make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6) }, actions)
-local function actionButton(text, colour)
-	return button(actions, text, colour, { Size = UDim2.new(0.2, -5, 1, 0), TextSize = 14 })
+local function actionButton(text)
+	return button(actions, text, CARD, { Size = UDim2.new(0.25, -5, 1, 0), TextSize = 14 })
 end
-local resignButton = actionButton("Resign", RED)
-local drawButton = actionButton("Draw", GREY)
-local takebackButton = actionButton("Take back", BLUE)
-local hintButton = actionButton("Hint", BLUE)
-local flipButton = actionButton("Flip", GREY)
+local resignButton = actionButton("Resign")
+local drawButton = actionButton("Draw")
+local takebackButton = actionButton("Take back")
+local hintButton = actionButton("Hint")
+local flipButton = actionButton("Flip")
 
-local chatRow = make("Frame", { Name = "Chat", Position = UDim2.new(0, 20, 1, -70), Size = UDim2.new(1, -40, 0, 56), BackgroundTransparency = 1 }, gamePage)
-local chatLog = label(chatRow, { Position = UDim2.new(0, 0, 0, 0), Size = UDim2.new(1, 0, 0, 20), TextSize = 13, TextColor3 = SOFT_INK })
+-- Shares the row's width between the action buttons that show.
+local function fitActions()
+	local shown = {}
+	for _, b in { resignButton, drawButton, takebackButton, hintButton, flipButton } do
+		if b.Visible then
+			table.insert(shown, b)
+		end
+	end
+	for _, b in shown do
+		b.Size = UDim2.new(1 / #shown, -6 * (#shown - 1) / #shown, 1, 0)
+	end
+end
+
+local chatRow = make("Frame", { Name = "Chat", Position = UDim2.new(0, 18, 1, -72), Size = UDim2.new(1, -36, 0, 60), BackgroundTransparency = 1 }, gamePage)
+local chatLog = label(chatRow, { Position = UDim2.new(0, 0, 0, 0), Size = UDim2.new(1, 0, 0, 18), TextSize = 13, TextColor3 = MUTED })
 local PHRASES = { "Hi!", "Good luck!", "Have fun!", "Nice move!", "Oops", "Thanks!", "Good game!", "Rematch?" }
 local phraseButtons = {}
 for i, phrase in PHRASES do
-	phraseButtons[i] = button(chatRow, phrase, Color3.fromRGB(120, 170, 220), {
-		Position = UDim2.new((i - 1) % 4 / 4, 1, 0, 22 + ((i - 1) // 4) * 18),
-		Size = UDim2.new(0.25, -2, 0, 16),
+	phraseButtons[i] = button(chatRow, phrase, CARD, {
+		Position = UDim2.new((i - 1) % 4 / 4, 1, 0, 20 + ((i - 1) // 4) * 20),
+		Size = UDim2.new(0.25, -2, 0, 18),
 		TextSize = 11,
 	})
 end
-local backButton = button(gamePage, "Back to lobby", BLUE, { Position = UDim2.new(0, 20, 1, -70), Size = UDim2.new(1, -40, 0, 44), TextSize = 18, Visible = false })
+local backButton = bigButton(gamePage, "<b>New game</b>", { Position = UDim2.new(0, 18, 1, -76), Size = UDim2.new(1, -36, 0, 60), TextSize = 22, Visible = false })
 
 -- Messages at the top of the screen.
 local toastBox = make("TextLabel", {
 	Name = "Toast",
 	AnchorPoint = Vector2.new(0.5, 0),
-	Position = UDim2.new(0.5, 0, 0, 14),
+	Position = UDim2.new(0.5, 0, 0, TOP + 8),
 	Size = UDim2.fromOffset(520, 40),
-	BackgroundColor3 = Color3.fromRGB(25, 45, 75),
-	BackgroundTransparency = 0.1,
-	TextColor3 = WHITE,
-	TextSize = 17,
+	BackgroundColor3 = Color3.fromRGB(20, 19, 18),
+	BackgroundTransparency = 0.05,
+	TextColor3 = TEXT,
+	TextSize = 16,
 	Visible = false,
 	ZIndex = 20,
 }, screen)
-round(toastBox, 12)
-outline(toastBox, Color3.fromRGB(150, 210, 255), 1, 0.3)
+round(toastBox, 6)
 
 local sounds = {}
 for name, id in { move = "libroxel://click", capture = "libroxel://coin", over = "libroxel://chime" } do
@@ -694,9 +724,9 @@ local function fillCard(card, seat, side)
 	card.PlayerName.Text = seat.name .. "  (" .. seat.rating .. ")" .. (if seat.bot then "  · computer" else "")
 	local taken, lead = capturedText(letter)
 	card.Detail.Text = (if side == 0 then "White" else "Black") .. (if taken ~= "" then "  ·  took " .. taken else "") .. (if lead > 0 then " +" .. lead else "")
-	card.Dot.BackgroundColor3 = if seat.bot and seat.colour then seat.colour else if side == 0 then Color3.fromRGB(240, 246, 252) else Color3.fromRGB(40, 55, 80)
+	card.Dot.BackgroundColor3 = if seat.bot and seat.colour then seat.colour else if side == 0 then Color3.fromRGB(240, 240, 240) else Color3.fromRGB(30, 30, 30)
 	card.Dot.Letter.Text = string.sub(seat.name, 1, 1)
-	card.Dot.Letter.TextColor3 = if side == 0 and not seat.bot then INK else WHITE
+	card.Dot.Letter.TextColor3 = if seat.bot or side == 0 then Color3.fromRGB(30, 30, 30) else TEXT
 	card.Clock.Visible = view.timed
 end
 
@@ -713,10 +743,9 @@ local function updateClocks()
 			left = math.max(0, left - elapsed)
 		end
 		card.Clock.Text = clockText(math.floor(left))
-		card.Clock.BackgroundColor3 = if running
-			then (if left < 20000 then RED else Color3.fromRGB(40, 150, 90))
-			else Color3.fromRGB(30, 50, 75)
-		card.Clock.TextTransparency = if running then 0 else 0.3
+		card.Clock.BackgroundColor3 = if running then (if left < 20000 then RED else Color3.fromRGB(240, 240, 240)) else CARD
+		card.Clock.TextColor3 = if running and left >= 20000 then Color3.fromRGB(30, 30, 30) else TEXT
+		card.Clock.TextTransparency = if running then 0 else 0.35
 	end
 	if view.firstMoveLeft and view.firstMoveLeft >= 0 and view.status == "playing" and not view.vsBot then
 		local left = math.max(0, view.firstMoveLeft - math.floor(elapsed / 1000))
@@ -734,20 +763,20 @@ local function drawMoves()
 	local rows = math.ceil(#sans / 2)
 	for row = 1, rows do
 		local white, black = sans[row * 2 - 1], sans[row * 2]
-		local y = (row - 1) * 24 + 4
+		local y = (row - 1) * 26
 		local shade = row % 2 == 0
 		local line = label(movesBox, {
-			Position = UDim2.new(0, 4, 0, y),
-			Size = UDim2.new(1, -16, 0, 24),
-			BackgroundColor3 = Color3.fromRGB(200, 225, 245),
-			BackgroundTransparency = if shade then 0.5 else 1,
+			Position = UDim2.new(0, 0, 0, y),
+			Size = UDim2.new(1, -8, 0, 26),
+			BackgroundColor3 = Color3.fromRGB(42, 40, 38),
+			BackgroundTransparency = if shade then 0 else 1,
 			Text = "",
 		})
-		label(line, { Position = UDim2.new(0, 6, 0, 0), Size = UDim2.new(0.18, 0, 1, 0), Text = row .. ".", TextColor3 = SOFT_INK, TextSize = 15 })
-		label(line, { Position = UDim2.new(0.2, 0, 0, 0), Size = UDim2.new(0.38, 0, 1, 0), Text = white or "", TextSize = 16, RichText = true })
-		label(line, { Position = UDim2.new(0.6, 0, 0, 0), Size = UDim2.new(0.38, 0, 1, 0), Text = black or "", TextSize = 16 })
+		label(line, { Position = UDim2.new(0, 10, 0, 0), Size = UDim2.new(0.18, 0, 1, 0), Text = row .. ".", TextColor3 = MUTED, TextSize = 14 })
+		label(line, { Position = UDim2.new(0.2, 0, 0, 0), Size = UDim2.new(0.38, 0, 1, 0), Text = white or "", TextSize = 15, RichText = true })
+		label(line, { Position = UDim2.new(0.6, 0, 0, 0), Size = UDim2.new(0.38, 0, 1, 0), Text = black or "", TextSize = 15 })
 	end
-	local height = rows * 24 + 8
+	local height = rows * 26 + 4
 	movesBox.CanvasSize = UDim2.new(0, 0, 0, height)
 	movesBox.CanvasPosition = Vector2.new(0, math.max(0, height - 200))
 end
@@ -761,6 +790,9 @@ local RESULT_WORDS = {
 
 local function drawThoughts()
 	local info = view.info
+	thoughts.Visible = view.vsBot or info ~= nil
+	movesBox.Position = UDim2.new(0, 18, 0, if thoughts.Visible then 160 else 58)
+	movesBox.Size = UDim2.new(1, -36, 1, if thoughts.Visible then -340 else -238)
 	if info then
 		thoughtsTitle.Text = (if info.by then info.by .. "'s thoughts" else "Engine") .. (if view.thinking then "  · thinking…" else "")
 		thoughtsScore.Text = if info.book then "Book" else Engine.scoreText(info.score)
@@ -774,9 +806,9 @@ local function drawThoughts()
 		evalFill.Position = if flipped then UDim2.fromScale(0, 0) else UDim2.fromScale(0, 1)
 		evalText.Text = if info.book then "" else Engine.scoreText(info.score)
 	else
-		thoughtsTitle.Text = if view.vsBot then "The computer's thoughts" else "Engine"
+		thoughtsTitle.Text = "The computer's thoughts"
 		thoughtsScore.Text = "0.00"
-		thoughtsStats.Text = if view.vsBot then "Waiting for its first move" else "People playing people: the engine stays quiet"
+		thoughtsStats.Text = "Waiting for its first move"
 		thoughtsLine.Text = ""
 		evalFill.Size = UDim2.fromScale(1, 0.5)
 		evalText.Text = ""
@@ -811,14 +843,16 @@ local function drawGame()
 	fillCard(topCard, if topSide == 0 then view.white else view.black, topSide)
 	fillCard(bottomCard, if topSide == 0 then view.black else view.white, 1 - topSide)
 
-	resignButton.Visible = playing and not watching
+	actions.Visible = playing and not watching
 	resignButton.Text = if #view.sans < 2 then "Abort" else "Resign"
-	drawButton.Visible = playing and not watching
+	drawButton.Visible = not view.vsBot
 	drawButton.Text = if view.drawOffer == side then "Offered" else "Draw"
-	takebackButton.Visible = playing and not watching and view.vsBot
-	hintButton.Visible = playing and not watching and view.vsBot
+	takebackButton.Visible = view.vsBot
+	hintButton.Visible = view.vsBot
+	fitActions()
 	chatRow.Visible = not watching and not view.vsBot and playing
 	backButton.Visible = watching or not playing
+	backButton.Text = if watching then "<b>Back to lobby</b>" else "<b>New game</b>"
 	if not view.vsBot and #view.chat > 0 then
 		chatLog.Text = view.chat[#view.chat]
 	else
@@ -859,7 +893,8 @@ local function showLobbyTab(name)
 	currentTab = name
 	for key, page in tabPages do
 		page.Visible = key == name
-		tabs[key].BackgroundColor3 = if key == name then BLUE else GREY
+		tabs[key].TextColor3 = if key == name then TEXT else MUTED
+		tabLines[key].Visible = key == name
 	end
 end
 
@@ -867,11 +902,9 @@ local function rowFrame(parent, y, height)
 	local row = make("Frame", {
 		Position = UDim2.new(0, 0, 0, y),
 		Size = UDim2.new(1, -10, 0, height),
-		BackgroundColor3 = WHITE,
-		BackgroundTransparency = 0.3,
+		BackgroundColor3 = CARD,
 	}, parent)
-	round(row, 10)
-	outline(row, WHITE, 1, 0.4)
+	round(row, 6)
 	return row
 end
 
@@ -888,24 +921,28 @@ local function drawLobby()
 		return
 	end
 	local my = lobby.me
-	myLine.Text = "Rating " .. my.rating .. " · " .. my.wins .. " won, " .. my.draws .. " drawn, " .. my.losses .. " lost · " .. my.botWins .. " wins against the computer"
+	myLine.Text = "Rating " .. my.rating .. " · " .. my.wins .. " won, " .. my.draws .. " drawn, " .. my.losses .. " lost"
+	local bot = Engine.BOTS[chosenBot]
 	for i, b in botButtons do
-		b.BackgroundColor3 = if i == chosenBot then Color3.fromRGB(150, 210, 255) else WHITE
+		b.button.BackgroundColor3 = if i == chosenBot then CARD_PICKED else CARD
+		b.edge.Transparency = if i == chosenBot then 0 else 1
 	end
+	botAbout.Text = bot.name .. ": " .. bot.about
+	playBotButton.Text = "<b>Play</b>  <font size=\"17\">vs " .. bot.name .. "</font>"
 	for control, b in controlButtons.computer do
-		b.BackgroundColor3 = if control == chosenControl then BLUE else GREY
+		b.BackgroundColor3 = if control == chosenControl then CARD_PICKED else CARD
 	end
 	for control, b in controlButtons.people do
-		b.BackgroundColor3 = if control == chosenPeopleControl then BLUE else GREY
+		b.BackgroundColor3 = if control == chosenPeopleControl then CARD_PICKED else CARD
 	end
 	for colour, b in colourButtons do
-		b.BackgroundColor3 = if colour == chosenColour then BLUE else GREY
+		b.BackgroundColor3 = if colour == chosenColour then CARD_PICKED else CARD
 	end
 	if my.seeking ~= "" then
-		seekButton.Text = "Looking for a " .. controlText(my.seeking) .. " game… (cancel)"
-		seekButton.BackgroundColor3 = Color3.fromRGB(230, 160, 60)
+		seekButton.Text = "Looking for a " .. controlText(my.seeking) .. " game…  <font size=\"15\">(cancel)</font>"
+		seekButton.BackgroundColor3 = ORANGE
 	else
-		seekButton.Text = "Find a game"
+		seekButton.Text = "<b>Find a game</b>  <font size=\"16\">" .. controlText(chosenPeopleControl) .. "</font>"
 		seekButton.BackgroundColor3 = GREEN
 	end
 
@@ -916,7 +953,7 @@ local function drawLobby()
 		local row = rowFrame(challengeList, y, 44)
 		label(row, { Position = UDim2.new(0, 10, 0, 0), Size = UDim2.new(0.55, 0, 1, 0), TextSize = 14, TextWrapped = true, Text = c.name .. " (" .. c.rating .. ") · " .. controlText(c.control) })
 		local yes = button(row, "Play", GREEN, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -78, 0.5, 0), Size = UDim2.fromOffset(66, 30), TextSize = 14 })
-		local no = button(row, "No", RED, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(66, 30), TextSize = 14 })
+		local no = button(row, "No", GREY, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(66, 30), TextSize = 14 })
 		yes.MouseButton1Click:Connect(function()
 			send("answer", { id = c.id, accept = true })
 		end)
@@ -937,20 +974,20 @@ local function drawLobby()
 	if y == 0 then
 		local row = rowFrame(challengeList, 0, 30)
 		row.BackgroundTransparency = 1
-		label(row, { Position = UDim2.new(0, 2, 0, 0), Size = UDim2.new(1, 0, 1, 0), TextSize = 14, TextColor3 = SOFT_INK, Text = "None yet. Challenge someone below." })
+		label(row, { Position = UDim2.new(0, 2, 0, 0), Size = UDim2.new(1, 0, 1, 0), TextSize = 14, TextColor3 = MUTED, Text = "None yet. Challenge someone below." })
 		y = 34
 	end
-	playersTitle.Position = UDim2.new(0, 0, 0, 156 + y)
-	playerList.Position = UDim2.new(0, 0, 0, 180 + y)
-	playerList.Size = UDim2.new(1, 0, 1, -(180 + y))
+	playersTitle.Position = UDim2.new(0, 0, 0, 106 + y)
+	playerList.Position = UDim2.new(0, 0, 0, 130 + y)
+	playerList.Size = UDim2.new(1, 0, 1, -(130 + y))
 
 	clear(playerList)
 	for i, p in lobby.players do
 		local row = rowFrame(playerList, (i - 1) * 52, 46)
 		label(row, { Position = UDim2.new(0, 10, 0, 3), Size = UDim2.new(0.6, 0, 0, 22), TextSize = 16, Text = p.name .. "  (" .. p.rating .. ")" })
-		label(row, { Position = UDim2.new(0, 10, 0, 23), Size = UDim2.new(0.6, 0, 0, 18), TextSize = 13, TextColor3 = SOFT_INK, Text = p.status })
+		label(row, { Position = UDim2.new(0, 10, 0, 23), Size = UDim2.new(0.6, 0, 0, 18), TextSize = 13, TextColor3 = MUTED, Text = p.status })
 		if p.free then
-			local challenge = button(row, "Challenge", BLUE, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(100, 32), TextSize = 14 })
+			local challenge = button(row, "Challenge", GREEN, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(96, 32), TextSize = 14 })
 			challenge.MouseButton1Click:Connect(function()
 				send("challenge", { to = p.id, control = chosenPeopleControl })
 			end)
@@ -959,7 +996,7 @@ local function drawLobby()
 	if #lobby.players == 0 then
 		local row = rowFrame(playerList, 0, 60)
 		row.BackgroundTransparency = 1
-		label(row, { Position = UDim2.new(0, 2, 0, 0), Size = UDim2.new(1, -4, 1, 0), TextSize = 14, TextColor3 = SOFT_INK, TextWrapped = true, Text = "Nobody else is here yet. Host this game so friends can join, or play the computer meanwhile." })
+		label(row, { Position = UDim2.new(0, 2, 0, 0), Size = UDim2.new(1, -4, 1, 0), TextSize = 14, TextColor3 = MUTED, TextWrapped = true, Text = "Nobody else is here yet. Host this game so friends can join, or play the computer meanwhile." })
 	end
 	playerList.CanvasSize = UDim2.new(0, 0, 0, #lobby.players * 52)
 
@@ -967,8 +1004,8 @@ local function drawLobby()
 	for i, g in lobby.live do
 		local row = rowFrame(liveList, (i - 1) * 56, 50)
 		label(row, { Position = UDim2.new(0, 10, 0, 4), Size = UDim2.new(0.68, 0, 0, 22), TextSize = 15, Text = g.white .. " (" .. g.whiteRating .. ")  vs  " .. g.black .. " (" .. g.blackRating .. ")" })
-		label(row, { Position = UDim2.new(0, 10, 0, 26), Size = UDim2.new(0.68, 0, 0, 18), TextSize = 13, TextColor3 = SOFT_INK, Text = controlText(g.control) .. " · move " .. (g.ply // 2 + 1) })
-		local watch = button(row, if g.mine then "Yours" else "Watch", BLUE, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(86, 32), TextSize = 14 })
+		label(row, { Position = UDim2.new(0, 10, 0, 26), Size = UDim2.new(0.68, 0, 0, 18), TextSize = 13, TextColor3 = MUTED, Text = controlText(g.control) .. " · move " .. (g.ply // 2 + 1) })
+		local watch = button(row, if g.mine then "Yours" else "Watch", GREY, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(86, 32), TextSize = 14 })
 		watch.MouseButton1Click:Connect(function()
 			if not g.mine then
 				send("watch", { game = g.id })
@@ -978,7 +1015,7 @@ local function drawLobby()
 	if #lobby.live == 0 then
 		local row = rowFrame(liveList, 0, 40)
 		row.BackgroundTransparency = 1
-		label(row, { Position = UDim2.new(0, 2, 0, 0), Size = UDim2.new(1, 0, 1, 0), TextSize = 14, TextColor3 = SOFT_INK, Text = "No games right now." })
+		label(row, { Position = UDim2.new(0, 2, 0, 0), Size = UDim2.new(1, 0, 1, 0), TextSize = 14, TextColor3 = MUTED, Text = "No games right now." })
 	end
 	liveList.CanvasSize = UDim2.new(0, 0, 0, #lobby.live * 56)
 end
@@ -993,12 +1030,24 @@ local function showPage()
 		for _, card in { topCard, bottomCard } do
 			card.Clock.Visible = false
 		end
-		topCard.PlayerName.Text = "Pick an opponent"
-		topCard.Detail.Text = "The computer, or someone in this server"
+		local bot = Engine.BOTS[chosenBot]
+		topCard.PlayerName.Text = if currentTab == "people" then "Press Find a game, or challenge someone" else "Pick a game to watch"
+		topCard.Detail.Text = if currentTab == "people" then "You'll be paired with someone in this server" else "Games going on in this server"
+		topCard.Dot.BackgroundColor3 = CARD
 		topCard.Dot.Letter.Text = "?"
+		topCard.Dot.Letter.TextColor3 = TEXT
+		if currentTab == "computer" and bot then
+			topCard.PlayerName.Text = bot.name .. "  (" .. bot.rating .. ")  · computer"
+			topCard.Detail.Text = "Press Play to start"
+			topCard.Dot.BackgroundColor3 = bot.colour
+			topCard.Dot.Letter.Text = string.sub(bot.name, 1, 1)
+			topCard.Dot.Letter.TextColor3 = Color3.fromRGB(30, 30, 30)
+		end
 		bottomCard.PlayerName.Text = me.Name
 		bottomCard.Detail.Text = if lobby then "Rating " .. lobby.me.rating else ""
+		bottomCard.Dot.BackgroundColor3 = Color3.fromRGB(240, 240, 240)
 		bottomCard.Dot.Letter.Text = string.sub(me.Name, 1, 1)
+		bottomCard.Dot.Letter.TextColor3 = Color3.fromRGB(30, 30, 30)
 		resultCard.Visible = false
 		promotionCard.Visible = false
 		evalFill.Size = UDim2.fromScale(1, 0.5)
@@ -1018,7 +1067,7 @@ local function slide(fromSq, toSq)
 	local ghost = make("ImageLabel", {
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = place(fromSq) + UDim2.fromScale(1 / 16, 1 / 16),
-		Size = UDim2.fromScale(0.92 / 8, 0.92 / 8),
+		Size = UDim2.fromScale(0.9 / 8, 0.9 / 8),
 		BackgroundTransparency = 1,
 		Image = to.piece.Image,
 		ZIndex = 6,
@@ -1095,9 +1144,20 @@ local function pick(sq)
 	drawBoard()
 end
 
+local function playComputer()
+	send("playBot", { level = chosenBot, control = chosenControl, colour = chosenColour })
+end
+
 for sq, s in squares do
 	s.button.MouseButton1Click:Connect(function()
-		if not view or not myTurn() or pending then
+		if not view then
+			-- Clicking the board in the lobby is a nudge towards Play.
+			if currentTab == "computer" then
+				toast("Press Play (bottom right) to start against " .. Engine.BOTS[chosenBot].name)
+			end
+			return
+		end
+		if not myTurn() or pending then
 			return
 		end
 		local moves = targets[sq]
@@ -1146,12 +1206,15 @@ end
 for name, tab in tabs do
 	tab.MouseButton1Click:Connect(function()
 		showLobbyTab(name)
+		if not view then
+			showPage()
+		end
 	end)
 end
 for i, b in botButtons do
-	b.MouseButton1Click:Connect(function()
+	b.button.MouseButton1Click:Connect(function()
 		chosenBot = i
-		drawLobby()
+		showPage()
 	end)
 end
 for control, b in controlButtons.computer do
@@ -1172,9 +1235,7 @@ for colour, b in colourButtons do
 		drawLobby()
 	end)
 end
-playBotButton.MouseButton1Click:Connect(function()
-	send("playBot", { level = chosenBot, control = chosenControl, colour = chosenColour })
-end)
+playBotButton.MouseButton1Click:Connect(playComputer)
 seekButton.MouseButton1Click:Connect(function()
 	if lobby and lobby.me.seeking ~= "" then
 		send("cancelSeek")
