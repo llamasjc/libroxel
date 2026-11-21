@@ -152,6 +152,8 @@ pub struct Editor {
     /// Playing a game started from the main menu: only the game shows, and
     /// leaving it goes back to the menu.
     pub player_mode: bool,
+    /// Esc pressed while playing: the game menu is open.
+    pub paused: bool,
     /// Fingers on a touch screen, for the on-screen controls.
     pub touch: touch::TouchPad,
     /// Which tab of the ribbon along the top is open.
@@ -233,6 +235,7 @@ impl Default for Editor {
             platform: browse::Platform::default(),
             menu: menu::Menu::default(),
             player_mode: false,
+            paused: false,
             touch: Default::default(),
             ribbon: ui::RibbonTab::Home,
             show_explorer: true,

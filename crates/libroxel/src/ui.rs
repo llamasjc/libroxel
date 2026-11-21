@@ -299,6 +299,7 @@ pub fn editor_ui(
     // A game played from the main menu ended: back to the menu.
     if editor.player_mode && engine.session.is_none() {
         editor.player_mode = false;
+        editor.paused = false;
         editor.menu.open = true;
         editor.menu.scanned = false;
     }
@@ -324,11 +325,7 @@ pub fn editor_ui(
         egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(ctx.viewport_rect()),
     );
 
-    if editor.player_mode {
-        egui::Panel::top("toolbar").show(&mut root, |ui| {
-            toolbar(ui, editor, engine.session.as_ref(), &mut actions);
-        });
-    } else {
+    if !editor.player_mode {
         // Laid out the way Studio users know: the ribbon on top, the
         // toolbox on the left, the explorer over the properties on the
         // right, and the output along the bottom.
@@ -564,8 +561,12 @@ pub fn editor_ui(
         actions.push(Action::Join { address, name });
     }
 
+    if editor.player_mode {
+        game_menu(&ctx, editor, engine.session.as_ref(), central, &mut actions);
+    }
+
     // Touch screens get on-screen controls while playing.
-    if playing && !editor.menu.open {
+    if playing && !editor.menu.open && !editor.paused {
         editor.touch.show(&ctx, central);
         let stick = editor.touch.stick();
         touch_input.stick = Vec2::new(stick.x, stick.y);
@@ -600,6 +601,10 @@ pub fn editor_ui(
         actions.push(Action::GuiHover(gui_hit.map(|(id, _)| id).filter(|_| over_view)));
     }
     capture.keyboard = ctx.egui_wants_keyboard_input();
+    if editor.paused {
+        capture.pointer = true;
+        capture.keyboard = true;
+    }
     editor.gizmo_active = gizmo_hot;
     if let Some(session) = engine.session.as_mut() {
         session.set_viewport(central.width(), central.height());
@@ -899,7 +904,11 @@ fn shortcuts(ctx: &egui::Context, editor: &mut Editor, playing: bool, actions: &
             actions.push(if playing { Action::Stop } else { Action::Play });
         }
         if playing && i.consume_key(Modifiers::NONE, Key::Escape) {
-            actions.push(Action::Stop);
+            if editor.player_mode {
+                editor.paused = !editor.paused;
+            } else {
+                actions.push(Action::Stop);
+            }
         }
         if typing {
             return;
@@ -1081,41 +1090,61 @@ fn insert_menu(ui: &mut egui::Ui, actions: &mut Vec<Action>) {
     }
 }
 
-/// The bar along the top while playing a game from the main menu: leave, and how the connection is going.
-fn toolbar(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>, actions: &mut Vec<Action>) {
-    let playing = session.is_some();
-    ui.horizontal(|ui| {
-        if playing {
-            let stop = if editor.player_mode { "Leave game" } else { "Stop" };
-            if theme::block_button(ui, theme::Kind::Danger, icon::STOP, stop, 30.0).clicked() {
-                actions.push(Action::Stop);
-            }
-        } else {
-            if theme::block_button(ui, theme::Kind::Go, icon::PLAY, "Play", 30.0).clicked() {
-                actions.push(Action::Play);
-            }
-            if theme::tool_button(ui, icon::BROADCAST, "Host", false)
-                .on_hover_text("Play, and let other computers join")
-                .clicked()
-            {
-                actions.push(Action::Host);
-            }
-            if theme::tool_button(ui, icon::SIGN_IN, "Join", false)
-                .on_hover_text("Join a game another computer hosts")
-                .clicked()
-            {
-                editor.dialog =
-                    Some(Dialog::Join { address: String::new(), name: editor.platform.player_name() });
-            }
-            if theme::tool_button(ui, icon::GLOBE_HEMISPHERE_WEST, "Browse", false)
-                .on_hover_text("Find games being hosted right now")
-                .clicked()
-            {
-                editor.platform.open = true;
-            }
+/// The menu Esc opens while playing a game from the main menu.
+fn game_menu(
+    ctx: &egui::Context,
+    editor: &mut Editor,
+    session: Option<&PlaySession>,
+    view: egui::Rect,
+    actions: &mut Vec<Action>,
+) {
+    if !editor.paused {
+        if editor.touch.seen {
+            egui::Area::new("game-menu-button".into()).fixed_pos(view.min + egui::vec2(10.0, 10.0)).show(
+                ctx,
+                |ui| {
+                    if theme::block_button(ui, theme::Kind::Plain, icon::LIST, "", 34.0).clicked() {
+                        editor.paused = true;
+                    }
+                },
+            );
         }
-        session_status(ui, editor, session, actions);
-    });
+        return;
+    }
+    egui::Area::new("game-menu-shade".into()).fixed_pos(view.min).order(egui::Order::Middle).show(
+        ctx,
+        |ui| {
+            let (rect, response) = ui.allocate_exact_size(view.size(), egui::Sense::click());
+            ui.painter().rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(10, 40, 80, 110));
+            if response.clicked() {
+                editor.paused = false;
+            }
+        },
+    );
+    egui::Area::new("game-menu".into())
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            theme::panel().inner_margin(egui::Margin::same(22)).show(ui, |ui| {
+                ui.set_width(280.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(RichText::new("Paused").font(theme::light(26.0)).color(theme::HEADING));
+                    ui.add_space(14.0);
+                    if theme::block_button(ui, theme::Kind::Primary, icon::PLAY, "Resume", 40.0).clicked() {
+                        editor.paused = false;
+                    }
+                    ui.add_space(8.0);
+                    if theme::block_button(ui, theme::Kind::Danger, icon::X, "Leave game", 40.0).clicked() {
+                        editor.paused = false;
+                        actions.push(Action::Stop);
+                    }
+                    if session.is_some_and(|s| s.host_address().is_some() || s.is_joined()) {
+                        ui.add_space(12.0);
+                        ui.horizontal_wrapped(|ui| session_status(ui, editor, session, actions));
+                    }
+                });
+            });
+        });
 }
 
 /// The terrain tool's options, under the toolbar.
@@ -3860,8 +3889,8 @@ fn play_group(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &m
                 actions.push(Action::Play);
             }
         } else {
-            let stop = if editor.player_mode { "Leave" } else { "Stop" };
-            if theme::ribbon_button(ui, icon::STOP, stop, true).on_hover_text("Shift+F5").clicked() {
+            let (glyph, stop) = if editor.player_mode { (icon::X, "Leave") } else { (icon::STOP, "Stop") };
+            if theme::ribbon_button(ui, glyph, stop, true).on_hover_text("Shift+F5").clicked() {
                 actions.push(Action::Stop);
             }
         }
