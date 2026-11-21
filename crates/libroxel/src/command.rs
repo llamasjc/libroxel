@@ -58,7 +58,10 @@ fn link(at: &Path, exe: &Path) -> std::io::Result<bool> {
             }
             // Only take over a link to another copy of Libroxel (an older
             // download, or one that has since moved).
-            let ours = old.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("libroxel"));
+            // (Named libroxel, or Libroxel-<version>-x86_64.AppImage.)
+            let ours = old
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().to_ascii_lowercase().starts_with("libroxel"));
             if !ours {
                 return Ok(false);
             }
@@ -118,13 +121,66 @@ fn home() -> Result<PathBuf, String> {
     std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| "no home folder".into())
 }
 
+/// The program to point the command and the app menu at: the AppImage
+/// file itself when the app runs from one (the program inside it sits in
+/// a temporary folder that goes away), else this program.
+#[cfg(target_os = "linux")]
+pub fn app_path() -> std::io::Result<PathBuf> {
+    match std::env::var_os("APPIMAGE").map(PathBuf::from) {
+        Some(image) if image.is_file() => Ok(image),
+        _ => std::env::current_exe(),
+    }
+}
+
+/// The app's icon, for the app menu entry.
+#[cfg(target_os = "linux")]
+const ICON_PNG: &[u8] = include_bytes!("../../../packaging/icons/libroxel-256.png");
+
+/// Puts Libroxel in the app menu, with its icon, the way the .deb does:
+/// for a copy that runs from an AppImage or a folder.
+#[cfg(target_os = "linux")]
+fn menu_entry(home: &Path, exe: &Path) -> std::io::Result<()> {
+    let data = std::env::var_os("XDG_DATA_HOME").map_or_else(|| home.join(".local/share"), PathBuf::from);
+    menu_entry_in(&data, exe)
+}
+
+#[cfg(target_os = "linux")]
+fn menu_entry_in(data: &Path, exe: &Path) -> std::io::Result<()> {
+    let icon = data.join("icons/hicolor/256x256/apps/libroxel.png");
+    if std::fs::read(&icon).ok().as_deref() != Some(ICON_PNG) {
+        std::fs::create_dir_all(icon.parent().expect("the icon has a folder"))?;
+        std::fs::write(&icon, ICON_PNG)?;
+    }
+    let quoted: String = exe
+        .to_string_lossy()
+        .chars()
+        .flat_map(|c| match c {
+            '"' | '`' | '$' | '\\' => vec!['\\', c],
+            c => vec![c],
+        })
+        .collect();
+    let entry = format!(
+        "[Desktop Entry]\nType=Application\nName=Libroxel\nComment=Make and play 3D games with friends\n\
+         Exec=\"{quoted}\" %u\nIcon=libroxel\nTerminal=false\nCategories=Game;\n\
+         StartupWMClass=libroxel\nMimeType=x-scheme-handler/libroxel;\n"
+    );
+    let file = data.join("applications/libroxel.desktop");
+    if std::fs::read_to_string(&file).is_ok_and(|old| old == entry) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(file.parent().expect("the entry has a folder"))?;
+    std::fs::write(file, entry)
+}
+
 #[cfg(target_os = "linux")]
 fn install_now() -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = app_path().map_err(|e| e.to_string())?;
+    // The .deb puts the command and the menu entry in place itself.
     if temporary(&exe) || command_opens(&exe) {
         return Ok(());
     }
     let home = home()?;
+    menu_entry(&home, &exe).map_err(|e| e.to_string())?;
     let bin = home.join(".local/bin");
     if exe.parent() == Some(bin.as_path()) {
         return Ok(());
@@ -287,6 +343,21 @@ mod tests {
         assert!(!empty.join(".bashrc").exists());
         std::fs::remove_dir_all(&home).unwrap();
         std::fs::remove_dir_all(&empty).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn puts_the_app_in_the_menu_with_its_icon() {
+        let data = scratch("menu");
+        let exe = Path::new("/home/a/Apps/Libroxel-1.0-x86_64.AppImage");
+        menu_entry_in(&data, exe).unwrap();
+        menu_entry_in(&data, exe).unwrap();
+        let entry = std::fs::read_to_string(data.join("applications/libroxel.desktop")).unwrap();
+        assert!(entry.contains("Exec=\"/home/a/Apps/Libroxel-1.0-x86_64.AppImage\" %u"), "{entry}");
+        assert!(entry.contains("Icon=libroxel"));
+        let icon = std::fs::read(data.join("icons/hicolor/256x256/apps/libroxel.png")).unwrap();
+        assert_eq!(&icon[1..4], b"PNG");
+        std::fs::remove_dir_all(&data).unwrap();
     }
 
     #[test]

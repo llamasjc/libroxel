@@ -10,7 +10,7 @@ authors.workspace = true
 publish = false
 default-run = "libroxel"
 
-# One app for everything: the editor, `libroxel server` and `libroxel hub`.
+# One app for everything: the home screen, the editor and `libroxel server`.
 [[bin]]
 name = "libroxel"
 path = "src/main.rs"
@@ -33,3 +33,7 @@ serde_json.workspace = true
 
 [lints]
 workspace = true
+
+# The Libroxel icon on libroxel.exe (Explorer, the taskbar, shortcuts).
+[target.'cfg(windows)'.build-dependencies]
+winresource = { version = "0.1", default-features = false }

@@ -5,10 +5,10 @@ and attaches the builds to a GitHub Release whenever a version tag is pushed.
 
 | File | Platform | What's inside |
 | --- | --- | --- |
-| `libroxel-<version>-windows-x86_64-setup.exe` | Windows 10/11 (x86-64) | an installer: Start menu, PATH, `libroxel://` links, uninstall from Settings |
-| `libroxel-<version>-macos-universal.dmg` | macOS 11+ (Apple silicon and Intel) | `Libroxel.app`, to drag into Applications |
-| `libroxel-<version>-linux-x86_64.run` | Linux (x86-64, glibc 2.35+) | an installer for any distribution: `sh` it, no password needed |
-| `libroxel-<version>-linux-x86_64.deb` | Debian and Ubuntu | the same app as a package (`sudo apt install ./…deb`) |
+| `libroxel-<version>-windows-x86_64-setup.exe` | Windows 10/11 (x86-64) | a setup wizard with the Libroxel icon: Start menu and desktop shortcuts, PATH, `libroxel://` links, and an uninstaller in Settings > Apps |
+| `libroxel-<version>-macos-universal.dmg` | macOS 11+ (Apple silicon and Intel) | `Libroxel.app` with its icon, on a window that shows dragging it onto Applications |
+| `libroxel-<version>-linux-x86_64.AppImage` | Linux (x86-64, glibc 2.35+) | the app for any distribution: make it executable and open it; it adds itself to the app menu with its icon |
+| `libroxel-<version>-linux-x86_64.deb` | Debian and Ubuntu | the same app as a package, with its menu entry and icon (`sudo apt install ./…deb`, or open it in Software) |
 | `libroxel-hub-linux-x86_64` | Linux servers (x86-64) | the Hub on its own, for the official Hub server |
 | `setup-hub.sh`, `update-hub.sh` | | set a Hub server up, and update it (see [OFFICIAL_HUB.md](OFFICIAL_HUB.md)) |
 | `SHA256SUMS.txt` | | checksums of the files above |
@@ -89,9 +89,21 @@ is published at all.
 
 Each installer makes `libroxel` in a terminal open the app: the Windows
 installer adds the app's folder to the user's PATH, the `.deb` puts it in
-`/usr/bin`, and the `.run` links it into `~/.local/bin` (adding that folder
-to PATH in `~/.bashrc`, `~/.zshrc` or `~/.profile` if needed). A Mac app
+`/usr/bin`, and the AppImage links itself into `~/.local/bin` the first time
+it opens (adding that folder to PATH in `~/.bashrc`, `~/.zshrc` or
+`~/.profile` if needed). A Mac app
 dragged to Applications links itself when it first opens (into
 `/usr/local/bin` if that's writable, otherwise `~/.local/bin`), and **More
 → Add the libroxel command** on the home screen puts it in `/usr/local/bin`
 with the Mac's password.
+
+## The icon
+
+`packaging/icons/libroxel.svg` is the app icon. The PNGs beside it
+(`libroxel-<size>.png`) and `libroxel.ico` are made from it; after changing
+it, render it at 1024 pixels and scale those down again. The `.ico` is built
+into `libroxel.exe` (`crates/libroxel/build.rs`) and used by the Windows
+setup wizard and its shortcuts; the Mac release makes `libroxel.icns` from
+the PNGs; the AppImage and the `.deb` use the PNGs for the app menu. The Mac
+disk image's window is `packaging/macos/dmg-background.svg` (with its PNGs),
+and the Windows wizard's side pictures are `packaging/windows/wizard-*.bmp`.

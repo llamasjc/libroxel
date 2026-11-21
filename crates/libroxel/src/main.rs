@@ -334,6 +334,9 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Libroxel".into(),
+                // The window's app id (WM_CLASS), so Linux docks match it to
+                // the menu entry and show the Libroxel icon.
+                name: Some("libroxel".into()),
                 resolution: (1440, 900).into(),
                 ..default()
             }),

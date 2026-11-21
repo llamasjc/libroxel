@@ -1326,7 +1326,7 @@ let release = null; // The newest release's files, once GitHub has said.
 function loadRelease() {
   if (release || !/^[\w.-]+\/[\w.-]+$/.test(REPO)) return;
   release = { loading: true };
-  const hasApp = (r) => (r.assets || []).some((a) => /^libroxel-.*-(windows-x86_64-setup\.exe|macos-universal\.dmg|linux-x86_64\.run)$/.test(a.name));
+  const hasApp = (r) => (r.assets || []).some((a) => /^libroxel-.*-(windows-x86_64-setup\.exe|macos-universal\.dmg|linux-x86_64\.AppImage)$/.test(a.name));
   fetch(`https://api.github.com/repos/${REPO}/releases?per_page=30`, { headers: { Accept: 'application/vnd.github+json' } })
     .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`GitHub answered ${r.status}`))))
     .then((list) => {
@@ -1344,9 +1344,9 @@ function download() {
   const mine = platform();
   loadRelease();
   const builds = [
-    { id: 'windows', name: 'Windows', file: 'libroxel-windows-x86_64-setup.exe', ends: '-windows-x86_64-setup.exe', about: 'Windows 10 or 11. Open the installer and follow it. If SmartScreen warns you, choose More info, then Run anyway.' },
-    { id: 'macos', name: 'macOS', file: 'libroxel-macos-universal.dmg', ends: '-macos-universal.dmg', about: 'macOS 11 or newer. Open it and drag Libroxel to Applications, then right-click Libroxel there and choose Open the first time.' },
-    { id: 'linux', name: 'Linux', file: 'libroxel-linux-x86_64.run', ends: '-linux-x86_64.run', about: 'x86-64 with Vulkan, any distribution. Run sh on the file you downloaded to install it.',
+    { id: 'windows', name: 'Windows', file: 'libroxel-windows-x86_64-setup.exe', ends: '-windows-x86_64-setup.exe', about: 'Windows 10 or 11. Open the setup wizard and press Next until it\'s done. Libroxel then sits in the Start menu. If SmartScreen warns you, choose More info, then Run anyway.' },
+    { id: 'macos', name: 'macOS', file: 'libroxel-macos-universal.dmg', ends: '-macos-universal.dmg', about: 'macOS 11 or newer. Open it and drag Libroxel onto the Applications folder. The first time, right-click Libroxel in Applications and choose Open.' },
+    { id: 'linux', name: 'Linux', file: 'libroxel-linux-x86_64.AppImage', ends: '-linux-x86_64.AppImage', about: 'Any x86-64 Linux with Vulkan. Make the file executable (right-click, Properties, Allow running as a program) and open it. It adds itself to your app menu.',
       alt: { label: '.deb for Debian and Ubuntu', file: 'libroxel-linux-x86_64.deb', ends: '-linux-x86_64.deb' } },
   ].sort((a, b) => (b.id === mine) - (a.id === mine));
   // From the repository's newest release when there is one, else from this server.

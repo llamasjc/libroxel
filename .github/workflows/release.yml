@@ -83,15 +83,25 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          # Two installers: a .run any Linux can use (it installs for you
-          # alone, no password), and a .deb for Debian and Ubuntu.
+          # Two downloads, each with the Libroxel icon and an app menu
+          # entry: an AppImage that runs on any Linux (download, make it
+          # executable, open it; it adds itself to the menu and the
+          # `libroxel` command the first time), and a .deb for Debian and Ubuntu.
           name="libroxel-$VERSION-${{ matrix.name }}"
-          mkdir -p payload/libroxel
-          cp target/${{ matrix.target }}/dist/libroxel packaging/linux/install.sh payload/libroxel/
-          cp README.md LICENSE-MIT LICENSE-APACHE payload/libroxel/
-          tar -czf payload.tar.gz -C payload libroxel
-          cat packaging/linux/installer-header.sh payload.tar.gz > "$name.run"
-          chmod +x "$name.run"
+          bin="target/${{ matrix.target }}/dist/libroxel"
+
+          appdir="Libroxel.AppDir"
+          mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" "$appdir/usr/share/icons/hicolor/256x256/apps"
+          install -m 755 "$bin" "$appdir/usr/bin/libroxel"
+          install -m 755 packaging/linux/AppRun "$appdir/AppRun"
+          cp packaging/linux/libroxel.desktop "$appdir/libroxel.desktop"
+          cp packaging/linux/libroxel.desktop "$appdir/usr/share/applications/"
+          cp packaging/icons/libroxel-256.png "$appdir/libroxel.png"
+          cp packaging/icons/libroxel-256.png "$appdir/usr/share/icons/hicolor/256x256/apps/libroxel.png"
+          ln -s libroxel.png "$appdir/.DirIcon"
+          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$appdir" "$name.AppImage"
 
           deb="deb/libroxel"
           mkdir -p "$deb/DEBIAN" "$deb/usr/lib/libroxel" "$deb/usr/bin" "$deb/usr/share/applications" "$deb/usr/share/doc/libroxel"
@@ -99,22 +109,26 @@ jobs:
           debver="${VERSION//[^0-9A-Za-z.+~]/~}"
           [[ "$debver" =~ ^[0-9] ]] || debver="0~$debver"
           sed "s/@VERSION@/$debver/" packaging/linux/deb/control > "$deb/DEBIAN/control"
-          install -m 755 target/${{ matrix.target }}/dist/libroxel "$deb/usr/lib/libroxel/libroxel"
+          install -m 755 "$bin" "$deb/usr/lib/libroxel/libroxel"
           ln -s ../lib/libroxel/libroxel "$deb/usr/bin/libroxel"
           cp packaging/linux/libroxel.desktop "$deb/usr/share/applications/"
+          for size in 16 24 32 48 64 128 256 512; do
+            install -D -m 644 "packaging/icons/libroxel-$size.png" "$deb/usr/share/icons/hicolor/${size}x${size}/apps/libroxel.png"
+          done
           cp README.md LICENSE-MIT LICENSE-APACHE "$deb/usr/share/doc/libroxel/"
           dpkg-deb --root-owner-group --build "$deb" "$name.deb"
 
-          mkdir dist && mv "$name.run" "$name.deb" dist/
+          mkdir dist && mv "$name.AppImage" "$name.deb" dist/
           echo "ASSET=dist/*" >> "$GITHUB_ENV"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          # An installer, not a bare libroxel.exe: it adds Libroxel to the
-          # Start menu, to PATH (so `libroxel` works in a terminal) and to
-          # libroxel:// links, and can be uninstalled from Settings.
+          # A setup wizard, not a bare libroxel.exe: with the Libroxel icon,
+          # it adds Libroxel to the Start menu (and the desktop), to PATH (so
+          # `libroxel` works in a terminal) and to libroxel:// links, and
+          # it's in Settings > Apps to uninstall.
           src="target/${{ matrix.target }}/dist"
           cp README.md LICENSE-MIT LICENSE-APACHE "$src/"
           if ! command -v iscc >/dev/null; then
@@ -126,7 +140,9 @@ jobs:
             fi
           fi
           name="libroxel-$VERSION-${{ matrix.name }}-setup"
-          iscc "/DVersion=$VERSION" "/DSource=$(cygpath -w "$PWD/$src")" "/DOutput=$name" "/O$(cygpath -w "$PWD")" packaging/windows/libroxel.iss
+          numeric=$(echo "$VERSION" | grep -oE '^[0-9]+(\.[0-9]+){0,3}' || true)
+          numeric="${numeric:-0}.0.0.0"; numeric=$(echo "$numeric" | cut -d. -f1-4)
+          iscc "/DVersion=$VERSION" "/DNumericVersion=$numeric" "/DSource=$(cygpath -w "$PWD/$src")" "/DOutput=$name" "/O$(cygpath -w "$PWD")" packaging/windows/libroxel.iss
           echo "ASSET=$name.exe" >> "$GITHUB_ENV"
 
       - name: Keep the Mac half
@@ -166,12 +182,30 @@ jobs:
           lipo -create -output "$app/Contents/MacOS/libroxel" \
             half/libroxel-aarch64-apple-darwin half/libroxel-x86_64-apple-darwin
           sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          # The app's icon, made from the icon pictures in packaging/icons.
+          mkdir -p "$app/Contents/Resources" libroxel.iconset
+          for size in 16 32 128 256 512; do
+            cp "packaging/icons/libroxel-$size.png" "libroxel.iconset/icon_${size}x${size}.png"
+            cp "packaging/icons/libroxel-$((size * 2)).png" "libroxel.iconset/icon_${size}x${size}@2x.png"
+          done
+          iconutil -c icns libroxel.iconset -o "$app/Contents/Resources/libroxel.icns"
           # Ad-hoc signature: an unsigned arm64 binary won't launch at all.
           codesign --force --deep --sign - "$app"
-          cp README.md LICENSE-MIT LICENSE-APACHE "$dir/"
-          # A disk image to drag the app into Applications from.
-          ln -s /Applications "$dir/Applications"
-          hdiutil create -volname Libroxel -srcfolder "$dir" -ov -format UDZO "$dir.dmg"
+          # The usual Mac disk image: the app beside an Applications folder
+          # on a picture that says to drag one onto the other.
+          tiffutil -cathidpicheck packaging/macos/dmg-background.png packaging/macos/dmg-background@2x.png -out background.tiff
+          brew install create-dmg
+          create-dmg \
+            --volname "Libroxel" \
+            --volicon "$app/Contents/Resources/libroxel.icns" \
+            --background background.tiff \
+            --window-pos 200 120 --window-size 660 442 \
+            --icon-size 128 --text-size 13 \
+            --icon "Libroxel.app" 165 210 \
+            --hide-extension "Libroxel.app" \
+            --app-drop-link 495 210 \
+            --no-internet-enable \
+            "$dir.dmg" "$dir/"
           echo "ASSET=$dir.dmg" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
         with:
@@ -229,9 +263,9 @@ jobs:
           body: |
             ## Download Libroxel
 
-            - **Windows:** `libroxel-…-windows-x86_64-setup.exe`, open it to install
-            - **Mac** (Apple silicon and Intel): `libroxel-…-macos-universal.dmg`, open it and drag Libroxel to Applications, then right-click it there and choose Open the first time
-            - **Linux:** `libroxel-…-linux-x86_64.run` for any Linux (`sh libroxel-…-linux-x86_64.run`), or `libroxel-…-linux-x86_64.deb` for Debian and Ubuntu
+            - **Windows:** `libroxel-…-windows-x86_64-setup.exe`, open it and follow the setup wizard
+            - **Mac** (Apple silicon and Intel): `libroxel-…-macos-universal.dmg`, open it and drag Libroxel onto Applications, then right-click it there and choose Open the first time
+            - **Linux:** `libroxel-…-linux-x86_64.AppImage` for any Linux (make it executable and open it), or `libroxel-…-linux-x86_64.deb` for Debian and Ubuntu
 
             After installing, typing `libroxel` in a new terminal opens it.
 
