@@ -86,6 +86,12 @@ pub struct Platform {
     two_step_secret: Option<String>,
     two_step_code: String,
     two_step_done: Slot<String>,
+    /// The email for a new account, or one being added; and the code mailed to it.
+    account_email: String,
+    email_code: String,
+    email_busy: bool,
+    email_done: Slot<String>,
+    email_status: Option<Result<String, String>>,
     two_step_status: Option<Result<String, String>>,
     /// The catalog: things to wear that people made.
     pub items: Vec<Item>,
@@ -149,6 +155,11 @@ impl Default for Platform {
             two_step_secret: None,
             two_step_code: String::new(),
             two_step_done: Arc::default(),
+            account_email: String::new(),
+            email_code: String::new(),
+            email_busy: false,
+            email_done: Arc::default(),
+            email_status: None,
             two_step_status: None,
             items: Vec::new(),
             fetched_items: Arc::default(),
@@ -290,6 +301,7 @@ impl Platform {
             if result.is_ok() {
                 // Look again, for the games and the name as the Hub has it.
                 self.account_hub = None;
+                self.account_email.clear();
             }
             self.account_status = Some(result);
         }
@@ -305,6 +317,15 @@ impl Platform {
                 self.fetch_security();
             }
             self.two_step_status = Some(result);
+        }
+        let taken = self.email_done.lock().unwrap().take();
+        if let Some(result) = taken {
+            self.email_busy = false;
+            if result.is_ok() {
+                self.email_code.clear();
+                self.fetch_security();
+            }
+            self.email_status = Some(result);
         }
         if let Some(result) = self.password_done.lock().unwrap().take() {
             self.password_busy = false;
@@ -602,6 +623,7 @@ impl Platform {
         let client = self.client();
         let (name, about) = (self.account_name.trim().to_owned(), self.account_about.trim().to_owned());
         let new = self.account.is_none();
+        let email = Some(self.account_email.trim().to_owned()).filter(|e| new && !e.is_empty());
         let out = self.account_saved.clone();
         std::thread::spawn(move || {
             let result = crate::identity().and_then(|me| {
@@ -613,6 +635,7 @@ impl Platform {
                 let account = AccountUpdate {
                     // Only a new account needs the bot check worked out.
                     work: new.then(|| libroxel_hub::account_work(&player_id, &name)),
+                    email: email.clone(),
                     signature: me.sign(&message),
                     player_id,
                     name: name.clone(),
@@ -621,7 +644,12 @@ impl Platform {
                     time,
                 };
                 client.update_account(&account)?;
-                Ok(format!("Saved. You are {name} on {}.", client.url()))
+                Ok(match &email {
+                    Some(email) => format!(
+                        "Welcome, {name}! We sent a code to {email}: type it below to prove the email is yours."
+                    ),
+                    None => format!("Saved. You are {name} on {}.", client.url()),
+                })
             });
             *out.lock().unwrap() = Some(result);
         });
@@ -682,6 +710,132 @@ impl Platform {
             });
             *out.lock().unwrap() = Some(result);
         });
+    }
+
+    /// Gives the account the email typed (or sends a new code to it).
+    fn send_email_code(&mut self, email: String) {
+        if self.email_busy {
+            return;
+        }
+        self.email_busy = true;
+        self.email_status = None;
+        let client = self.client();
+        let out = self.email_done.clone();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| {
+                let time = libroxel_hub_now_ms();
+                let set = libroxel_hub::EmailSet {
+                    player_id: me.player_id(),
+                    signature: me.sign(&libroxel_hub::email_message(&me.player_id(), &email, time)),
+                    email: email.clone(),
+                    time,
+                };
+                let sent = client.set_email(&set)?;
+                Ok(if sent.verified {
+                    format!("{email} is already proved.")
+                } else if sent.sent {
+                    format!("We sent a code to {email}. Type it below.")
+                } else {
+                    format!("Saved {email}. (This Hub can't send mail, so there's no code.)")
+                })
+            });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    /// Sends in the code from the mail.
+    fn verify_email_code(&mut self) {
+        if self.email_busy {
+            return;
+        }
+        self.email_busy = true;
+        self.email_status = None;
+        let client = self.client();
+        let code = self.email_code.trim().to_owned();
+        let out = self.email_done.clone();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| {
+                let time = libroxel_hub_now_ms();
+                client.verify_email(&libroxel_hub::EmailCode {
+                    player_id: me.player_id(),
+                    signature: me.sign(&libroxel_hub::email_code_message(&me.player_id(), &code, time)),
+                    code,
+                    time,
+                })?;
+                Ok("Your email is proved. Thanks!".to_owned())
+            });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    /// The account's email: add one, prove it with the mailed code, or see it's done.
+    fn email_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(security) = self.security.clone() else { return };
+        ui.add_space(10.0);
+        ui.label(RichText::new("Email").strong());
+        match &security.email {
+            Some(email) if security.email_verified => {
+                ui.colored_label(crate::theme::GREEN, format!("{email} (proved)"));
+            }
+            Some(email) if security.sends_mail => {
+                ui.colored_label(
+                    crate::theme::AMBER,
+                    format!("Not proved yet: type the code we mailed to {email}."),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Code from the mail");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.email_code).char_limit(6).desired_width(70.0),
+                    );
+                    let ready = self.email_code.trim().len() == 6 && !self.email_busy;
+                    if ui.add_enabled(ready, egui::Button::new("Prove it")).clicked() {
+                        self.verify_email_code();
+                    }
+                    if ui.add_enabled(!self.email_busy, egui::Button::new("Send again")).clicked() {
+                        self.send_email_code(email.clone());
+                    }
+                });
+            }
+            Some(email) => {
+                ui.label(RichText::new(email).color(crate::theme::TEXT));
+            }
+            None => {
+                ui.colored_label(
+                    crate::theme::AMBER,
+                    "Your account has no email yet. Add one, so you can prove the account is yours.",
+                );
+            }
+        }
+        // A new address, for an account without one or to change it.
+        ui.horizontal(|ui| {
+            let label = if security.email.is_some() { "New email" } else { "Your email" };
+            ui.label(label);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.account_email)
+                    .char_limit(254)
+                    .hint_text("you@example.com")
+                    .desired_width(220.0),
+            );
+            let email = self.account_email.trim().to_owned();
+            let ready = libroxel_hub::valid_email(&email) && !self.email_busy;
+            let button = if security.sends_mail { "Send code" } else { "Save" };
+            if ui.add_enabled(ready, egui::Button::new(button)).clicked() {
+                self.send_email_code(email);
+                self.account_email.clear();
+            }
+            if self.email_busy {
+                ui.spinner();
+            }
+        });
+        match &self.email_status {
+            Some(Ok(said)) => {
+                ui.colored_label(crate::theme::GREEN, said);
+            }
+            Some(Err(why)) => {
+                ui.colored_label(crate::theme::RED, why);
+            }
+            None => {}
+        }
     }
 
     /// Asks the Hub how this account is kept safe (only its owner may).
@@ -824,6 +978,9 @@ impl Platform {
 
     /// The password part of the Avatar tab: set one, or sign in with one.
     fn password_ui(&mut self, ui: &mut egui::Ui) {
+        if self.account.is_some() {
+            self.email_ui(ui);
+        }
         ui.add_space(10.0);
         if self.account.is_some() {
             ui.label(RichText::new("Password").strong());
@@ -989,9 +1146,19 @@ impl Platform {
             ui.label("About you");
             ui.add(egui::TextEdit::multiline(&mut self.account_about).desired_rows(2).char_limit(300));
             ui.end_row();
+            if self.account.is_none() {
+                ui.label("Email");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.account_email)
+                        .char_limit(254)
+                        .hint_text("you@example.com, kept private"),
+                );
+                ui.end_row();
+            }
         });
         let name = self.account_name.trim().to_owned();
-        let valid = libroxel_hub::valid_account_name(&name);
+        let email_ok = self.account.is_some() || libroxel_hub::valid_email(self.account_email.trim());
+        let valid = libroxel_hub::valid_account_name(&name) && email_ok;
         ui.horizontal(|ui| {
             let label = if self.account.is_some() { "Save changes" } else { "Claim this name" };
             if ui.add_enabled(valid && !self.account_busy, egui::Button::new(label)).clicked() {
@@ -1001,10 +1168,15 @@ impl Platform {
                 ui.spinner();
             }
         });
-        if !name.is_empty() && !valid {
+        if !name.is_empty() && !libroxel_hub::valid_account_name(&name) {
             ui.colored_label(
                 crate::theme::AMBER,
                 "A name is 3 to 20 letters, digits or underscores, with at least one letter.",
+            );
+        } else if self.account.is_none() && !name.is_empty() && !email_ok {
+            ui.colored_label(
+                crate::theme::AMBER,
+                "Add your email too: the Hub mails it a code to prove it's yours. No one else sees it.",
             );
         }
         match &self.account_status {

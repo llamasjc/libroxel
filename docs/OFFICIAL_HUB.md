@@ -60,6 +60,41 @@ curl -fsSLO https://github.com/<owner>/<repo>/releases/latest/download/update-hu
 sudo bash setup-hub.sh --repo <owner>/<repo> --domain hub.libroxel.com
 ```
 
+### Email codes
+
+New accounts give an email, and the Hub mails them a 6-digit code to prove
+it's theirs (older accounts are asked to add one). Emails are private: only
+the account's owner sees theirs. The Hub sends mail through any SMTP
+provider; [Resend](https://resend.com) is free for 3,000 mails a month:
+
+1. Make a Resend account, open **Domains → Add domain** and add
+   `libroxel.com`.
+2. Add the DNS records it shows at your domain's DNS provider (an `MX` and
+   a `TXT` for SPF on `send.libroxel.com`, and a `TXT` for DKIM on
+   `resend._domainkey.libroxel.com`). Adding a DMARC record too helps mail
+   land in inboxes: `TXT` on `_dmarc.libroxel.com` with
+   `v=DMARC1; p=none;`. Wait until Resend says the domain is verified.
+3. Open **API Keys → Create API key** (sending access is enough).
+4. On the server, put the key in `/etc/libroxel/mail.conf`:
+
+   ```sh
+   sudo tee /etc/libroxel/mail.conf >/dev/null <<'EOF'
+   LIBROXEL_SMTP_HOST=smtp.resend.com
+   LIBROXEL_SMTP_PORT=587
+   LIBROXEL_SMTP_USER=resend
+   LIBROXEL_SMTP_PASSWORD=re_your_key_here
+   LIBROXEL_MAIL_FROM=Libroxel <no-reply@libroxel.com>
+   EOF
+   sudo chmod 600 /etc/libroxel/mail.conf
+   sudo systemctl restart libroxel-hub
+   journalctl -u libroxel-hub -n 5
+   ```
+
+   The log says `Mailing email codes through smtp.resend.com:587`. Any
+   other provider works the same way with its own SMTP settings. Until mail
+   is set up, the Hub keeps the emails people give but sends no codes, and
+   doesn't insist on one.
+
 ## 3. HTTPS and who is calling
 
 Players' passwords never leave their computers, and every change is signed,

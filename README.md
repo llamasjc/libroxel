@@ -204,6 +204,9 @@ The first build compiles Bevy and takes a while. After that it is quick.
   hands that copy out only to someone who proves the password. Ten wrong
   passwords for a name lock signing in to it for 15 minutes. Signing in
   keeps this computer's old key beside the new one (`identity.key.old-…`).
+- **Email:** making an account asks for an email, kept private, and the
+  Hub mails it a 6-digit code to prove it's yours (type it on the Avatar
+  tab, or the website's account page). Accounts made before ask for one.
 - **More than one account:** **Sign out** at the top of **Your account**
   starts a new, empty account to claim another name or sign in with. Every
   account you've used is kept on this computer (in `accounts/` beside

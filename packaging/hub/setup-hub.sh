@@ -93,6 +93,21 @@ if [ -f "$here/update-hub.sh" ]; then
     install -m 755 "$here/update-hub.sh" /usr/local/bin/libroxel-hub-update
 fi
 
+echo "== Mail settings in /etc/libroxel/mail.conf (for email codes)"
+if [ ! -f /etc/libroxel/mail.conf ]; then
+    install -m 600 /dev/null /etc/libroxel/mail.conf
+    cat > /etc/libroxel/mail.conf <<'MAIL'
+# How the Hub mails codes that prove players' emails. Fill these in from your
+# mail provider (Resend, Brevo, Postmark…), then: sudo systemctl restart libroxel-hub
+# Until LIBROXEL_SMTP_HOST is set, emails are kept but no codes are sent.
+#LIBROXEL_SMTP_HOST=smtp.resend.com
+#LIBROXEL_SMTP_PORT=587
+#LIBROXEL_SMTP_USER=resend
+#LIBROXEL_SMTP_PASSWORD=your-api-key
+#LIBROXEL_MAIL_FROM=Libroxel <no-reply@libroxel.com>
+MAIL
+fi
+
 echo "== The service: starts on boot, restarts if it ever stops"
 cat > /etc/systemd/system/libroxel-hub.service <<UNIT
 [Unit]
@@ -104,6 +119,7 @@ StartLimitIntervalSec=0
 [Service]
 User=libroxel
 Group=libroxel
+EnvironmentFile=-/etc/libroxel/mail.conf
 ExecStart=/usr/local/bin/libroxel-hub --port 7430 --data /var/lib/libroxel/hub.sqlite --behind-proxy
 Restart=always
 RestartSec=2

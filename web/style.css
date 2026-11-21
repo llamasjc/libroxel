@@ -161,7 +161,7 @@ h1, h2, h3 { font-family: var(--display); font-weight: 600; margin: 0; color: va
 .chip.on { background: linear-gradient(rgb(220, 238, 252), rgb(178, 216, 246)); border-color: rgb(102, 167, 232); color: var(--accent-deep); }
 .iconbtn { padding: 3px 8px; }
 
-input[type=text], input[type=password], input[type=search], textarea {
+input[type=text], input[type=password], input[type=search], input[type=email], textarea {
   width: 100%; padding: 7px 9px; background: #fff; border: 1px solid rgb(171, 173, 179); border-top-color: rgb(140, 150, 160); border-radius: 3px;
 }
 input:focus, textarea:focus { outline: none; border-color: rgb(61, 123, 173); box-shadow: 0 0 4px rgba(90, 170, 240, 0.7); }
