@@ -573,11 +573,11 @@ impl PlaySession {
         let address = with_port(address);
         let target: SocketAddr = address
             .to_socket_addrs()
-            .map_err(|e| format!("could not find {address}: {e}"))?
+            .map_err(|e| format!("could not find that address: {e}"))?
             .next()
-            .ok_or_else(|| format!("could not find {address}"))?;
+            .ok_or_else(|| "could not find that address".to_owned())?;
         let stream = TcpStream::connect_timeout(&target, Duration::from_secs(5))
-            .map_err(|e| format!("could not reach {address}: {e}"))?;
+            .map_err(|e| format!("could not reach the host: {e}"))?;
         let mut conn = Conn::new(stream).map_err(|e| e.to_string())?;
         conn.send(&json!({ "t": "hello", "name": name, "version": PROTOCOL }));
         conn.flush();
@@ -595,7 +595,7 @@ impl PlaySession {
             own_model: None,
             teleports: 0,
         }));
-        session.info(format!("🔗 Joining {address}"));
+        session.info("🔗 Joining the game (its address stays hidden here)".to_owned());
         Ok(session)
     }
 

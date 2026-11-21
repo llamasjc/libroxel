@@ -1,5 +1,5 @@
 //! `libroxel-hub`: only the Hub, for a server with no screen. It builds
-//! without the game engine, and does what `libroxel hub` does.
+//! without the game engine, and is the only program that runs or looks after the Hub.
 
 use std::path::PathBuf;
 

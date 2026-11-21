@@ -5,7 +5,7 @@
 //! In the editor you build a world out of parts, attach scripts, and press
 //! Play to test it with a character. Stop puts everything back.
 //!
-//! A game file (or `--sample`) on the command line skips the home screen
+//! A game file on the command line skips the home screen
 //! and opens it in the editor. A `libroxel://` link (from Play on the
 //! website) opens the home screen and joins or starts that game.
 //!
@@ -14,8 +14,14 @@
 //! cargo run -p libroxel -- my_game.lrx  # edit a saved place
 //! ```
 
+// On Windows the app opens as a window with no console behind it.
+// `libroxel server` and `libroxel help` borrow the terminal they were
+// typed in instead (see `attach_terminal`).
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod accounts;
 mod browse;
+mod command;
 mod debugging;
 mod file_picker;
 mod gui;
@@ -281,15 +287,19 @@ pub fn identity() -> Result<libroxel_net::Identity, String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if matches!(args.first().map(String::as_str), Some("server" | "help" | "--help" | "-h")) {
+        attach_terminal();
+    }
     if server::dispatch(&args) {
         return;
     }
     // Play buttons on the website open this copy of the app.
     url_handler::register();
+    // Typing `libroxel` in a terminal opens this copy too.
+    command::install();
     let mut editor = Editor { platform: browse::Platform::start(), ..Editor::default() };
     let mut notes = Vec::new();
     let tree = match args.first().cloned() {
-        Some(flag) if flag == "--sample" => templates::sample_obby(),
         Some(link) if url_handler::is_link(&link) => {
             editor.menu.open = true;
             match url_handler::parse(&link) {
@@ -347,6 +357,25 @@ fn main() {
         .add_systems(Update, update_title)
         .run();
 }
+
+/// Lets a windowless Windows build print to the terminal it was started
+/// from, for `libroxel server` and `libroxel help`.
+#[cfg(windows)]
+fn attach_terminal() {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn AttachConsole(process: u32) -> i32;
+    }
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    // SAFETY: AttachConsole takes a plain number and only fails (returning
+    // 0) when there is no terminal to attach to, which is fine.
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_terminal() {}
 
 /// egui draws with its own camera so the 3D camera can be limited to the
 /// space between the panels.

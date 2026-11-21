@@ -12,7 +12,7 @@ and the engine runs on [Bevy](https://bevy.org).
 
 ![The Libroxel editor](docs/editor.png)
 
-![Playing the sample obby: the leaderboard, the coin counter and a "hold E" prompt](docs/playing.png)
+![Playing a game in Libroxel](docs/playing.png)
 
 ## Getting started
 
@@ -40,27 +40,10 @@ The first build compiles Bevy and takes a while. After that it is quick.
 
 ## The editor
 
-- **File → Open a starter game → Sample obby** loads a small obstacle course with a wooden
-  ramp, spinning coins, lava, fading platforms, a lift and a finish pad, plus
-  a leaderboard that counts coins and deaths, an on-screen coin counter, a
-  day/night button, a vault whose door opens when you click it, and a stand
-  where you hold E to buy a speed boost. Coins are saved between play tests,
-  and a builder tool (press 1, then click) places bricks. There's also a
-  launch pad, street lamps that light up at night, TNT that blows up a stack
-  of crates, a chat box (press /) that floats what you say over your head,
-  an overhead camera (press C), and a zombie in the quarry that chases you.
-  Everyone starts on the Runners team and joins the Winners at the finish.
-  A health bar sits in the corner, the quarry has a mine cart (its sides are
-  welded on) that you can click to push, and a pressure plate by the shop
-  glows while you stand on it. Past the quarry is a walled kart track with a
-  go-kart to drive (walk into its seat, WASD to drive, Space to hop out), and
-  there's a bench to sit on at the start. Over the track's right wall is a
-  physics playground: a tyre swing on a rope, a hovering pad held up by an
-  AlignPosition, a weight bouncing on a spring, a windmill turned by a
-  hinge motor and a gate on a servo hinge (click it). The quarry has a smoking
-  campfire, the launch pad fizzes, the finish sparkles, and the zombie
-  glows red so you can spot it.
-  Press **Play** (or F5) to try it.
+- **File → Open a starter game → Kart race** loads a finished kart race:
+  four karts on the grid (walk into a seat, WASD to drive, Space to hop
+  out), three laps through blue gates, and laps and best times on the
+  leaderboard. Press **Play** (or F5) to try it.
 - **Layout:** the editor is laid out the way Roblox Studio users know it.
   Along the top is a **File** menu and a ribbon with **Home**, **Model**,
   **Test** and **View** tabs. The **Toolbox** sits on the left, the
@@ -181,13 +164,12 @@ The first build compiles Bevy and takes a while. After that it is quick.
   `~/.config/libroxel/identity.key`.
 - **Publishing:** **File → Publish…** puts the open game on the Hub with a
   title and a few words about it. It then shows on the home screen's
-  **🌍 Online** tab under **Published games** for everyone using that Hub,
+  **🌍 Online** tab under **Published games** for everyone,
   with **▶ Play** (play it on your own, no host needed) and **🌐 With
   friends** (host it so friends can join). Publishing the same file again
   puts out a new version; this computer keeps the secret that allows that
-  in `~/.config/libroxel/published.json`. Games stay published for as long
-  as the Hub keeps running, so publish to a Hub on a computer that stays on
-  (`libroxel hub`) if you want games to be there when you're not.
+  in `~/.config/libroxel/published.json`. Published games stay up when
+  you're away.
 - **Accounts:** the home screen's **👤 Avatar** tab has **Your account**:
   claim a name on the Hub (3 to 20 letters, digits or underscores, one per
   Hub) and say a little about yourself. The account belongs to your
@@ -218,7 +200,7 @@ The first build compiles Bevy and takes a while. After that it is quick.
   and each code works once. The account page lists recent sign-ins on other
   computers and where they came from. New accounts work out a small puzzle
   on the player's computer first (a bot check), and whoever runs the Hub
-  hands out verified badges (`libroxel hub verify <name>`).
+  hands out verified badges (`libroxel-hub verify <name>`).
 - **Names no one else can take:** a name stays yours on that Hub, whatever
   the case (`Admin`, `admin` and `ADMIN` are one name). Every account also
   gets a number in the order it joined, starting at 0, and profile links
@@ -240,9 +222,9 @@ The first build compiles Bevy and takes a while. After that it is quick.
   `player:Kick(reason)`; a removed player can't rejoin that game. Every
   published game and catalog hat has a **⚑** to report it. Once three
   different players report something, the Hub stops listing it until
-  whoever runs the Hub looks: `libroxel hub reports` lists reports,
-  `libroxel hub clear game <id>` lists one again, and
-  `libroxel hub remove game <id>` takes it down (`item` for hats).
+  whoever runs the Hub looks: `libroxel-hub reports` lists reports,
+  `libroxel-hub clear game <id>` lists one again, and
+  `libroxel-hub remove game <id>` takes it down (`item` for hats).
 - **Editing together:** **Test > Edit together → Share this game**
   lets others edit the game you have open, live, while you work on it. Send
   them the code from **📋 Copy edit code** (or, on your own network, your
@@ -253,31 +235,30 @@ The first build compiles Bevy and takes a while. After that it is quick.
   the same thing at once, the last change to reach the sharing computer
   wins. Only the sharing computer saves the game. Playing a game is still
   done on your own; editing together carries on when you stop.
-- **Finding games:** **🌍 Browse** lists the games being hosted right now on
-  a Hub, community servers first, and joins one with a click. With an
-  official Hub set, everyone uses it. Without one, every copy of Libroxel
-  runs a small Hub on port 7430, so friends on your network can put your
-  computer's address in Browse's Hub box; `libroxel server` runs one too,
-  and `libroxel hub` runs only a Hub. Games you host are listed on the
-  Hub that Browse points at. Set `LIBROXEL_HUB=host:port` to use another
-  Hub from the start.
+- **Finding games:** **🌍 Browse** lists the games being hosted right now,
+  community servers first, and joins one with a click. There is one Hub
+  and everyone uses it; the app can't run its own. (For trying a Hub out
+  on one computer, such as the demo Hub, `LIBROXEL_HUB=host:port` points
+  the app at it.)
 - **One app, one home screen:** the build is a single `libroxel` program
   (`cargo run` starts it) and it opens on a home screen with tabs.
   **▶ Play** shows your games as tiles (the starter games and every saved game):
   pick one and press Play, or double-click it, or **Play with friends** to
   host it. **🌍 Online** lists the games being hosted, with a Join button
   each, and joins a friend's game from a pasted join code or address.
-  **✏ Create** opens the editor on a new world, the sample or a saved game.
-  **🌐 Host** hosts a game and plays it, starts a server in the background
-  with no player of your own (showing its join code), and turns this
-  computer's Hub on or off. **👤 Avatar** picks your skin, shirt and
+  **✏ Create** opens the editor on a new world, a starter game or a saved
+  game. **More → 🌐 Host a server** hosts a game and plays it, or starts a
+  server in the background with no player of your own (its join code stays
+  hidden until you press Show IP). **👤 Avatar** picks your skin, shirt and
   trouser colours and a hat (a cap, a tall hat, a crown, a halo or an
   antenna); you look like that in every game you play, host or join, and
-  other players see it. Your player name sits in the top bar. Games
+  other players see it. The Libroxel mark at the left of the top bar is
+  Home; Search and who you play as (your account's name, which can't be
+  typed over) sit at the right. Games
   played from the home screen show only the game: **⏹ Leave game** (or Esc)
   goes back, and **File → Main menu** does from the editor. (For scripts
-  and servers without a screen, `libroxel server <game.lrx>`,
-  `libroxel hub` and `libroxel help` still work.)
+  and servers without a screen, `libroxel server <game.lrx>` and
+  `libroxel help` still work.)
 - **Home and Friends:** the home screen opens on **Home**: your friends
   along the top (a green dot when they're online, blue with the game's name
   when they're in one; click one in a game to join them), then every game
@@ -307,23 +288,19 @@ The first build compiles Bevy and takes a while. After that it is quick.
   your friends are. Hosts sign their listing too, so server lists show
   "hosted by" with the account the Hub checked, whatever the server is
   called. Accounts, passwords and friends live in the Hub's SQLite file
-  (`hub.sqlite` in Libroxel's data folder, or `--data` for `libroxel hub`),
+  (`hub.sqlite` on the Hub's server, or `--data` for `libroxel-hub`),
   so they outlast a restart.
 - **One official Hub:** every copy of the app uses `https://hub.libroxel.com`
   (`OFFICIAL_HUB` in `crates/libroxel-hub/src/lib.rs`) for accounts, friends, publishing
-  and server lists, with no Hub of its own. Whoever runs it owns it: only
-  its owners list Official servers, and `libroxel hub ban`, `owners` and
+  and server lists; the app never runs a Hub of its own. Whoever runs it
+  owns it: only its owners list Official servers, and `libroxel-hub ban`, `owners` and
   `accounts` look after it from its own computer.
   [docs/OFFICIAL_HUB.md](docs/OFFICIAL_HUB.md) covers running one with
   HTTPS. Forks set their own.
-- **Starter games:** three small finished games to play or build on. The
-  **Sample obby** has coins, lava, TNT and a rover. **Kart race** is three
-  laps round a track in karts, through blue gates in order, with laps and
-  best lap times on the leaderboard. **Coin rush** is one-minute rounds in
-  an arena where coins keep appearing, a lava bar sweeps the middle and a
-  robot that finds its own way to the coins tries to get there first; the
-  most coins wins the round. Open them from the home screen or **File →
-  Open a starter game**.
+- **Starter games:** a small finished game to play or build on. **Kart
+  race** is three laps round a track in karts, through blue gates in order,
+  with laps and best lap times on the leaderboard. Open it from the home
+  screen or **File → Open a starter game**.
 - **Undo/redo** with Ctrl+Z and Ctrl+Y. **Save** with Ctrl+S. Games are
   saved as `.lrx` files in `~/Projects/libroxel-games/` by default.
 
@@ -390,7 +367,7 @@ as before: a mesh part as a box, a picture as nothing, a sound silent.
 | [`libroxel-script`](crates/libroxel-script) | The sandboxed Luau runtime (via `mlua`) with a thread scheduler. Every name scripts can see lives in [`names.rs`](crates/libroxel-script/src/names.rs). |
 | [`libroxel-rbx`](crates/libroxel-rbx) | Opens place and model files saved by Roblox Studio (`.rbxl`, `.rbxlx`, `.rbxm`, `.rbxmx`) as instance trees, using the open-source rbx-dom readers. |
 | [`libroxel-engine`](crates/libroxel-engine) | Play sessions: physics, the player character, touch events, respawning, and the Bevy integration (rendering and cameras). |
-| [`libroxel`](crates/libroxel) | The Libroxel app: the home screen (Play, Online, Create, Host), the editor, plus `libroxel server` and `libroxel hub`. |
+| [`libroxel`](crates/libroxel) | The Libroxel app: the home screen (Play, Online, Create, Host), the editor, plus `libroxel server`. |
 | [`libroxel-proto`](crates/libroxel-proto) | A minimal player that runs a saved game or a single script. |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit together.
@@ -641,8 +618,7 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   has `Play(fadeTime?, weight?, speed?)`, `Stop(fadeTime?)`, `AdjustSpeed`,
   `AdjustWeight`, `IsPlaying`, `Length`, `Looped`, `Speed`, `TimePosition`
   and a `Stopped` event; `animator:GetPlayingAnimationTracks()` lists what's
-  playing. Animations that don't move the legs let them walk as usual. In
-  the sample obby, type `/e dance` (or another one) in the chat.
+  playing. Animations that don't move the legs let them walk as usual.
 - **Pathfinding:** `game:GetService("PathfindingService"):CreatePath({
   AgentRadius = 1, AgentHeight = 5, AgentCanJump = true })` makes a path;
   `path:ComputeAsync(from, to)` searches the ground for a way round walls,

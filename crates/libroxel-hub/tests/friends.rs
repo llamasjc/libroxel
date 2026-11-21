@@ -126,7 +126,7 @@ fn friends_ask_accept_see_each_other_and_join() {
 
     // Her server is on the Kart race list and no other.
     assert_eq!(hub.game_servers("starter:Kart race").unwrap().len(), 1);
-    assert!(hub.game_servers("starter:Sample obby").unwrap().is_empty());
+    assert!(hub.game_servers("starter:Tower of Doom").unwrap().is_empty());
 
     // Signing off shows her offline, with when she was last on.
     ana.presence(&hub, false, None);

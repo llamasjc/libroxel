@@ -148,16 +148,11 @@ fn main() {
 
     // Servers, each with a real host behind it that answers pings.
     let kart = "starter:Kart race";
-    let obby = "starter:Sample obby";
-    let coins = "starter:Coin rush";
     let servers: Vec<(String, &str, &str, &str, u32, u32, HostKind)> = vec![
         (friends[0].me.player_id(), "AnaRacer's game", "Kart race", kart, 4, 8, HostKind::Player),
         ("speedway".into(), "Speedway 24/7", "Kart race", kart, 11, 12, HostKind::Community),
         ("pitstop".into(), "Pit stop (no ramming)", "Kart race", kart, 12, 12, HostKind::Community),
         ("official-kart".into(), "Libroxel Kart race #1", "Kart race", kart, 2, 20, HostKind::Official),
-        (friends[1].me.player_id(), "BoJumps's game", "Sample obby", obby, 3, 10, HostKind::Player),
-        ("marathon".into(), "Obby marathon", "Sample obby", obby, 7, 16, HostKind::Community),
-        ("coins-eu".into(), "Coin rush EU", "Coin rush", coins, 5, 10, HostKind::Community),
         ("tower-1".into(), "Tower of Doom: floor 20+", "Tower of Doom", &tower, 6, 10, HostKind::Community),
         ("tower-2".into(), "DeeDev's game", "Tower of Doom", &tower, 2, 6, HostKind::Player),
     ];
@@ -198,9 +193,9 @@ fn main() {
             }
         }
         friends[0].presence(&hub, true, Some(("Kart race", kart)), Some(servers[0].0.clone()));
-        friends[1].presence(&hub, true, Some(("Sample obby", obby)), Some(servers[4].0.clone()));
-        friends[2].presence(&hub, true, Some(("Sample obby", obby)), Some(servers[4].0.clone()));
-        friends[3].presence(&hub, true, Some(("Tower of Doom", &tower)), Some(servers[8].0.clone()));
+        friends[1].presence(&hub, true, Some(("Kart race", kart)), Some(servers[1].0.clone()));
+        friends[2].presence(&hub, true, Some(("Tower of Doom", &tower)), Some(servers[4].0.clone()));
+        friends[3].presence(&hub, true, Some(("Tower of Doom", &tower)), Some(servers[5].0.clone()));
         friends[4].presence(&hub, true, None, None);
         friends[5].presence(&hub, false, None, None);
         std::thread::sleep(Duration::from_secs(10));

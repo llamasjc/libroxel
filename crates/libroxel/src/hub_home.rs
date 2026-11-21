@@ -493,7 +493,7 @@ fn server_row(ui: &mut egui::Ui, platform: &mut Platform, server: &ServerInfo, t
                     // Only an account the Hub checked; the server's name is whatever the host typed.
                     if server.admin_host {
                         ui.label(RichText::new("Admin").small().strong().color(theme::AMBER))
-                            .on_hover_text("Run by whoever runs this Hub, checked by the Hub.");
+                            .on_hover_text("Run by Libroxel, checked by the Hub.");
                     } else if let Some(host) = &server.host {
                         let verified = if server.host_verified { " · verified" } else { "" };
                         ui.label(
@@ -646,7 +646,7 @@ pub fn home_tab(
             );
             let online = platform.social.friends.friends.iter().filter(|f| f.online).count();
             let note = match (platform.account.is_some(), online) {
-                (false, _) => "Claim a name on the Avatar tab to add friends.".to_owned(),
+                (false, _) => "Make an account on the Avatar tab to add friends.".to_owned(),
                 (true, 0) => "None of your friends are online right now.".to_owned(),
                 (true, 1) => "1 friend is online.".to_owned(),
                 (true, n) => format!("{n} friends are online."),
@@ -888,7 +888,7 @@ fn game_page(
             ui.set_min_width(ui.available_width());
             ui.label(RichText::new("No servers are running this game right now.").color(theme::TEXT));
             let more = if entry.hostable() {
-                "Press New server to start one; it shows up here for everyone on this Hub."
+                "Press New server to start one; it shows up here for everyone."
             } else {
                 "Servers show up here as soon as someone hosts it."
             };
@@ -947,16 +947,14 @@ pub fn friends_tab(
         ui.add_space(8.0);
         theme::panel().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new("Claim a name first").font(theme::display(17.0)).color(theme::TEXT));
+            ui.label(RichText::new("Make an account first").font(theme::display(17.0)).color(theme::TEXT));
             ui.label(
-                RichText::new(format!(
-                    "Friends find you by your name on the Hub at {}. It takes a second, on the Avatar tab.",
-                    platform.hub_address
-                ))
-                .color(SOFT),
+                RichText::new("Friends find you by your name. It takes a second, on the Avatar tab.")
+                    .color(SOFT),
             );
             ui.add_space(6.0);
-            if theme::block_button(ui, theme::Kind::Primary, icon::T_SHIRT, "Claim a name", 38.0).clicked() {
+            if theme::block_button(ui, theme::Kind::Primary, icon::T_SHIRT, "Make an account", 38.0).clicked()
+            {
                 *tab = Tab::Avatar;
             }
         });
@@ -1116,7 +1114,7 @@ fn people_results(
     change: &mut Option<(String, String, FriendAction)>,
 ) {
     if social.people.is_empty() {
-        ui.label(RichText::new(format!("Nobody called “{}” on this Hub.", social.people_for)).color(SOFT));
+        ui.label(RichText::new(format!("Nobody called “{}”.", social.people_for)).color(SOFT));
     }
     for person in &social.people {
         let busy = social.changing.contains(&person.player_id);
@@ -1162,7 +1160,7 @@ fn people_results(
 pub fn search_tab(state: &mut HomeState, ui: &mut egui::Ui, platform: &mut Platform, tab: &mut Tab) {
     platform.refresh_if_old();
     theme::heading(ui, "Search");
-    ui.label(RichText::new("Find players and games on this Hub.").color(SOFT));
+    ui.label(RichText::new("Find players and games.").color(SOFT));
     ui.add_space(8.0);
     let mut search = std::mem::take(&mut platform.social.people_search);
     if search_box(ui, &mut search, "A player's name or a game") {
@@ -1196,7 +1194,7 @@ pub fn search_tab(state: &mut HomeState, ui: &mut egui::Ui, platform: &mut Platf
             })
             .collect();
         if found.is_empty() {
-            ui.label(RichText::new(format!("No games called “{looked_for}” on this Hub.")).color(SOFT));
+            ui.label(RichText::new(format!("No games called “{looked_for}”.")).color(SOFT));
         }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(18.0, 18.0);

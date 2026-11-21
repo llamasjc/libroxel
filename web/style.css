@@ -78,6 +78,11 @@ button, input, textarea { font: inherit; color: inherit; }
 }
 .brand { display: flex; align-items: center; gap: 10px; color: var(--heading); font: 700 24px var(--display); text-shadow: 0 0 8px rgba(255, 255, 255, 0.9); }
 .brand:hover { text-decoration: none; }
+/* The mark is the Home button: a glossy pill while you're on Home, as in the app. */
+.brand { padding: 5px 10px; border-radius: 9px; border: 1px solid transparent; }
+.brand:hover { background: rgba(220, 240, 255, 0.45); }
+.brand.active { background: linear-gradient(rgb(250, 253, 255), rgb(196, 228, 250)); border-color: rgb(70, 130, 190); box-shadow: 0 0 16px rgba(160, 220, 255, 0.8); }
+.who .tab.iconbtn { padding: 6px 10px; }
 .brand svg { width: 30px; height: 32px; }
 .tabs { display: flex; gap: 4px; flex: 1; overflow-x: auto; scrollbar-width: none; height: 100%; align-items: center; }
 .tabs::-webkit-scrollbar { display: none; }

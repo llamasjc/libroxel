@@ -186,7 +186,7 @@ pub(crate) fn sign_in_with(
     if !(MIN_MEMORY_KIB..=MAX_MEMORY_KIB).contains(&salt.memory_kib)
         || !(MIN_PASSES..=MAX_PASSES).contains(&salt.passes)
     {
-        return Err("this Hub asks for unsafe password settings".into());
+        return Err("the Hub asks for unsafe password settings".into());
     }
     let salt_bytes =
         data_encoding::HEXLOWER.decode(salt.salt.as_bytes()).map_err(|_| "the Hub sent a bad salt")?;
@@ -264,7 +264,7 @@ pub(crate) async fn set_password(
     }
     let db = db.lock().unwrap();
     if crate::owner::is_banned(&db, &set.player_id) {
-        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+        return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
     }
     let has_account: Option<i64> = db
         .query_row("SELECT 1 FROM accounts WHERE player_id = ?1", params![set.player_id], |r| r.get(0))
@@ -316,7 +316,7 @@ pub(crate) async fn sign_in_salt(
     }
     let db = db.lock().unwrap();
     let Some((_, salt, memory_kib, passes, _, _)) = password_for(&db, &name)? else {
-        return Err((StatusCode::NOT_FOUND, "no one with that name has a password on this Hub".into()));
+        return Err((StatusCode::NOT_FOUND, "nobody with that name has a password".into()));
     };
     Ok(Json(SignInSalt { salt, memory_kib, passes }))
 }
@@ -351,7 +351,7 @@ pub(crate) async fn sign_in(
         return wrong();
     }
     if crate::owner::is_banned(&db, &player_id) {
-        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+        return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
     }
     match crate::security::check_code(&db, &player_id, attempt.code.as_deref()) {
         Ok(()) => {}

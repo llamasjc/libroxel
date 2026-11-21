@@ -1,14 +1,13 @@
-//! The editor's side of the Hub: a built-in Hub, the Browse window, and
-//! listing a hosted game so others can find it.
+//! The app's side of the Hub: the Browse window, and listing a hosted
+//! game so others can find it.
 
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bevy_egui::egui::{self, RichText};
 use libroxel_hub::{
     AccountUpdate, Announcer, GameInfo, HostKind, HostSigner, HubClient, Item, Listing, NewItem, Profile,
-    Publish, Report, RunningHub, ServerInfo,
+    Publish, Report, ServerInfo,
 };
 use libroxel_instance::serde_json::{self, Value as Json, json};
 
@@ -26,11 +25,8 @@ pub struct Downloaded {
 
 /// Everything about the Hub the editor keeps between frames.
 pub struct Platform {
-    /// The Hub this editor runs for its network, if it could start one.
-    pub own_hub: Option<RunningHub>,
-    /// Why the built-in Hub is not running, if it is not.
-    pub own_hub_note: Option<String>,
-    /// The Hub that Browse lists and Host announces to.
+    /// The Hub's address ([`libroxel_hub::hub_address`]). It isn't
+    /// something to change in the app: there is one Hub.
     pub hub_address: String,
     pub open: bool,
     pub search: String,
@@ -111,9 +107,7 @@ pub struct Platform {
 impl Default for Platform {
     fn default() -> Self {
         Self {
-            own_hub: None,
-            own_hub_note: None,
-            hub_address: format!("127.0.0.1:{}", libroxel_hub::DEFAULT_PORT),
+            hub_address: libroxel_hub::hub_address(),
             open: false,
             search: String::new(),
             name: "Player".into(),
@@ -174,45 +168,14 @@ impl Default for Platform {
 }
 
 impl Platform {
-    /// Uses the official Hub, or the one `LIBROXEL_HUB` names. With
-    /// neither, runs a Hub on this computer.
+    /// Who you play as: your account's name, or "Player" before you claim one.
+    pub fn player_name(&self) -> String {
+        self.account.as_ref().map_or_else(|| "Player".to_owned(), |a| a.name.clone())
+    }
+
+    /// Starts with the Hub ([`libroxel_hub::hub_address`]).
     pub fn start() -> Self {
-        let mut platform = Self::default();
-        if let Some(address) = std::env::var("LIBROXEL_HUB").ok().filter(|a| !a.trim().is_empty()) {
-            platform.hub_address = address;
-            return platform;
-        }
-        if let Some(official) = libroxel_hub::OFFICIAL_HUB {
-            platform.hub_address = official.to_owned();
-            platform.own_hub_note = Some("Everyone uses the official Hub.".into());
-            return platform;
-        }
-        platform.start_hub();
-        platform
-    }
-
-    /// Runs a Hub on this computer, if it isn't already.
-    pub fn start_hub(&mut self) {
-        if self.own_hub.is_some() {
-            return;
-        }
-        let addr = SocketAddr::from(([0, 0, 0, 0], libroxel_hub::DEFAULT_PORT));
-        match libroxel_hub::start(addr, Some(&data_dir().join("hub.sqlite"))) {
-            Ok(hub) => {
-                self.own_hub = Some(hub);
-                self.own_hub_note = None;
-            }
-            // Usually another Libroxel on this computer already runs one,
-            // and that Hub works just as well.
-            Err(e) => self.own_hub_note = Some(e),
-        }
-    }
-
-    /// Stops the Hub this app runs (games listed on it drop off).
-    pub fn stop_hub(&mut self) {
-        if self.own_hub.take().is_some() {
-            self.own_hub_note = Some("You stopped it.".into());
-        }
+        Self::default()
     }
 
     pub(crate) fn client(&self) -> HubClient {
@@ -430,9 +393,9 @@ impl Platform {
                 let _ = std::fs::create_dir_all(data_dir())
                     .and_then(|_| std::fs::write(published_file(), Json::Object(known).to_string()));
                 if done.version == 1 {
-                    format!("Published on {hub}. Anyone using that Hub can find it Online.")
+                    "Published. Anyone can find it Online.".to_owned()
                 } else {
-                    format!("Version {} is out on {hub}.", done.version)
+                    format!("Version {} is out.", done.version)
                 }
             });
             *out.lock().unwrap() = Some(said);
@@ -479,11 +442,7 @@ impl Platform {
                 let signature = me.sign(&libroxel_hub::item_message(&creator_id, &name, "hat", &data, time));
                 let item = NewItem { creator_id, name, kind: "hat".into(), data, time, signature };
                 let shared = client.share_item(&item)?;
-                Ok(format!(
-                    "{} is in the catalog on {}. Anyone can wear it from the Avatar tab.",
-                    shared.name,
-                    client.url()
-                ))
+                Ok(format!("{} is in the catalog. Anyone can wear it from the Avatar tab.", shared.name))
             });
             *out.lock().unwrap() = Some(result);
         });
@@ -518,7 +477,7 @@ impl Platform {
             });
         }
         if self.items.is_empty() {
-            ui.label("Nothing in the catalog on this Hub yet.");
+            ui.label("Nothing in the catalog yet.");
         }
         let mut worn = None;
         let mut reporting = None;
@@ -648,7 +607,7 @@ impl Platform {
                     Some(email) => format!(
                         "Welcome, {name}! We sent a code to {email}: type it below to prove the email is yours."
                     ),
-                    None => format!("Saved. You are {name} on {}.", client.url()),
+                    None => format!("Saved. You are {name}."),
                 })
             });
             *out.lock().unwrap() = Some(result);
@@ -673,10 +632,7 @@ impl Platform {
                     .map_or(0, |d| d.as_secs() as i64);
                 let set = libroxel_hub::seal_password(&me.secret_bytes(), &password, time)?;
                 client.set_password(&set)?;
-                Ok(format!(
-                    "Password set. Sign in with your name and it on any computer that uses {}.",
-                    client.url()
-                ))
+                Ok("Password set. Sign in with your name and it on any computer.".to_owned())
             });
             *out.lock().unwrap() = Some(result);
         });
@@ -736,7 +692,7 @@ impl Platform {
                 } else if sent.sent {
                     format!("We sent a code to {email}. Type it below.")
                 } else {
-                    format!("Saved {email}. (This Hub can't send mail, so there's no code.)")
+                    format!("Saved {email}. (The Hub can't send mail yet, so there's no code.)")
                 })
             });
             *out.lock().unwrap() = Some(result);
@@ -1114,7 +1070,7 @@ impl Platform {
                     .clicked()
             {
                 let said = crate::accounts::sign_out(Some(&name)).map(|()| {
-                    format!("Signed out of {name}. Claim a new name below, or sign in to another account.")
+                    format!("Signed out of {name}. Make a new account below, or sign in to another one.")
                 });
                 self.account_changed(said);
             }
@@ -1125,14 +1081,15 @@ impl Platform {
     pub fn account_ui(&mut self, ui: &mut egui::Ui, look: Json) {
         self.look_up_account();
         ui.label(RichText::new("Your account").font(crate::theme::display(17.0)));
-        ui.label(
-            RichText::new(format!(
-                "Claim a name on the Hub at {}. Games you publish then show it, and others can find your page. \
-                 It belongs to the identity key on this computer; set a password below to use it elsewhere too.",
-                self.hub_address
-            ))
-            .color(crate::theme::MUTED),
-        );
+        let about = if self.account.is_some() {
+            "You play, host and join games as this name, games you publish show it, and others can find \
+             your page. Set a password below to use it on other computers too."
+        } else {
+            "Make an account: pick a name. You play as it, games you publish show it, and others can find \
+             your page. It belongs to the identity key on this computer; set a password below to use it \
+             elsewhere too."
+        };
+        ui.label(RichText::new(about).color(crate::theme::MUTED));
         self.switch_ui(ui);
         ui.add_space(6.0);
         egui::Grid::new("account").num_columns(2).show(ui, |ui| {
@@ -1160,7 +1117,7 @@ impl Platform {
         let email_ok = self.account.is_some() || libroxel_hub::valid_email(self.account_email.trim());
         let valid = libroxel_hub::valid_account_name(&name) && email_ok;
         ui.horizontal(|ui| {
-            let label = if self.account.is_some() { "Save changes" } else { "Claim this name" };
+            let label = if self.account.is_some() { "Save changes" } else { "Make an account" };
             if ui.add_enabled(valid && !self.account_busy, egui::Button::new(label)).clicked() {
                 self.save_account(look);
             }
@@ -1194,9 +1151,9 @@ impl Platform {
                 1 => "1 published game".to_owned(),
                 n => format!("{n} published games"),
             };
-            ui.label(format!("Your page on this Hub: {} (#{}) · {games}", profile.name, profile.number));
+            ui.label(format!("Your page: {} (#{}) · {games}", profile.name, profile.number));
             if profile.admin {
-                ui.colored_label(crate::theme::AMBER, "You are an admin of this Hub.");
+                ui.colored_label(crate::theme::AMBER, "You are an admin of the Hub.");
             } else if profile.verified {
                 ui.colored_label(crate::theme::LINK, "Your account is verified.");
             }
@@ -1288,7 +1245,7 @@ impl Platform {
             ui.label(if self.fetching {
                 "Looking…"
             } else {
-                "No games are published on this Hub yet. Publish one from the editor's File menu."
+                "No games are published yet. Publish one from the editor's File menu."
             });
         }
         if let Some(error) = &self.download_error {
@@ -1326,7 +1283,7 @@ impl Platform {
                             search = Some(game.author.clone());
                         }
                         if game.author_id.is_some() {
-                            by.on_hover_text("Their account on this Hub. Click for all their games");
+                            by.on_hover_text("Their account. Click for all their games");
                         }
                         ui.label(game.plays.to_string());
                         ui.horizontal(|ui| {
@@ -1417,7 +1374,7 @@ impl Platform {
                         let hover = match &server.host {
                             _ if server.admin_host => {
                                 format!(
-                                    "{} host · run by this Hub's admin (checked by the Hub)",
+                                    "{} host · run by a Libroxel admin (checked by the Hub)",
                                     server.kind.label()
                                 )
                             }
@@ -1458,49 +1415,37 @@ impl Platform {
         }
         let mut join = None;
         let mut open = self.open;
-        egui::Window::new(format!("{} Browse games", crate::theme::icon::GLOBE_HEMISPHERE_WEST)).open(&mut open).default_width(560.0).show(ctx, |ui| {
-            egui::Grid::new("browse-settings").num_columns(2).show(ui, |ui| {
-                ui.label("Hub");
-                let hub = ui.add(
-                    egui::TextEdit::singleline(&mut self.hub_address).hint_text("127.0.0.1:7430 or a friend's Hub"),
-                );
-                if hub.lost_focus() {
-                    self.servers.clear();
-                    self.refresh();
+        egui::Window::new(format!("{} Browse games", crate::theme::icon::GLOBE_HEMISPHERE_WEST))
+            .open(&mut open)
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                egui::Grid::new("browse-settings").num_columns(2).show(ui, |ui| {
+                    ui.label("Search");
+                    if ui.text_edit_singleline(&mut self.search).changed() {
+                        self.last_fetch = None;
+                    }
+                    ui.end_row();
+                    // You play as your account's name; it can't be typed over here.
+                    if let Some(account) = &self.account {
+                        self.name = account.name.clone();
+                    }
+                    ui.label("Playing as");
+                    ui.label(RichText::new(self.name.trim()).strong());
+                    ui.end_row();
+                });
+                ui.separator();
+                if let Some(picked) = self.list(ui) {
+                    join = Some(picked);
                 }
-                ui.end_row();
-                ui.label("Search");
-                if ui.text_edit_singleline(&mut self.search).changed() {
-                    self.last_fetch = None;
-                }
-                ui.end_row();
-                ui.label("Your name");
-                ui.add(egui::TextEdit::singleline(&mut self.name).char_limit(20));
-                ui.end_row();
+                ui.horizontal(|ui| {
+                    if ui.button(format!("{} Refresh", crate::theme::icon::ARROW_CLOCKWISE)).clicked() {
+                        self.refresh();
+                    }
+                    if let Some(status) = self.announcer.as_ref().and_then(Announcer::status) {
+                        ui.label(RichText::new(format!("Your game: {status}")).small());
+                    }
+                });
             });
-            if let Some(hub) = &self.own_hub {
-                ui.label(
-                    RichText::new(format!(
-                        "This computer runs a Hub on port {}. Friends on your network can use this computer's \
-                         address as their Hub.",
-                        hub.addr().port()
-                    ))
-                    .small(),
-                );
-            }
-            ui.separator();
-            if let Some(picked) = self.list(ui) {
-                join = Some(picked);
-            }
-            ui.horizontal(|ui| {
-                if ui.button(format!("{} Refresh", crate::theme::icon::ARROW_CLOCKWISE)).clicked() {
-                    self.refresh();
-                }
-                if let Some(status) = self.announcer.as_ref().and_then(Announcer::status) {
-                    ui.label(RichText::new(format!("Your game: {status}")).small());
-                }
-            });
-        });
         self.open = open && join.is_none();
         join
     }

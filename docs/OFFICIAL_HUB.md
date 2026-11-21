@@ -150,21 +150,22 @@ owner too.
 
 ## Looking after it
 
-All of these run on the Hub's computer, straight on its database, so no one
-can do them over the network:
+All of these run on the Hub's server with the `libroxel-hub` program,
+straight on its database, so no one can do them over the network (the
+Libroxel app itself can't run or look after a Hub):
 
 | Command | What it does |
 | --- | --- |
-| `libroxel hub accounts [search]` | Lists accounts, with owners, passwords and bans |
-| `libroxel hub owners` | Lists the owners |
-| `libroxel hub owner add\|remove <name or id>` | Adds or removes an owner |
-| `libroxel hub ban <name> [reason]` | Bans an account: it can't sign in, host, publish, share, report or befriend anyone, and its page, games and hats stop being listed |
-| `libroxel hub unban <name>` | Lets it back |
-| `libroxel hub verify\|unverify <name>` | Gives or takes away a verified badge |
-| `libroxel hub rename <name> <new name>` | Renames an account |
-| `libroxel hub reports` | Lists reported games and hats |
-| `libroxel hub clear <game\|item> <id>` | Lists a reported one again |
-| `libroxel hub remove <game\|item> <id>` | Takes one down for good |
+| `libroxel-hub accounts [search]` | Lists accounts, with owners, passwords and bans |
+| `libroxel-hub owners` | Lists the owners |
+| `libroxel-hub owner add\|remove <name or id>` | Adds or removes an owner |
+| `libroxel-hub ban <name> [reason]` | Bans an account: it can't sign in, host, publish, share, report or befriend anyone, and its page, games and hats stop being listed |
+| `libroxel-hub unban <name>` | Lets it back |
+| `libroxel-hub verify\|unverify <name>` | Gives or takes away a verified badge |
+| `libroxel-hub rename <name> <new name>` | Renames an account |
+| `libroxel-hub reports` | Lists reported games and hats |
+| `libroxel-hub clear <game\|item> <id>` | Lists a reported one again |
+| `libroxel-hub remove <game\|item> <id>` | Takes one down for good |
 
 On a server set up with the script, run these as `sudo libroxel-admin …`
 (for example `sudo libroxel-admin owner add <your name>`); elsewhere add

@@ -319,13 +319,10 @@ impl Menu {
             self.scanned = true;
         }
         self.servers.retain(|s| !s.finished() || !s.lines().is_empty());
-        // Play as your account's name unless you picked another.
+        // You always play as your account's name: it can't be changed
+        // here (a new name is claimed on the Avatar tab).
         platform.look_up_account();
-        if self.name == "Player"
-            && let Some(account) = &platform.account
-        {
-            self.name = account.name.clone();
-        }
+        self.name = platform.account.as_ref().map_or_else(|| "Player".to_owned(), |a| a.name.clone());
         let screen = ctx.content_rect();
         let mut ui = egui::Ui::new(
             ctx.clone(),
@@ -334,8 +331,8 @@ impl Menu {
         );
         ui.painter().rect_filled(screen, 0.0, theme::BACK);
         theme::paint_sky(ui.painter(), screen);
-        // The top bar, a sheet of sky-tinted glass: the name, the tabs and
-        // who you play as.
+        // The top bar, a sheet of sky-tinted glass: the mark (Home), the
+        // tabs, and on the right Search and who you play as.
         let bar = egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), 68.0));
         theme::glass_bar(ui.painter(), bar);
         ui.painter().hline(
@@ -343,41 +340,8 @@ impl Menu {
             bar.max.y,
             egui::Stroke::new(1.0, theme::see_through(20, 70, 130, 120)),
         );
-        ui.scope_builder(egui::UiBuilder::new().max_rect(bar.shrink2(egui::vec2(28.0, 14.0))), |ui| {
-            ui.horizontal_centered(|ui| {
-                theme::wordmark(ui, 30.0);
-                ui.add_space(36.0);
-                ui.spacing_mut().item_spacing.x = 2.0;
-                for (tab, glyph, label) in [
-                    (Tab::Home, theme::icon::HOUSE, "Home"),
-                    (Tab::Search, theme::icon::MAGNIFYING_GLASS, "Search"),
-                    (Tab::Friends, theme::icon::USERS, "Friends"),
-                    (Tab::Play, theme::icon::PLAY, "Play"),
-                    (Tab::Online, theme::icon::GLOBE_HEMISPHERE_WEST, "Online"),
-                    (Tab::Create, theme::icon::HAMMER, "Create"),
-                    (Tab::Host, theme::icon::BROADCAST, "Host"),
-                    (Tab::Avatar, theme::icon::T_SHIRT, "Avatar"),
-                ] {
-                    if theme::tab(ui, glyph, label, self.tab == tab).clicked() {
-                        self.tab = tab;
-                        self.error = None;
-                        if tab == Tab::Home {
-                            self.home.view = crate::hub_home::View::Home;
-                        }
-                    }
-                }
-                // Who you play as, at the right of the bar.
-                ui.spacing_mut().item_spacing.x = 8.0;
-                ui.add_space((ui.available_width() - 236.0).max(12.0));
-                theme::label_caps(ui, "Playing as");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.name)
-                        .char_limit(20)
-                        .desired_width(130.0)
-                        .font(theme::display(15.0))
-                        .margin(egui::vec2(8.0, 5.0)),
-                );
-            });
+        ui.scope_builder(egui::UiBuilder::new().max_rect(bar.shrink2(egui::vec2(20.0, 12.0))), |ui| {
+            ui.horizontal_centered(|ui| self.top_bar(ui, platform));
         });
         // The page sits on a big frosted pane over the sky, like a window
         // on a desktop, with the sky and hills showing round its edges.
@@ -403,7 +367,7 @@ impl Menu {
                     Tab::Play => self.play_tab(ui),
                     Tab::Online => self.online_tab(ui, platform),
                     Tab::Create => self.create_tab(ui),
-                    Tab::Host => self.host_tab(ui, platform),
+                    Tab::Host => self.host_tab(ui),
                     Tab::Avatar => {
                         egui::ScrollArea::vertical()
                             .id_salt("avatar")
@@ -422,6 +386,81 @@ impl Menu {
             self.error = None;
         }
         pick
+    }
+
+    /// Goes to a tab from the top bar.
+    fn go(&mut self, tab: Tab) {
+        self.tab = tab;
+        self.error = None;
+        if tab == Tab::Home {
+            self.home.view = crate::hub_home::View::Home;
+        }
+    }
+
+    /// The top bar's contents: the mark, the tabs, the More menu, Search
+    /// and who you play as. When the window is too narrow for every tab's
+    /// name, the tabs show only their icons (with the name on hover).
+    fn top_bar(&mut self, ui: &mut egui::Ui, platform: &mut Platform) {
+        if theme::logo_button(ui, self.tab == Tab::Home).clicked() {
+            self.go(Tab::Home);
+        }
+        ui.add_space(10.0);
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let more_label = "More";
+        let more_glyph = theme::icon::CARET_DOWN;
+        let chip = player_chip_width(ui, &self.name);
+        let right = chip + 52.0 + 24.0;
+        let wide: f32 =
+            TOP_TABS.iter().map(|(_, glyph, label)| theme::tab_width(ui, glyph, label)).sum::<f32>()
+                + theme::tab_width(ui, more_glyph, more_label)
+                + 2.0 * (TOP_TABS.len() as f32 + 1.0);
+        let compact = wide > ui.available_width() - right;
+        for (tab, glyph, label) in TOP_TABS {
+            let shown = if compact { "" } else { label };
+            let response = theme::tab(ui, glyph, shown, self.tab == tab);
+            let response = if compact { response.on_hover_text(label) } else { response };
+            if response.clicked() {
+                self.go(tab);
+            }
+        }
+        // Less-used pages wait behind More.
+        let in_more = MORE_TABS.iter().any(|(tab, ..)| *tab == self.tab);
+        let more = theme::tab(ui, more_glyph, if compact { "" } else { more_label }, in_more);
+        let more = if compact { more.on_hover_text(more_label) } else { more };
+        egui::Popup::menu(&more).show(|ui| {
+            ui.set_min_width(190.0);
+            for (tab, glyph, label) in MORE_TABS {
+                if ui.selectable_label(self.tab == tab, format!("{glyph}  {label}")).clicked() {
+                    self.go(tab);
+                    ui.close();
+                }
+            }
+            #[cfg(target_os = "macos")]
+            {
+                ui.separator();
+                if ui
+                    .button(format!("{}  Add the libroxel command", theme::icon::TERMINAL_WINDOW))
+                    .on_hover_text("Links /usr/local/bin/libroxel to this app, so typing libroxel in Terminal opens it. Asks for your password.")
+                    .clicked()
+                {
+                    ui.close();
+                    if let Err(why) = crate::command::link_for_everyone() {
+                        self.error = Some(why);
+                    }
+                }
+            }
+        });
+        // Search and who you play as, at the right of the bar.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if player_chip(ui, &self.name, platform.account.is_some()).clicked() {
+                self.go(Tab::Avatar);
+            }
+            let search = theme::tab(ui, theme::icon::MAGNIFYING_GLASS, "", self.tab == Tab::Search);
+            if search.on_hover_text("Search for players and games").clicked() {
+                self.go(Tab::Search);
+            }
+        });
     }
 
     /// How the player looks, as saved on the Avatar tab.
@@ -590,20 +629,13 @@ impl Menu {
                 if theme::tool_button(ui, theme::icon::ARROW_CLOCKWISE, "Refresh", false).clicked() {
                     platform.refresh();
                 }
-                ui.label(RichText::new("Listing from the Hub at").color(SOFT));
-                ui.add(egui::TextEdit::singleline(&mut platform.hub_address).desired_width(160.0));
             });
         });
         ui.add_space(20.0);
         subheading(ui, "Join with a code");
         ui.label(RichText::new("A friend who hosts can send you their join code. On your own network an address like 192.168.1.5:7420 works too.").color(SOFT));
         ui.add_space(6.0);
-        ui.add(
-            egui::TextEdit::multiline(&mut self.code)
-                .hint_text("Paste the code here")
-                .desired_rows(2)
-                .desired_width(f32::INFINITY),
-        );
+        theme::hidden_field(ui, &mut self.code, "Paste the code here", ui.available_width() - 40.0);
         ui.add_space(6.0);
         let ready = !self.code.trim().is_empty();
         if ui
@@ -670,7 +702,7 @@ impl Menu {
         pick
     }
 
-    fn host_tab(&mut self, ui: &mut egui::Ui, platform: &mut Platform) -> Option<Pick> {
+    fn host_tab(&mut self, ui: &mut egui::Ui) -> Option<Pick> {
         let mut pick = None;
         theme::heading(ui, "Share a game");
         ui.horizontal(|ui| {
@@ -703,11 +735,6 @@ impl Menu {
         theme::panel().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             self.server_section(ui);
-        });
-        ui.add_space(12.0);
-        theme::panel().show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            hub_section(ui, platform);
         });
         pick
     }
@@ -746,17 +773,12 @@ impl Menu {
                 let lines = server.lines();
                 let code = lines.iter().position(|l| l.starts_with("Join code"));
                 if let Some(code) = code.and_then(|i| lines[i].split("\n\n").nth(1)).map(str::trim) {
-                    ui.horizontal(|ui| {
-                        let short: String = code.chars().take(24).collect();
-                        ui.label(RichText::new(format!("Join code {short}…")).monospace())
-                            .on_hover_text(code);
-                        if ui.small_button("Copy").clicked() {
-                            ui.ctx().copy_text(code.to_owned());
-                        }
-                    });
+                    theme::hidden_text(ui, ("server-code", i), "Join code", code);
                 }
                 for line in lines.iter().rev().take(3).rev() {
-                    ui.label(RichText::new(line.lines().next().unwrap_or("")).small().color(SOFT));
+                    // The join code (it holds this computer's addresses) only shows above, behind Show IP.
+                    let first = line.lines().next().unwrap_or("");
+                    ui.label(RichText::new(first).small().color(SOFT));
                 }
             });
         }
@@ -791,32 +813,57 @@ impl Menu {
     }
 }
 
-fn hub_section(ui: &mut egui::Ui, platform: &mut Platform) {
-    subheading(ui, "This computer's Hub");
-    ui.label(
-        RichText::new("The Hub is the list Online shows. Friends on your network can point their Online tab at this computer's address to see the games hosted here.")
-            .color(SOFT),
+/// The tabs along the top bar, after the mark (which is Home).
+const TOP_TABS: [(Tab, &str, &str); 5] = [
+    (Tab::Play, theme::icon::PLAY, "Play"),
+    (Tab::Online, theme::icon::GLOBE_HEMISPHERE_WEST, "Online"),
+    (Tab::Friends, theme::icon::USERS, "Friends"),
+    (Tab::Create, theme::icon::HAMMER, "Create"),
+    (Tab::Avatar, theme::icon::T_SHIRT, "Avatar"),
+];
+
+/// The pages in the top bar's More menu.
+const MORE_TABS: [(Tab, &str, &str); 1] = [(Tab::Host, theme::icon::BROADCAST, "Host a server")];
+
+const CHIP_CAPS: &str = "Playing as";
+
+fn player_chip_width(ui: &egui::Ui, name: &str) -> f32 {
+    let caps = ui.painter().layout_no_wrap(CHIP_CAPS.into(), theme::display(12.0), theme::HEADING).size().x;
+    let shown = ui.painter().layout_no_wrap(name.to_owned(), theme::display(15.0), theme::TEXT).size().x;
+    caps + shown.min(160.0) + 34.0
+}
+
+/// Who you play as, in a glass pill at the right of the top bar: your
+/// account's name, which can't be typed over. Clicking it opens Avatar,
+/// where the account is.
+fn player_chip(ui: &mut egui::Ui, name: &str, signed_in: bool) -> egui::Response {
+    let size = egui::vec2(player_chip_width(ui, name), 36.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let painter = ui.painter();
+    let tint = if response.hovered() {
+        Color32::from_rgba_unmultiplied(235, 247, 255, 200)
+    } else {
+        Color32::from_rgba_unmultiplied(235, 247, 255, 150)
+    };
+    theme::glass(painter, rect, 18.0, tint);
+    let caps = painter.layout_no_wrap(CHIP_CAPS.into(), theme::display(12.0), theme::HEADING);
+    let x = rect.min.x + 14.0;
+    painter.galley(egui::pos2(x, rect.center().y - caps.size().y / 2.0), caps.clone(), theme::HEADING);
+    let mut job =
+        egui::text::LayoutJob::simple_singleline(name.to_owned(), theme::display(15.0), theme::TEXT);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(160.0);
+    let shown = painter.layout_job(job);
+    painter.galley(
+        egui::pos2(x + caps.size().x + 8.0, rect.center().y - shown.size().y / 2.0),
+        shown,
+        theme::TEXT,
     );
-    ui.add_space(4.0);
-    match platform.own_hub.as_ref().map(|hub| hub.addr().port()) {
-        Some(port) => {
-            ui.horizontal(|ui| {
-                theme::status(ui, theme::GREEN, &format!("Running on port {port}"));
-                if ui.button("Stop the Hub").clicked() {
-                    platform.stop_hub();
-                }
-            });
-        }
-        None => {
-            ui.horizontal(|ui| {
-                let note = platform.own_hub_note.clone().unwrap_or_default();
-                theme::status(ui, theme::MUTED, &format!("Not running here. {note}"));
-                if ui.button("Run a Hub").clicked() {
-                    platform.start_hub();
-                }
-            });
-        }
-    }
+    let hint = if signed_in {
+        "Your account's name. Change it on the Avatar tab."
+    } else {
+        "Make an account on the Avatar tab to play as yourself."
+    };
+    response.on_hover_text(hint).on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Where the avatar is saved.

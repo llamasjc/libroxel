@@ -1,0 +1,11 @@
+Package: libroxel
+Version: @VERSION@
+Section: games
+Priority: optional
+Architecture: amd64
+Depends: libasound2 | libasound2t64, libudev1, libxkbcommon0, libwayland-client0, libvulkan1, libx11-6, libxcursor1, libxrandr2, libxi6
+Maintainer: Libroxel <hello@libroxel.com>
+Homepage: https://libroxel.com
+Description: Make and play 3D games with friends
+ Libroxel is a game platform: play games other people made, join friends
+ online, and build your own in the editor with Luau scripts.

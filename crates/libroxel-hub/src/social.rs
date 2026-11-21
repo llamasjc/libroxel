@@ -239,7 +239,7 @@ pub(crate) async fn change_friend(
     }
     let db = db.lock().unwrap();
     if crate::owner::is_banned(&db, &change.player_id) {
-        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+        return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
     }
     let (me, them) = (change.player_id.as_str(), change.other_id.as_str());
     match change.action {
@@ -248,7 +248,7 @@ pub(crate) async fn change_friend(
                 return Err((StatusCode::BAD_REQUEST, "claim a name on the Avatar tab first".into()));
             }
             if account_name(&db, them)?.is_none() {
-                return Err((StatusCode::NOT_FOUND, "there is no one with that id on this Hub".into()));
+                return Err((StatusCode::NOT_FOUND, "there is nobody with that id".into()));
             }
             fresh(&db, me, "friends", change.time)?;
             let (_, they_asked, friends) = standing(&db, me, them)?;
@@ -301,7 +301,7 @@ pub(crate) async fn update_presence(
     }
     let db = db.lock().unwrap();
     if crate::owner::is_banned(&db, &update.player_id) {
-        return Err((StatusCode::FORBIDDEN, "this account is banned from this Hub".into()));
+        return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
     }
     fresh(&db, &update.player_id, "presence", update.time)?;
     let text = |s: &Option<String>| s.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(clip);
