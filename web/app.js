@@ -1242,13 +1242,20 @@ function platform() {
 const REPO = (document.querySelector('meta[name="libroxel-repo"]')?.content || '').trim();
 let release = null; // The newest release's files, once GitHub has said.
 
-/** Asks GitHub for the newest release's builds, once. */
+/** Asks GitHub for the newest release that has the app in it, once. */
 function loadRelease() {
   if (release || !/^[\w.-]+\/[\w.-]+$/.test(REPO)) return;
   release = { loading: true };
-  fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
-    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status === 404 ? 'none' : `GitHub answered ${r.status}`))))
-    .then((r) => { release = { tag: r.tag_name, assets: r.assets || [] }; })
+  const hasApp = (r) => (r.assets || []).some((a) => /^libroxel-.*-(windows-x86_64\.zip|macos-universal\.zip|linux-x86_64\.tar\.gz)$/.test(a.name));
+  fetch(`https://api.github.com/repos/${REPO}/releases?per_page=30`, { headers: { Accept: 'application/vnd.github+json' } })
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`GitHub answered ${r.status}`))))
+    .then((list) => {
+      // Newest first; leave out drafts, pre-releases and releases without the app (like Hub-only ones).
+      const r = list.filter((x) => !x.draft && !x.prerelease && hasApp(x))
+        .sort((x, y) => new Date(y.published_at) - new Date(x.published_at))[0];
+      if (!r) throw new Error('none');
+      release = { tag: r.tag_name, assets: r.assets || [] };
+    })
     .catch((e) => { release = { error: e.message }; })
     .finally(() => route.name === 'download' && render());
 }

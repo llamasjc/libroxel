@@ -141,7 +141,7 @@ auth=()
 # GitHub answers with JSON, or with the file itself for application/octet-stream.
 api() { local accept="$1"; shift; curl -fsSL --retry 3 -H "Accept: $accept" "${auth[@]}" "$@"; }
 
-# The newest release that carries the Hub: a full release (v…) or a Hub-only one (hub-v…).
+# The newest release that carries the Hub.
 releases="$(api application/vnd.github+json "https://api.github.com/repos/$REPO/releases?per_page=30")" \
     || { log "could not ask GitHub about $REPO's releases"; exit 1; }
 release="$(jq -c '[.[] | select((.draft | not) and (.prerelease | not))
