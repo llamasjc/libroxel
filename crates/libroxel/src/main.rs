@@ -31,6 +31,7 @@ mod images;
 mod menu;
 mod mesh_import;
 mod open;
+mod party_games;
 mod rich_text;
 mod server;
 mod social;
