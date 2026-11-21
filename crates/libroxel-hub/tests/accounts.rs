@@ -12,11 +12,22 @@ fn time() -> i64 {
 }
 
 fn claim(hub: &HubClient, key: &[u8; 32], name: &str, time: i64) -> Result<(), String> {
+    claim_with_email(hub, key, name, time, None)
+}
+
+fn claim_with_email(
+    hub: &HubClient,
+    key: &[u8; 32],
+    name: &str,
+    time: i64,
+    email: Option<&str>,
+) -> Result<(), String> {
     let id = player_id_of(key);
     let look = serde_json::json!({});
     let message = account_message(&id, name, "", &look, time);
     hub.update_account(&AccountUpdate {
         work: Some(libroxel_hub::account_work(&id, name)),
+        email: email.map(str::to_owned),
         player_id: id,
         name: name.into(),
         about: String::new(),
@@ -300,6 +311,7 @@ fn new_accounts_need_the_bot_check_and_whoever_runs_the_hub_verifies_people() {
         time: time(),
         signature: sign(&bot, &account_message(&id, "bot1", "", &look, time())),
         work: None,
+        email: None,
     };
     assert!(hub.update_account(&account).unwrap_err().contains("bot check"));
     account.work = Some(libroxel_hub::account_work(&id, "someone_else"));
@@ -359,4 +371,79 @@ fn accounts_are_numbered_in_the_order_they_joined() {
     assert_eq!((number("llamas"), number("eve"), number("Boss")), (0, 1, 2));
     claim(&hub, &[5u8; 32], "newcomer", time()).unwrap();
     assert_eq!(number("newcomer"), 3);
+}
+
+#[test]
+fn a_hub_that_sends_mail_needs_an_email_and_a_code_proves_it() {
+    use libroxel_hub::{EmailCode, EmailSet, Mail, email_code_message, email_message, security_message};
+    let outbox = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let options = libroxel_hub::HubOptions { mail: Mail::Outbox(outbox.clone()), ..Default::default() };
+    let running = libroxel_hub::start_with("127.0.0.1:0".parse().unwrap(), None, options).unwrap();
+    let hub = HubClient::new(&running.url());
+    let key = [60u8; 32];
+    let id = player_id_of(&key);
+    let now = time();
+    let ms =
+        || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    let security = || {
+        let t = ms();
+        hub.security(&id, t, &sign(&key, &security_message(&id, t))).unwrap()
+    };
+    let code = |code: &str| {
+        let t = ms();
+        hub.verify_email(&EmailCode {
+            player_id: id.clone(),
+            code: code.into(),
+            time: t,
+            signature: sign(&key, &email_code_message(&id, code, t)),
+        })
+    };
+
+    // No email, or a bad one: no account.
+    assert!(claim(&hub, &key, "Mailer", now).unwrap_err().contains("needs an email"));
+    assert!(claim_with_email(&hub, &key, "Mailer", now, Some("nope")).unwrap_err().contains("email address"));
+    claim_with_email(&hub, &key, "Mailer", now, Some(" Mailer@Example.com ")).unwrap();
+    let (to, sent) = outbox.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(to, "mailer@example.com");
+    assert_eq!(sent.len(), 6);
+    let seen = security();
+    assert!(seen.sends_mail && !seen.email_verified);
+    assert_eq!(seen.email.as_deref(), Some("mailer@example.com"));
+
+    // The wrong code doesn't prove it; the one in the mail does.
+    let wrong = if sent == "000000" { "111111" } else { "000000" };
+    assert!(code(wrong).unwrap_err().contains("not the code"));
+    code(&sent).unwrap();
+    assert!(security().email_verified);
+
+    // A new email needs proving again, and codes can't be asked for every second.
+    let set = |email: &str| {
+        let t = ms();
+        hub.set_email(&EmailSet {
+            player_id: id.clone(),
+            email: email.into(),
+            time: t,
+            signature: sign(&key, &email_message(&id, email, t)),
+        })
+    };
+    assert!(set("mailer@example.com").unwrap().verified);
+    assert!(set("new@example.com").unwrap_err().contains("just sent"));
+    assert_eq!(security().email.as_deref(), Some("mailer@example.com"));
+    // Someone else can't give this account an email.
+    let t = ms();
+    let forged = EmailSet {
+        player_id: id.clone(),
+        email: "evil@example.com".into(),
+        time: t,
+        signature: sign(&[61u8; 32], &email_message(&id, "evil@example.com", t)),
+    };
+    assert!(hub.set_email(&forged).is_err());
+}
+
+#[test]
+fn a_hub_without_mail_keeps_accounts_without_an_email() {
+    let running = start("127.0.0.1:0".parse().unwrap(), None).unwrap();
+    let hub = HubClient::new(&running.url());
+    claim(&hub, &[62u8; 32], "NoMail", time()).unwrap();
+    claim_with_email(&hub, &[63u8; 32], "SomeMail", time(), Some("some@example.com")).unwrap();
 }

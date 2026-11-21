@@ -155,6 +155,7 @@ fn players_claim_names_and_their_signed_games_show_them() {
             look,
             time,
             work: Some(libroxel_hub::account_work(id, name)),
+            email: None,
         }
     };
     client.update_account(&account(&alice_key, &alice, "Alice", now)).unwrap();

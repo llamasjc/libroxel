@@ -37,6 +37,7 @@ impl Player {
             time,
             signature: sign(&self.key, &message),
             work: Some(libroxel_hub::account_work(&self.id, name)),
+            email: None,
         })
         .unwrap();
     }

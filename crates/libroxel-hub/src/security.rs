@@ -215,6 +215,15 @@ pub struct SignInRecord {
 pub struct Security {
     pub has_password: bool,
     pub two_step: bool,
+    /// The account's email (only its owner sees it), if it has one.
+    #[serde(default)]
+    pub email: Option<String>,
+    /// Whether that email is proved with a code from the mail.
+    #[serde(default)]
+    pub email_verified: bool,
+    /// Whether this Hub mails codes (a Hub that can't keeps emails only).
+    #[serde(default)]
+    pub sends_mail: bool,
     /// The latest sign-ins on other computers, newest first.
     pub sign_ins: Vec<SignInRecord>,
 }
@@ -241,6 +250,7 @@ pub(crate) struct Signed {
 
 pub(crate) async fn security(
     State(db): State<Db>,
+    State(mail): State<std::sync::Arc<crate::Mail>>,
     UrlPath(id): UrlPath<String>,
     Query(signed): Query<Signed>,
 ) -> Result<Json<Security>, (StatusCode, String)> {
@@ -268,7 +278,15 @@ pub(crate) async fn security(
             .map(|rows| rows.filter_map(Result::ok).collect())
         })
         .unwrap_or_default();
-    Ok(Json(Security { has_password: has("passwords"), two_step: has("two_step"), sign_ins }))
+    let email = crate::email::email_of(&db, &id);
+    Ok(Json(Security {
+        has_password: has("passwords"),
+        two_step: has("two_step"),
+        email_verified: email.as_ref().is_some_and(|e| e.1),
+        email: email.map(|e| e.0),
+        sends_mail: mail.sends(),
+        sign_ins,
+    }))
 }
 
 // ---------------------------------------------------------------------------

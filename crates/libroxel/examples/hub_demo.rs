@@ -37,6 +37,7 @@ impl Person {
         let message = libroxel_hub::account_message(&id, self.name, "", &look, time);
         let account = AccountUpdate {
             work: Some(libroxel_hub::account_work(&id, self.name)),
+            email: None,
             player_id: id,
             name: self.name.into(),
             about: String::new(),

@@ -282,7 +282,7 @@ async function work(playerId, name, progress) {
 }
 
 /** Makes a new account with a password, as the app does, and signs in. */
-async function createAccount(name, password, onStep) {
+async function createAccount(name, password, email, onStep) {
   const secret = random(32);
   const playerId = playerIdOf(secret);
   onStep('Checking you are not a bot…');
@@ -292,7 +292,7 @@ async function createAccount(name, password, onStep) {
   const about = '';
   const signature = signText(secret, `libroxel account\n${playerId}\n${name}\n${about}\n${canonical(look)}\n${time}`);
   onStep('Claiming your name…');
-  await api('/accounts', { method: 'POST', body: { player_id: playerId, name, about, look, time, signature, work: nonce } });
+  await api('/accounts', { method: 'POST', body: { player_id: playerId, name, about, look, time, signature, work: nonce, email } });
   lastSigned.account = time;
   onStep('Locking your account with your password…');
   await setPassword(secret, playerId, password);
@@ -647,6 +647,9 @@ function render() {
     flash = null;
   }
   if (data.error && ['home', 'game', 'friends'].includes(route.name)) nodes.push(status(data.error, 'error'));
+  loadSecurity();
+  const nudge = emailNudge();
+  if (nudge) nodes.push(nudge);
   page.replaceChildren(...nodes, ...[view()].flat(Infinity).filter(Boolean));
   document.title = `${titleFor(route)} · Libroxel`;
 }
@@ -1058,17 +1061,87 @@ async function saveAccount(button) {
 
 let securityInfo = null;
 
+/** Asks the Hub how your account is kept safe, and its email (only you may), once. */
+function loadSecurity() {
+  if (!session || (securityInfo && securityInfo.for === session.playerId)) return;
+  securityInfo = { for: session.playerId, loading: true };
+  const time = Date.now();
+  const signature = signText(secretKey(), `libroxel security\n${session.playerId}\n${time}`);
+  api(`/accounts/${session.playerId}/security`, { query: { time, signature } })
+    .then((s) => { securityInfo = { for: session.playerId, ...s }; })
+    .catch((e) => { securityInfo = { for: session.playerId, error: e.message }; })
+    .finally(() => render());
+}
+
+/** Whether `email` looks like an address (the Hub checks properly). */
+function validEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) && email.trim().length <= 254;
+}
+
+/** A note at the top of every page while your account has no proved email. */
+function emailNudge() {
+  if (!session || !securityInfo || securityInfo.loading || securityInfo.error || route.name === 'avatar') return null;
+  if (!securityInfo.email) return el('div', { class: 'status wait' }, 'Your account has no email yet. ', el('a', { href: '#/avatar' }, 'Add one'), ' so you can prove the account is yours.');
+  if (!securityInfo.email_verified && securityInfo.sends_mail) return el('div', { class: 'status wait' }, `Prove your email: type the code we mailed to ${securityInfo.email} `, el('a', { href: '#/avatar' }, 'on your account page'), '.');
+  return null;
+}
+
+let emailMessage = null;
+
+async function sendEmailCode(address) {
+  const time = Date.now();
+  const email = address.trim().toLowerCase();
+  const signature = signText(secretKey(), `libroxel email\n${session.playerId}\n${email}\n${time}`);
+  try {
+    const sent = await api('/accounts/email', { method: 'POST', body: { player_id: session.playerId, email, time, signature } });
+    emailMessage = { text: sent.verified ? `${email} is already proved.` : sent.sent ? `We sent a code to ${email}. Type it below.` : `Saved ${email}. (This Hub can't send mail, so there's no code.)` };
+    securityInfo = null;
+  } catch (e) {
+    emailMessage = { text: e.message, kind: 'error' };
+  }
+  render();
+}
+
+async function proveEmail(code) {
+  const time = Date.now();
+  const signature = signText(secretKey(), `libroxel email code\n${session.playerId}\n${code.trim()}\n${time}`);
+  try {
+    await api('/accounts/email/verify', { method: 'POST', body: { player_id: session.playerId, code: code.trim(), time, signature } });
+    emailMessage = { text: 'Your email is proved. Thanks!' };
+    securityInfo = null;
+  } catch (e) {
+    emailMessage = { text: e.message, kind: 'error' };
+  }
+  render();
+}
+
+/** Your email: add one, prove it with the mailed code, or see it's done. */
+function emailPanel() {
+  const s = securityInfo;
+  const out = [el('div', { class: 'caps', style: 'margin-top:12px' }, 'Email')];
+  if (s.email && s.email_verified) out.push(el('p', {}, s.email, ' ', el('span', { style: 'color:var(--green)' }, icon(ICON.check), ' proved')));
+  else if (s.email && s.sends_mail) {
+    const code = el('input', { type: 'text', inputmode: 'numeric', maxlength: 6, placeholder: '6-digit code', style: 'max-width:140px' });
+    out.push(el('p', { style: 'color:var(--amber)' }, `Not proved yet: type the code we mailed to ${s.email}.`));
+    out.push(el('div', { class: 'search' }, code,
+      el('button', { class: 'btn go small', onclick: () => proveEmail(code.value) }, 'Prove it'),
+      el('button', { class: 'chip', onclick: () => sendEmailCode(s.email) }, 'Send again')));
+  } else if (s.email) out.push(el('p', {}, s.email));
+  else out.push(el('p', { style: 'color:var(--amber)' }, 'Your account has no email yet. Add one, so you can prove the account is yours.'));
+  const box = el('input', { type: 'email', autocomplete: 'email', maxlength: 254, placeholder: s.email ? 'A new email' : 'you@example.com' });
+  out.push(el('div', { class: 'search' }, box,
+    el('button', { class: 'chip', onclick: () => (validEmail(box.value) ? sendEmailCode(box.value) : (emailMessage = { text: "That doesn't look like an email address.", kind: 'error' }, render())) },
+      s.sends_mail ? 'Send code' : 'Save')));
+  if (emailMessage) {
+    out.push(status(emailMessage.text, emailMessage.kind || ''));
+    emailMessage = null;
+  }
+  return out;
+}
+
 function security() {
   const panel = el('div', { class: 'panel', style: 'margin-top:26px' }, el('h3', {}, icon(ICON.shield), ' Your account'));
-  if (!securityInfo || securityInfo.for !== session.playerId) {
-    securityInfo = { for: session.playerId, loading: true };
-    const time = Date.now();
-    const signature = signText(secretKey(), `libroxel security\n${session.playerId}\n${time}`);
-    api(`/accounts/${session.playerId}/security`, { query: { time, signature } })
-      .then((s) => { securityInfo = { for: session.playerId, ...s }; })
-      .catch((e) => { securityInfo = { for: session.playerId, error: e.message }; })
-      .finally(() => route.name === 'avatar' && render());
-  }
+  loadSecurity();
   if (securityInfo.loading) return add(panel, [el('p', { class: 'soft' }, 'Loading…')]);
   if (securityInfo.error) return add(panel, [status(securityInfo.error, 'error')]);
   add(panel, [
@@ -1078,6 +1151,7 @@ function security() {
     securityInfo.sign_ins?.length
       ? el('div', {}, el('div', { class: 'caps' }, 'Latest sign-ins'), el('ul', { class: 'signins' }, securityInfo.sign_ins.slice(0, 6).map((s) => el('li', {}, `${ago(s.secs_ago)} from ${s.from}`))))
       : null,
+    ...emailPanel(),
   ]);
   return panel;
 }
@@ -1188,6 +1262,7 @@ function createPage() {
   const password = el('input', { type: 'password', autocomplete: 'new-password' });
   if (from?.password) password.value = from.password;
   const again = el('input', { type: 'password', autocomplete: 'new-password' });
+  const email = el('input', { type: 'email', autocomplete: 'email', maxlength: 254, placeholder: 'you@example.com' });
   const remember = el('input', { type: 'checkbox', checked: true });
   const message = el('div', {}, from && status(`There's no account called ${from.name} yet. Type the password again to make it.`, 'wait'));
   const go = el('button', { class: 'btn go', type: 'submit' }, icon(ICON.userPlus), 'Make my account');
@@ -1195,6 +1270,7 @@ function createPage() {
     el('label', { class: 'field' }, el('span', {}, 'Name (3 to 20 letters, digits or _, with a letter)'), name),
     el('label', { class: 'field' }, el('span', {}, `Password (at least ${MIN_PASSWORD} characters, without your name in it)`), password),
     el('label', { class: 'field' }, el('span', {}, 'Password again'), again),
+    el('label', { class: 'field' }, el('span', {}, "Email (kept private: we mail it a code to prove it's yours)"), email),
     el('label', { class: 'check' }, remember, 'Keep me signed in on this computer'),
     el('div', { class: 'form-actions' }, go),
     message);
@@ -1204,18 +1280,20 @@ function createPage() {
     const n = name.value.trim();
     const problem = !/^[A-Za-z0-9_]{3,20}$/.test(n) || !/[A-Za-z]/.test(n)
       ? 'A name is 3 to 20 letters, digits or underscores, with at least one letter.'
-      : passwordProblem(password.value, n) || (password.value !== again.value ? "The passwords don't match." : null);
+      : passwordProblem(password.value, n) || (password.value !== again.value ? "The passwords don't match." : null)
+        || (validEmail(email.value) ? null : 'Type your email: the Hub mails it a code to prove it is yours.');
     if (problem) return say(problem, 'error');
     go.disabled = true;
     try {
       say('Checking the name is free…');
       const existing = await accountNamed(n);
       if (existing) throw new Error(`Someone already has the name ${existing.name} (names ignore capitals). If it's yours, sign in instead.`);
-      const made = await createAccount(n, password.value, say);
+      const made = await createAccount(n, password.value, email.value.trim(), say);
       saveSession(made, remember.checked);
-      flash = { text: `Welcome, ${n}! Sign in to the app with the same name and password to play as you.` };
+      securityInfo = null;
+      flash = { text: `Welcome, ${n}! We mailed a code to ${email.value.trim()}: type it here to prove the email is yours.` };
       await refresh();
-      goTo('#/');
+      goTo('#/avatar');
     } catch (err) {
       say(err.message, 'error');
       go.disabled = false;

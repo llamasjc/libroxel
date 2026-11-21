@@ -46,6 +46,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 mod cli;
+mod email;
 mod limits;
 pub use cli::{HUB_HELP, cli};
 mod owner;
@@ -83,8 +84,12 @@ pub const OFFICIAL_HUB: Option<&str> = match option_env!("LIBROXEL_OFFICIAL_HUB"
     None => Some("https://hub.libroxel.com"),
 };
 
+pub use email::{
+    EmailCode, EmailSent, EmailSet, Mail, SmtpSettings, email_code_message, email_message, valid_email,
+};
+
 /// How a Hub is run.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct HubOptions {
     /// It sits behind a web server on this computer (such as Caddy, for
     /// HTTPS), so trust that server's `X-Forwarded-For` for who is calling.
@@ -94,6 +99,9 @@ pub struct HubOptions {
     /// every pretend player calls from the same address. Never for a Hub
     /// others use.
     pub no_limits: bool,
+    /// How it mails codes to prove emails ([`Mail::from_env`] for the
+    /// `LIBROXEL_SMTP_*` settings).
+    pub mail: Mail,
 }
 
 /// How often hosts should announce themselves.
@@ -276,6 +284,10 @@ pub struct AccountUpdate {
     /// The answer to the bot check ([`account_work`]), needed to make a new account.
     #[serde(default)]
     pub work: Option<u64>,
+    /// An email for a new account, kept private; a Hub that can send mail
+    /// needs one, and mails it a code to prove it ([`EmailCode`]).
+    #[serde(default)]
+    pub email: Option<String>,
 }
 
 /// What a player signs to change their account.
@@ -508,6 +520,13 @@ type Db = Arc<Mutex<Connection>>;
 struct Hub {
     db: Db,
     limits: Arc<Limits>,
+    mail: Arc<Mail>,
+}
+
+impl FromRef<Hub> for Arc<Mail> {
+    fn from_ref(hub: &Hub) -> Arc<Mail> {
+        hub.mail.clone()
+    }
 }
 
 impl FromRef<Hub> for Db {
@@ -618,6 +637,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     password::create_tables(&db)?;
     owner::create_tables(&db)?;
     security::create_tables(&db)?;
+    email::create_tables(&db)?;
     Ok(db)
 }
 
@@ -634,7 +654,7 @@ pub fn router(db: Connection) -> Router {
 pub fn router_with(db: Connection, options: HubOptions) -> Router {
     let limits =
         Arc::new(Limits { trust_proxy: options.behind_proxy, off: options.no_limits, ..Limits::default() });
-    let hub = Hub { db: Arc::new(Mutex::new(db)), limits };
+    let hub = Hub { db: Arc::new(Mutex::new(db)), limits, mail: Arc::new(options.mail) };
     // Only publishing carries a whole place; everything else is small.
     let big = axum::extract::DefaultBodyLimit::max(MAX_PLACE * 2 + 64 * 1024);
     Router::new()
@@ -651,6 +671,8 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/accounts/sign-in", post(password::sign_in))
         .route("/accounts/sign-in/{name}", get(password::sign_in_salt))
         .route("/accounts/two-step", post(security::set_two_step))
+        .route("/accounts/email", post(email::set_email))
+        .route("/accounts/email/verify", post(email::verify_email))
         .route("/accounts/{id}/security", get(security::security))
         .route("/catalog", get(list_items).post(share_item))
         .route("/catalog/{id}", delete(unlist_item))
@@ -869,9 +891,25 @@ async fn publish(
 async fn update_account(
     State(db): State<Db>,
     State(limits): State<Arc<Limits>>,
+    State(mail): State<Arc<Mail>>,
     Extension(caller): Extension<Caller>,
     Json(account): Json<AccountUpdate>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let outgoing = save_account(&db, &limits, &mail, &caller, &account)?;
+    if let Err(e) = email::post(mail, outgoing).await {
+        eprintln!("could not mail {}'s code: {e}", account.name);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Checks and keeps an account change; a new account's email code to mail comes back.
+fn save_account(
+    db: &Db,
+    limits: &Limits,
+    mail: &Mail,
+    caller: &Caller,
+    account: &AccountUpdate,
+) -> Result<Option<email::Outgoing>, (StatusCode, String)> {
     let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
     if !valid_account_name(&account.name) {
         return bad("a name is 3 to 20 letters, digits or underscores");
@@ -910,6 +948,7 @@ async fn update_account(
         return Err((StatusCode::CONFLICT, "a newer change to that account is already here".into()));
     }
     let old_name = last.map(|(_, name)| name);
+    let new_account = old_name.is_none();
     let renaming = !old_name.as_ref().is_some_and(|old| old.eq_ignore_ascii_case(&account.name));
     let taken: Option<String> = db
         .query_row("SELECT player_id FROM accounts WHERE name = ?1", params![account.name], |r| r.get(0))
@@ -931,6 +970,15 @@ async fn update_account(
             StatusCode::CONFLICT,
             format!("{} was someone else's name until recently; it stays theirs for 30 days", account.name),
         ));
+    }
+    let email = account.email.as_deref().map(str::trim).filter(|e| !e.is_empty());
+    if old_name.is_none() && mail.sends() && email.is_none() {
+        return bad("a new account needs an email (update Libroxel if it didn't ask for one)");
+    }
+    if let Some(email) = email.filter(|_| old_name.is_none())
+        && !valid_email(email)
+    {
+        return bad("that doesn't look like an email address");
     }
     if old_name.is_none() && !security::work_done(&account.player_id, &account.name, account.work) {
         return bad("a new account needs the bot check worked out (update Libroxel)");
@@ -954,7 +1002,11 @@ async fn update_account(
         params![account.player_id, account.name, about, look, account.time, now],
     )
     .map_err(internal)?;
-    Ok(StatusCode::NO_CONTENT)
+    // A new account's email: kept, and a code mailed to prove it.
+    match email.filter(|_| new_account) {
+        Some(email) => Ok(email::keep(&db, mail, &account.player_id, email)?.1),
+        None => Ok(None),
+    }
 }
 
 async fn share_item(
@@ -1442,6 +1494,12 @@ pub fn run(addr: SocketAddr, db_path: &Path, options: HubOptions) -> Result<(), 
         if options.behind_proxy {
             println!("Trusting X-Forwarded-For from a web server on this computer for who is calling.");
         }
+        match &options.mail {
+            Mail::Smtp(smtp) => {
+                println!("Mailing email codes through {}:{}, from {}.", smtp.host, smtp.port, smtp.from)
+            }
+            _ => println!("No mail settings (LIBROXEL_SMTP_HOST): emails are kept, but no codes are sent."),
+        }
         println!(
             "Point players at it with the Hub address in Browse, or LIBROXEL_HUB=http://<this computer>:{}",
             addr.port()
@@ -1693,6 +1751,42 @@ impl HubClient {
             .call()
             .and_then(|mut r| r.body_mut().read_json())
             .map_err(|e| format!("could not get your account's security from the Hub at {}: {e}", self.base))
+    }
+
+    /// Gives the account an email, which mails it a code (see [`Self::verify_email`]).
+    pub fn set_email(&self, set: &EmailSet) -> Result<EmailSent, String> {
+        self.agent
+            .post(format!("{}/accounts/email", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(set)
+            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .and_then(|mut r| {
+                if r.status().is_success() {
+                    r.body_mut().read_json().map_err(|e| e.to_string())
+                } else {
+                    Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+                }
+            })
+    }
+
+    /// Proves the account's email with the code from the mail.
+    pub fn verify_email(&self, code: &EmailCode) -> Result<(), String> {
+        self.agent
+            .post(format!("{}/accounts/email/verify", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(code)
+            .map_err(|e| format!("could not reach the Hub at {}: {e}", self.base))
+            .and_then(|mut r| {
+                if r.status().is_success() {
+                    Ok(())
+                } else {
+                    Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+                }
+            })
     }
 
     /// A player's page, by player id or account name.
