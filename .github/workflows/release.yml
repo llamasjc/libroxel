@@ -5,8 +5,9 @@ name: Release
 #
 # It's all or nothing: the release is only published once every platform
 # has built. If one fails, nothing is published, the previous release stays
-# where it is, and "Re-run failed jobs" finishes the same tag later. "Run workflow" on the Actions tab
-# builds the same files without publishing, to try a build first.
+# where it is, and "Re-run failed jobs" finishes the same tag later.
+# "Run workflow" on the Actions tab builds the same files without
+# publishing, to try a build first.
 #
 # Pushes to main build too, without publishing, only to keep the build
 # cache warm: GitHub lets a tag's run use the caches main saved, but not the
@@ -15,6 +16,9 @@ on:
   push:
     tags: ["v*"]
     branches: [main]
+    # Changes that can't affect the build don't need a warm-up. (Tags
+    # always build: GitHub ignores these filters for tag pushes.)
+    paths-ignore: ["web/**", "docs/**", "**.md", "packaging/web/**"]
   workflow_dispatch:
 
 # A newer push to main cancels an older warm-up build, since it's pointless
@@ -41,16 +45,9 @@ jobs:
           - name: windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-          # The Mac app runs on Apple silicon and Intel. The two halves build
-          # side by side, and the mac job joins them into one app.
-          - name: macos-arm64
-            os: macos-latest
-            target: aarch64-apple-darwin
-            mac_half: true
-          - name: macos-x86_64
-            os: macos-latest
-            target: x86_64-apple-darwin
-            mac_half: true
+    env:
+      # rust-lld links the big Windows exe in seconds instead of minutes.
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
     steps:
       - uses: actions/checkout@v4
 
@@ -151,24 +148,52 @@ jobs:
           iscc "/DVersion=$VERSION" "/DNumericVersion=$numeric" "/DSource=$(cygpath -w "$PWD/$src")" "/DOutput=$name" "/O$(cygpath -w "$PWD")" packaging/windows/libroxel.iss
           echo "ASSET=$name.exe" >> "$GITHUB_ENV"
 
-      - name: Keep the Mac half
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          mkdir -p half && cp target/${{ matrix.target }}/dist/libroxel half/libroxel-${{ matrix.target }}
-          echo "ASSET=half/libroxel-${{ matrix.target }}" >> "$GITHUB_ENV"
-
       - uses: actions/upload-artifact@v4
         with:
-          # dist-… files go in the release; the Mac halves only feed the mac job.
-          name: ${{ matrix.mac_half && 'half' || 'dist' }}-${{ matrix.name }}
+          name: dist-${{ matrix.name }}
           path: ${{ env.ASSET }}
           if-no-files-found: error
           retention-days: 7
 
+  # The Mac app runs on Apple silicon and Intel. The two halves build side by
+  # side, and the mac job joins them into one app. They're a job of their own
+  # so the Mac packaging starts as soon as they're done, without waiting for
+  # the slower Windows build.
+  mac-half:
+    name: Build (${{ matrix.name }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            target: aarch64-apple-darwin
+          - name: macos-x86_64
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: dist-${{ matrix.name }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build
+        run: cargo build --locked --profile dist -p libroxel --target ${{ matrix.target }}
+      - name: Keep the Mac half
+        run: |
+          mkdir -p half && cp target/${{ matrix.target }}/dist/libroxel half/libroxel-${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: half-${{ matrix.name }}
+          path: half/libroxel-${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 1
+
   mac:
     name: Package (macOS universal)
-    needs: build
+    needs: mac-half
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -200,7 +225,8 @@ jobs:
           # The usual Mac disk image: the app beside an Applications folder
           # on a picture that says to drag one onto the other.
           tiffutil -cathidpicheck packaging/macos/dmg-background.png packaging/macos/dmg-background@2x.png -out background.tiff
-          brew install create-dmg
+          # Skip Homebrew's own update, which takes longer than the install.
+          HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install create-dmg
           create-dmg \
             --volname "Libroxel" \
             --volicon "$app/Contents/Resources/libroxel.icns" \
