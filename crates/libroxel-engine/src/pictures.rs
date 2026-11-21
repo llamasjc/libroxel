@@ -47,6 +47,89 @@ pub const PICTURES: &[(&str, &[u8])] = &[
 static FOLDERS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
+pub const HUB_ASSET: &str = "asset://";
+
+pub const ENDINGS: &[&str] = &["png", "jpg", "jpeg", "mesh", "obj", "ogg", "wav", "mp3"];
+
+struct HubAssets {
+    dir: PathBuf,
+    fetch: fn(String),
+    asked: std::collections::HashSet<String>,
+}
+
+static HUB_ASSETS: Mutex<Option<HubAssets>> = Mutex::new(None);
+
+pub fn set_hub_assets(dir: PathBuf, fetch: fn(String)) {
+    *HUB_ASSETS.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some(HubAssets { dir, fetch, asked: Default::default() });
+}
+
+pub fn hub_asset_arrived() {
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+fn hub_asset(rest: &str) -> Option<Vec<u8>> {
+    let hash = rest.split('.').next().unwrap_or_default();
+    if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let hash = hash.to_ascii_lowercase();
+    let mut assets = HUB_ASSETS.lock().unwrap_or_else(|e| e.into_inner());
+    let assets = assets.as_mut()?;
+    if let Ok(bytes) = std::fs::read(assets.dir.join(&hash)) {
+        return Some(bytes);
+    }
+    if assets.asked.insert(hash.clone()) {
+        (assets.fetch)(hash);
+    }
+    None
+}
+
+fn ending_of(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        "png"
+    } else if bytes.starts_with(&[0xFF, 0xD8]) {
+        "jpg"
+    } else if bytes.starts_with(b"OggS") {
+        "ogg"
+    } else if bytes.starts_with(b"RIFF") {
+        "wav"
+    } else if bytes.starts_with(b"ID3") || bytes.starts_with(&[0xFF, 0xFB]) {
+        "mp3"
+    } else if bytes.starts_with(b"version ") {
+        "mesh"
+    } else {
+        "obj"
+    }
+}
+
+pub fn local_file(name: &str) -> Option<(Vec<u8>, String)> {
+    let name = name.trim();
+    let lower = name.to_ascii_lowercase();
+    if name.is_empty() || name.starts_with(BUILT_IN) || lower.starts_with(HUB_ASSET) {
+        return None;
+    }
+    if let Some(id) = asset_id(name) {
+        let folders = asset_folders();
+        return ENDINGS
+            .iter()
+            .find_map(|e| {
+                folders.iter().find_map(|dir| {
+                    std::fs::read(dir.join(format!("{id}.{e}"))).ok().map(|b| (b, e.to_string()))
+                })
+            })
+            .or_else(|| {
+                folders.iter().find_map(|dir| std::fs::read(dir.join(&id)).ok()).map(|b| {
+                    let e = ending_of(&b).to_owned();
+                    (b, e)
+                })
+            });
+    }
+    let ending = lower.rsplit_once('.').map(|(_, e)| e)?;
+    let ending = *ENDINGS.iter().find(|e| **e == ending)?;
+    bytes_for(name).map(|b| (b, ending.to_owned()))
+}
+
 /// Where plain picture names are looked for, first to last.
 pub fn set_folders(folders: Vec<PathBuf>) {
     let mut current = FOLDERS.lock().unwrap_or_else(|e| e.into_inner());
@@ -70,6 +153,9 @@ pub fn bytes_for(name: &str) -> Option<Vec<u8>> {
     }
     if let Some(built_in) = name.strip_prefix(BUILT_IN) {
         return PICTURES.iter().find(|(n, _)| *n == built_in).map(|(_, b)| b.to_vec());
+    }
+    if let Some(rest) = name.strip_prefix(HUB_ASSET) {
+        return hub_asset(rest);
     }
     if let Some(id) = asset_id(name) {
         return find_asset(&id, &["png", "jpg", "jpeg"]);

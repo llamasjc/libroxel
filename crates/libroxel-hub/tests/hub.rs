@@ -313,3 +313,43 @@ fn web_pages_may_call_the_hub() {
         preflight.headers().get("access-control-allow-methods").unwrap().to_str().unwrap().contains("POST")
     );
 }
+
+#[test]
+fn assets_are_kept_by_hash_and_handed_back() {
+    let hub = start("127.0.0.1:0".parse().unwrap(), None).unwrap();
+    let client = HubClient::new(&hub.url());
+    let picture = b"\x89PNG not really a picture".to_vec();
+    let hash = libroxel_hub::asset_hash(&picture);
+    assert_eq!(client.missing_assets(&[hash.clone()]).unwrap(), [hash.clone()]);
+    assert!(client.asset(&hash).is_err());
+    assert_eq!(client.put_asset(&picture).unwrap(), hash);
+    assert_eq!(client.put_asset(&picture).unwrap(), hash);
+    assert!(client.missing_assets(&[hash.clone()]).unwrap().is_empty());
+    assert_eq!(client.asset(&hash).unwrap(), picture);
+    let wrong = ureq::post(format!("{}/assets/{hash}", hub.url())).send(&b"something else"[..]);
+    assert!(wrong.is_err());
+}
+
+#[test]
+fn official_games_come_from_the_hub() {
+    let dir = std::env::temp_dir().join(format!("libroxel-official-{}", new_secret()));
+    let path = dir.join("hub.sqlite");
+    let db = libroxel_hub::open_db(Some(&path)).unwrap();
+    let chess = libroxel_hub::StarterPlace {
+        name: "Chess".into(),
+        about: "Chess".into(),
+        place: r#"{"format":"libroxel-place","children":[]}"#.into(),
+    };
+    libroxel_hub::set_official(&db, std::slice::from_ref(&chess)).unwrap();
+    drop(db);
+    let hub = start("127.0.0.1:0".parse().unwrap(), Some(&path)).unwrap();
+    let client = HubClient::new(&hub.url());
+    let list = client.official().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].name, "Chess");
+    assert_eq!(list[0].hash, libroxel_hub::asset_hash(chess.place.as_bytes()));
+    assert_eq!(client.official_place("Chess").unwrap(), chess.place);
+    assert!(client.official_place("Nothing").is_err());
+    drop(hub);
+    let _ = std::fs::remove_dir_all(dir);
+}

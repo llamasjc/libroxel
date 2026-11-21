@@ -26,6 +26,7 @@ mod debugging;
 mod file_picker;
 mod gui;
 mod history;
+mod hub_assets;
 mod hub_home;
 mod images;
 mod menu;
@@ -297,6 +298,7 @@ fn main() {
     if server::dispatch(&args) {
         return;
     }
+    hub_assets::start(&libroxel_hub::hub_address());
     // Play buttons on the website open this copy of the app.
     url_handler::register();
     // Typing `libroxel` in a terminal opens this copy too.
