@@ -618,8 +618,13 @@ function signOut() {
   data.friends = null;
   data.me = null;
   flash = { text: 'Signed out. This browser no longer has your key.' };
-  location.hash = '#/';
-  render();
+  goTo('#/');
+}
+
+/** Goes to `hash`, drawing the page once (a hash change draws it by itself). */
+function goTo(hash) {
+  if (location.hash === hash) render();
+  else location.hash = hash;
 }
 
 function status(text, kind = '') {
@@ -1036,28 +1041,61 @@ function security() {
 // --- Sign in, make an account -------------------------------------------------
 
 let pending = null;
+// What the other tab should start with, when one sends you to the other.
+let carry = null;
+
+/** The two tabs at the top of signing in and making an account. */
+function accountTabs(current) {
+  const tab = (name, href, label) => el('a', { class: `chip${current === name ? ' on' : ''}`, href }, label);
+  return el('div', { class: 'hats', style: 'margin:4px 0 18px' }, tab('sign-in', '#/sign-in', 'Sign in'), tab('create', '#/create', 'Make an account'));
+}
+
+/** Signed in already: say so, and offer to sign out to use another account. */
+function signedInAlready(next) {
+  return [
+    el('h1', { class: 'title' }, next === 'create' ? 'Make an account' : 'Sign in'),
+    el('p', {}, `You are signed in as ${session.name}.`),
+    el('div', { class: 'form-actions' },
+      el('button', {
+        class: 'btn go', onclick: () => { saveSession(null); data.friends = null; data.me = null; render(); },
+      }, icon(ICON.signOut), next === 'create' ? 'Sign out and make another account' : 'Sign out and sign in as someone else'),
+      el('a', { href: '#/' }, 'Go home')),
+  ];
+}
+
+/** Whether an account called `name` is on the Hub (names ignore case). */
+async function accountNamed(name) {
+  try {
+    return await api(`/accounts/${encodeURIComponent(name)}`);
+  } catch (e) {
+    if (e.status === 404) return null;
+    throw e;
+  }
+}
 
 function signInPage() {
-  if (session) return [el('h1', { class: 'title' }, 'Signed in'), el('p', {}, `You are signed in as ${session.name}. `, el('a', { href: '#/' }, 'Go home'), '.')];
-  const name = el('input', { type: 'text', autocomplete: 'username', maxlength: 20, value: pending?.name || '' });
+  if (session) return signedInAlready('sign-in');
+  const name = el('input', { type: 'text', autocomplete: 'username', maxlength: 20, value: pending?.name || carry?.name || '' });
   const password = el('input', { type: 'password', autocomplete: 'current-password' });
   const code = el('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 8, placeholder: '123456' });
   const remember = el('input', { type: 'checkbox', checked: true });
   const message = el('div');
   const go = el('button', { class: 'btn go', type: 'submit' }, icon(ICON.signIn), 'Sign in');
   const needsCode = Boolean(pending?.keys);
+  carry = null;
   const form = el('form', { class: 'narrow' },
     !needsCode && el('label', { class: 'field' }, el('span', {}, 'Name'), name),
     !needsCode && el('label', { class: 'field' }, el('span', {}, 'Password'), password),
     needsCode && el('p', {}, `Signing in as ${pending.name}. `, el('button', { class: 'link', type: 'button', onclick: () => { pending = null; render(); } }, 'Not you?')),
     needsCode && el('label', { class: 'field' }, el('span', {}, 'The code from your authenticator app'), code),
     el('label', { class: 'check' }, remember, 'Keep me signed in on this computer'),
-    el('div', { class: 'form-actions' }, go, el('a', { href: '#/create' }, 'Make an account')),
+    el('div', { class: 'form-actions' }, go),
     message);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     go.disabled = true;
-    const say = (text, kind = 'wait') => message.replaceChildren(status(text, kind));
+    const say = (...text) => message.replaceChildren(el('div', { class: 'status wait' }, ...text));
+    const fail = (...text) => message.replaceChildren(el('div', { class: 'status error' }, ...text));
     try {
       if (!pending?.keys) {
         const n = name.value.trim();
@@ -1066,45 +1104,55 @@ function signInPage() {
         pending = { name: n, keys: await stretchFor(n, password.value) };
       } else say('Signing in…');
       const signed = await signIn(pending.name, pending.keys, needsCode ? code.value.trim() : null);
-      const who = pending.name;
+      const who = (await accountNamed(pending.name).catch(() => null))?.name || pending.name;
       saveSession({ ...signed, name: who }, remember.checked);
       pending = null;
       flash = { text: `Signed in. Welcome back, ${who}!` };
       await refresh();
-      location.hash = '#/';
-      render();
+      goTo('#/');
     } catch (err) {
       if (err.status === 401 && pending?.keys && !needsCode) {
         render();
         return;
       }
       if (err.status === 404 || (err.status === 403 && !needsCode)) pending = null;
-      if (err.status === 404) say('No one with that name has a password on this Hub. Set one in the app first, on its Avatar tab.', 'error');
-      else say(err.message, 'error');
       go.disabled = false;
+      if (err.status !== 404) return fail(err.message);
+      // No password under that name: either there's no such account yet, or it was made in the app without one.
+      const n = name.value.trim();
+      const existing = await accountNamed(n).catch(() => null);
+      if (existing) {
+        return fail(`${existing.name} has no password yet, so it can only be used on the computer it was made on. Open Libroxel there and set a password on the Avatar tab, then sign in here.`);
+      }
+      carry = { name: n, password: password.value };
+      location.hash = '#/create';
     }
   });
   return [
     el('h1', { class: 'title' }, 'Sign in'),
-    el('p', { class: 'note' }, 'Use the name and password from the app. Your password never leaves this computer: it is turned into a key here, the same way the app does it.'),
+    accountTabs('sign-in'),
+    el('p', { class: 'note' }, 'Use the name and password from the app. New here? Type the name you want and a password, and you can make the account next. Your password never leaves this computer: it is turned into a key here, the same way the app does it.'),
     form,
   ];
 }
 
 function createPage() {
-  if (session) return signInPage();
-  const name = el('input', { type: 'text', autocomplete: 'username', maxlength: 20, pattern: '[A-Za-z0-9_]*[A-Za-z][A-Za-z0-9_]*' });
+  if (session) return signedInAlready('create');
+  const from = carry;
+  carry = null;
+  const name = el('input', { type: 'text', autocomplete: 'username', maxlength: 20, value: from?.name || '' });
   const password = el('input', { type: 'password', autocomplete: 'new-password' });
+  if (from?.password) password.value = from.password;
   const again = el('input', { type: 'password', autocomplete: 'new-password' });
   const remember = el('input', { type: 'checkbox', checked: true });
-  const message = el('div');
+  const message = el('div', {}, from && status(`There's no account called ${from.name} yet. Type the password again to make it.`, 'wait'));
   const go = el('button', { class: 'btn go', type: 'submit' }, icon(ICON.userPlus), 'Make my account');
   const form = el('form', { class: 'narrow' },
-    el('label', { class: 'field' }, el('span', {}, 'Name (3 to 20 letters, digits or _)'), name),
-    el('label', { class: 'field' }, el('span', {}, `Password (at least ${MIN_PASSWORD} characters)`), password),
+    el('label', { class: 'field' }, el('span', {}, 'Name (3 to 20 letters, digits or _, with a letter)'), name),
+    el('label', { class: 'field' }, el('span', {}, `Password (at least ${MIN_PASSWORD} characters, without your name in it)`), password),
     el('label', { class: 'field' }, el('span', {}, 'Password again'), again),
     el('label', { class: 'check' }, remember, 'Keep me signed in on this computer'),
-    el('div', { class: 'form-actions' }, go, el('a', { href: '#/sign-in' }, 'I have an account')),
+    el('div', { class: 'form-actions' }, go),
     message);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1116,12 +1164,14 @@ function createPage() {
     if (problem) return say(problem, 'error');
     go.disabled = true;
     try {
+      say('Checking the name is free…');
+      const existing = await accountNamed(n);
+      if (existing) throw new Error(`Someone already has the name ${existing.name} (names ignore capitals). If it's yours, sign in instead.`);
       const made = await createAccount(n, password.value, say);
       saveSession(made, remember.checked);
       flash = { text: `Welcome, ${n}! Sign in to the app with the same name and password to play as you.` };
       await refresh();
-      location.hash = '#/';
-      render();
+      goTo('#/');
     } catch (err) {
       say(err.message, 'error');
       go.disabled = false;
@@ -1129,7 +1179,8 @@ function createPage() {
   });
   return [
     el('h1', { class: 'title' }, 'Make an account'),
-    el('p', { class: 'note' }, 'One account for the website and the app: your name, friends and avatar go everywhere with you. Already playing in the app? Sign in with the name and password you set there instead.'),
+    accountTabs('create'),
+    el('p', { class: 'note' }, 'One account for the website and the app: your name, friends and avatar go everywhere with you. Any free name works, Admin too. Already playing in the app? Sign in with the name and password you set there instead.'),
     form,
   ];
 }
