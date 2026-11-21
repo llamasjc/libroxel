@@ -1453,7 +1453,7 @@ function platform() {
 const REPO = (document.querySelector('meta[name="libroxel-repo"]')?.content || '').trim();
 let release = null; // The newest release with every installer on it, once GitHub has said.
 
-const INSTALLERS = ['-windows-x86_64-setup.exe', '-macos-universal.dmg', '-linux-x86_64.AppImage'];
+const INSTALLERS = ['-windows-x86_64-setup.exe', '-macos-universal.dmg', '-linux-x86_64.AppImage', '-linux-x86_64.deb'];
 const RELEASE_KEY = 'libroxel-release';
 const assetFor = (r, end) => (r.assets || []).find((a) => a.name.startsWith('libroxel-') && a.name.endsWith(end));
 
