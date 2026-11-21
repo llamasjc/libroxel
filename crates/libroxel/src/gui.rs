@@ -824,22 +824,20 @@ pub fn draw_prompt(
     let object = tree.get_string(prompt, Property::ObjectText).unwrap_or_default();
     let rect = Rect::from_center_size(at, egui::vec2(210.0, 56.0));
     let painter = ui.painter();
-    // A hard offset shadow, then the slab, with an accent strip down the left.
-    painter.rect_filled(rect.translate(egui::vec2(4.0, 4.0)), theme::CORNER, Color32::from_black_alpha(150));
-    painter.rect_filled(rect, theme::CORNER, theme::INK1);
-    painter.rect_stroke(rect, theme::CORNER, Stroke::new(1.0, theme::LINE), StrokeKind::Inside);
-    // The key, as a keycap standing on its edge.
-    let key_box = Rect::from_center_size(rect.left_center() + egui::vec2(30.0, -2.0), egui::vec2(34.0, 32.0));
-    painter.rect_filled(key_box.translate(egui::vec2(0.0, 4.0)), theme::CORNER, theme::EMBER);
-    painter.rect_filled(key_box, theme::CORNER, theme::TANGERINE);
-    painter.text(key_box.center(), Align2::CENTER_CENTER, key, theme::display_bold(17.0), theme::INK0);
+    // A pane of frosted glass with a soft shadow, and the key on a glossy
+    // blue button.
+    theme::soft_shadow(painter, rect, 8.0, 90);
+    theme::glass(painter, rect, 8.0, Color32::from_rgba_unmultiplied(236, 246, 255, 225));
+    let key_box = Rect::from_center_size(rect.left_center() + egui::vec2(30.0, 0.0), egui::vec2(34.0, 32.0));
+    theme::glass(painter, key_box, 7.0, Color32::from_rgba_unmultiplied(40, 140, 230, 255));
+    painter.text(key_box.center(), Align2::CENTER_CENTER, key, theme::display_bold(17.0), Color32::WHITE);
     if progress > 0.0 && progress < 1.0 {
         // A bar along the bottom of the bubble fills up while the key is held.
         let bar = Rect::from_min_size(
             rect.left_bottom() + egui::vec2(0.0, -4.0),
             egui::vec2(rect.width() * progress, 4.0),
         );
-        painter.rect_filled(bar, 0.0, theme::SUN);
+        painter.rect_filled(bar, 0.0, theme::AMBER);
     }
     let text_x = key_box.right() + 12.0;
     let width = rect.right() - text_x - 8.0;
@@ -849,7 +847,7 @@ pub fn draw_prompt(
             egui::pos2(text_x, rect.center().y - 17.0),
             &object.to_uppercase(),
             theme::display(11.0),
-            theme::DUST,
+            theme::MUTED,
             width,
         );
     }
@@ -859,7 +857,7 @@ pub fn draw_prompt(
         egui::pos2(text_x, rect.center().y + action_y),
         &action,
         theme::display(17.0),
-        theme::CHALK,
+        theme::TEXT,
         width,
     );
     rect
@@ -1111,39 +1109,44 @@ pub fn hotbar(ui: &egui::Ui, tree: &InstanceTree, tools: &[(InstanceId, bool)]) 
     for (i, (tool, held)) in tools.iter().take(9).enumerate() {
         let rect = Rect::from_min_size(Pos2::new(x, y), egui::vec2(slot, slot));
         x += slot + gap;
-        // The held tool lifts out of the row on its accent edge.
+        // Each slot is a pane of glass; the held one lifts and glows blue,
+        // like a taskbar button that's open.
         let face = if *held { rect.translate(egui::vec2(0.0, -6.0)) } else { rect };
-        painter.rect_filled(
-            rect.translate(egui::vec2(0.0, 4.0)),
-            theme::CORNER,
-            Color32::from_black_alpha(140),
-        );
+        theme::soft_shadow(painter, face, 7.0, 80);
         if *held {
-            painter.rect_filled(face.translate(egui::vec2(0.0, 4.0)), theme::CORNER, theme::EMBER);
+            let glow = egui::Shadow {
+                offset: [0, 0],
+                blur: 16,
+                spread: 2,
+                color: theme::see_through(90, 190, 255, 200),
+            };
+            painter.add(glow.as_shape(face, 7));
         }
-        painter.rect_filled(
-            face,
-            theme::CORNER,
-            if *held { theme::INK2 } else { theme::INK1.gamma_multiply(0.92) },
-        );
-        let line = if *held { Stroke::new(2.0, theme::TANGERINE) } else { Stroke::new(1.0, theme::LINE) };
-        painter.rect_stroke(face, theme::CORNER, line, StrokeKind::Inside);
-        // The slot's number in a corner tab.
-        let tab = Rect::from_min_size(face.left_top(), egui::vec2(16.0, 15.0));
-        painter.rect_filled(tab, 0.0, if *held { theme::TANGERINE } else { theme::INK3 });
+        let tint = if *held {
+            Color32::from_rgba_unmultiplied(214, 238, 255, 240)
+        } else {
+            Color32::from_rgba_unmultiplied(236, 244, 252, 205)
+        };
+        theme::glass(painter, face, 7.0, tint);
+        if *held {
+            painter.rect_stroke(face, 7, Stroke::new(1.5, theme::ACCENT), StrokeKind::Inside);
+        }
+        // The slot's number on a small orb in a corner.
+        let tab = face.left_top() + egui::vec2(10.0, 10.0);
+        theme::orb(painter, tab, 7.0, if *held { theme::ACCENT } else { Color32::from_rgb(150, 170, 192) });
         painter.text(
-            tab.center(),
+            tab,
             Align2::CENTER_CENTER,
             (i + 1).to_string(),
-            theme::display_bold(11.0),
-            if *held { theme::INK0 } else { theme::DUST },
+            theme::display_bold(10.0),
+            Color32::WHITE,
         );
         let name = tree.name(*tool).unwrap_or("?");
-        let galley = painter.layout(name.to_owned(), theme::display(12.5), theme::CHALK, slot - 8.0);
+        let galley = painter.layout(name.to_owned(), theme::display(12.5), theme::TEXT, slot - 8.0);
         painter.with_clip_rect(face.shrink(3.0)).galley(
             face.center() + egui::vec2(-galley.size().x / 2.0, 6.0 - galley.size().y / 2.0),
             galley,
-            theme::CHALK,
+            theme::TEXT,
         );
         rects.push((i, face));
     }

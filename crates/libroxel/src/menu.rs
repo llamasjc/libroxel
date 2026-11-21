@@ -153,8 +153,8 @@ pub fn saved_games() -> Vec<PathBuf> {
     found.into_iter().map(|(_, p)| p).collect()
 }
 
-const ACCENT: Color32 = theme::TANGERINE;
-const SOFT: Color32 = theme::DUST;
+const ACCENT: Color32 = theme::ACCENT;
+const SOFT: Color32 = theme::MUTED;
 
 /// A secondary block button.
 fn big(ui: &mut egui::Ui, glyph: &str, text: &str) -> egui::Response {
@@ -168,19 +168,19 @@ fn play_button(ui: &mut egui::Ui, kind: theme::Kind, glyph: &str, text: &str) ->
 
 /// A section's title inside a page.
 fn subheading(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).font(theme::display(17.0)).color(theme::CHALK));
+    ui.label(RichText::new(text).font(theme::display(17.0)).color(theme::TEXT));
 }
 
 /// A colour for a game's picture, the same every time for the same name,
-/// picked from a few that sit well on the graphite.
+/// picked from a few bright ones that sit well on the sky.
 pub(crate) fn tint(name: &str) -> Color32 {
     const TINTS: [Color32; 6] = [
-        theme::TANGERINE,
-        theme::MINT,
-        theme::SKY,
-        theme::SUN,
-        Color32::from_rgb(178, 146, 255),
-        theme::BRICK,
+        Color32::from_rgb(255, 140, 40),
+        Color32::from_rgb(92, 196, 62),
+        Color32::from_rgb(30, 170, 230),
+        Color32::from_rgb(255, 196, 40),
+        Color32::from_rgb(160, 110, 240),
+        Color32::from_rgb(240, 84, 140),
     ];
     let hash = name.bytes().fold(2166136261u32, |h, b| (h ^ b as u32).wrapping_mul(16777619));
     TINTS[(hash % TINTS.len() as u32) as usize]
@@ -225,7 +225,11 @@ pub(crate) fn paint_diorama(
     // The ground: a flat slab.
     let ground = |x: f32, y: f32| at(x, y, 0.6);
     let slab = [ground(-1.7, -1.7), ground(1.7, -1.7), ground(1.7, 1.7), ground(-1.7, 1.7)];
-    painter.add(egui::Shape::convex_polygon(slab.to_vec(), theme::INK3, egui::Stroke::new(1.0, theme::LINE)));
+    painter.add(egui::Shape::convex_polygon(
+        slab.to_vec(),
+        Color32::from_rgb(146, 210, 104),
+        egui::Stroke::new(1.0, Color32::from_rgb(92, 160, 64)),
+    ));
     // Columns of cubes drawn back to front, their heights from the seed.
     let mut cells: Vec<(i32, i32)> = (0..3).flat_map(|x| (0..3).map(move |y| (x, y))).collect();
     cells.sort_by_key(|(x, y)| x + y);
@@ -234,7 +238,7 @@ pub(crate) fn paint_diorama(
             let bits = (hash >> ((gx * 3 + gy) * 2) as u32) & 3;
             let high = if gx == 1 && gy == 1 { 2 } else { bits.saturating_sub(1) };
             for z in 0..high {
-                let shade = if z + 1 == high { colour } else { colour.lerp_to_gamma(theme::INK2, 0.35) };
+                let shade = if z + 1 == high { colour } else { colour.lerp_to_gamma(theme::CARD, 0.35) };
                 cube(gx as f32 - 1.5, gy as f32 - 1.5, 0.6 + z as f32, shade);
             }
         }
@@ -244,38 +248,44 @@ pub(crate) fn paint_diorama(
 /// A game's tile: a little scene, its name and a line under it.
 fn card(ui: &mut egui::Ui, symbol: &str, title: &str, note: &str, selected: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(196.0, 176.0), egui::Sense::click());
-    let painter = ui.painter_at(rect.expand(6.0));
+    let painter = ui.painter_at(rect.expand(20.0));
     let hovered = response.hovered();
     let lift = if hovered { -3.0 } else { 0.0 };
-    // A hard shadow under the tile, which grows as it lifts.
+    // A frosted pane floating over the sky, lifting a little under the
+    // pointer with its shadow spreading.
     let face = rect.translate(egui::vec2(0.0, lift));
-    painter.rect_filled(rect.translate(egui::vec2(4.0, 4.0)), theme::CORNER, Color32::from_black_alpha(120));
-    painter.rect_filled(face, theme::CORNER, theme::INK2);
+    theme::soft_shadow(&painter, face, 8.0, if hovered { 80 } else { 50 });
     let colour = tint(title);
-    let picture = egui::Rect::from_min_size(face.min, egui::vec2(face.width(), 112.0));
-    painter.rect_filled(
-        picture,
-        egui::CornerRadius { nw: theme::CORNER, ne: theme::CORNER, sw: 0, se: 0 },
-        theme::INK1,
-    );
-    theme::paint_dot_grid(&painter.with_clip_rect(picture), picture);
+    if hovered || selected {
+        let glow = egui::Shadow {
+            offset: [0, 0],
+            blur: 14,
+            spread: 1,
+            color: theme::see_through(90, 180, 255, if selected { 200 } else { 130 }),
+        };
+        painter.add(glow.as_shape(face, 8));
+    }
+    theme::gradient(&painter, face, 8.0, &[(0.0, Color32::WHITE), (1.0, Color32::from_rgb(236, 244, 252))]);
+    let picture = egui::Rect::from_min_size(face.min, egui::vec2(face.width(), 112.0)).shrink(4.0);
+    theme::paint_bubbles(&painter.with_clip_rect(picture), picture);
     paint_diorama(&painter, picture.center() + egui::vec2(0.0, 8.0), 13.0, title, colour);
-    // The game's own icon in a corner chip.
-    let chip = egui::Rect::from_min_size(picture.min + egui::vec2(8.0, 8.0), egui::vec2(26.0, 26.0));
-    painter.rect_filled(chip, theme::CORNER, colour);
+    painter.rect_stroke(
+        picture,
+        5,
+        egui::Stroke::new(1.0, theme::see_through(30, 80, 140, 70)),
+        egui::StrokeKind::Inside,
+    );
+    // The game's own icon on a glossy chip in a corner.
+    let chip = egui::Rect::from_min_size(picture.min + egui::vec2(6.0, 6.0), egui::vec2(26.0, 26.0));
+    theme::glass(&painter, chip, 6.0, colour);
     painter.text(
         chip.center(),
         egui::Align2::CENTER_CENTER,
         symbol,
         egui::FontId::proportional(16.0),
-        theme::INK0,
+        Color32::WHITE,
     );
-    // An accent edge between picture and words.
-    painter.rect_filled(
-        egui::Rect::from_min_size(egui::pos2(face.min.x, picture.max.y), egui::vec2(face.width(), 3.0)),
-        0.0,
-        colour,
-    );
+    let picture = picture.expand(4.0);
     let width = face.width() - 24.0;
     let line = |y: f32, text: &str, font: egui::FontId, colour: Color32| {
         theme::text_line(
@@ -287,13 +297,16 @@ fn card(ui: &mut egui::Ui, symbol: &str, title: &str, note: &str, selected: bool
             width,
         );
     };
-    line(12.0, title, theme::display(16.0), theme::CHALK);
+    line(10.0, title, theme::display(16.0), theme::HEADING);
     line(34.0, note, egui::FontId::proportional(12.0), SOFT);
-    if selected || hovered {
-        let stroke =
-            egui::Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { ACCENT } else { theme::DUST });
-        painter.rect_stroke(face, theme::CORNER, stroke, egui::StrokeKind::Outside);
-    }
+    let rim = if selected {
+        egui::Stroke::new(2.0, ACCENT)
+    } else if hovered {
+        egui::Stroke::new(1.0, Color32::from_rgb(102, 167, 232))
+    } else {
+        egui::Stroke::new(1.0, Color32::from_rgb(170, 200, 230))
+    };
+    painter.rect_stroke(face, 8, rim, egui::StrokeKind::Inside);
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -318,12 +331,17 @@ impl Menu {
             "home".into(),
             egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(screen),
         );
-        ui.painter().rect_filled(screen, 0.0, theme::INK0);
-        theme::paint_dot_grid(ui.painter(), screen);
-        // The top bar: the name, the tabs and who you play as.
+        ui.painter().rect_filled(screen, 0.0, theme::BACK);
+        theme::paint_sky(ui.painter(), screen);
+        // The top bar, a sheet of sky-tinted glass: the name, the tabs and
+        // who you play as.
         let bar = egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), 68.0));
-        ui.painter().rect_filled(bar, 0.0, theme::INK1);
-        ui.painter().hline(bar.x_range(), bar.max.y, egui::Stroke::new(1.0, theme::LINE));
+        theme::glass_bar(ui.painter(), bar);
+        ui.painter().hline(
+            bar.x_range(),
+            bar.max.y,
+            egui::Stroke::new(1.0, theme::see_through(20, 70, 130, 120)),
+        );
         ui.scope_builder(egui::UiBuilder::new().max_rect(bar.shrink2(egui::vec2(28.0, 14.0))), |ui| {
             ui.horizontal_centered(|ui| {
                 theme::wordmark(ui, 30.0);
@@ -359,8 +377,12 @@ impl Menu {
                 );
             });
         });
-        let page = egui::Rect::from_min_max(egui::pos2(screen.min.x, bar.max.y), screen.max)
-            .shrink2(egui::vec2(36.0, 30.0));
+        // The page sits on a big frosted pane over the sky, like a window
+        // on a desktop, with the sky and hills showing round its edges.
+        let pane = egui::Rect::from_min_max(egui::pos2(screen.min.x, bar.max.y), screen.max)
+            .shrink2(egui::vec2(22.0, 18.0));
+        theme::frosted_pane(ui.painter(), pane);
+        let page = pane.shrink2(egui::vec2(22.0, 18.0));
         let mut pick = None;
         ui.scope_builder(egui::UiBuilder::new().max_rect(page), |ui| {
             egui::ScrollArea::vertical().id_salt("home-page").auto_shrink([false, false]).show(ui, |ui| {
@@ -385,7 +407,7 @@ impl Menu {
                 };
                 if let Some(error) = &self.error {
                     ui.add_space(8.0);
-                    theme::status(ui, theme::BRICK, error);
+                    theme::status(ui, theme::RED, error);
                 }
             });
         });
@@ -773,7 +795,7 @@ fn hub_section(ui: &mut egui::Ui, platform: &mut Platform) {
     match platform.own_hub.as_ref().map(|hub| hub.addr().port()) {
         Some(port) => {
             ui.horizontal(|ui| {
-                theme::status(ui, theme::MINT, &format!("Running on port {port}"));
+                theme::status(ui, theme::GREEN, &format!("Running on port {port}"));
                 if ui.button("Stop the Hub").clicked() {
                     platform.stop_hub();
                 }
@@ -782,7 +804,7 @@ fn hub_section(ui: &mut egui::Ui, platform: &mut Platform) {
         None => {
             ui.horizontal(|ui| {
                 let note = platform.own_hub_note.clone().unwrap_or_default();
-                theme::status(ui, theme::DUST, &format!("Not running here. {note}"));
+                theme::status(ui, theme::MUTED, &format!("Not running here. {note}"));
                 if ui.button("Run a Hub").clicked() {
                     platform.start_hub();
                 }
@@ -850,7 +872,7 @@ fn swatches(ui: &mut egui::Ui, color: &mut Color3, label: &str) {
                 ui.painter().rect_stroke(
                     face,
                     theme::CORNER,
-                    egui::Stroke::new(2.0, theme::CHALK),
+                    egui::Stroke::new(2.0, theme::TEXT),
                     egui::StrokeKind::Outside,
                 );
             }

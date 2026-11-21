@@ -848,9 +848,10 @@ conditions.
 Libroxel's interface uses fonts and icons under their own open licences,
 included with the program:
 
-- [Chakra Petch](https://fonts.google.com/specimen/Chakra+Petch) for headings,
+- [Selawik](https://github.com/microsoft/Selawik) for headings and text, with
   [Atkinson Hyperlegible](https://fonts.google.com/specimen/Atkinson+Hyperlegible)
-  for text and [IBM Plex Mono](https://github.com/IBM/plex) for code, all under
-  the SIL Open Font License 1.1 (see `crates/libroxel/assets/fonts/`).
+  filling in characters it lacks, and [IBM Plex Mono](https://github.com/IBM/plex)
+  for code, all under the SIL Open Font License 1.1 (see
+  `crates/libroxel/assets/fonts/` and `web/fonts/`).
 - [Phosphor](https://phosphoricons.com) icons, under the MIT License, through the
   `egui-phosphor` crate.

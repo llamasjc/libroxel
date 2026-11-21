@@ -14,7 +14,7 @@ use crate::social::starter_id;
 use crate::starter_games::STARTER_GAMES;
 use crate::theme::{self, icon};
 
-const SOFT: Color32 = theme::DUST;
+const SOFT: Color32 = theme::MUTED;
 
 /// What the Home tab shows.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -142,7 +142,7 @@ fn seed(name: &str) -> usize {
 /// own colours.
 pub fn paint_avatar(painter: &egui::Painter, centre: egui::Pos2, r: f32, look: &Json, name: &str) {
     let look = Look::from_json(look, Look::for_player(seed(name)));
-    painter.circle_filled(centre, r, theme::INK3);
+    theme::radial(painter, centre, r, Color32::from_rgb(236, 248, 255), Color32::from_rgb(160, 208, 244));
     // Shoulders: the part of the circle below a line, in the shirt colour.
     let cut = centre.y + r * 0.42;
     let mut shoulders = Vec::new();
@@ -176,13 +176,26 @@ pub fn paint_avatar(painter: &egui::Painter, centre: egui::Pos2, r: f32, look: &
         let band = egui::Rect::from_min_max(head.left_top(), head.right_top() + egui::vec2(0.0, r * 0.18));
         painter.rect_filled(band.translate(egui::vec2(0.0, -r * 0.12)), r * 0.08, rgb(look.hat_color));
     }
+    // Glass over the portrait: a gloss on its upper half and a bright rim.
+    let gleam = egui::Rect::from_center_size(centre - egui::vec2(0.0, r * 0.5), egui::vec2(r * 1.5, r * 0.9));
+    theme::gradient(
+        painter,
+        gleam,
+        r * 0.45,
+        &[
+            (0.0, Color32::from_rgba_unmultiplied(255, 255, 255, 120)),
+            (1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 0)),
+        ],
+    );
+    painter.circle_stroke(centre, r, egui::Stroke::new((r * 0.06).clamp(1.0, 2.5), Color32::WHITE));
+    painter.circle_stroke(centre, r + 0.5, egui::Stroke::new(1.0, theme::see_through(30, 80, 140, 110)));
 }
 
 /// Where a friend is, as a word and a colour.
 fn whereabouts(friend: &Friend) -> (String, Color32) {
     match (&friend.game, friend.online) {
-        (Some(game), true) => (game.clone(), theme::SKY),
-        (None, true) => ("Online".into(), theme::MINT),
+        (Some(game), true) => (game.clone(), theme::LINK),
+        (None, true) => ("Online".into(), theme::GREEN),
         _ => (
             match friend.last_online_secs_ago {
                 Some(secs) => format!("Offline · {}", ago(secs)),
@@ -222,14 +235,14 @@ fn friend_bubble(ui: &mut egui::Ui, friend: &Friend) -> egui::Response {
     let painter = ui.painter_at(rect);
     let centre = egui::pos2(rect.center().x, rect.min.y + 42.0);
     if response.hovered() {
-        painter.circle_filled(centre, 41.0, theme::INK3.gamma_multiply(1.4));
+        painter.circle_filled(centre, 43.0, theme::see_through(120, 200, 255, 110));
     }
     paint_avatar(&painter, centre, 38.0, &friend.look, &friend.name);
     let (status, colour) = whereabouts(friend);
     if friend.online {
         let dot = centre + egui::vec2(27.0, 27.0);
-        painter.circle_filled(dot, 9.0, theme::INK0);
-        painter.circle_filled(dot, 6.5, colour);
+        painter.circle_filled(dot, 8.5, Color32::WHITE);
+        theme::orb(&painter, dot, 6.5, colour);
     }
     let width = rect.width();
     let centred = |y: f32, text: &str, font: egui::FontId, colour: Color32| {
@@ -245,7 +258,7 @@ fn friend_bubble(ui: &mut egui::Ui, friend: &Friend) -> egui::Response {
         };
         painter.galley(egui::pos2(rect.center().x - galley.size().x / 2.0, rect.min.y + y), galley, colour);
     };
-    centred(88.0, &friend.name, theme::display(14.0), theme::CHALK);
+    centred(88.0, &friend.name, theme::display(14.0), theme::TEXT);
     if friend.online {
         centred(107.0, &status, egui::FontId::proportional(11.5), colour);
     }
@@ -262,21 +275,21 @@ fn add_bubble(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(96.0, 128.0), egui::Sense::click());
     let painter = ui.painter_at(rect);
     let centre = egui::pos2(rect.center().x, rect.min.y + 42.0);
-    let fill = if response.hovered() { theme::INK3 } else { theme::INK2 };
-    painter.circle_filled(centre, 38.0, fill);
-    painter.circle_stroke(centre, 38.0, egui::Stroke::new(1.5, theme::LINE));
+    let top = if response.hovered() { Color32::from_rgb(240, 250, 255) } else { Color32::WHITE };
+    theme::radial(&painter, centre + egui::vec2(0.0, 10.0), 40.0, top, Color32::from_rgb(196, 226, 248));
+    painter.circle_stroke(centre, 38.0, egui::Stroke::new(1.5, Color32::from_rgb(120, 170, 220)));
     painter.text(
         centre,
         egui::Align2::CENTER_CENTER,
         icon::USER_PLUS,
         egui::FontId::proportional(28.0),
-        theme::CHALK,
+        theme::ACCENT,
     );
-    let galley = painter.layout_no_wrap("Add friends".into(), theme::display(14.0), theme::CHALK);
+    let galley = painter.layout_no_wrap("Add friends".into(), theme::display(14.0), theme::TEXT);
     painter.galley(
         egui::pos2(rect.center().x - galley.size().x / 2.0, rect.min.y + 88.0),
         galley,
-        theme::CHALK,
+        theme::TEXT,
     );
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -285,57 +298,73 @@ fn add_bubble(ui: &mut egui::Ui) -> egui::Response {
 /// friends' faces on it when they are in.
 fn game_tile(ui: &mut egui::Ui, entry: &Entry, friends: &[&Friend]) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(188.0, 214.0), egui::Sense::click());
-    let painter = ui.painter_at(rect.expand(6.0));
+    let painter = ui.painter_at(rect.expand(20.0));
     let hovered = response.hovered();
     let face = rect.translate(egui::vec2(0.0, if hovered { -3.0 } else { 0.0 }));
     let colour = tint(&entry.title);
     let picture = egui::Rect::from_min_size(face.min, egui::vec2(face.width(), 150.0));
-    painter.rect_filled(
-        picture.translate(egui::vec2(4.0, 4.0)),
-        theme::CORNER,
-        Color32::from_black_alpha(120),
-    );
-    painter.rect_filled(picture, theme::CORNER, theme::INK1);
-    theme::paint_dot_grid(&painter.with_clip_rect(picture), picture);
+    theme::soft_shadow(&painter, picture, 8.0, if hovered { 90 } else { 55 });
+    if hovered {
+        let glow = egui::Shadow {
+            offset: [0, 0],
+            blur: 14,
+            spread: 1,
+            color: theme::see_through(90, 180, 255, 160),
+        };
+        painter.add(glow.as_shape(picture, 8));
+    }
+    theme::paint_bubbles(&painter.with_clip_rect(picture.shrink(0.5)), picture);
     paint_diorama(&painter, picture.center() + egui::vec2(0.0, 10.0), 17.0, &entry.title, colour);
     let chip = egui::Rect::from_min_size(picture.min + egui::vec2(8.0, 8.0), egui::vec2(26.0, 26.0));
-    painter.rect_filled(chip, theme::CORNER, colour);
+    theme::glass(&painter, chip, 6.0, colour);
     painter.text(
         chip.center(),
         egui::Align2::CENTER_CENTER,
         entry.symbol,
         egui::FontId::proportional(16.0),
-        theme::INK0,
+        Color32::WHITE,
     );
     // Friends inside, as small faces in the corner.
     for (i, friend) in friends.iter().take(3).enumerate() {
         let at = egui::pos2(picture.max.x - 18.0 - i as f32 * 22.0, picture.min.y + 20.0);
-        painter.circle_filled(at, 13.0, theme::SKY);
+        painter.circle_filled(at, 13.0, Color32::WHITE);
         paint_avatar(&painter, at, 11.5, &friend.look, &friend.name);
     }
-    if hovered {
-        painter.rect_stroke(
-            picture,
-            theme::CORNER,
-            egui::Stroke::new(2.0, theme::CHALK),
-            egui::StrokeKind::Outside,
-        );
-    }
+    // Glass over the picture: a gloss over its top and a bright rim.
+    let gloss = egui::Rect::from_min_max(picture.min, egui::pos2(picture.max.x, picture.min.y + 46.0));
+    theme::gradient(
+        &painter,
+        gloss.shrink(1.0),
+        7.0,
+        &[
+            (0.0, Color32::from_rgba_unmultiplied(255, 255, 255, 90)),
+            (1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 0)),
+        ],
+    );
+    painter.rect_stroke(
+        picture,
+        8,
+        egui::Stroke::new(
+            if hovered { 2.0 } else { 1.0 },
+            if hovered { theme::ACCENT } else { Color32::from_rgb(130, 176, 222) },
+        ),
+        egui::StrokeKind::Inside,
+    );
     let width = face.width();
     theme::text_line(
         &painter,
         egui::pos2(face.min.x, picture.max.y + 10.0),
         &entry.title,
         theme::display(16.0),
-        theme::CHALK,
+        theme::TEXT,
         width,
     );
     let playing = entry.playing();
     let (line, colour) = if !friends.is_empty() {
         let names: Vec<&str> = friends.iter().map(|f| f.name.as_str()).collect();
-        (format!("{}  {} playing · {}", icon::USERS, count(playing), names.join(", ")), theme::SKY)
+        (format!("{}  {} playing · {}", icon::USERS, count(playing), names.join(", ")), theme::LINK)
     } else if playing > 0 {
-        (format!("{}  {} playing", icon::USERS, count(playing)), theme::MINT)
+        (format!("{}  {} playing", icon::USERS, count(playing)), theme::GREEN)
     } else {
         (format!("{}  by {}", icon::USER, entry.by), SOFT)
     };
@@ -356,13 +385,13 @@ fn ping_badge(ui: &mut egui::Ui, ping: Option<Result<u32, String>>) {
     let painter = ui.painter_at(rect);
     let (bars, colour, text) = match &ping {
         None => (0, SOFT, "…".to_owned()),
-        Some(Err(_)) => (0, theme::BRICK, "no answer".to_owned()),
+        Some(Err(_)) => (0, theme::RED, "no answer".to_owned()),
         Some(Ok(ms)) => {
             let (bars, colour) = match ms {
-                ..60 => (4, theme::MINT),
-                60..120 => (3, theme::MINT),
-                120..250 => (2, theme::SUN),
-                _ => (1, theme::BRICK),
+                ..60 => (4, theme::GREEN),
+                60..120 => (3, theme::GREEN),
+                120..250 => (2, theme::AMBER),
+                _ => (1, theme::RED),
             };
             (bars, colour, format!("{ms} ms"))
         }
@@ -380,7 +409,7 @@ fn ping_badge(ui: &mut egui::Ui, ping: Option<Result<u32, String>>) {
         egui::Align2::LEFT_CENTER,
         text,
         egui::FontId::proportional(12.5),
-        if bars > 0 { theme::CHALK } else { colour },
+        if bars > 0 { theme::TEXT } else { colour },
     );
     if let Some(Err(why)) = ping {
         response.on_hover_text(why);
@@ -398,7 +427,7 @@ fn players_bar(ui: &mut egui::Ui, server: &ServerInfo) {
     painter.rect_filled(track, 1.0, theme::LINE);
     let text = if server.max_players > 0 {
         let share = (server.players as f32 / server.max_players as f32).clamp(0.0, 1.0);
-        let fill = if share >= 1.0 { theme::BRICK } else { theme::MINT };
+        let fill = if share >= 1.0 { theme::RED } else { theme::GREEN };
         painter.rect_filled(
             egui::Rect::from_min_size(track.min, egui::vec2(track.width() * share, 4.0)),
             1.0,
@@ -413,7 +442,7 @@ fn players_bar(ui: &mut egui::Ui, server: &ServerInfo) {
         egui::Align2::LEFT_TOP,
         text,
         egui::FontId::proportional(12.5),
-        theme::CHALK,
+        theme::TEXT,
     );
 }
 
@@ -433,10 +462,10 @@ fn server_row(ui: &mut egui::Ui, platform: &mut Platform, server: &ServerInfo, t
     let ping = platform.social.ping(&server.code);
     let mut join = false;
     let frame = egui::Frame::new()
-        .fill(if friends.is_empty() { theme::INK2 } else { theme::INK2.lerp_to_gamma(theme::SKY, 0.14) })
+        .fill(if friends.is_empty() { theme::CARD } else { theme::CARD.lerp_to_gamma(theme::LINK, 0.14) })
         .stroke(egui::Stroke::new(
             1.0,
-            if friends.is_empty() { theme::LINE } else { theme::SKY.gamma_multiply(0.5) },
+            if friends.is_empty() { theme::LINE } else { theme::LINK.gamma_multiply(0.5) },
         ))
         .corner_radius(theme::CORNER)
         .inner_margin(egui::Margin::symmetric(12, 10));
@@ -446,29 +475,29 @@ fn server_row(ui: &mut egui::Ui, platform: &mut Platform, server: &ServerInfo, t
             // A small picture of the game, as server lists show a server's icon.
             let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(52.0, 52.0), egui::Sense::hover());
             let painter = ui.painter_at(icon_rect);
-            painter.rect_filled(icon_rect, theme::CORNER, theme::INK1);
+            painter.rect_filled(icon_rect, theme::CORNER, theme::PANEL);
             paint_diorama(&painter, icon_rect.center() + egui::vec2(0.0, 4.0), 6.0, title, tint(title));
             ui.add_space(6.0);
             ui.vertical(|ui| {
                 ui.set_width((ui.available_width() - 330.0).max(160.0));
-                ui.label(RichText::new(&server.name).font(theme::display(16.0)).color(theme::CHALK));
+                ui.label(RichText::new(&server.name).font(theme::display(16.0)).color(theme::TEXT));
                 ui.horizontal(|ui| {
                     let kind_colour = match server.kind {
-                        libroxel_hub::HostKind::Community => theme::MINT,
-                        libroxel_hub::HostKind::Player => theme::SKY,
-                        libroxel_hub::HostKind::Official => theme::SUN,
+                        libroxel_hub::HostKind::Community => theme::GREEN,
+                        libroxel_hub::HostKind::Player => theme::LINK,
+                        libroxel_hub::HostKind::Official => theme::AMBER,
                     };
                     ui.label(
                         RichText::new(format!("{} server", server.kind.label())).small().color(kind_colour),
                     );
                     // Only an account the Hub checked; the server's name is whatever the host typed.
                     if server.admin_host {
-                        ui.label(RichText::new("Admin").small().strong().color(theme::SUN))
+                        ui.label(RichText::new("Admin").small().strong().color(theme::AMBER))
                             .on_hover_text("Run by whoever runs this Hub, checked by the Hub.");
                     } else if let Some(host) = &server.host {
                         let verified = if server.host_verified { " · verified" } else { "" };
                         ui.label(
-                            RichText::new(format!("hosted by {host}{verified}")).small().color(theme::CHALK),
+                            RichText::new(format!("hosted by {host}{verified}")).small().color(theme::TEXT),
                         )
                         .on_hover_text("The Hub checked this account really hosts it.");
                     }
@@ -482,7 +511,7 @@ fn server_row(ui: &mut egui::Ui, platform: &mut Platform, server: &ServerInfo, t
                         ui.label(
                             RichText::new(format!("{} {verb} here", names.join(", ")))
                                 .small()
-                                .color(theme::SKY),
+                                .color(theme::LINK),
                         );
                     }
                 });
@@ -563,13 +592,13 @@ fn host(entry: &Entry, platform: &mut Platform) -> Option<Pick> {
 fn section(ui: &mut egui::Ui, title: &str, link: Option<&str>) -> bool {
     let mut clicked = false;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(title).font(theme::display(20.0)).color(theme::CHALK));
+        ui.label(RichText::new(title).font(theme::display(20.0)).color(theme::TEXT));
         if let Some(link) = link {
             ui.add_space(8.0);
             clicked = ui
                 .add(
                     egui::Label::new(
-                        RichText::new(format!("{link} {}", icon::CARET_RIGHT)).color(theme::SKY),
+                        RichText::new(format!("{link} {}", icon::CARET_RIGHT)).color(theme::LINK),
                     )
                     .sense(egui::Sense::click()),
                 )
@@ -613,7 +642,7 @@ pub fn home_tab(
         ui.vertical(|ui| {
             ui.add_space(8.0);
             ui.label(
-                RichText::new(format!("Hello, {name}!")).font(theme::display_bold(28.0)).color(theme::CHALK),
+                RichText::new(format!("Hello, {name}!")).font(theme::display_bold(28.0)).color(theme::TEXT),
             );
             let online = platform.social.friends.friends.iter().filter(|f| f.online).count();
             let note = match (platform.account.is_some(), online) {
@@ -637,7 +666,7 @@ pub fn home_tab(
         let label =
             format!("{} {waiting} friend request{} waiting", icon::BELL, if waiting == 1 { "" } else { "s" });
         if ui
-            .add(egui::Label::new(RichText::new(label).color(theme::SUN)).sense(egui::Sense::click()))
+            .add(egui::Label::new(RichText::new(label).color(theme::AMBER)).sense(egui::Sense::click()))
             .clicked()
         {
             *tab = Tab::Friends;
@@ -709,7 +738,7 @@ fn game_page(
     let mut pick = None;
     if ui
         .add(
-            egui::Label::new(RichText::new(format!("{} Home", icon::ARROW_LEFT)).color(theme::SKY))
+            egui::Label::new(RichText::new(format!("{} Home", icon::ARROW_LEFT)).color(theme::LINK))
                 .sense(egui::Sense::click()),
         )
         .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -723,8 +752,8 @@ fn game_page(
         // The picture.
         let (rect, _) = ui.allocate_exact_size(egui::vec2(440.0, 248.0), egui::Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, theme::CORNER, theme::INK1);
-        theme::paint_dot_grid(&painter, rect);
+        painter.rect_filled(rect, theme::CORNER, theme::PANEL);
+        theme::paint_bubbles(&painter, rect);
         paint_diorama(
             &painter,
             rect.center() + egui::vec2(0.0, 18.0),
@@ -740,13 +769,13 @@ fn game_page(
         );
         ui.add_space(26.0);
         ui.vertical(|ui| {
-            ui.label(RichText::new(&entry.title).font(theme::display_bold(34.0)).color(theme::CHALK));
-            ui.label(RichText::new(format!("By {}", entry.by)).color(theme::SKY));
+            ui.label(RichText::new(&entry.title).font(theme::display_bold(34.0)).color(theme::TEXT));
+            ui.label(RichText::new(format!("By {}", entry.by)).color(theme::LINK));
             ui.add_space(14.0);
             ui.horizontal(|ui| {
                 let stat = |ui: &mut egui::Ui, value: String, label: &str| {
                     ui.vertical(|ui| {
-                        ui.label(RichText::new(value).font(theme::display(20.0)).color(theme::CHALK));
+                        ui.label(RichText::new(value).font(theme::display(20.0)).color(theme::TEXT));
                         theme::label_caps(ui, label);
                     });
                     ui.add_space(26.0);
@@ -800,12 +829,12 @@ fn game_page(
     if !entry.about.is_empty() {
         ui.add_space(18.0);
         theme::label_caps(ui, "About");
-        ui.label(RichText::new(&entry.about).color(theme::CHALK));
+        ui.label(RichText::new(&entry.about).color(theme::TEXT));
     }
     ui.add_space(22.0);
     // The servers.
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Servers").font(theme::display(22.0)).color(theme::CHALK));
+        ui.label(RichText::new("Servers").font(theme::display(22.0)).color(theme::TEXT));
         ui.add_space(16.0);
         ui.label(RichText::new("Sort by").color(SOFT));
         ui.selectable_value(&mut state.sort, Sort::Players, "Players");
@@ -857,7 +886,7 @@ fn game_page(
     if others.is_empty() && with_friends.is_empty() {
         theme::panel().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new("No servers are running this game right now.").color(theme::CHALK));
+            ui.label(RichText::new("No servers are running this game right now.").color(theme::TEXT));
             let more = if entry.hostable() {
                 "Press New server to start one; it shows up here for everyone on this Hub."
             } else {
@@ -894,7 +923,7 @@ fn person_row(
             ui.add_space(6.0);
             ui.vertical(|ui| {
                 ui.add_space(3.0);
-                ui.label(RichText::new(name).font(theme::display(16.0)).color(theme::CHALK));
+                ui.label(RichText::new(name).font(theme::display(16.0)).color(theme::TEXT));
                 ui.label(RichText::new(status.0).small().color(status.1));
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), buttons);
@@ -918,7 +947,7 @@ pub fn friends_tab(
         ui.add_space(8.0);
         theme::panel().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new("Claim a name first").font(theme::display(17.0)).color(theme::CHALK));
+            ui.label(RichText::new("Claim a name first").font(theme::display(17.0)).color(theme::TEXT));
             ui.label(
                 RichText::new(format!(
                     "Friends find you by your name on the Hub at {}. It takes a second, on the Avatar tab.",
@@ -935,15 +964,15 @@ pub fn friends_tab(
     }
     match &platform.social.change_status {
         Some(Ok(said)) => {
-            theme::status(ui, theme::MINT, said);
+            theme::status(ui, theme::GREEN, said);
         }
         Some(Err(why)) => {
-            theme::status(ui, theme::BRICK, why);
+            theme::status(ui, theme::RED, why);
         }
         None => {}
     }
     if let Some(error) = &platform.social.friends_error {
-        theme::status(ui, theme::BRICK, error);
+        theme::status(ui, theme::RED, error);
     }
     ui.add_space(10.0);
     let friends = platform.social.friends.clone();
@@ -957,7 +986,7 @@ pub fn friends_tab(
         ui.label(
             RichText::new(format!("Your friends ({}) · {online} online", friends.friends.len()))
                 .font(theme::display(18.0))
-                .color(theme::CHALK),
+                .color(theme::TEXT),
         );
         ui.add_space(6.0);
         if friends.friends.is_empty() {
@@ -980,7 +1009,7 @@ pub fn friends_tab(
             person_row(ui, &friend.look, &friend.name, (&status, colour), |ui| {
                 let confirming = state.confirm_unfriend.as_deref() == Some(friend.player_id.as_str());
                 if confirming {
-                    if ui.button(RichText::new("Unfriend").color(theme::BRICK)).clicked() {
+                    if ui.button(RichText::new("Unfriend").color(theme::RED)).clicked() {
                         change = Some((friend.player_id.clone(), friend.name.clone(), FriendAction::Remove));
                         state.confirm_unfriend = None;
                     }
@@ -1010,7 +1039,7 @@ pub fn friends_tab(
             ui.label(
                 RichText::new(format!("Friend requests ({})", friends.incoming.len()))
                     .font(theme::display(18.0))
-                    .color(theme::SUN),
+                    .color(theme::AMBER),
             );
             ui.add_space(6.0);
             for person in &friends.incoming {
@@ -1029,7 +1058,7 @@ pub fn friends_tab(
             }
             ui.add_space(14.0);
         }
-        ui.label(RichText::new("Add friends").font(theme::display(18.0)).color(theme::CHALK));
+        ui.label(RichText::new("Add friends").font(theme::display(18.0)).color(theme::TEXT));
         ui.add_space(4.0);
         let mut search = std::mem::take(&mut platform.social.people_search);
         let mut go = false;
@@ -1055,11 +1084,11 @@ pub fn friends_tab(
             for person in &social.people {
                 let busy = social.changing.contains(&person.player_id);
                 let (state_text, colour) = if social.is_friend(&person.player_id) {
-                    ("Friends", theme::MINT)
+                    ("Friends", theme::GREEN)
                 } else if social.asked(&person.player_id) {
-                    ("Request sent", theme::SKY)
+                    ("Request sent", theme::LINK)
                 } else if social.asked_by(&person.player_id) {
-                    ("Asked to be your friend", theme::SUN)
+                    ("Asked to be your friend", theme::AMBER)
                 } else {
                     ("", SOFT)
                 };

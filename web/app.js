@@ -42,11 +42,11 @@ const ICON = {
 
 // The app's colours, for drawing.
 const C = {
-  ink0: [18, 17, 15], ink1: [28, 26, 23], ink2: [38, 35, 31], ink3: [52, 48, 42], line: [63, 58, 51],
-  tangerine: [255, 106, 43], mint: [47, 212, 154], sky: [89, 168, 255], sun: [255, 201, 60],
-  brick: [242, 84, 91], dust: [163, 155, 139],
+  card: [255, 255, 255], grass: [146, 210, 104], grassEdge: [92, 160, 64],
+  portrait: [190, 226, 250],
 };
-const TINTS = [C.tangerine, C.mint, C.sky, C.sun, [178, 146, 255], C.brick];
+// The bright colours game pictures are tinted with (menu.rs `tint`).
+const TINTS = [[255, 140, 40], [92, 196, 62], [30, 170, 230], [255, 196, 40], [160, 110, 240], [240, 84, 140]];
 
 // The Avatar tab's colours (crates/libroxel/src/menu.rs) and hats.
 const SKINS = [[255, 224, 196], [238, 196, 160], [222, 172, 128], [196, 140, 96], [160, 108, 72], [118, 78, 52], [86, 56, 38], [120, 200, 120]];
@@ -412,7 +412,7 @@ function diorama(width, height, cx, cy, unit, title) {
     svg('polygon', { points: points.join(' '), fill: rgb(fill), ...(stroke ? { stroke: rgb(stroke), 'stroke-width': 1 } : {}) });
   const shapes = [];
   const g = (x, y) => at(x, y, 0.6);
-  shapes.push(poly([g(-1.7, -1.7), g(1.7, -1.7), g(1.7, 1.7), g(-1.7, 1.7)], C.ink3, C.line));
+  shapes.push(poly([g(-1.7, -1.7), g(1.7, -1.7), g(1.7, 1.7), g(-1.7, 1.7)], C.grass, C.grassEdge));
   const cells = [];
   for (let x = 0; x < 3; x++) for (let y = 0; y < 3; y++) cells.push([x, y]);
   cells.sort((a, b) => a[0] + a[1] - (b[0] + b[1]));
@@ -420,7 +420,7 @@ function diorama(width, height, cx, cy, unit, title) {
     const bits = (hash >>> ((gx * 3 + gy) * 2)) & 3;
     const high = gx === 1 && gy === 1 ? 2 : Math.max(bits - 1, 0);
     for (let z = 0; z < high; z++) {
-      const c = z + 1 === high ? colour : lerp(colour, C.ink2, 0.35);
+      const c = z + 1 === high ? colour : lerp(colour, C.card, 0.35);
       const [x, y, zz] = [gx - 1.5, gy - 1.5, 0.6 + z];
       const top = [at(x, y, zz + 1), at(x + 1, y, zz + 1), at(x + 1, y + 1, zz + 1), at(x, y + 1, zz + 1)];
       const left = [at(x, y + 1, zz + 1), at(x + 1, y + 1, zz + 1), at(x + 1, y + 1, zz), at(x, y + 1, zz)];
@@ -468,7 +468,7 @@ function portrait(look, name, size) {
   const [hx, hy] = [cx - hw / 2, cy - r * 0.08 - hh / 2];
   const dark = 'rgb(30, 26, 22)';
   const parts = [
-    svg('circle', { cx, cy, r, fill: rgb(C.ink3) }),
+    svg('circle', { cx, cy, r, fill: rgb(C.portrait), stroke: '#fff', 'stroke-width': 3 }),
     svg('polygon', { points: pts.join(' '), fill: rgb(l.shirt) }),
     svg('rect', { x: hx, y: hy, width: hw, height: hh, rx: r * 0.16, fill: rgb(l.skin) }),
   ];
@@ -503,11 +503,15 @@ function figure(look, name) {
   return svg('svg', { viewBox: '0 0 196 320', width: 196, height: 320, 'aria-hidden': 'true' }, ...p);
 }
 
+// The glassy cube (theme.rs `paint_logo`), the same as in index.html.
 function logo() {
   return svg('svg', { viewBox: '0 0 28 30', 'aria-hidden': 'true' },
-    svg('polygon', { points: '14,1 27,8 14,15 1,8', fill: rgb([255, 150, 90]) }),
-    svg('polygon', { points: '1,8 14,15 14,29 1,22', fill: rgb(C.tangerine) }),
-    svg('polygon', { points: '27,8 14,15 14,29 27,22', fill: rgb([200, 78, 26]) }));
+    svg('polygon', { points: '14,1 27,8 14,15 1,8', fill: 'rgb(150,224,252)' }),
+    svg('polygon', { points: '1,8 14,15 14,29 1,22', fill: 'rgb(40,160,228)' }),
+    svg('polygon', { points: '27,8 14,15 14,29 27,22', fill: 'rgb(22,104,190)' }),
+    svg('polygon', { points: '14,1 20.5,4.5 14,8 7.5,4.5', fill: 'rgb(120,214,90)' }),
+    svg('polygon', { points: '1,8 14,1 18.5,3.5 7.5,11.5', fill: 'rgba(255,255,255,0.3)' }),
+    svg('polygon', { points: '14,1 27,8 27,22 14,29 1,22 1,8', fill: 'none', stroke: 'rgba(255,255,255,0.8)', 'stroke-width': 1 }));
 }
 
 // ---------------------------------------------------------------------------
@@ -652,10 +656,10 @@ function titleFor(r) {
 }
 
 function whereabouts(friend) {
-  if (friend.online && friend.game) return [friend.game, 'var(--sky)'];
-  if (friend.online) return ['Online', 'var(--mint)'];
+  if (friend.online && friend.game) return [friend.game, 'var(--link)'];
+  if (friend.online) return ['Online', 'var(--green)'];
   const when = friend.last_online_secs_ago;
-  return [when === null || when === undefined ? 'Offline' : `Offline · ${ago(when)}`, 'var(--dust)'];
+  return [when === null || when === undefined ? 'Offline' : `Offline · ${ago(when)}`, 'var(--muted)'];
 }
 
 // --- Home -----------------------------------------------------------------
@@ -679,7 +683,7 @@ function home() {
       el('a', { class: 'friend-tile', href: '#/friends' }, el('div', { class: 'add-face' }, icon(ICON.userPlus)), el('b', {}, 'Add friends')),
       list.map((f) => {
         const [where, colour] = whereabouts(f);
-        const dot = f.online ? (f.game ? 'var(--sky)' : 'var(--mint)') : null;
+        const dot = f.online ? (f.game ? 'var(--link)' : 'var(--green)') : null;
         const tile = el('a', { class: 'friend-tile', href: f.server ? '#' : `#/user/${f.number ?? f.player_id}`, title: f.server ? `Join ${f.name}` : f.name },
           el('div', { class: 'face' }, portrait(f.look, f.name, 78), dot && el('span', { class: 'dot', style: `background:${dot}` })),
           el('b', {}, f.name),
@@ -736,7 +740,7 @@ function game() {
     if (best) joinServer(best);
     else launch(appLink('play', entry.key), `Starting ${entry.title}.`);
   });
-  const by = entry.byId ? el('a', { href: `#/user/${entry.byId}` }, `By ${entry.by}`) : el('div', { style: 'color:var(--sky)' }, `By ${entry.by}`);
+  const by = entry.byId ? el('a', { href: `#/user/${entry.byId}` }, `By ${entry.by}`) : el('div', { style: 'color:var(--link)' }, `By ${entry.by}`);
   const out = [
     back,
     el('div', { class: 'hero' },
@@ -789,7 +793,7 @@ function serverRow(server, entry) {
       el('small', {},
         el('span', { class: `kind-${kind}` }, `${kind.charAt(0).toUpperCase()}${kind.slice(1)} server`),
         host,
-        inside.map((f) => el('span', { style: 'color:var(--sky);display:inline-flex;gap:4px;align-items:center' }, portrait(f.look, f.name, 16), `${f.name} is here`)))),
+        inside.map((f) => el('span', { style: 'color:var(--link);display:inline-flex;gap:4px;align-items:center' }, portrait(f.look, f.name, 16), `${f.name} is here`)))),
     el('div', { class: `fill${isFull ? ' full' : ''}` },
       server.max_players ? `${server.players} / ${server.max_players} players` : `${server.players} playing`,
       el('div', { class: 'bar' }, el('i', { style: `width:${server.max_players ? filled * 100 : 0}%` }))),
@@ -891,7 +895,7 @@ function friendsPage() {
       else action = el('button', { class: 'btn go small', onclick: () => changeFriend(p.player_id, 'add', asking ? `You and ${p.name} are friends now.` : `Friend request sent to ${p.name}.`) }, icon(ICON.userPlus), asking ? 'Accept' : 'Add');
       right.push(el('div', { class: 'person' },
         portrait(null, p.name, 44),
-        el('div', { class: 'what' }, el('a', { href: `#/user/${p.number ?? p.player_id}` }, el('b', {}, p.name)), el('small', { class: asked ? '' : 'soft', style: asked ? 'color:var(--sky)' : '' }, asked ? 'Request sent' : p.about || '')),
+        el('div', { class: 'what' }, el('a', { href: `#/user/${p.number ?? p.player_id}` }, el('b', {}, p.name)), el('small', { class: asked ? '' : 'soft', style: asked ? 'color:var(--link)' : '' }, asked ? 'Request sent' : p.about || '')),
         el('div', { class: 'buttons' }, action)));
     }
   }
@@ -929,7 +933,7 @@ function user() {
   let action = null;
   if (session && !isMe && f) {
     if (f.friends.some((x) => x.player_id === p.player_id)) action = el('span', { class: 'soft' }, icon(ICON.check), ' Friends');
-    else if (f.outgoing.some((x) => x.player_id === p.player_id)) action = el('span', { style: 'color:var(--sky)' }, 'Request sent');
+    else if (f.outgoing.some((x) => x.player_id === p.player_id)) action = el('span', { style: 'color:var(--link)' }, 'Request sent');
     else action = el('button', { class: 'btn go small', onclick: () => changeFriend(p.player_id, 'add', `Friend request sent to ${p.name}.`).then(() => profiles.delete(id)) }, icon(ICON.userPlus), 'Add friend');
   }
   const days = Math.floor(p.joined_secs_ago / 86400);
@@ -1236,7 +1240,7 @@ function download() {
   out.push(el('div', { class: 'downloads' }, builds.map((b) => {
     const href = link(b);
     return el('div', { class: `download${b.id === mine ? ' mine' : ''}` },
-      el('h3', {}, b.name, b.id === mine ? el('span', { class: 'caps', style: 'margin-left:8px;color:var(--mint)' }, 'Your computer') : null),
+      el('h3', {}, b.name, b.id === mine ? el('span', { class: 'caps', style: 'margin-left:8px;color:var(--green)' }, 'Your computer') : null),
       el('p', {}, b.about),
       href
         ? el('a', { class: `btn small${b.id === mine ? ' go' : ''}`, href }, icon(ICON.download), 'Download')
