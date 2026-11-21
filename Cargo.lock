@@ -5096,6 +5096,7 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "egui-phosphor",
+ "libroxel-chess",
  "libroxel-engine",
  "libroxel-hub",
  "libroxel-instance",
@@ -5107,6 +5108,10 @@ dependencies = [
  "transform-gizmo-egui",
  "winresource",
 ]
+
+[[package]]
+name = "libroxel-chess"
+version = "0.0.1"
 
 [[package]]
 name = "libroxel-engine"
@@ -5131,6 +5136,7 @@ dependencies = [
  "hmac",
  "iroh-base",
  "lettre",
+ "libroxel-chess",
  "rusqlite",
  "serde",
  "serde_json",

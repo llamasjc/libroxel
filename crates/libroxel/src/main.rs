@@ -21,6 +21,8 @@
 
 mod accounts;
 mod browse;
+mod chess;
+mod chess_pieces;
 mod command;
 mod debugging;
 mod file_picker;

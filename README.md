@@ -225,6 +225,23 @@ The first build compiles Bevy and takes a while. After that it is quick.
   whoever runs the Hub looks: `libroxel-hub reports` lists reports,
   `libroxel-hub clear game <id>` lists one again, and
   `libroxel-hub remove game <id>` takes it down (`item` for hats).
+- **Chess:** the **Chess** tab is a whole chess game, no 3D needed. Play
+  eight computer players from Droplet (about 250) to Zenith (about 2300),
+  with take-backs and hints, or pass and play on one computer. Online,
+  pick a clock (1+0 up to 30+0) for a quick match against someone near
+  your rating, or challenge a friend with the clock and side you want.
+  Games can be rated (separate Bullet, Blitz, Rapid and Classical ratings)
+  or casual. The Hub checks every move and keeps the clocks, so there's
+  check, mate, stalemate, threefold repetition, the 50-move rule, too few
+  pieces, flag falls, resigning, draw offers, aborting before the first
+  moves, claiming the win when an opponent has been gone a minute, and
+  rematches with the sides swapped. Drag or click pieces, see where each
+  can go, premove while the other side thinks, draw arrows with the right
+  mouse button, step back through the moves, flip the board, pick a board
+  colour, and copy the position (FEN) or the game record (PGN). Watch the
+  games being played now, climb the leaderboard, and see your own ratings
+  and recent games. Chat is a set of friendly phrases. Closing the app in
+  the middle of a game is fine: opening it again picks the game back up.
 - **Editing together:** **Test > Edit together → Share this game**
   lets others edit the game you have open, live, while you work on it. Send
   them the code from **📋 Copy edit code** (or, on your own network, your
