@@ -365,7 +365,7 @@ fn main() {
 /// Lets a windowless Windows build print to the terminal it was started
 /// from, for `libroxel server` and `libroxel help`.
 #[cfg(windows)]
-#[allow(unsafe_code)] // One call into Windows itself; nothing else in Libroxel needs unsafe.
+#[allow(unsafe_code)]
 fn attach_terminal() {
     #[link(name = "kernel32")]
     unsafe extern "system" {

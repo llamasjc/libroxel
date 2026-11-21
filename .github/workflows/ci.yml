@@ -5,7 +5,6 @@ on:
     branches: [main]
   pull_request:
 
-# A newer push to the same branch or PR cancels the older run still going.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -18,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Bevy system dependencies
+      - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libwayland-dev libxkbcommon-dev libudev-dev libasound2-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -28,8 +27,6 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
-  # The app has Windows-only and Mac-only code that the Linux job never
-  # compiles, so a mistake there would only show up when a release fails.
   check-other-platforms:
     name: check (${{ matrix.os }})
     strategy:
