@@ -1061,61 +1061,10 @@ pub fn friends_tab(
         ui.label(RichText::new("Add friends").font(theme::display(18.0)).color(theme::TEXT));
         ui.add_space(4.0);
         let mut search = std::mem::take(&mut platform.social.people_search);
-        let mut go = false;
-        ui.horizontal(|ui| {
-            let field = ui.add(
-                egui::TextEdit::singleline(&mut search)
-                    .hint_text(format!("{} Search by name", icon::MAGNIFYING_GLASS))
-                    .desired_width(ui.available_width() - 90.0)
-                    .margin(egui::vec2(8.0, 6.0)),
-            );
-            go = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if theme::tool_button(ui, icon::MAGNIFYING_GLASS, "Find", false).clicked() {
-                go = true;
-            }
-        });
-        let social = &platform.social;
-        if !social.people_for.is_empty() && social.people_for == search.trim() {
-            if social.people.is_empty() {
-                ui.label(
-                    RichText::new(format!("Nobody called “{}” on this Hub.", social.people_for)).color(SOFT),
-                );
-            }
-            for person in &social.people {
-                let busy = social.changing.contains(&person.player_id);
-                let (state_text, colour) = if social.is_friend(&person.player_id) {
-                    ("Friends", theme::GREEN)
-                } else if social.asked(&person.player_id) {
-                    ("Request sent", theme::LINK)
-                } else if social.asked_by(&person.player_id) {
-                    ("Asked to be your friend", theme::AMBER)
-                } else {
-                    ("", SOFT)
-                };
-                let about = if state_text.is_empty() { person.about.as_str() } else { state_text };
-                person_row(ui, &Json::Null, &person.name, (about, colour), |ui| {
-                    if social.is_friend(&person.player_id) {
-                        return;
-                    }
-                    if social.asked(&person.player_id) {
-                        if ui.add_enabled(!busy, egui::Button::new("Cancel")).clicked() {
-                            change =
-                                Some((person.player_id.clone(), person.name.clone(), FriendAction::Remove));
-                        }
-                        return;
-                    }
-                    let label = if social.asked_by(&person.player_id) { "Accept" } else { "Add friend" };
-                    if ui
-                        .add_enabled_ui(!busy, |ui| {
-                            theme::block_button(ui, theme::Kind::Primary, icon::USER_PLUS, label, 30.0)
-                        })
-                        .inner
-                        .clicked()
-                    {
-                        change = Some((person.player_id.clone(), person.name.clone(), FriendAction::Add));
-                    }
-                });
-            }
+        let go = search_box(ui, &mut search, "Search by name");
+        let me = platform.account.as_ref().map(|a| a.player_id.clone());
+        if !platform.social.people_for.is_empty() && platform.social.people_for == search.trim() {
+            people_results(ui, &platform.social, me.as_deref(), &mut change);
         }
         if !friends.outgoing.is_empty() {
             ui.add_space(14.0);
@@ -1138,4 +1087,128 @@ pub fn friends_tab(
         platform.change_friend(&id, &who, action);
     }
     pick
+}
+
+/// A search box with a Find button; whether to search now.
+fn search_box(ui: &mut egui::Ui, search: &mut String, hint: &str) -> bool {
+    let mut go = false;
+    ui.horizontal(|ui| {
+        let field = ui.add(
+            egui::TextEdit::singleline(search)
+                .hint_text(format!("{} {hint}", icon::MAGNIFYING_GLASS))
+                .desired_width(ui.available_width() - 90.0)
+                .margin(egui::vec2(8.0, 6.0)),
+        );
+        go = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if theme::tool_button(ui, icon::MAGNIFYING_GLASS, "Find", false).clicked() {
+            go = true;
+        }
+    });
+    go
+}
+
+/// The people a name search found, each with what you can do about them.
+/// `me` is your own account, which shows up too (as you).
+fn people_results(
+    ui: &mut egui::Ui,
+    social: &crate::social::Social,
+    me: Option<&str>,
+    change: &mut Option<(String, String, FriendAction)>,
+) {
+    if social.people.is_empty() {
+        ui.label(RichText::new(format!("Nobody called “{}” on this Hub.", social.people_for)).color(SOFT));
+    }
+    for person in &social.people {
+        let busy = social.changing.contains(&person.player_id);
+        let mine = me == Some(person.player_id.as_str());
+        let (state_text, colour) = if mine {
+            ("That's you", theme::GREEN)
+        } else if social.is_friend(&person.player_id) {
+            ("Friends", theme::GREEN)
+        } else if social.asked(&person.player_id) {
+            ("Request sent", theme::LINK)
+        } else if social.asked_by(&person.player_id) {
+            ("Asked to be your friend", theme::AMBER)
+        } else {
+            ("", SOFT)
+        };
+        let about = if state_text.is_empty() { person.about.as_str() } else { state_text };
+        let name = format!("{}  #{}", person.name, person.number);
+        person_row(ui, &Json::Null, &name, (about, colour), |ui| {
+            if mine || me.is_none() || social.is_friend(&person.player_id) {
+                return;
+            }
+            if social.asked(&person.player_id) {
+                if ui.add_enabled(!busy, egui::Button::new("Cancel")).clicked() {
+                    *change = Some((person.player_id.clone(), person.name.clone(), FriendAction::Remove));
+                }
+                return;
+            }
+            let label = if social.asked_by(&person.player_id) { "Accept" } else { "Add friend" };
+            if ui
+                .add_enabled_ui(!busy, |ui| {
+                    theme::block_button(ui, theme::Kind::Primary, icon::USER_PLUS, label, 30.0)
+                })
+                .inner
+                .clicked()
+            {
+                *change = Some((person.player_id.clone(), person.name.clone(), FriendAction::Add));
+            }
+        });
+    }
+}
+
+/// The Search tab: find players and games on the Hub by name.
+pub fn search_tab(state: &mut HomeState, ui: &mut egui::Ui, platform: &mut Platform, tab: &mut Tab) {
+    platform.refresh_if_old();
+    theme::heading(ui, "Search");
+    ui.label(RichText::new("Find players and games on this Hub.").color(SOFT));
+    ui.add_space(8.0);
+    let mut search = std::mem::take(&mut platform.social.people_search);
+    if search_box(ui, &mut search, "A player's name or a game") {
+        platform.social.people_search = search.clone();
+        platform.find_people();
+    }
+    platform.social.people_search = search.clone();
+    let looked_for = platform.social.people_for.clone();
+    if looked_for.is_empty() || looked_for != search.trim() {
+        return;
+    }
+    ui.add_space(12.0);
+    let mut change = None;
+    let me = platform.account.as_ref().map(|a| a.player_id.clone());
+    ui.columns(2, |columns| {
+        let ui = &mut columns[0];
+        ui.label(RichText::new("Players").font(theme::display(18.0)).color(theme::TEXT));
+        ui.add_space(6.0);
+        people_results(ui, &platform.social, me.as_deref(), &mut change);
+
+        let ui = &mut columns[1];
+        ui.label(RichText::new("Games").font(theme::display(18.0)).color(theme::TEXT));
+        ui.add_space(6.0);
+        let needle = looked_for.to_lowercase();
+        let found: Vec<Entry> = entries(platform)
+            .into_iter()
+            .filter(|e| {
+                e.title.to_lowercase().contains(&needle)
+                    || e.by.to_lowercase().contains(&needle)
+                    || e.about.to_lowercase().contains(&needle)
+            })
+            .collect();
+        if found.is_empty() {
+            ui.label(RichText::new(format!("No games called “{looked_for}” on this Hub.")).color(SOFT));
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(18.0, 18.0);
+            for entry in &found {
+                if game_tile(ui, entry, &[]).clicked() {
+                    state.view = View::Game(entry.key.clone());
+                    *tab = Tab::Home;
+                }
+            }
+        });
+    });
+    if let Some((id, who, action)) = change {
+        platform.change_friend(&id, &who, action);
+    }
 }

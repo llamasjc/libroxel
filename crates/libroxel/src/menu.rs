@@ -75,6 +75,7 @@ pub enum Pick {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Home,
+    Search,
     Friends,
     Play,
     Online,
@@ -349,6 +350,7 @@ impl Menu {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for (tab, glyph, label) in [
                     (Tab::Home, theme::icon::HOUSE, "Home"),
+                    (Tab::Search, theme::icon::MAGNIFYING_GLASS, "Search"),
                     (Tab::Friends, theme::icon::USERS, "Friends"),
                     (Tab::Play, theme::icon::PLAY, "Play"),
                     (Tab::Online, theme::icon::GLOBE_HEMISPHERE_WEST, "Online"),
@@ -390,6 +392,10 @@ impl Menu {
                 pick = match self.tab {
                     Tab::Home => {
                         crate::hub_home::home_tab(&mut self.home, ui, platform, &name, &mut self.tab)
+                    }
+                    Tab::Search => {
+                        crate::hub_home::search_tab(&mut self.home, ui, platform, &mut self.tab);
+                        None
                     }
                     Tab::Friends => {
                         crate::hub_home::friends_tab(&mut self.home, ui, platform, &name, &mut self.tab)

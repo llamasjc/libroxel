@@ -588,7 +588,7 @@ function parseRoute() {
   switch (parts[0]) {
     case 'game': return { name: 'game', key: parts.slice(1).join('/') };
     case 'user': return { name: 'user', id: parts[1] };
-    case 'friends': case 'avatar': case 'sign-in': case 'create': case 'download': return { name: parts[0] };
+    case 'search': case 'friends': case 'avatar': case 'sign-in': case 'create': case 'download': return { name: parts[0] };
     default: return { name: 'home' };
   }
 }
@@ -598,6 +598,7 @@ function tabs() {
     el('a', { class: `tab${route.name === name ? ' active' : ''}`, href }, icon(glyph), label);
   document.getElementById('tabs').replaceChildren(
     tab('home', ICON.house, 'Home', '#/'),
+    tab('search', ICON.search, 'Search', '#/search'),
     tab('friends', ICON.users, 'Friends', '#/friends'),
     tab('avatar', ICON.shirt, 'Avatar', '#/avatar'),
     tab('download', ICON.download, 'Download', '#/download'),
@@ -638,7 +639,7 @@ function status(text, kind = '') {
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, friends: friendsPage, avatar, user, 'sign-in': signInPage, create: createPage, download };
+  const views = { home, game, search: searchPage, friends: friendsPage, avatar, user, 'sign-in': signInPage, create: createPage, download };
   const view = views[route.name] || home;
   const nodes = [];
   if (flash) {
@@ -652,7 +653,7 @@ function render() {
 
 function titleFor(r) {
   if (r.name === 'game') return entries().find((e) => e.key === r.key)?.title || 'Game';
-  return { home: 'Home', friends: 'Friends', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download' }[r.name] || 'Libroxel';
+  return { home: 'Home', search: 'Search', friends: 'Friends', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download' }[r.name] || 'Libroxel';
 }
 
 function whereabouts(friend) {
@@ -804,6 +805,78 @@ function serverRow(server, entry) {
 
 let search = { text: '', results: null, busy: false };
 
+/** A box to find players by name, and what it found (you too, as you). */
+function peopleSearch(placeholder, alsoGames = false) {
+  const out = [];
+  const box = el('input', { type: 'search', placeholder, value: search.text });
+  const find = async () => {
+    search = { text: box.value.trim(), results: null, busy: true };
+    if (!search.text) { search.busy = false; render(); return; }
+    render();
+    try {
+      search.results = await api('/accounts', { query: { q: search.text } });
+    } catch (e) {
+      flash = { text: e.message, kind: 'error' };
+      search.results = [];
+    }
+    search.busy = false;
+    render();
+  };
+  box.addEventListener('keydown', (e) => e.key === 'Enter' && find());
+  out.push(el('div', { class: 'search' }, box, el('button', { class: 'chip', onclick: find }, icon(ICON.search), 'Find')));
+  if (search.busy) out.push(el('p', { class: 'soft' }, 'Looking…'));
+  if (!search.results) return out;
+  const people = alsoGames ? [el('h2', { class: 'subhead' }, 'Players')] : [];
+  if (!search.results.length) people.push(el('p', { class: 'soft' }, `No one called “${search.text}” on this Hub.`));
+  for (const p of search.results) people.push(personResult(p));
+  if (!alsoGames) return [...out, ...people];
+  const needle = search.text.toLowerCase();
+  const games = entries().filter((e) => [e.title, e.by, e.about].some((t) => (t || '').toLowerCase().includes(needle)));
+  return [
+    ...out,
+    el('div', { class: 'search-results' },
+      el('div', {}, people),
+      el('div', {},
+        el('h2', { class: 'subhead' }, 'Games'),
+        games.length ? el('div', { class: 'games' }, games.map(gameCard)) : el('p', { class: 'soft' }, `No games called “${search.text}” on this Hub.`))),
+  ];
+}
+
+/** One player a search found, with what you can do about them. */
+function personResult(p) {
+  const f = data.friends;
+  const mine = session?.playerId === p.player_id;
+  let action = null;
+  let note = p.about || '';
+  if (mine) note = "That's you";
+  else if (session && f) {
+    const isFriend = f.friends.some((x) => x.player_id === p.player_id);
+    const asked = f.outgoing.some((x) => x.player_id === p.player_id);
+    const asking = f.incoming.some((x) => x.player_id === p.player_id);
+    if (isFriend) action = el('span', { class: 'soft' }, 'Friends');
+    else if (asked) {
+      note = 'Request sent';
+      action = el('button', { class: 'chip', onclick: () => changeFriend(p.player_id, 'remove', `Took back your request to ${p.name}.`) }, 'Cancel');
+    } else action = el('button', { class: 'btn go small', onclick: () => changeFriend(p.player_id, 'add', asking ? `You and ${p.name} are friends now.` : `Friend request sent to ${p.name}.`) }, icon(ICON.userPlus), asking ? 'Accept' : 'Add');
+  }
+  return el('div', { class: 'person' },
+    portrait(null, p.name, 44),
+    el('div', { class: 'what' },
+      el('a', { href: `#/user/${p.number ?? p.player_id}` }, el('b', {}, p.name), el('span', { class: 'soft' }, ` #${p.number ?? ''}`)),
+      el('small', { class: 'soft' }, note)),
+    el('div', { class: 'buttons' }, action));
+}
+
+// --- Search ---------------------------------------------------------------
+
+function searchPage() {
+  return [
+    el('h1', { class: 'title' }, 'Search'),
+    el('p', { class: 'note' }, 'Find players and games on this Hub.'),
+    ...peopleSearch("A player's name or a game", true),
+  ];
+}
+
 async function changeFriend(otherId, action, done) {
   const time = Math.max(Date.now(), lastSigned.friends + 1);
   lastSigned.friends = time;
@@ -865,40 +938,7 @@ function friendsPage() {
     }
   }
   right.push(el('h2', { class: 'subhead', style: 'margin-top:8px' }, 'Add friends'));
-  const box = el('input', { type: 'search', placeholder: 'Their name', value: search.text });
-  const find = async () => {
-    search = { text: box.value.trim(), results: null, busy: true };
-    if (!search.text) { search.busy = false; render(); return; }
-    render();
-    try {
-      search.results = await api('/accounts', { query: { q: search.text } });
-    } catch (e) {
-      flash = { text: e.message, kind: 'error' };
-      search.results = [];
-    }
-    search.busy = false;
-    render();
-  };
-  box.addEventListener('keydown', (e) => e.key === 'Enter' && find());
-  right.push(el('div', { class: 'search' }, box, el('button', { class: 'chip', onclick: find }, icon(ICON.search), 'Find')));
-  if (search.busy) right.push(el('p', { class: 'soft' }, 'Looking…'));
-  if (search.results) {
-    const people = search.results.filter((p) => p.player_id !== session.playerId);
-    if (!people.length) right.push(el('p', { class: 'soft' }, `No one called “${search.text}” on this Hub.`));
-    for (const p of people) {
-      const isFriend = f.friends.some((x) => x.player_id === p.player_id);
-      const asked = f.outgoing.some((x) => x.player_id === p.player_id);
-      const asking = f.incoming.some((x) => x.player_id === p.player_id);
-      let action;
-      if (isFriend) action = el('span', { class: 'soft' }, 'Friends');
-      else if (asked) action = el('button', { class: 'chip', onclick: () => changeFriend(p.player_id, 'remove', `Took back your request to ${p.name}.`) }, 'Cancel');
-      else action = el('button', { class: 'btn go small', onclick: () => changeFriend(p.player_id, 'add', asking ? `You and ${p.name} are friends now.` : `Friend request sent to ${p.name}.`) }, icon(ICON.userPlus), asking ? 'Accept' : 'Add');
-      right.push(el('div', { class: 'person' },
-        portrait(null, p.name, 44),
-        el('div', { class: 'what' }, el('a', { href: `#/user/${p.number ?? p.player_id}` }, el('b', {}, p.name)), el('small', { class: asked ? '' : 'soft', style: asked ? 'color:var(--link)' : '' }, asked ? 'Request sent' : p.about || '')),
-        el('div', { class: 'buttons' }, action)));
-    }
-  }
+  right.push(...peopleSearch('Their name'));
   if (f.outgoing.length) {
     right.push(el('div', { class: 'caps group' }, 'Requests you sent'));
     for (const p of f.outgoing) {
