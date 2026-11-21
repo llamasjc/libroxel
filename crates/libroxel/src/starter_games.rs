@@ -1,12 +1,9 @@
 //! Starter games: small, finished games to play straight away, and places
 //! to start from in the editor.
 
-use libroxel_instance::{
-    ClassKind, Color3, InstanceId, InstanceTree, Material, NormalId, PartShape, Property, PropertyValue,
-    UDim, UDim2, Vec2, Vec3,
-};
+use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Material, Property, PropertyValue, Vec3};
 
-use crate::templates::{add, block, code, kart, material, picture, script, set, shape};
+use crate::templates::{add, block, code, material, script, set};
 
 /// A game you can start from: its name, a line about it and how to build it.
 pub struct StarterGame {
@@ -21,7 +18,7 @@ pub const STARTER_GAMES: &[StarterGame] = &[
     StarterGame {
         name: "Kart race",
         symbol: crate::theme::icon::STEERING_WHEEL,
-        about: "Three laps round the track in a kart",
+        about: "Drift, boost and throw items against seven racers on three tracks",
         build: kart_race,
     },
     StarterGame {
@@ -73,254 +70,44 @@ pub fn starter(name: &str) -> Option<&'static StarterGame> {
     STARTER_GAMES.iter().find(|game| game.name == name)
 }
 
-const HUD_SCRIPT: &str = r#"
--- Shows the game's status at the top of the screen, and short messages
--- for this player under it.
-local storage = game:GetService("ReplicatedStorage")
-local hud = script.Parent
-local status = storage:WaitForChild("Status")
-
-local function show()
-	hud.Status.Text = status.Value
-end
-status:GetPropertyChangedSignal("Value"):Connect(show)
-show()
-
-local shown = 0
-storage:WaitForChild("Notify").OnClientEvent:Connect(function(text)
-	shown += 1
-	local mine = shown
-	hud.Message.Text = text
-	hud.Message.Visible = true
-	task.wait(3)
-	if shown == mine then
-		hud.Message.Visible = false
-	end
-end)
-"#;
-
-/// A status line at the top of the screen and a message box under it, fed
-/// by a `Status` value and a `Notify` event in ReplicatedStorage.
-fn status_hud(tree: &mut InstanceTree, first: &str) {
-    let storage = tree.service(ClassKind::ReplicatedStorage).expect("every tree has storage");
-    let status = add(tree, storage, ClassKind::StringValue, "Status");
-    set(tree, status, Property::StringValue, PropertyValue::String(first.into()));
-    add(tree, storage, ClassKind::RemoteEvent, "Notify");
-
-    let starter_gui = tree.service(ClassKind::StarterGui).expect("every tree has StarterGui");
-    let hud = add(tree, starter_gui, ClassKind::ScreenGui, "HUD");
-    let dark = Color3::from_rgb8(25, 30, 40);
-    let white = Color3::from_rgb8(255, 255, 255);
-    for (name, y, height, size) in [("Status", 10.0, 40.0, 20.0), ("Message", 58.0, 34.0, 18.0)] {
-        let label = add(tree, hud, ClassKind::TextLabel, name);
-        set(tree, label, Property::GuiPosition, PropertyValue::UDim2(UDim2::new(0.5, 0.0, 0.0, y)));
-        set(tree, label, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 460.0, 0.0, height)));
-        set(tree, label, Property::AnchorPoint, PropertyValue::Vec2(Vec2::new(0.5, 0.0)));
-        set(tree, label, Property::BackgroundColor, PropertyValue::Color3(dark));
-        set(tree, label, Property::BackgroundTransparency, PropertyValue::Number(0.3));
-        set(tree, label, Property::TextColor, PropertyValue::Color3(white));
-        set(tree, label, Property::TextSize, PropertyValue::Number(size));
-        let corner = add(tree, label, ClassKind::UICorner, "UICorner");
-        set(tree, corner, Property::CornerRadius, PropertyValue::UDim(UDim::new(0.0, 8.0)));
-        if name == "Message" {
-            set(tree, label, Property::Visible, PropertyValue::Bool(false));
-        }
-    }
-    code(tree, hud, ClassKind::LocalScript, "HudScript", HUD_SCRIPT);
-}
-
 fn spawn_at(tree: &mut InstanceTree, parent: InstanceId, at: [f32; 3]) {
     let spawn = add(tree, parent, ClassKind::SpawnLocation, "SpawnLocation");
     set(tree, spawn, Property::Position, PropertyValue::Vec3(Vec3::new(at[0], at[1], at[2])));
     set(tree, spawn, Property::Size, PropertyValue::Vec3(Vec3::new(6.0, 1.0, 6.0)));
 }
 
-fn tree_at(tree: &mut InstanceTree, parent: InstanceId, x: f32, z: f32) {
-    let trunk = block(tree, parent, "Trunk", [x, 2.0, z], [1.0, 4.0, 1.0], [120, 85, 55]);
-    material(tree, trunk, Material::Wood);
-    let leaves = block(tree, parent, "Leaves", [x, 5.5, z], [5.0, 5.0, 5.0], [70, 150, 70]);
-    shape(tree, leaves, PartShape::Ball);
-    material(tree, leaves, Material::Grass);
-}
-
-const RACE_SCRIPT: &str = r#"
--- The race: drive through the blue gates in order and over the finish
--- line to finish a lap. The first to finish three laps wins, then the
--- race starts again. Your laps and best lap time are on the leaderboard.
-local Players = game:GetService("Players")
-local storage = game:GetService("ReplicatedStorage")
-local status = storage:WaitForChild("Status")
-local notify = storage:WaitForChild("Notify")
-local gates = workspace:WaitForChild("Gates")
-local order = { gates.Gate1, gates.Gate2, gates.Gate3, gates.Finish }
-local LAPS = 3
-
-local cheer = Instance.new("Sound")
-cheer.SoundId = "libroxel://chime"
-cheer.Parent = gates.Finish
-
--- Where each player is in the race, by their UserId.
-local racers = {}
-
-Players.PlayerAdded:Connect(function(player)
-	local stats = Instance.new("Folder")
-	stats.Name = "leaderstats"
-	stats.Parent = player
-	local laps = Instance.new("IntValue")
-	laps.Name = "Laps"
-	laps.Parent = stats
-	local best = Instance.new("NumberValue")
-	best.Name = "Best"
-	best.Parent = stats
-	racers[player.UserId] = { next = 1, started = time() }
-end)
-
-Players.PlayerRemoving:Connect(function(player)
-	racers[player.UserId] = nil
-end)
-
-local function inside(gate, position)
-	local offset = position - gate.Position
-	local half = gate.Size / 2
-	return math.abs(offset.X) <= half.X and math.abs(offset.Y) <= half.Y and math.abs(offset.Z) <= half.Z
-end
-
-local function restart()
-	for _, player in Players:GetPlayers() do
-		player.leaderstats.Laps.Value = 0
-		racers[player.UserId] = { next = 1, started = time() }
-	end
-	status.Value = "Drive through the blue gates. First to " .. LAPS .. " laps wins!"
-end
-
-restart()
-while true do
-	task.wait(0.1)
-	for _, player in Players:GetPlayers() do
-		local racer = racers[player.UserId]
-		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-		if racer and root and inside(order[racer.next], root.Position) then
-			if racer.next < #order then
-				racer.next += 1
-			else
-				-- Over the finish line after every gate: a lap.
-				local lap = math.floor((time() - racer.started) * 10 + 0.5) / 10
-				local stats = player.leaderstats
-				stats.Laps.Value += 1
-				if stats.Best.Value == 0 or lap < stats.Best.Value then
-					stats.Best.Value = lap
-				end
-				racer.next, racer.started = 1, time()
-				if stats.Laps.Value >= LAPS then
-					cheer:Play()
-					status.Value = player.Name .. " wins the race!"
-					notify:FireAllClients(player.Name .. " wins the race!")
-					task.wait(6)
-					restart()
-				else
-					notify:FireClient(player, "Lap " .. stats.Laps.Value .. " of " .. LAPS .. ": " .. lap .. " seconds")
-				end
-			end
-		end
-	end
-end
-"#;
-
-/// A kart race round a rectangular track: four karts on the grid, three
-/// gates and a finish line, with laps and best times on the leaderboard.
+/// An arcade kart race, made of scripts like any creator's game:
+/// `ReplicatedStorage.Kart` holds the `Tracks` module (three tracks, built
+/// when a race starts) and the `Control` and `Race` remote events,
+/// `ServerScriptService.KartServer` drives every kart, the computer racers
+/// and the items, and `StarterGui.KartScreen` has the start menu, the HUD
+/// and the chase camera. The scripts are in `kart_game/`.
 pub fn kart_race() -> InstanceTree {
     let mut tree = InstanceTree::new();
     let ws = tree.workspace();
-    let ground = block(&mut tree, ws, "Baseplate", [0.0, -0.5, 0.0], [240.0, 1.0, 200.0], [99, 140, 88]);
-    material(&mut tree, ground, Material::Grass);
+    // Everyone arrives at the garage, off to the side of every track, and
+    // is put in a kart when a race starts.
+    let garage = add(&mut tree, ws, ClassKind::Folder, "Garage");
+    let floor =
+        block(&mut tree, garage, "GarageFloor", [0.0, 0.1, 440.0], [40.0, 0.2, 30.0], [176, 160, 150]);
+    material(&mut tree, floor, Material::Brick);
+    spawn_at(&mut tree, garage, [0.0, 0.5, 440.0]);
 
-    // The track: four straights round a grassy island, with low walls a
-    // character can step over but a kart can't drive through.
-    let track = add(&mut tree, ws, ClassKind::Folder, "Track");
-    let asphalt = [62, 64, 70];
-    for (name, at, size) in [
-        ("SouthStraight", [0.0, 35.0], [136.0, 16.0]),
-        ("NorthStraight", [0.0, -35.0], [136.0, 16.0]),
-        ("WestStraight", [-60.0, 0.0], [16.0, 54.0]),
-        ("EastStraight", [60.0, 0.0], [16.0, 54.0]),
-    ] {
-        let road = block(&mut tree, track, name, [at[0], 0.1, at[1]], [size[0], 0.2, size[1]], asphalt);
-        material(&mut tree, road, Material::SmoothPlastic);
-    }
-    let walls = add(&mut tree, track, ClassKind::Folder, "Walls");
-    let (red, white) = ([210, 60, 50], [235, 235, 235]);
-    for (i, (at, size)) in [
-        ([0.0, 43.5], [138.0, 1.0]),
-        ([0.0, -43.5], [138.0, 1.0]),
-        ([-68.5, 0.0], [1.0, 88.0]),
-        ([68.5, 0.0], [1.0, 88.0]),
-        ([0.0, 26.5], [105.0, 1.0]),
-        ([0.0, -26.5], [105.0, 1.0]),
-        ([-52.0, 0.0], [1.0, 52.0]),
-        ([52.0, 0.0], [1.0, 52.0]),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let colour = if i % 2 == 0 { red } else { white };
-        block(
-            &mut tree,
-            walls,
-            &format!("Wall{}", i + 1),
-            [at[0], 0.25, at[1]],
-            [size[0], 0.5, size[1]],
-            colour,
-        );
-    }
-    // A chequered finish line with an arch over it.
-    // It's paint on the road: a kart's flat underside would catch on even
-    // this thin a lip and stop dead, so nothing collides with it.
-    let line = block(&mut tree, track, "FinishLine", [0.0, 0.21, 35.0], [2.0, 0.02, 16.0], [255, 255, 255]);
-    set(&mut tree, line, Property::CanCollide, PropertyValue::Bool(false));
-    picture(&mut tree, line, "checker", NormalId::Top, Some(2.0));
-    for z in [26.0, 44.0] {
-        block(&mut tree, track, "ArchPost", [0.0, 4.0, z], [1.0, 8.0, 1.0], [235, 235, 235]);
-    }
-    let banner = block(&mut tree, track, "ArchBanner", [0.0, 8.5, 35.0], [1.0, 1.4, 19.0], [255, 255, 255]);
-    picture(&mut tree, banner, "checker", NormalId::Right, Some(1.4));
-    picture(&mut tree, banner, "checker", NormalId::Left, Some(1.4));
+    let storage = tree.service(ClassKind::ReplicatedStorage).expect("every tree has storage");
+    let shared = add(&mut tree, storage, ClassKind::Folder, "Kart");
+    code(&mut tree, shared, ClassKind::ModuleScript, "Tracks", include_str!("kart_game/Tracks.luau"));
+    add(&mut tree, shared, ClassKind::RemoteEvent, "Control");
+    add(&mut tree, shared, ClassKind::RemoteEvent, "Race");
 
-    // The gates the race script checks, in order. You drive through them;
-    // they don't stop anything.
-    let gates = add(&mut tree, ws, ClassKind::Folder, "Gates");
-    for (name, at, size) in [
-        ("Gate1", [-60.0, 0.0], [16.0, 3.0]),
-        ("Gate2", [0.0, -35.0], [3.0, 16.0]),
-        ("Gate3", [60.0, 0.0], [16.0, 3.0]),
-        ("Finish", [0.0, 35.0], [3.0, 16.0]),
-    ] {
-        let gate =
-            block(&mut tree, gates, name, [at[0], 3.0, at[1]], [size[0], 6.0, size[1]], [80, 160, 255]);
-        material(&mut tree, gate, Material::Neon);
-        set(&mut tree, gate, Property::CanCollide, PropertyValue::Bool(false));
-        let see_through = if name == "Finish" { 1.0 } else { 0.85 };
-        set(&mut tree, gate, Property::Transparency, PropertyValue::Number(see_through));
-    }
-
-    // Four karts on the grid, behind the line, facing down the straight.
-    let grid = add(&mut tree, ws, ClassKind::Folder, "Karts");
-    let colours = [[220, 60, 60], [60, 120, 220], [250, 190, 50], [70, 180, 90]];
-    for (i, (x, z)) in [(7.0, 31.0), (7.0, 39.0), (14.0, 31.0), (14.0, 39.0)].into_iter().enumerate() {
-        kart(&mut tree, grid, Vec3::new(x, 0.2, z), 90.0, colours[i]);
-    }
-
-    // Players start beside the grid, in the pit by the south straight.
-    let pit = add(&mut tree, ws, ClassKind::Folder, "Pit");
-    let pad = block(&mut tree, pit, "PitFloor", [10.0, 0.1, 52.0], [24.0, 0.2, 14.0], [176, 160, 150]);
-    material(&mut tree, pad, Material::Brick);
-    spawn_at(&mut tree, pit, [10.0, 0.5, 52.0]);
-    for (x, z) in [(-30.0, 0.0), (-10.0, -10.0), (15.0, 8.0), (35.0, -5.0), (0.0, 12.0)] {
-        tree_at(&mut tree, ws, x, z);
-    }
-
-    status_hud(&mut tree, "Get in a kart and drive through the blue gates!");
     let server = tree.service(ClassKind::ServerScriptService).expect("every tree has ServerScriptService");
-    script(&mut tree, server, "Race", RACE_SCRIPT);
+    script(&mut tree, server, "KartServer", include_str!("kart_game/Server.luau"));
+
+    let starter_gui = tree.service(ClassKind::StarterGui).expect("every tree has StarterGui");
+    let screen = add(&mut tree, starter_gui, ClassKind::ScreenGui, "KartScreen");
+    tree.set_extra(screen, "IgnoreGuiInset", Some(PropertyValue::Bool(true)))
+        .expect("screen GUIs take extras");
+    set(&mut tree, screen, Property::ResetOnSpawn, PropertyValue::Bool(false));
+    code(&mut tree, screen, ClassKind::LocalScript, "KartClient", include_str!("kart_game/Client.luau"));
     tree.drain_changes();
     tree
 }
@@ -457,30 +244,6 @@ mod tests {
             }
             assert!(errors(&mut session).is_empty(), "{}: {:?}", game.name, errors(&mut session));
         }
-    }
-
-    #[test]
-    fn a_lap_needs_every_gate_in_order() {
-        let mut session = start_on(kart_race(), true).unwrap();
-        session.step(1.0 / 60.0, CharacterInput::default());
-        let visit = |session: &mut libroxel_engine::session::PlaySession, gate: &str| {
-            let move_to = format!(
-                "workspace.Player1.HumanoidRootPart.Position = workspace.Gates.{gate}.Position + Vector3.new(0, 0, 0)"
-            );
-            session.runtime().run("drive", &move_to).unwrap();
-            for _ in 0..12 {
-                session.step(1.0 / 60.0, CharacterInput::default());
-            }
-        };
-        // Straight to the finish doesn't count.
-        visit(&mut session, "Finish");
-        assert_eq!(value(&session, "game.Players.Player1.leaderstats.Laps.Value"), "0");
-        for gate in ["Gate1", "Gate2", "Gate3", "Finish"] {
-            visit(&mut session, gate);
-        }
-        assert_eq!(value(&session, "game.Players.Player1.leaderstats.Laps.Value"), "1");
-        assert_ne!(value(&session, "game.Players.Player1.leaderstats.Best.Value"), "0");
-        assert!(errors(&mut session).is_empty());
     }
 
     fn steps(session: &mut libroxel_engine::session::PlaySession, frames: usize) {
@@ -924,62 +687,188 @@ mod tests {
         assert!(errors(&mut guest).is_empty(), "{:?}", errors(&mut guest));
     }
 
-    /// Drives the first kart off the grid with the throttle held and
-    /// returns how far west it got (the finish line is at x = 0).
-    fn drive_off_the_grid(frames: usize) -> (f32, f32) {
-        let mut session = start_on(kart_race(), true).unwrap();
-        for _ in 0..30 {
-            session.step(1.0 / 60.0, CharacterInput::default());
+    /// Steps a kart race until `check` prints `want`, holding `input`.
+    fn race_until(
+        session: &mut libroxel_engine::session::PlaySession,
+        check: &str,
+        want: &str,
+        seconds: f32,
+        input: CharacterInput,
+    ) {
+        for _ in 0..(seconds * 60.0) as usize {
+            session.step(1.0 / 60.0, input);
+            if value(session, check) == want {
+                return;
+            }
         }
-        session
-            .runtime()
-            .run(
-                "hop",
-                "local seat = workspace.Karts:GetChildren()[1].VehicleSeat
-                workspace.Player1.HumanoidRootPart.Position = seat.Position + Vector3.new(0, 3, 0)",
-            )
-            .unwrap();
-        for _ in 0..30 {
-            session.step(1.0 / 60.0, CharacterInput::default());
-        }
-        let start: f32 =
-            value(&session, "workspace.Karts:GetChildren()[1].Chassis.Position.X").parse().unwrap();
-        for _ in 0..frames {
-            session.step(1.0 / 60.0, CharacterInput { throttle: 1.0, ..Default::default() });
-        }
-        let end: f32 =
-            value(&session, "workspace.Karts:GetChildren()[1].Chassis.Position.X").parse().unwrap();
-        assert!(errors(&mut session).is_empty());
-        (start, end)
+        panic!("gave up waiting for {check} to be {want}: it is {}", value(session, check));
     }
 
-    #[test]
-    fn karts_drive_through_the_finish_line() {
-        let (start, end) = drive_off_the_grid(180);
-        assert!(start > 5.0, "on the grid behind the line: {start}");
-        assert!(end < -10.0, "drove over the line and on down the straight: {start} -> {end}");
-    }
-
-    #[test]
-    fn players_walk_through_the_finish_line() {
-        let mut session = start_on(kart_race(), true).unwrap();
-        for _ in 0..30 {
-            session.step(1.0 / 60.0, CharacterInput::default());
-        }
+    fn kart_control(session: &libroxel_engine::session::PlaySession, action: &str) {
         session
             .runtime()
-            .run("put", "workspace.Player1.HumanoidRootPart.Position = Vector3.new(6, 3, 35)")
+            .run("control", &format!("game.ReplicatedStorage.Kart.Control:FireServer({action})"))
             .unwrap();
-        for _ in 0..30 {
-            session.step(1.0 / 60.0, CharacterInput::default());
-        }
-        // Walk west (-X) for three seconds.
-        let west =
-            CharacterInput { move_dir: libroxel_instance::Vec3::new(-1.0, 0.0, 0.0), ..Default::default() };
+    }
+
+    const PHASE: &str = "game.ReplicatedStorage.Kart:GetAttribute('Phase')";
+    const MY_KART: &str = "(function() for _, k in workspace.Race.Karts:GetChildren() do \
+        if k:GetAttribute('UserId') == game.Players.Player1.UserId then return k end end end)()";
+
+    #[test]
+    fn a_kart_race_from_the_menu_to_the_results() {
+        let mut session = start_on(kart_race(), true).unwrap();
+        steps(&mut session, 10);
+        let gui = "game.Players.Player1.PlayerGui.KartScreen";
+        assert_eq!(value(&session, &format!("{gui}.Menu.Visible")), "true");
+        assert_eq!(value(&session, &format!("{gui}.Menu.Start.Text")), "START RACE");
+        // One lap, on your own: it starts straight away.
+        kart_control(&session, "'laps', 1");
+        kart_control(&session, "'start'");
+        steps(&mut session, 5);
+        assert_eq!(value(&session, PHASE), "countdown");
+        assert_eq!(value(&session, "#workspace.Race.Karts:GetChildren()"), "8");
+        // You're in your kart, at the back of the grid, and can't hop out.
+        steps(&mut session, 5);
+        assert_eq!(value(&session, &format!("{MY_KART}.Seat.Occupant.Parent.Name")), "Player1");
+        assert_eq!(value(&session, &format!("{MY_KART}:GetAttribute('Place')")), "8");
+        let hop = CharacterInput { jump: true, ..Default::default() };
+        steps(&mut session, 5);
+        session.step(1.0 / 60.0, hop);
+        assert_eq!(value(&session, &format!("{MY_KART}.Seat.Occupant ~= nil")), "true");
+        race_until(&mut session, PHASE, "race", 6.0, CharacterInput::default());
+        // Full throttle: the kart gets going and moves round the lap.
+        let gas = CharacterInput { throttle: 1.0, ..Default::default() };
+        let start: f32 = value(&session, &format!("{MY_KART}:GetAttribute('Distance')")).parse().unwrap();
         for _ in 0..180 {
-            session.step(1.0 / 60.0, west);
+            session.step(1.0 / 60.0, gas);
         }
-        let x: f32 = value(&session, "workspace.Player1.HumanoidRootPart.Position.X").parse().unwrap();
-        assert!(x < -10.0, "walked over the line: {x}");
+        let speed: f32 = value(&session, &format!("{MY_KART}:GetAttribute('Speed')")).parse().unwrap();
+        assert!(speed > 60.0, "up to speed: {speed}");
+        let on: f32 = value(&session, &format!("{MY_KART}:GetAttribute('Distance')")).parse().unwrap();
+        assert!(on > 5.0 && on < 40.0, "round the lap: {start} -> {on}");
+        assert_eq!(value(&session, &format!("{gui}.Hud.Visible")), "true");
+        // The computer racers finish, and the results come up when the
+        // time after the first finisher runs out, even if you never finish.
+        race_until(&mut session, PHASE, "results", 120.0, CharacterInput::default());
+        assert_eq!(value(&session, &format!("{gui}.Results.Visible")), "true");
+        let finished = "(function() local n = 0 for _, k in workspace.Race.Karts:GetChildren() do \
+            if k:GetAttribute('Finished') then n += 1 end end return n end)()";
+        let finished: usize = value(&session, finished).parse().unwrap();
+        assert!(finished >= 6, "most of the field finished: {finished}");
+        assert_ne!(value(&session, "game.Players.Player1.leaderstats.Points.Value"), "0");
+        // And back to the menu for another.
+        kart_control(&session, "'menu'");
+        steps(&mut session, 3);
+        assert_eq!(value(&session, PHASE), "menu");
+        assert!(errors(&mut session).is_empty(), "{:?}", errors(&mut session));
+    }
+
+    #[test]
+    fn every_kart_track_builds_and_loops() {
+        let mut session = start_on(kart_race(), true).unwrap();
+        steps(&mut session, 5);
+        for track in 1..=3 {
+            kart_control(&session, &format!("'track', {track}"));
+            steps(&mut session, 3);
+            assert_eq!(
+                value(&session, "game.ReplicatedStorage.Kart:GetAttribute('Track')"),
+                track.to_string()
+            );
+            let samples = format!("require(game.ReplicatedStorage.Kart.Tracks).samples({track})");
+            let length: f32 = value(&session, &format!("{samples}.length")).parse().unwrap();
+            assert!((900.0..3000.0).contains(&length), "track {track} is {length} studs");
+            // The road joins up: the last sample is one step from the first.
+            let gap: f32 = value(
+                &session,
+                &format!("(function() local s = {samples} return (s[#s].p - s[1].p).Magnitude end)()"),
+            )
+            .parse()
+            .unwrap();
+            assert!(gap < 14.0, "track {track} closes: {gap}");
+            let boxes: usize = value(&session, "#workspace.Race.Track.Boxes:GetChildren()").parse().unwrap();
+            assert!(boxes >= 12, "track {track} has item boxes");
+        }
+        assert!(errors(&mut session).is_empty(), "{:?}", errors(&mut session));
+    }
+
+    #[test]
+    fn drifting_charges_a_boost() {
+        let mut session = start_on(kart_race(), true).unwrap();
+        steps(&mut session, 5);
+        kart_control(&session, "'start'");
+        race_until(&mut session, PHASE, "race", 6.0, CharacterInput::default());
+        let gas = CharacterInput { throttle: 1.0, ..Default::default() };
+        for _ in 0..90 {
+            session.step(1.0 / 60.0, gas);
+        }
+        // Hold Space while steering right, into the slide, for two seconds.
+        let space = libroxel_script::UserInput::Key(libroxel_instance::KeyCode::Space);
+        session.input_began(space, false);
+        let slide = CharacterInput { throttle: 1.0, steer: 1.0, ..Default::default() };
+        for _ in 0..70 {
+            session.step(1.0 / 60.0, slide);
+        }
+        assert_ne!(value(&session, &format!("{MY_KART}:GetAttribute('Charge')")), "0", "drifting");
+        for _ in 0..60 {
+            session.step(1.0 / 60.0, slide);
+        }
+        let charge: u32 = value(&session, &format!("{MY_KART}:GetAttribute('Charge')")).parse().unwrap();
+        assert!(charge >= 2, "charged: {charge}");
+        session.input_ended(space, false);
+        steps(&mut session, 2);
+        assert_eq!(value(&session, &format!("{MY_KART}:GetAttribute('Boost')")), "true");
+        assert!(errors(&mut session).is_empty(), "{:?}", errors(&mut session));
+    }
+
+    #[test]
+    fn kart_racing_with_someone_who_joined() {
+        use libroxel_engine::PlaySession;
+        use std::{cell::RefCell, rc::Rc};
+        let mut host = PlaySession::host(Rc::new(RefCell::new(kart_race())), 0, None, true).unwrap();
+        let port = host.host_address().unwrap().port();
+        let mut guest = PlaySession::join(
+            Rc::new(RefCell::new(InstanceTree::new())),
+            &format!("127.0.0.1:{port}"),
+            "Bea",
+        )
+        .unwrap();
+        let idle = CharacterInput::default();
+        let until = |host: &mut PlaySession, guest: &mut PlaySession, check: &str, want: &str, input| {
+            for _ in 0..1200 {
+                host.step(1.0 / 60.0, idle);
+                guest.step(1.0 / 60.0, input);
+                if value(guest, check) == want {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            panic!("gave up waiting for {check} to be {want}: it is {}", value(guest, check));
+        };
+        let gui = "game.Players.LocalPlayer.PlayerGui:FindFirstChild('KartScreen')";
+        until(&mut host, &mut guest, &format!("{gui} ~= nil and {gui}.Menu.Visible"), "true", idle);
+        // The guest votes for the canyon and starts; both race there.
+        let control = |session: &PlaySession, action: &str| {
+            session
+                .runtime()
+                .run("control", &format!("game.ReplicatedStorage.Kart.Control:FireServer({action})"))
+                .unwrap();
+        };
+        control(&guest, "'track', 2");
+        control(&guest, "'start'");
+        let phase = "game.ReplicatedStorage.Kart:GetAttribute('Phase')";
+        until(&mut host, &mut guest, phase, "race", idle);
+        assert_eq!(value(&host, "game.ReplicatedStorage.Kart:GetAttribute('Track')"), "2");
+        let mine = "(function() for _, k in workspace.Race.Karts:GetChildren() do \
+            if k:GetAttribute('UserId') == game.Players.LocalPlayer.UserId then return k end end end)()";
+        assert_eq!(value(&guest, "#workspace.Race.Karts:GetChildren()"), "8");
+        assert_eq!(value(&guest, &format!("{mine}.Seat.Occupant.Parent.Name")), "Bea");
+        // The guest's throttle drives the guest's kart, on the host.
+        let gas = CharacterInput { throttle: 1.0, ..Default::default() };
+        let speed = format!("{mine}:GetAttribute('Speed') > 50");
+        until(&mut host, &mut guest, &speed, "true", gas);
+        assert_eq!(value(&guest, &format!("{gui}.Hud.Visible")), "true");
+        assert!(errors(&mut host).is_empty(), "{:?}", errors(&mut host));
+        assert!(errors(&mut guest).is_empty(), "{:?}", errors(&mut guest));
     }
 }

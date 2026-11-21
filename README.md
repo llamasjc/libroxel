@@ -40,10 +40,9 @@ The first build compiles Bevy and takes a while. After that it is quick.
 
 ## The editor
 
-- **File → Open a starter game → Kart race** loads a finished kart race:
-  four karts on the grid (walk into a seat, WASD to drive, Space to hop
-  out), three laps through blue gates, and laps and best times on the
-  leaderboard. Press **Play** (or F5) to try it.
+- **File → Open a starter game → Kart race** loads an arcade kart race
+  made only of parts and Luau scripts. Press **Play** (or F5), pick a
+  track and press **START RACE**.
 - **Layout:** the editor is laid out the way Roblox Studio users know it.
   Along the top is a **File** menu and a ribbon with **Home**, **Model**,
   **Test** and **View** tabs. The **Toolbox** sits on the left, the
@@ -299,8 +298,24 @@ The first build compiles Bevy and takes a while. After that it is quick.
   HTTPS. Forks set their own.
 - **Starter games:** small finished games to play or build on. Open them
   from the home screen or **File → Open a starter game**.
-  - **Kart race** is three laps round a track in karts, through blue gates
-    in order, with laps and best lap times on the leaderboard.
+  - **Kart race** is an arcade kart racer for up to eight: you and
+    whoever is in the server, with computer racers (Easy, Normal or Hard)
+    filling the grid. Pick one of three tracks (Sunny Meadow, Dusty
+    Canyon's figure eight with a bridge, and Frosty Peaks) and 1, 3 or 5
+    laps, then press **START RACE**; with friends in the server everyone
+    votes for a track. W/S or the arrows drive, A/D steer, hold Space or
+    Shift while steering to drift (hold it longer, steering into the bend,
+    for a blue, orange or pink mini-turbo when you let go), and E uses an
+    item. A controller drifts with the right trigger and uses items with X;
+    on a touch screen there are DRIFT and ITEM buttons. Hold the throttle
+    from "2" on the countdown for a rocket start, and press drift off a
+    ramp for a trick boost. Boost pads, item boxes and seven items: Turbo,
+    Turbo x3, Bumper (bounces off walls), Seeker (chases the racer ahead),
+    Slime (dropped behind you), Overdrive (fast, and knocks karts away)
+    and Storm (spins out everyone ahead). The HUD shows your place, lap,
+    time, item, a map and everyone's places; finishing scores points on
+    the leaderboard. A humanoid whose `JumpPower` is 0 can't jump out of
+    its seat, which is how the race keeps you in your kart.
   - **Chess** is a whole chess game made only of GUI objects and Luau
     scripts, to show what the engine can do. Play eight computer players
     (Droplet at about 250 up to Zenith at about 2300), with take-backs and
