@@ -326,8 +326,8 @@ The first build compiles Bevy and takes a while. After that it is quick.
     computer's search (alpha-beta with a transposition table, quiescence,
     null moves and late move reductions) shows its depth, score and best
     line as it thinks, beside a bar for who is winning.
-  - **Checkers**, **Connect 4** and **Rey Esquinado** (Kings in the
-    Corner, for 2 to 4 players) are table games made the same way. They
+  - **Checkers**, **Connect 4** and **Kings in the Corner** (the card
+    game, for 2 to 4 players) are table games made the same way. They
     share one table server and one screen (`crates/libroxel/src/table_games/`):
     a menu with a big **Play** button against an Easy, Medium or Hard
     computer player, or **Find a game** and **Play** buttons to sit down

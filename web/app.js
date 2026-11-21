@@ -30,7 +30,7 @@ const STARTER_GAMES = [
   { name: 'Kart race', symbol: '', about: 'Three laps round the track in a kart' },
   { name: 'Checkers', symbol: '', about: 'Checkers against the computer or anyone in the server' },
   { name: 'Connect 4', symbol: '', about: 'Line up four discs before the other player does' },
-  { name: 'Rey Esquinado', symbol: '', about: 'The card game with the Kings in the corners, for 2 to 4' },
+  { name: 'Kings in the Corner', symbol: '', about: 'Be first to play every card. For 2 to 4 players' },
 ];
 
 const ICON = {
