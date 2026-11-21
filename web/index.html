@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Libroxel</title>
+  <meta name="description" content="Play games people make, with your friends. Press Play and Libroxel opens straight into the game.">
+  <!-- The Hub this site reads: the same one the app uses. -->
+  <meta name="libroxel-hub" content="https://hub.libroxel.com">
+  <!-- The GitHub repository (owner/name) whose releases Download offers; set by setup-site.sh. -->
+  <meta name="libroxel-repo" content="">
+  <meta name="theme-color" content="#1c1a17">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="fonts/ChakraPetch-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/Phosphor-Bold.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/" aria-label="Libroxel home">
+      <svg viewBox="0 0 28 30" aria-hidden="true">
+        <polygon points="14,1 27,8 14,15 1,8" fill="rgb(255,150,90)"/>
+        <polygon points="1,8 14,15 14,29 1,22" fill="rgb(255,106,43)"/>
+        <polygon points="27,8 14,15 14,29 27,22" fill="rgb(200,78,26)"/>
+      </svg>
+      <span>LIBROXEL</span>
+    </a>
+    <nav class="tabs" id="tabs"></nav>
+    <div class="who" id="who"></div>
+  </header>
+  <main id="page">
+    <noscript><p>The Libroxel website needs JavaScript to show games and friends.</p></noscript>
+  </main>
+  <footer>
+    Libroxel is free and open source. Games and servers are listed by the Hub at <span id="hub-name">hub.libroxel.com</span>.
+    <a href="#/download">Download the app</a>.
+  </footer>
+</body>
+</html>

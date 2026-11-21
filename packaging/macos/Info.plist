@@ -20,5 +20,17 @@
   <string>11.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <!-- Play on the website opens libroxel:// links in the app. -->
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>org.libroxel.app.links</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>libroxel</string>
+      </array>
+    </dict>
+  </array>
 </dict>
 </plist>

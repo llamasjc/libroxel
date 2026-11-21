@@ -1,0 +1,266 @@
+/* The Libroxel website: the same look as the app's home screen. */
+
+@font-face { font-family: "Chakra Petch"; font-weight: 600; font-display: swap; src: url("fonts/ChakraPetch-SemiBold.woff2") format("woff2"); }
+@font-face { font-family: "Chakra Petch"; font-weight: 700; font-display: swap; src: url("fonts/ChakraPetch-Bold.woff2") format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible"; font-weight: 400; font-display: swap; src: url("fonts/AtkinsonHyperlegible-Regular.woff2") format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible"; font-weight: 700; font-display: swap; src: url("fonts/AtkinsonHyperlegible-Bold.woff2") format("woff2"); }
+@font-face { font-family: "Phosphor"; font-display: block; src: url("fonts/Phosphor-Bold.woff2") format("woff2"); }
+
+:root {
+  /* The app's colours (crates/libroxel/src/theme.rs). */
+  --ink0: rgb(18, 17, 15);
+  --ink1: rgb(28, 26, 23);
+  --ink2: rgb(38, 35, 31);
+  --ink3: rgb(52, 48, 42);
+  --line: rgb(63, 58, 51);
+  --chalk: rgb(241, 235, 221);
+  --dust: rgb(163, 155, 139);
+  --tangerine: rgb(255, 106, 43);
+  --ember: rgb(176, 64, 22);
+  --mint: rgb(47, 212, 154);
+  --mint-edge: rgb(22, 128, 92);
+  --sky: rgb(89, 168, 255);
+  --brick: rgb(242, 84, 91);
+  --sun: rgb(255, 201, 60);
+  --corner: 3px;
+  --display: "Chakra Petch", "Atkinson Hyperlegible", system-ui, sans-serif;
+  --body: "Atkinson Hyperlegible", system-ui, sans-serif;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background-color: var(--ink0);
+  background-image: radial-gradient(rgba(241, 235, 221, 0.04) 1px, transparent 1.4px);
+  background-size: 26px 15px;
+  color: var(--chalk);
+  font-family: var(--body);
+  font-size: 15px;
+  line-height: 1.4;
+  min-height: 100vh;
+}
+a { color: var(--sky); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button, input, textarea { font: inherit; color: inherit; }
+.icon { font-family: "Phosphor"; font-style: normal; font-weight: normal; line-height: 1; display: inline-block; }
+.hidden { display: none !important; }
+
+/* --- The bar along the top ------------------------------------------------ */
+
+.topbar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: 28px;
+  height: 68px; padding: 0 28px;
+  background: var(--ink1);
+  border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: center; gap: 10px; color: var(--chalk); font: 700 19px var(--display); letter-spacing: 0.08em; }
+.brand:hover { text-decoration: none; }
+.brand svg { width: 28px; height: 30px; }
+.tabs { display: flex; gap: 6px; flex: 1; overflow-x: auto; scrollbar-width: none; height: 100%; align-items: stretch; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  display: flex; align-items: center; gap: 8px; padding: 0 10px;
+  color: var(--chalk); font: 600 16px var(--display); letter-spacing: 0.02em; text-transform: uppercase;
+  border-bottom: 3px solid transparent; white-space: nowrap;
+}
+.tab:hover { text-decoration: none; background: rgba(241, 235, 221, 0.04); }
+.tab.active { border-bottom-color: var(--tangerine); }
+.tab .icon { font-size: 15px; }
+.who { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+.caps { font: 600 12px var(--display); letter-spacing: 0.12em; text-transform: uppercase; color: var(--dust); }
+.who .name {
+  min-width: 130px; padding: 5px 9px; border: 1px solid var(--line); border-radius: var(--corner);
+  background: var(--ink0); color: var(--chalk); font: 600 15px var(--display);
+}
+
+/* --- Page ------------------------------------------------------------------ */
+
+main { max-width: 1400px; padding: 30px 36px 60px; }
+h1, h2, h3 { font-family: var(--display); font-weight: 600; margin: 0; }
+.title { display: flex; align-items: center; gap: 12px; font-size: 26px; margin-bottom: 6px; }
+.title::before { content: ""; width: 6px; height: 16px; background: var(--tangerine); }
+.section { font-size: 20px; display: flex; align-items: baseline; gap: 12px; margin: 26px 0 8px; }
+.section a { font: 400 14px var(--body); }
+.soft { color: var(--dust); }
+.note { color: var(--dust); margin: 0 0 14px; }
+.status { display: flex; align-items: center; gap: 8px; margin: 8px 0; color: var(--mint); }
+.status::before { content: ""; width: 8px; height: 8px; border-radius: 1px; background: currentColor; }
+.status.error { color: var(--brick); }
+.status.wait { color: var(--sun); }
+.empty { padding: 18px; background: var(--ink2); border: 1px solid var(--line); border-radius: var(--corner); color: var(--dust); }
+
+/* --- Buttons --------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  height: 46px; padding: 0 22px; border: 0; border-radius: var(--corner); cursor: pointer;
+  font: 600 18px var(--display); background: var(--ink3); color: var(--chalk);
+  box-shadow: 0 4px 0 rgb(30, 28, 25); margin-bottom: 4px; white-space: nowrap;
+}
+.btn:hover { filter: brightness(1.08); text-decoration: none; }
+.btn:active { transform: translateY(3px); box-shadow: 0 1px 0 rgb(30, 28, 25); }
+.btn.go { background: var(--mint); color: var(--ink0); box-shadow: 0 4px 0 var(--mint-edge); }
+.btn.go:active { box-shadow: 0 1px 0 var(--mint-edge); }
+.btn.big { height: 52px; font-size: 22px; padding: 0 34px; min-width: 194px; }
+.btn.small { height: 32px; padding: 0 14px; font-size: 14px; gap: 7px; box-shadow: 0 3px 0 rgb(30, 28, 25); }
+.btn.go.small { box-shadow: 0 3px 0 var(--mint-edge); }
+.btn[disabled] { background: var(--ink2); color: rgba(163, 155, 139, 0.7); box-shadow: 0 4px 0 rgb(24, 22, 19); cursor: default; filter: none; transform: none; }
+.link { background: none; border: 0; padding: 0; color: var(--sky); cursor: pointer; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; cursor: pointer;
+  background: transparent; border: 1px solid var(--line); border-radius: var(--corner); color: var(--chalk); font-size: 14px;
+}
+.chip:hover { background: var(--ink2); }
+.chip.on { background: var(--ember); border-color: var(--ember); color: var(--chalk); }
+.iconbtn { padding: 3px 8px; }
+
+input[type=text], input[type=password], input[type=search], textarea {
+  width: 100%; padding: 8px 10px; background: var(--ink0); border: 1px solid var(--line); border-radius: var(--corner);
+}
+input:focus, textarea:focus { outline: 1px solid var(--tangerine); border-color: var(--tangerine); }
+label.field { display: block; margin: 12px 0; }
+label.field span { display: block; margin-bottom: 4px; }
+
+/* --- Home ------------------------------------------------------------------ */
+
+.hello { display: flex; align-items: center; gap: 18px; margin-bottom: 8px; }
+.hello h1 { font: 700 30px var(--display); }
+.friend-row { display: flex; gap: 18px; overflow-x: auto; padding: 8px 4px 6px; }
+.friend-tile { width: 86px; flex: none; text-align: center; color: var(--chalk); }
+.friend-tile:hover { text-decoration: none; }
+.friend-tile .face { position: relative; width: 78px; height: 78px; margin: 0 auto 6px; }
+.friend-tile .dot { position: absolute; right: 3px; bottom: 3px; width: 15px; height: 15px; border-radius: 50%; border: 3px solid var(--ink0); }
+.friend-tile b { display: block; font: 600 15px var(--display); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.friend-tile small { display: block; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.add-face { display: flex; align-items: center; justify-content: center; width: 78px; height: 78px; margin: 0 auto 6px; border-radius: 50%; background: var(--ink1); border: 1px solid var(--line); font-size: 24px; }
+.waiting { color: var(--sun); font-size: 14px; display: flex; gap: 6px; align-items: center; }
+
+.games { display: grid; grid-template-columns: repeat(auto-fill, minmax(188px, 1fr)); gap: 18px 16px; max-width: 1100px; }
+.game { color: var(--chalk); display: block; }
+.game:hover { text-decoration: none; }
+.game .pic {
+  position: relative; aspect-ratio: 188 / 150; border-radius: var(--corner); background: var(--ink1);
+  box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.47); transition: transform 0.1s; overflow: hidden;
+  background-image: radial-gradient(rgba(241, 235, 221, 0.05) 1px, transparent 1.4px); background-size: 26px 15px;
+}
+.game:hover .pic { transform: translateY(-3px); }
+.game .pic svg.scene { position: absolute; inset: 0; width: 100%; height: 100%; }
+.game .badge { position: absolute; left: 8px; top: 8px; width: 26px; height: 26px; border-radius: var(--corner); display: flex; align-items: center; justify-content: center; color: var(--ink0); font-size: 16px; }
+.game .faces { position: absolute; right: 8px; top: 8px; display: flex; }
+.game .faces svg { width: 26px; height: 26px; margin-left: -6px; border-radius: 50%; box-shadow: 0 0 0 2px var(--sky); }
+.game h3 { font-size: 16px; margin: 12px 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.game .meta { font-size: 13px; color: var(--sky); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.game .meta.live { color: var(--mint); }
+.game .meta.idle { color: var(--dust); }
+
+/* --- A game's page ---------------------------------------------------------- */
+
+.back { display: inline-flex; gap: 6px; align-items: center; margin-bottom: 14px; }
+.hero { display: flex; gap: 34px; flex-wrap: wrap; }
+.hero .pic { width: 440px; max-width: 100%; aspect-ratio: 440 / 248; border: 1px solid var(--line); border-radius: var(--corner); background: var(--ink1); background-image: radial-gradient(rgba(241, 235, 221, 0.05) 1px, transparent 1.4px); background-size: 26px 15px; }
+.hero .pic svg { width: 100%; height: 100%; display: block; }
+.hero h1 { font: 700 38px var(--display); margin-top: 4px; }
+.stats { display: flex; gap: 38px; margin: 18px 0 22px; }
+.stats b { display: block; font: 600 22px var(--display); }
+.actions { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+.hint { color: var(--dust); font-size: 13px; margin-top: 6px; }
+.about { margin-top: 22px; white-space: pre-wrap; max-width: 760px; }
+
+.servers-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 28px 0 12px; }
+.servers-head h2 { font-size: 24px; }
+.servers-head label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.group { margin: 16px 0 8px; }
+.server {
+  display: flex; align-items: center; gap: 14px; padding: 12px; margin-bottom: 10px;
+  background: var(--ink2); border: 1px solid var(--line); border-radius: var(--corner);
+}
+.server.friends { background: rgb(42, 46, 54); border-color: rgb(58, 74, 96); }
+.server .mini { width: 52px; height: 52px; flex: none; background: var(--ink1); border-radius: var(--corner); }
+.server .what { flex: 1; min-width: 0; }
+.server .what b { font: 600 17px var(--display); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server .what small { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; font-size: 13px; margin-top: 4px; }
+.kind-player { color: var(--sky); }
+.kind-community { color: var(--mint); }
+.kind-official { color: var(--sun); }
+.tag { padding: 0 6px; border-radius: var(--corner); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.tag.admin { background: var(--tangerine); color: var(--ink0); }
+.tag.verified { background: var(--sky); color: var(--ink0); }
+.fill { width: 120px; flex: none; font-size: 13px; }
+.fill .bar { height: 3px; background: var(--ink3); margin-top: 3px; }
+.fill .bar i { display: block; height: 100%; background: var(--mint); }
+.fill.full .bar i { background: var(--brick); }
+
+/* --- Friends ---------------------------------------------------------------- */
+
+.columns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 10px; align-items: start; }
+.person {
+  display: flex; align-items: center; gap: 14px; padding: 9px 12px; margin-bottom: 10px;
+  background: var(--ink2); border: 1px solid var(--line); border-radius: var(--corner);
+}
+.person .what { flex: 1; min-width: 0; }
+.person .what b { display: block; font: 600 16px var(--display); color: var(--chalk); }
+.person .what small { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person .buttons { display: flex; gap: 8px; align-items: center; }
+.subhead { font: 600 19px var(--display); margin: 0 0 12px; }
+.subhead.sun { color: var(--sun); }
+.search { display: flex; gap: 10px; margin-bottom: 10px; }
+
+/* --- Avatar ----------------------------------------------------------------- */
+
+.avatar-page { display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
+.figure { width: 244px; padding: 24px; background: var(--ink2); border-radius: 8px; text-align: center; color: var(--dust); }
+.swatches { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 14px; }
+.swatch { width: 26px; height: 26px; border-radius: 4px; border: 2px solid transparent; cursor: pointer; padding: 0; }
+.swatch.on { border-color: var(--sun); box-shadow: 0 0 0 1px var(--ink0) inset; }
+.hats { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 14px; }
+.panel { background: var(--ink2); border: 1px solid var(--line); border-radius: var(--corner); padding: 16px 18px; margin-bottom: 16px; max-width: 760px; }
+.panel h3 { font-size: 18px; margin-bottom: 6px; }
+.signins { margin: 6px 0 0; padding-left: 18px; color: var(--dust); }
+
+/* --- Sign in, download ------------------------------------------------------ */
+
+.narrow { max-width: 460px; }
+.form-actions { display: flex; gap: 14px; align-items: center; margin-top: 18px; flex-wrap: wrap; }
+.check { display: flex; gap: 8px; align-items: center; margin-top: 10px; color: var(--dust); }
+.downloads { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; max-width: 900px; margin: 18px 0 30px; }
+.download { padding: 18px; background: var(--ink2); border: 1px solid var(--line); border-radius: var(--corner); }
+.download.mine { border-color: var(--mint); }
+.download h3 { font-size: 20px; }
+.download p { color: var(--dust); font-size: 14px; margin: 6px 0 14px; }
+ol.steps { padding-left: 20px; max-width: 760px; }
+ol.steps li { margin-bottom: 8px; }
+code { font-family: ui-monospace, "IBM Plex Mono", monospace; font-size: 13px; background: var(--ink0); border: 1px solid var(--line); padding: 1px 5px; border-radius: var(--corner); }
+
+/* --- The "opening Libroxel" box ------------------------------------------- */
+
+.overlay { position: fixed; inset: 0; z-index: 50; background: rgba(10, 9, 8, 0.72); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.dialog { width: 440px; max-width: 100%; padding: 26px; background: var(--ink1); border: 1px solid var(--line); border-radius: 6px; box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.5); text-align: center; }
+.dialog h2 { font-size: 24px; margin: 10px 0 6px; }
+.dialog p { color: var(--dust); margin: 0 0 18px; }
+.dialog .actions { justify-content: center; }
+.spinner { width: 34px; height: 34px; margin: 0 auto; border: 4px solid var(--ink3); border-top-color: var(--tangerine); border-radius: 50%; animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+footer { padding: 24px 36px 40px; color: var(--dust); font-size: 13px; border-top: 1px solid var(--line); }
+footer a { color: var(--dust); text-decoration: underline; }
+
+/* --- Phones ----------------------------------------------------------------- */
+
+@media (max-width: 860px) {
+  .topbar { gap: 14px; padding: 0 16px; height: auto; min-height: 60px; flex-wrap: wrap; padding-top: 8px; }
+  .brand span { display: none; }
+  .tabs { order: 3; flex-basis: 100%; height: 44px; }
+  .who { margin-left: auto; }
+  .who .caps { display: none; }
+  .who .name { min-width: 0; }
+  main { padding: 20px 16px 50px; }
+  .columns { grid-template-columns: 1fr; }
+  .games { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .server { flex-wrap: wrap; }
+  .server .what { flex-basis: calc(100% - 70px); }
+  .fill { margin-left: 66px; }
+  .hero h1 { font-size: 30px; }
+  footer { padding: 20px 16px 30px; }
+}
