@@ -36,6 +36,16 @@ impl Game {
         }
     }
 
+    /// What the game's picture is made from: the id the Hub lists a
+    /// starter game under, or the file.
+    pub fn id(&self) -> String {
+        match self {
+            Game::Starter(name) => crate::social::starter_id(name),
+            Game::Blank => "blank".into(),
+            Game::File(path) => path.display().to_string(),
+        }
+    }
+
     /// The game as a saved place, for a server.
     fn text(&self) -> Result<String, String> {
         match self {
@@ -172,82 +182,80 @@ fn subheading(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).font(theme::display(17.0)).color(theme::TEXT));
 }
 
-/// A colour for a game's picture, the same every time for the same name,
-/// picked from a few bright ones that sit well on the sky.
-pub(crate) fn tint(name: &str) -> Color32 {
-    const TINTS: [Color32; 6] = [
-        Color32::from_rgb(255, 140, 40),
-        Color32::from_rgb(92, 196, 62),
-        Color32::from_rgb(30, 170, 230),
-        Color32::from_rgb(255, 196, 40),
-        Color32::from_rgb(160, 110, 240),
-        Color32::from_rgb(240, 84, 140),
-    ];
-    let hash = name.bytes().fold(2166136261u32, |h, b| (h ^ b as u32).wrapping_mul(16777619));
-    TINTS[(hash % TINTS.len() as u32) as usize]
+/// A game's picture, worked out from its id the way GitHub makes default
+/// profile pictures: a 5×5 grid of blocks mirrored left to right, in one
+/// colour. Returns which blocks are filled and the colour. The website
+/// makes the same picture for the same id (`blocks` in web/app.js), so the
+/// two must stay in step.
+pub(crate) fn blocks(id: &str) -> ([bool; 25], Color32) {
+    let mut h = id.bytes().fold(2_166_136_261u32, |h, b| (h ^ b as u32).wrapping_mul(16_777_619));
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x85eb_ca6b);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0xc2b2_ae35);
+    h ^= h >> 16;
+    let mut bits = h & 0x7fff;
+    if bits.count_ones() < 5 {
+        bits ^= 0x7fff;
+    }
+    let mut cells = [false; 25];
+    for i in 0..15 {
+        if bits >> i & 1 == 1 {
+            let (col, row) = (i / 5, i % 5);
+            cells[row * 5 + col] = true;
+            cells[row * 5 + 4 - col] = true;
+        }
+    }
+    let hue = ((h >> 15) % 360) as f64;
+    let light = 0.45 + (h >> 28) as f64 / 15.0 * 0.1;
+    (cells, hsl(hue, 0.6, light))
 }
 
-/// A little stack of cubes seen from above a corner, made up from `seed`,
-/// standing on a ground tile: each game's tile gets its own.
-pub(crate) fn paint_diorama(
-    painter: &egui::Painter,
-    centre: egui::Pos2,
-    unit: f32,
-    seed: &str,
-    colour: Color32,
-) {
-    let hash = seed.bytes().fold(2166136261u32, |h, b| (h ^ b as u32).wrapping_mul(16777619));
-    let (dx, dy) = (unit * 0.866, unit * 0.5);
-    let at = |x: f32, y: f32, z: f32| egui::pos2(centre.x + (x - y) * dx, centre.y + (x + y) * dy - z * unit);
-    let cube = |x: f32, y: f32, z: f32, c: Color32| {
-        let top = [
-            at(x, y, z + 1.0),
-            at(x + 1.0, y, z + 1.0),
-            at(x + 1.0, y + 1.0, z + 1.0),
-            at(x, y + 1.0, z + 1.0),
-        ];
-        let left = [
-            at(x, y + 1.0, z + 1.0),
-            at(x + 1.0, y + 1.0, z + 1.0),
-            at(x + 1.0, y + 1.0, z),
-            at(x, y + 1.0, z),
-        ];
-        let right = [
-            at(x + 1.0, y, z + 1.0),
-            at(x + 1.0, y + 1.0, z + 1.0),
-            at(x + 1.0, y + 1.0, z),
-            at(x + 1.0, y, z),
-        ];
-        for (face, shade) in [(left, 0.78), (right, 0.55), (top, 1.0)] {
-            let fill = c.gamma_multiply(shade);
-            painter.add(egui::Shape::convex_polygon(face.to_vec(), fill.to_opaque(), egui::Stroke::NONE));
-        }
+/// The colour of a game's [`blocks`].
+pub(crate) fn picture_colour(id: &str) -> Color32 {
+    blocks(id).1
+}
+
+fn hsl(h: f64, s: f64, l: f64) -> Color32 {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
     };
-    // The ground: a flat slab.
-    let ground = |x: f32, y: f32| at(x, y, 0.6);
-    let slab = [ground(-1.7, -1.7), ground(1.7, -1.7), ground(1.7, 1.7), ground(-1.7, 1.7)];
-    painter.add(egui::Shape::convex_polygon(
-        slab.to_vec(),
-        Color32::from_rgb(146, 210, 104),
-        egui::Stroke::new(1.0, Color32::from_rgb(92, 160, 64)),
-    ));
-    // Columns of cubes drawn back to front, their heights from the seed.
-    let mut cells: Vec<(i32, i32)> = (0..3).flat_map(|x| (0..3).map(move |y| (x, y))).collect();
-    cells.sort_by_key(|(x, y)| x + y);
-    for (gx, gy) in cells {
-        {
-            let bits = (hash >> ((gx * 3 + gy) * 2) as u32) & 3;
-            let high = if gx == 1 && gy == 1 { 2 } else { bits.saturating_sub(1) };
-            for z in 0..high {
-                let shade = if z + 1 == high { colour } else { colour.lerp_to_gamma(theme::CARD, 0.35) };
-                cube(gx as f32 - 1.5, gy as f32 - 1.5, 0.6 + z as f32, shade);
-            }
-        }
+    let m = l - c / 2.0;
+    let v = |n: f64| ((n + m) * 255.0).round() as u8;
+    Color32::from_rgb(v(r), v(g), v(b))
+}
+
+/// Paints a game's [`blocks`] over `rect`: a light grey ground with the
+/// grid in the middle, a block of margin round it.
+pub(crate) fn paint_blocks(painter: &egui::Painter, rect: egui::Rect, corner: f32, id: &str) {
+    let (cells, colour) = blocks(id);
+    painter.rect_filled(rect, corner, Color32::from_rgb(240, 240, 240));
+    let side = rect.width().min(rect.height());
+    let cell = side / 7.0;
+    let grid = egui::Rect::from_center_size(rect.center(), egui::vec2(cell * 5.0, cell * 5.0));
+    for (i, _) in cells.iter().enumerate().filter(|(_, on)| **on) {
+        let min = grid.min + egui::vec2(cell * (i % 5) as f32, cell * (i / 5) as f32);
+        // A hair bigger, so blocks side by side meet without a seam.
+        painter.rect_filled(egui::Rect::from_min_size(min, egui::vec2(cell, cell)).expand(0.3), 0.0, colour);
     }
 }
 
-/// A game's tile: a little scene, its name and a line under it.
-fn card(ui: &mut egui::Ui, symbol: &str, title: &str, note: &str, selected: bool) -> egui::Response {
+/// A game's tile: its picture, its name and a line under it.
+fn card(
+    ui: &mut egui::Ui,
+    symbol: &str,
+    title: &str,
+    id: &str,
+    note: &str,
+    selected: bool,
+) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(196.0, 176.0), egui::Sense::click());
     let painter = ui.painter_at(rect.expand(20.0));
     let hovered = response.hovered();
@@ -256,7 +264,7 @@ fn card(ui: &mut egui::Ui, symbol: &str, title: &str, note: &str, selected: bool
     // pointer with its shadow spreading.
     let face = rect.translate(egui::vec2(0.0, lift));
     theme::soft_shadow(&painter, face, 8.0, if hovered { 80 } else { 50 });
-    let colour = tint(title);
+    let colour = picture_colour(id);
     if hovered || selected {
         let glow = egui::Shadow {
             offset: [0, 0],
@@ -268,8 +276,7 @@ fn card(ui: &mut egui::Ui, symbol: &str, title: &str, note: &str, selected: bool
     }
     theme::gradient(&painter, face, 8.0, &[(0.0, Color32::WHITE), (1.0, Color32::from_rgb(236, 244, 252))]);
     let picture = egui::Rect::from_min_size(face.min, egui::vec2(face.width(), 112.0)).shrink(4.0);
-    theme::paint_bubbles(&painter.with_clip_rect(picture), picture);
-    paint_diorama(&painter, picture.center() + egui::vec2(0.0, 8.0), 13.0, title, colour);
+    paint_blocks(&painter, picture, 5.0, id);
     painter.rect_stroke(
         picture,
         5,
@@ -555,7 +562,7 @@ impl Menu {
             ui.spacing_mut().item_spacing = egui::vec2(16.0, 16.0);
             for (game, symbol, note) in tiles {
                 let selected = !with_blank && self.game == game;
-                let tile = card(ui, symbol, &game.label(), &note, selected);
+                let tile = card(ui, symbol, &game.label(), &game.id(), &note, selected);
                 if tile.double_clicked() || (with_blank && tile.clicked()) {
                     chosen = Some(game.clone());
                 }
@@ -1010,4 +1017,24 @@ fn draw_avatar(ui: &mut egui::Ui, look: &Look) {
         egui::FontId::proportional(13.0),
         SOFT,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The same pictures the website makes for these ids.
+    #[test]
+    fn blocks_match_the_website() {
+        for (id, cells, colour) in [
+            ("starter:Chess", "1101110101110111010111111", [66, 208, 196]),
+            ("starter:Kart race", "0111011011111111010110101", [46, 154, 184]),
+            ("abc123", "1010101110011100010001010", [55, 205, 170]),
+        ] {
+            let (got, c) = blocks(id);
+            let got: String = got.iter().map(|&on| if on { '1' } else { '0' }).collect();
+            assert_eq!(got, cells, "{id}");
+            assert_eq!([c.r(), c.g(), c.b()], colour, "{id}");
+        }
+    }
 }

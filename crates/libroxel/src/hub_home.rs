@@ -9,7 +9,7 @@ use libroxel_hub::{Friend, FriendAction, GameInfo, ServerInfo};
 use libroxel_instance::serde_json::Value as Json;
 
 use crate::browse::Platform;
-use crate::menu::{Game, Pick, Tab, paint_diorama, tint};
+use crate::menu::{Game, Pick, Tab, paint_blocks, picture_colour};
 use crate::social::starter_id;
 use crate::starter_games::STARTER_GAMES;
 use crate::theme::{self, icon};
@@ -303,7 +303,7 @@ fn game_tile(ui: &mut egui::Ui, entry: &Entry, friends: &[&Friend]) -> egui::Res
     let painter = ui.painter_at(rect.expand(20.0));
     let hovered = response.hovered();
     let face = rect.translate(egui::vec2(0.0, if hovered { -3.0 } else { 0.0 }));
-    let colour = tint(&entry.title);
+    let colour = picture_colour(&entry.key);
     let picture = egui::Rect::from_min_size(face.min, egui::vec2(face.width(), 150.0));
     theme::soft_shadow(&painter, picture, 8.0, if hovered { 90 } else { 55 });
     if hovered {
@@ -315,8 +315,7 @@ fn game_tile(ui: &mut egui::Ui, entry: &Entry, friends: &[&Friend]) -> egui::Res
         };
         painter.add(glow.as_shape(picture, 8));
     }
-    theme::paint_bubbles(&painter.with_clip_rect(picture.shrink(0.5)), picture);
-    paint_diorama(&painter, picture.center() + egui::vec2(0.0, 10.0), 17.0, &entry.title, colour);
+    paint_blocks(&painter, picture, 8.0, &entry.key);
     let chip = egui::Rect::from_min_size(picture.min + egui::vec2(8.0, 8.0), egui::vec2(26.0, 26.0));
     theme::glass(&painter, chip, 6.0, colour);
     painter.text(
@@ -454,7 +453,7 @@ fn full(server: &ServerInfo) -> bool {
 
 /// One server's row: picture, name, host and friends inside, players,
 /// ping and Join. Returns whether Join was pressed.
-fn server_row(ui: &mut egui::Ui, platform: &mut Platform, server: &ServerInfo, title: &str) -> bool {
+fn server_row(ui: &mut egui::Ui, platform: &mut Platform, server: &ServerInfo, key: &str) -> bool {
     let friends: Vec<(String, Json)> = platform
         .social
         .friends_in(&server.server_id)
@@ -477,8 +476,7 @@ fn server_row(ui: &mut egui::Ui, platform: &mut Platform, server: &ServerInfo, t
             // A small picture of the game, as server lists show a server's icon.
             let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(52.0, 52.0), egui::Sense::hover());
             let painter = ui.painter_at(icon_rect);
-            painter.rect_filled(icon_rect, theme::CORNER, theme::PANEL);
-            paint_diorama(&painter, icon_rect.center() + egui::vec2(0.0, 4.0), 6.0, title, tint(title));
+            paint_blocks(&painter, icon_rect, theme::CORNER as f32, key);
             ui.add_space(6.0);
             ui.vertical(|ui| {
                 ui.set_width((ui.available_width() - 330.0).max(160.0));
@@ -796,15 +794,7 @@ fn game_page(
         // The picture.
         let (rect, _) = ui.allocate_exact_size(egui::vec2(440.0, 248.0), egui::Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, theme::CORNER, theme::PANEL);
-        theme::paint_bubbles(&painter, rect);
-        paint_diorama(
-            &painter,
-            rect.center() + egui::vec2(0.0, 18.0),
-            34.0,
-            &entry.title,
-            tint(&entry.title),
-        );
+        paint_blocks(&painter, rect, theme::CORNER as f32, &entry.key);
         painter.rect_stroke(
             rect,
             theme::CORNER,
@@ -928,7 +918,7 @@ fn game_page(
         theme::label_caps(ui, "Servers your friends are in");
         ui.add_space(4.0);
         for server in &with_friends {
-            if server_row(ui, platform, server, &entry.title) {
+            if server_row(ui, platform, server, &entry.key) {
                 join = Some(server.code.clone());
             }
             ui.add_space(6.0);
@@ -950,7 +940,7 @@ fn game_page(
         });
     }
     for server in &others {
-        if server_row(ui, platform, server, &entry.title) {
+        if server_row(ui, platform, server, &entry.key) {
             join = Some(server.code.clone());
         }
         ui.add_space(6.0);
