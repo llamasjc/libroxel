@@ -36,19 +36,12 @@ A tag with a hyphen, such as `v0.2.0-beta.1`, is published as a pre-release.
 The official Hub server picks up each new (non-pre-release) release within
 about 10 minutes and updates itself.
 
-## A quick Hub-only release
+## The Hub server
 
-To get a fix to the Hub server without a whole release of the app, push a
-tag starting `hub-v`:
-
-```sh
-git tag hub-v0.1.2
-git push origin hub-v0.1.2
-```
-
-**Hub release** builds only the Hub (a few minutes) and publishes it without
-making it the latest release, so the app's download links don't change. The
-server takes whichever release carrying the Hub is newest.
+Every release also carries the Hub for servers, next to the app. The
+official Hub server usually builds itself from `main` instead (see
+[OFFICIAL_HUB.md](OFFICIAL_HUB.md)), so a Hub fix only needs a push to
+`main`, not a release.
 
 ## Why releases take a while, and the cache
 

@@ -192,6 +192,16 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          body: |
+            ## Download Libroxel
+
+            - **Windows:** `libroxel-…-windows-x86_64.zip`, unzip and open `libroxel.exe`
+            - **Mac** (Apple silicon and Intel): `libroxel-…-macos-universal.zip`, unzip, then right-click `Libroxel.app` and choose Open the first time
+            - **Linux:** `libroxel-…-linux-x86_64.tar.gz`, unpack and run `./libroxel`
+
+            The other files (`libroxel-hub-linux-x86_64`, `setup-hub.sh`, `update-hub.sh`) are for running a Hub server.
           generate_release_notes: true
+          # The app's release is the one download links point at.
+          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
           # Tags like v0.2.0-beta.1 become pre-releases.
           prerelease: ${{ contains(github.ref_name, '-') }}
