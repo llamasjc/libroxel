@@ -405,8 +405,8 @@ mod tests {
         steps(&mut session, 10);
         // The screen is built: the board's 64 squares and the lobby.
         let gui = "game.Players.Player1.PlayerGui.ChessScreen";
-        // 64 squares, the result card, the promotion picker, a corner and an outline.
-        assert_eq!(value(&session, &format!("#{gui}.BoardColumn.Board:GetChildren()")), "68");
+        // 64 squares, the result card, the promotion picker and a corner.
+        assert_eq!(value(&session, &format!("#{gui}.BoardColumn.Board:GetChildren()")), "67");
         assert_eq!(value(&session, &format!("{gui}.Panel.Lobby.Visible")), "true");
         let act = |session: &mut libroxel_engine::session::PlaySession, action: &str| {
             session
@@ -488,7 +488,8 @@ mod tests {
             panic!("gave up waiting for {check} to be {want}: it is {}", value(guest, check));
         };
         // The guest's screen comes up, and lists the host's player in the lobby.
-        let lobby = format!("{gui} and {gui}.Panel.Lobby.people:FindFirstChildOfClass('ScrollingFrame')");
+        let lobby =
+            format!("{gui} and {gui}.Panel.Lobby.people.Choices:FindFirstChildOfClass('ScrollingFrame')");
         let listed = format!("(function() local list = {lobby} return list and #list:GetChildren() end)()");
         until(&mut host, &mut guest, &listed, "1");
         // Both look for a 5+0 game, and are paired.
