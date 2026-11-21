@@ -315,7 +315,7 @@ fn game_tile(ui: &mut egui::Ui, entry: &Entry, friends: &[&Friend]) -> egui::Res
         };
         painter.add(glow.as_shape(picture, 8));
     }
-    paint_blocks(&painter, picture, 8.0, &entry.key);
+    paint_blocks(&painter, picture, &entry.key);
     let chip = egui::Rect::from_min_size(picture.min + egui::vec2(8.0, 8.0), egui::vec2(26.0, 26.0));
     theme::glass(&painter, chip, 6.0, colour);
     painter.text(
@@ -476,7 +476,7 @@ fn server_row(ui: &mut egui::Ui, platform: &mut Platform, server: &ServerInfo, k
             // A small picture of the game, as server lists show a server's icon.
             let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(52.0, 52.0), egui::Sense::hover());
             let painter = ui.painter_at(icon_rect);
-            paint_blocks(&painter, icon_rect, theme::CORNER as f32, key);
+            paint_blocks(&painter, icon_rect, key);
             ui.add_space(6.0);
             ui.vertical(|ui| {
                 ui.set_width((ui.available_width() - 330.0).max(160.0));
@@ -794,7 +794,7 @@ fn game_page(
         // The picture.
         let (rect, _) = ui.allocate_exact_size(egui::vec2(440.0, 248.0), egui::Sense::hover());
         let painter = ui.painter_at(rect);
-        paint_blocks(&painter, rect, theme::CORNER as f32, &entry.key);
+        paint_blocks(&painter, rect, &entry.key);
         painter.rect_stroke(
             rect,
             theme::CORNER,

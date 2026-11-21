@@ -43,6 +43,7 @@ const ICON = {
 
 // The app's colours, for drawing.
 const C = {
+  grass: [146, 210, 104], grassEdge: [92, 160, 64],
   portrait: [190, 226, 250],
 };
 
@@ -459,9 +460,10 @@ function bestServer(servers) {
 // ---------------------------------------------------------------------------
 
 /**
- * A game's picture from its id, the way GitHub makes default profile
- * pictures: a 5×5 grid of blocks mirrored left to right, in one colour.
- * The app makes the same one (`blocks` in crates/libroxel/src/menu.rs).
+ * A game's picture from its id: a cluster of cubes on a 4×4 patch of
+ * grass, mirrored along the diagonal so it looks the same on the left and
+ * the right. The app makes the same one (`blocks` in
+ * crates/libroxel/src/menu.rs).
  */
 function blocks(id) {
   let h = fnv(id);
@@ -470,19 +472,19 @@ function blocks(id) {
   h ^= h >>> 13;
   h = Math.imul(h, 0xc2b2ae35) >>> 0;
   h = (h ^ (h >>> 16)) >>> 0;
-  let bits = h & 0x7fff;
-  let ones = 0;
-  for (let i = 0; i < 15; i++) ones += (bits >>> i) & 1;
-  if (ones < 5) bits ^= 0x7fff;
-  const cells = new Array(25).fill(false);
-  for (let i = 0; i < 15; i++) {
-    if ((bits >>> i) & 1) {
-      const [col, row] = [Math.floor(i / 5), i % 5];
-      cells[row * 5 + col] = true;
-      cells[row * 5 + 4 - col] = true;
+  const heights = new Array(16).fill(0);
+  let bit = 0;
+  for (let y = 0; y < 4; y++) {
+    for (let x = y; x < 4; x++) {
+      const v = (h >>> bit) & 3;
+      bit += 2;
+      const inner = x >= 1 && x <= 2 && y >= 1 && y <= 2;
+      const high = inner ? [1, 2, 2, 3][v] : [0, 0, 1, 2][v];
+      heights[y * 4 + x] = high;
+      heights[x * 4 + y] = high;
     }
   }
-  return { cells, colour: hsl((h >>> 15) % 360, 0.6, 0.45 + ((h >>> 28) / 15) * 0.1) };
+  return { heights, colour: hsl((h >>> 20) % 360, 0.6, 0.55) };
 }
 
 function hsl(h, s, l) {
@@ -495,16 +497,30 @@ function hsl(h, s, l) {
 
 const pictureColour = (id) => blocks(id).colour;
 
-/** A game's picture: its blocks on light grey in the middle, a block of margin round them. */
+/** A game's picture: its grass and cubes, as big as fits in the middle. */
 function gamePicture(width, height, id) {
-  const { cells, colour } = blocks(id);
-  const cell = Math.min(width, height) / 7;
-  const [x0, y0] = [(width - cell * 5) / 2, (height - cell * 5) / 2];
-  const shapes = [svg('rect', { width, height, fill: 'rgb(240, 240, 240)' })];
-  cells.forEach((on, i) => {
-    if (on) shapes.push(svg('rect', { x: x0 + cell * (i % 5), y: y0 + cell * Math.floor(i / 5), width: cell, height: cell, fill: rgb(colour) }));
-  });
-  return svg('svg', { viewBox: `0 0 ${width} ${height}`, class: 'scene', 'shape-rendering': 'crispEdges', 'aria-hidden': 'true' }, ...shapes);
+  const { heights, colour } = blocks(id);
+  const unit = Math.min(width / 8, height / 7.5);
+  const [dx, dy] = [unit * 0.866, unit * 0.5];
+  const [bx, by] = [width / 2, height / 2 + unit * 0.6];
+  const at = (x, y, z) => `${(bx + (x - y) * dx).toFixed(2)},${(by + (x + y - 4) * dy - z * unit).toFixed(2)}`;
+  const poly = (points, fill, extra = {}) => svg('polygon', { points: points.join(' '), fill: rgb(fill), ...extra });
+  const [lo, hi] = [-0.25, 4.25];
+  const shapes = [poly([at(lo, lo, 0), at(hi, lo, 0), at(hi, hi, 0), at(lo, hi, 0)], C.grass, { stroke: rgb(C.grassEdge), 'stroke-width': 1 })];
+  const [left, right] = [shade(colour, 0.78), shade(colour, 0.55)];
+  for (let sum = 0; sum < 7; sum++) {
+    for (let y = 0; y < 4; y++) {
+      const x = sum - y;
+      if (x < 0 || x > 3) continue;
+      for (let z = 0; z < heights[y * 4 + x]; z++) {
+        shapes.push(
+          poly([at(x, y + 1, z + 1), at(x + 1, y + 1, z + 1), at(x + 1, y + 1, z), at(x, y + 1, z)], left),
+          poly([at(x + 1, y, z + 1), at(x + 1, y + 1, z + 1), at(x + 1, y + 1, z), at(x + 1, y, z)], right),
+          poly([at(x, y, z + 1), at(x + 1, y, z + 1), at(x + 1, y + 1, z + 1), at(x, y + 1, z + 1)], colour));
+      }
+    }
+  }
+  return svg('svg', { viewBox: `0 0 ${width} ${height}`, class: 'scene', 'aria-hidden': 'true' }, ...shapes);
 }
 
 const usualLook = (name) => ({
