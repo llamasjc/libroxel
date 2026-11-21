@@ -17,7 +17,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# A newer push to main makes an older warm-up pointless.
+# A newer push to main cancels an older warm-up build, since it's pointless
+# now. Tag runs are never cancelled: each version finishes and gets
+# published, and pushing the same tag again waits for the first run.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: ${{ github.ref_type == 'branch' }}
@@ -297,8 +299,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          # The app's release is the one download links point at.
-          if [[ "$GITHUB_REF_NAME" == *-* ]]; then latest=false; else latest=true; fi
+          # Latest goes to the highest version, not to whichever run finished
+          # last: if v0.1.1 finishes after v0.1.2, v0.1.2 stays Latest.
+          latest=true
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            latest=false
+          else
+            newest=$( { gh api "repos/$GH_REPO/releases?per_page=100" \
+              --jq '.[] | select((.draft or .prerelease) | not) | .tag_name'; echo "$GITHUB_REF_NAME"; } | sort -V | tail -n1)
+            [[ "$newest" == "$GITHUB_REF_NAME" ]] || latest=false
+          fi
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest=$latest
           [[ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" == false ]] \
             || { echo "::error::The release is still a draft"; exit 1; }
