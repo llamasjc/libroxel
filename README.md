@@ -865,3 +865,6 @@ included with the program:
   `crates/libroxel/assets/fonts/` and `web/fonts/`).
 - [Phosphor](https://phosphoricons.com) icons, under the MIT License, through the
   `egui-phosphor` crate.
+- The chess pieces are Colin M.L. Burnett's "cburnett" set, as used by
+  [Lichess](https://github.com/lichess-org/lila), under the GNU GPL v2 or
+  later (see `crates/libroxel-engine/assets/CHESS-PIECES.md`).

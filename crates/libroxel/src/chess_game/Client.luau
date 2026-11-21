@@ -27,25 +27,29 @@ for _, kind in { Enum.CoreGuiType.PlayerList, Enum.CoreGuiType.Backpack, Enum.Co
 end
 
 ------------------------------------------------------------------------
--- Looks: a plain dark chess-site style with a green and cream board.
+-- Looks: Lichess's dark theme and its brown board.
 
-local BACKGROUND = Color3.fromRGB(49, 46, 43)
+local BACKGROUND = Color3.fromRGB(22, 21, 18)
 local PANEL = Color3.fromRGB(38, 36, 33)
-local CARD = Color3.fromRGB(60, 58, 55)
-local CARD_PICKED = Color3.fromRGB(72, 86, 58)
-local TEXT = Color3.fromRGB(255, 255, 255)
-local MUTED = Color3.fromRGB(176, 174, 170)
-local LIGHT_SQUARE = Color3.fromRGB(235, 236, 208)
-local DARK_SQUARE = Color3.fromRGB(119, 149, 86)
-local LAST_LIGHT = Color3.fromRGB(245, 246, 130)
-local LAST_DARK = Color3.fromRGB(185, 202, 67)
-local PICKED = Color3.fromRGB(246, 246, 105)
-local CHECKED = Color3.fromRGB(235, 97, 80)
-local HINTED = Color3.fromRGB(120, 180, 230)
-local GREEN = Color3.fromRGB(129, 182, 76)
-local GREY = Color3.fromRGB(70, 68, 65)
-local RED = Color3.fromRGB(200, 70, 60)
-local ORANGE = Color3.fromRGB(220, 140, 50)
+local CARD = Color3.fromRGB(48, 46, 44)
+local CARD_PICKED = Color3.fromRGB(50, 81, 109)
+local TEXT = Color3.fromRGB(230, 230, 230)
+local MUTED = Color3.fromRGB(153, 153, 153)
+local LIGHT_SQUARE = Color3.fromRGB(240, 217, 181)
+local DARK_SQUARE = Color3.fromRGB(181, 136, 99)
+-- Lichess tints the last move green and the picked piece dark green.
+local LAST_LIGHT = Color3.fromRGB(205, 210, 106)
+local LAST_DARK = Color3.fromRGB(170, 162, 58)
+local PICKED_LIGHT = Color3.fromRGB(130, 151, 105)
+local PICKED_DARK = Color3.fromRGB(100, 111, 64)
+local MOVE_DOT = Color3.fromRGB(20, 85, 30)
+local CHECKED = Color3.fromRGB(231, 76, 60)
+local HINTED = Color3.fromRGB(120, 170, 220)
+local PRIMARY = Color3.fromRGB(54, 146, 231)
+local GOOD = Color3.fromRGB(98, 153, 36)
+local GREY = Color3.fromRGB(64, 62, 59)
+local RED = Color3.fromRGB(220, 50, 47)
+local ORANGE = Color3.fromRGB(199, 134, 42)
 
 -- Space at the top. The screen already starts under the app's own bar.
 local TOP = 14
@@ -98,7 +102,7 @@ end
 
 -- The big green button.
 local function bigButton(parent, text, props)
-	local b = button(parent, text, GREEN, props)
+	local b = button(parent, text, PRIMARY, props)
 	b.RichText = true
 	b.TextSize = 24
 	return b
@@ -235,8 +239,8 @@ for _, sq in Rules.SQUARES do
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromScale(0.32, 0.32),
-		BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-		BackgroundTransparency = 0.82,
+		BackgroundColor3 = MOVE_DOT,
+		BackgroundTransparency = 0.5,
 		Visible = false,
 		ZIndex = 4,
 	}, square)
@@ -251,7 +255,7 @@ for _, sq in Rules.SQUARES do
 		ZIndex = 4,
 	}, square)
 	round(ring, 100)
-	make("UIStroke", { Color = Color3.fromRGB(0, 0, 0), Thickness = 5, Transparency = 0.8 }, ring)
+	make("UIStroke", { Color = MOVE_DOT, Thickness = 5, Transparency = 0.5 }, ring)
 	local fileText = label(square, {
 		Name = "File",
 		AnchorPoint = Vector2.new(1, 1),
@@ -358,7 +362,7 @@ for i, info in TAB_NAMES do
 		AnchorPoint = Vector2.new(0, 1),
 		Position = UDim2.new(0, 0, 1, 0),
 		Size = UDim2.new(1, 0, 0, 3),
-		BackgroundColor3 = GREEN,
+		BackgroundColor3 = PRIMARY,
 		BorderSizePixel = 0,
 	}, tab)
 	tabX += TAB_WIDTHS[i]
@@ -443,7 +447,7 @@ for i, bot in Engine.BOTS do
 	label(face, { Size = UDim2.fromScale(1, 1), Text = string.sub(bot.name, 1, 1), TextColor3 = Color3.fromRGB(30, 30, 30), TextSize = 18, TextXAlignment = Enum.TextXAlignment.Center })
 	label(b, { Position = UDim2.new(0, 50, 0, 7), Size = UDim2.new(1, -54, 0, 20), Text = bot.name, TextSize = 16 })
 	label(b, { Position = UDim2.new(0, 50, 0, 27), Size = UDim2.new(1, -54, 0, 18), Text = "Rating " .. bot.rating, TextSize = 13, TextColor3 = MUTED })
-	local edge = make("UIStroke", { Color = GREEN, Thickness = 2, Transparency = 1 }, b)
+	local edge = make("UIStroke", { Color = PRIMARY, Thickness = 2, Transparency = 1 }, b)
 	botButtons[i] = { button = b, edge = edge }
 end
 local botsBottom = 24 + 4 * (ROW + 6)
@@ -526,7 +530,7 @@ round(movesBox, 6)
 local drawBanner = make("Frame", { Name = "DrawOffer", Position = UDim2.new(0, 18, 1, -172), Size = UDim2.new(1, -36, 0, 42), BackgroundColor3 = Color3.fromRGB(90, 76, 40), Visible = false }, gamePage)
 round(drawBanner, 6)
 local drawText = label(drawBanner, { Position = UDim2.new(0, 10, 0, 0), Size = UDim2.new(0.5, 0, 1, 0), TextSize = 14, Text = "Draw offered" })
-local acceptDraw = button(drawBanner, "Accept", GREEN, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -92, 0.5, 0), Size = UDim2.fromOffset(80, 30), TextSize = 14 })
+local acceptDraw = button(drawBanner, "Accept", GOOD, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -92, 0.5, 0), Size = UDim2.fromOffset(80, 30), TextSize = 14 })
 local declineDraw = button(drawBanner, "Decline", GREY, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(80, 30), TextSize = 14 })
 
 local actions = make("Frame", { Name = "Actions", Position = UDim2.new(0, 18, 1, -122), Size = UDim2.new(1, -36, 0, 42), BackgroundTransparency = 1 }, gamePage)
@@ -661,7 +665,7 @@ local function drawBoard()
 			colour = HINTED
 		end
 		if sq == picked then
-			colour = PICKED
+			colour = if s.light then PICKED_LIGHT else PICKED_DARK
 		end
 		if sq == checked then
 			colour = CHECKED
@@ -943,7 +947,7 @@ local function drawLobby()
 		seekButton.BackgroundColor3 = ORANGE
 	else
 		seekButton.Text = "<b>Find a game</b>  <font size=\"16\">" .. controlText(chosenPeopleControl) .. "</font>"
-		seekButton.BackgroundColor3 = GREEN
+		seekButton.BackgroundColor3 = PRIMARY
 	end
 
 	-- Challenges to and from you.
@@ -952,7 +956,7 @@ local function drawLobby()
 	for _, c in lobby.incoming do
 		local row = rowFrame(challengeList, y, 44)
 		label(row, { Position = UDim2.new(0, 10, 0, 0), Size = UDim2.new(0.55, 0, 1, 0), TextSize = 14, TextWrapped = true, Text = c.name .. " (" .. c.rating .. ") · " .. controlText(c.control) })
-		local yes = button(row, "Play", GREEN, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -78, 0.5, 0), Size = UDim2.fromOffset(66, 30), TextSize = 14 })
+		local yes = button(row, "Play", GOOD, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -78, 0.5, 0), Size = UDim2.fromOffset(66, 30), TextSize = 14 })
 		local no = button(row, "No", GREY, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(66, 30), TextSize = 14 })
 		yes.MouseButton1Click:Connect(function()
 			send("answer", { id = c.id, accept = true })
@@ -987,7 +991,7 @@ local function drawLobby()
 		label(row, { Position = UDim2.new(0, 10, 0, 3), Size = UDim2.new(0.6, 0, 0, 22), TextSize = 16, Text = p.name .. "  (" .. p.rating .. ")" })
 		label(row, { Position = UDim2.new(0, 10, 0, 23), Size = UDim2.new(0.6, 0, 0, 18), TextSize = 13, TextColor3 = MUTED, Text = p.status })
 		if p.free then
-			local challenge = button(row, "Challenge", GREEN, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(96, 32), TextSize = 14 })
+			local challenge = button(row, "Challenge", GOOD, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(96, 32), TextSize = 14 })
 			challenge.MouseButton1Click:Connect(function()
 				send("challenge", { to = p.id, control = chosenPeopleControl })
 			end)
