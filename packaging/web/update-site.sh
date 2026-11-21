@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Puts the newest Libroxel website online: fetches the main branch of the
-# repository in /etc/libroxel/site.conf and, when it changed, sets the site
-# up again with the fetched copy's own setup-site.sh. A timer runs it every
+# Puts the website from the latest GitHub release online, so it matches the
+# released app: fetches that release's tag of the repository in
+# /etc/libroxel/site.conf and, when it changed, sets the site up again with
+# the fetched copy's own setup-site.sh. A timer runs it every
 # 10 minutes; run it by hand with: sudo libroxel-site-update --now
 set -euo pipefail
 
@@ -23,13 +24,17 @@ fi
 git -C "$checkout" remote set-url origin "https://github.com/$REPO.git"
 done_file=/var/lib/libroxel-site/online
 before="$(cat "$done_file" 2>/dev/null || true)"
-git -C "$checkout" fetch -q --depth 1 origin main || { log "could not fetch github.com/$REPO"; exit 1; }
-git -C "$checkout" reset -q --hard FETCH_HEAD
-now="$(git -C "$checkout" rev-parse --short HEAD)"
+tag="$(curl -fsSL --retry 3 -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/$REPO/releases/latest" \
+    | grep -o '"tag_name": *"[^"]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')" || true
+[ -n "$tag" ] || { log "no release of $REPO yet; leaving the site as it is"; exit 0; }
+now="$tag"
 if [ "$now" = "$before" ] && [ "${1:-}" != --now ]; then
     exit 0
 fi
-[ -f "$checkout/web/index.html" ] || { log "main has no web/index.html; leaving the site as it is"; exit 1; }
+git -C "$checkout" fetch -q --depth 1 origin "refs/tags/$tag" || { log "could not fetch $tag from github.com/$REPO"; exit 1; }
+git -C "$checkout" reset -q --hard FETCH_HEAD
+[ -f "$checkout/web/index.html" ] || { log "$tag has no web/index.html; leaving the site as it is"; exit 1; }
 log "putting $now online"
 bash "$checkout/packaging/web/setup-site.sh" --from "$checkout/web" --no-check
 echo "$now" > "$done_file"

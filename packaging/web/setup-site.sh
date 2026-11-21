@@ -41,7 +41,7 @@ case "$REPO" in ""|*/*) ;; *) echo "--repo is owner/name, such as someone/librox
 install -d -m 755 /etc/libroxel
 cat > "$conf" <<CONF
 # The Libroxel website (setup-site.sh writes this; run it again to change it).
-# The GitHub repository whose main branch the site updates from (owner/name).
+# The GitHub repository whose latest release the site updates from (owner/name).
 REPO="$REPO"
 DOMAIN="$DOMAIN"
 HUB="$HUB"
