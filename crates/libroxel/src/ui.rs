@@ -286,6 +286,14 @@ pub fn editor_ui(
         (code, s.joined_count())
     });
     editor.platform.tick(hosting);
+    editor.platform.look_up_account();
+    if let Some(look) = editor.platform.take_account_look() {
+        editor.menu.use_look(&look);
+        let look = editor.menu.look();
+        if let Some(session) = engine.session.as_mut() {
+            session.set_local_look(look);
+        }
+    }
     editor.platform.social_tick(engine.session.is_some());
     if !playing {
         edit_together(engine, editor);

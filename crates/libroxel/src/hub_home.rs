@@ -597,6 +597,10 @@ fn best_server<'a>(platform: &Platform, servers: &'a [ServerInfo]) -> Option<&'a
 fn follow_link(state: &mut HomeState, platform: &mut Platform, list: &[Entry], name: &str) -> Option<Pick> {
     use crate::url_handler::Launch;
     let pending = state.launch.take()?;
+    if !platform.account_known() && pending.since.elapsed() < std::time::Duration::from_secs(15) {
+        state.launch = Some(pending);
+        return None;
+    }
     let key = match &pending.launch {
         Launch::Join(code) => return Some(Pick::Join { code: code.clone(), name: name.to_owned() }),
         Launch::Play(key) | Launch::Host(key) => key.clone(),

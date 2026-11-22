@@ -66,6 +66,12 @@ pub struct Platform {
     /// The Hub the account was last looked up on.
     account_hub: Option<String>,
     account_found: Slot<Option<Profile>>,
+    account_look: Option<Json>,
+    account_checked: Option<Instant>,
+    account_time: i64,
+    look_to_save: Option<Json>,
+    look_saving: bool,
+    look_saved: Slot<()>,
     account_saved: Slot<String>,
     account_busy: bool,
     pub account: Option<Profile>,
@@ -148,6 +154,12 @@ impl Default for Platform {
             account_about: String::new(),
             account_hub: None,
             account_found: Arc::default(),
+            account_look: None,
+            account_checked: None,
+            account_time: 0,
+            look_to_save: None,
+            look_saving: false,
+            look_saved: Arc::default(),
             saved_accounts: None,
             account_saved: Arc::default(),
             account_busy: false,
@@ -267,17 +279,37 @@ impl Platform {
         if let Some(result) = taken {
             self.account_busy = false;
             match result {
-                Ok(Some(profile)) => {
-                    // Kept on this computer, to switch back to after signing out.
-                    if crate::accounts::remember(&profile.name).is_ok() {
-                        self.saved_accounts = None;
+                Ok(Some(mut profile)) => {
+                    let old = self.account.take().filter(|a| a.player_id == profile.player_id);
+                    if let Some(old) = &old {
+                        if self.account_name == old.name {
+                            self.account_name = profile.name.clone();
+                        }
+                        if self.account_about == old.about {
+                            self.account_about = profile.about.clone();
+                        }
+                        if let Some(look) = &self.look_to_save {
+                            profile.look = look.clone();
+                        }
+                    } else {
+                        // Kept on this computer, to switch back to after signing out.
+                        if crate::accounts::remember(&profile.name).is_ok() {
+                            self.saved_accounts = None;
+                        }
+                        self.account_name = profile.name.clone();
+                        self.account_about = profile.about.clone();
+                        self.look_to_save = None;
+                        self.fetch_security();
                     }
-                    self.account_name = profile.name.clone();
-                    self.account_about = profile.about.clone();
+                    if old.is_none_or(|o| o.look != profile.look) && profile.look.is_object() {
+                        self.account_look = Some(profile.look.clone());
+                    }
                     self.account = Some(profile);
-                    self.fetch_security();
                 }
-                Ok(None) => self.account = None,
+                Ok(None) => {
+                    self.account = None;
+                    self.look_to_save = None;
+                }
                 Err(e) => self.account_status = Some(Err(e)),
             }
         }
@@ -589,11 +621,72 @@ impl Platform {
         }
     }
 
-    /// Looks up this player's account on the Hub, once for each Hub.
-    pub fn look_up_account(&mut self) {
-        if self.account_busy || self.account_hub.as_deref() == Some(self.hub_address.as_str()) {
+    pub fn account_known(&self) -> bool {
+        !self.account_busy && self.account_hub.as_deref() == Some(self.hub_address.as_str())
+    }
+
+    pub fn take_account_look(&mut self) -> Option<Json> {
+        self.account_look.take()
+    }
+
+    pub fn save_look(&mut self, look: Json) {
+        if let Some(account) = &mut self.account
+            && account.look != look
+        {
+            account.look = look.clone();
+            self.look_to_save = Some(look);
+        }
+    }
+
+    fn signed_time(&mut self) -> i64 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        self.account_time = now.max(self.account_time + 1);
+        self.account_time
+    }
+
+    fn send_look(&mut self) {
+        if self.look_saved.lock().unwrap().take().is_some() {
+            self.look_saving = false;
+        }
+        if self.look_saving || self.account_busy {
             return;
         }
+        let (Some(account), Some(look)) = (&self.account, self.look_to_save.take()) else { return };
+        let (name, about) = (account.name.clone(), account.about.clone());
+        let time = self.signed_time();
+        self.look_saving = true;
+        let client = self.client();
+        let out = self.look_saved.clone();
+        std::thread::spawn(move || {
+            let _ = crate::identity().and_then(|me| {
+                let player_id = me.player_id();
+                let message = libroxel_hub::account_message(&player_id, &name, &about, &look, time);
+                client.update_account(&AccountUpdate {
+                    work: None,
+                    email: None,
+                    signature: me.sign(&message),
+                    player_id,
+                    name,
+                    about,
+                    look,
+                    time,
+                })
+            });
+            *out.lock().unwrap() = Some(Ok(()));
+        });
+    }
+
+    /// Looks up this player's account on the Hub, once for each Hub.
+    pub fn look_up_account(&mut self) {
+        self.send_look();
+        let same_hub = self.account_hub.as_deref() == Some(self.hub_address.as_str());
+        let recent = self.account_checked.is_some_and(|at| at.elapsed() < Duration::from_secs(30));
+        if self.account_busy || self.look_saving || self.look_to_save.is_some() || (same_hub && recent) {
+            return;
+        }
+        self.account_checked = Some(Instant::now());
         self.account_hub = Some(self.hub_address.clone());
         self.account_busy = true;
         let client = self.client();
@@ -616,12 +709,11 @@ impl Platform {
         let new = self.account.is_none();
         let email = Some(self.account_email.trim().to_owned()).filter(|e| new && !e.is_empty());
         let out = self.account_saved.clone();
+        let time = self.signed_time();
+        self.look_to_save = None;
         std::thread::spawn(move || {
             let result = crate::identity().and_then(|me| {
                 let player_id = me.player_id();
-                let time = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_secs() as i64);
                 let message = libroxel_hub::account_message(&player_id, &name, &about, &look, time);
                 let account = AccountUpdate {
                     // Only a new account needs the bot check worked out.

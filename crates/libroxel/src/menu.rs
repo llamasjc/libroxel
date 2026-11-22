@@ -485,6 +485,15 @@ impl Menu {
             .clone()
     }
 
+    pub fn use_look(&mut self, json: &libroxel_instance::serde_json::Value) {
+        let look = Look::from_json(json, self.look());
+        if self.look.as_ref() != Some(&look) {
+            let _ = std::fs::create_dir_all(data_dir())
+                .and_then(|_| std::fs::write(avatar_file(), look.to_json().to_string()));
+            self.look = Some(look);
+        }
+    }
+
     fn avatar_tab(&mut self, ui: &mut egui::Ui, platform: &mut Platform) {
         let mut look = self.look();
         theme::heading(ui, "Your avatar");
@@ -536,6 +545,7 @@ impl Menu {
         ui.add_space(24.0);
         platform.account_ui(ui, look.to_json());
         if Some(&look) != self.look.as_ref() {
+            platform.save_look(look.to_json());
             let json = look.to_json().to_string();
             self.look = Some(look);
             let saved = std::fs::create_dir_all(data_dir()).and_then(|_| std::fs::write(avatar_file(), json));

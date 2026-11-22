@@ -142,6 +142,7 @@ pub fn ban(db: &Connection, who: &str, reason: &str) -> Result<String, String> {
     )
     .map_err(|e| e.to_string())?;
     let _ = db.execute("DELETE FROM presence WHERE player_id = ?1", params![id]);
+    let _ = db.execute("DELETE FROM web_presence WHERE player_id = ?1", params![id]);
     let _ = db.execute("DELETE FROM servers WHERE host_id = ?1", params![id]);
     Ok(id)
 }

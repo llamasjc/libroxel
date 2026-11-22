@@ -113,6 +113,17 @@ pub fn presence_message(update: &PresenceUpdate) -> Vec<u8> {
     .into_bytes()
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WebPresence {
+    pub player_id: String,
+    pub time: i64,
+    pub signature: String,
+}
+
+pub fn web_presence_message(player_id: &str, time: i64) -> Vec<u8> {
+    format!("libroxel web\n{player_id}\n{time}").into_bytes()
+}
+
 /// One friend, as their friends see them.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Friend {
@@ -160,6 +171,10 @@ pub(crate) fn create_tables(db: &Connection) -> Result<(), String> {
             game        TEXT,
             game_id     TEXT,
             server_id   TEXT,
+            last_seen   INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS web_presence (
+            player_id   TEXT PRIMARY KEY,
             last_seen   INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS signed (
@@ -322,6 +337,27 @@ pub(crate) async fn update_presence(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub(crate) async fn update_web_presence(
+    State(db): State<Db>,
+    Json(update): Json<WebPresence>,
+) -> Result<StatusCode, Failure> {
+    if !verify(&update.player_id, &web_presence_message(&update.player_id, update.time), &update.signature) {
+        return Err((StatusCode::FORBIDDEN, "the signature does not match that player".into()));
+    }
+    let db = db.lock().unwrap();
+    if crate::owner::is_banned(&db, &update.player_id) {
+        return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
+    }
+    fresh(&db, &update.player_id, "web", update.time)?;
+    db.execute(
+        "INSERT INTO web_presence (player_id, last_seen) VALUES (?1, ?2)
+         ON CONFLICT(player_id) DO UPDATE SET last_seen = ?2",
+        params![update.player_id, now()],
+    )
+    .map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct ListSigned {
     time: i64,
@@ -366,10 +402,11 @@ pub(crate) async fn list_friends(
     )?;
     let mut statement = db
         .prepare(
-            "SELECT a.player_id, a.name, a.look, p.online, p.game, p.game_id, p.server_id, p.last_seen, a.number
+            "SELECT a.player_id, a.name, a.look, p.online, p.game, p.game_id, p.server_id, p.last_seen, a.number, w.last_seen
              FROM friends f
              JOIN accounts a ON a.player_id = CASE WHEN f.from_id = ?1 THEN f.to_id ELSE f.from_id END
              LEFT JOIN presence p ON p.player_id = a.player_id
+             LEFT JOIN web_presence w ON w.player_id = a.player_id
              WHERE (f.from_id = ?1 OR f.to_id = ?1) AND f.accepted = 1",
         )
         .map_err(internal)?;
@@ -383,6 +420,7 @@ pub(crate) async fn list_friends(
         Option<String>,
         Option<i64>,
         i64,
+        Option<i64>,
     );
     let rows: Vec<Row> = statement
         .query_map(params![id], |r| {
@@ -396,14 +434,21 @@ pub(crate) async fn list_friends(
                 r.get(6)?,
                 r.get(7)?,
                 r.get(8)?,
+                r.get(9)?,
             ))
         })
         .map(|rows| rows.filter_map(Result::ok).collect())
         .map_err(internal)?;
     let mut friends = Vec::new();
-    for (player_id, name, look, online, game, game_id, server_id, last_seen, number) in rows {
-        let online = online == Some(true) && last_seen.is_some_and(|t| t >= alive);
-        let server = match (&server_id, online) {
+    for (player_id, name, look, online, game, game_id, server_id, app_seen, number, web_seen) in rows {
+        let in_app = online == Some(true) && app_seen.is_some_and(|t| t >= alive);
+        let on_web = web_seen.is_some_and(|t| t >= alive);
+        let last_seen = match (app_seen, web_seen) {
+            (Some(a), Some(w)) => Some(a.max(w)),
+            (a, w) => a.or(w),
+        };
+        let online = in_app || on_web;
+        let server = match (&server_id, in_app) {
             (Some(server_id), true) => db
                 .query_row(
                     &format!("SELECT {SERVER_COLUMNS} FROM servers WHERE server_id = ?1 AND last_seen >= ?2"),
@@ -420,8 +465,8 @@ pub(crate) async fn list_friends(
             name,
             look: serde_json::from_str(&look).unwrap_or(serde_json::Value::Null),
             online,
-            game: game.filter(|_| online),
-            game_id: game_id.filter(|_| online),
+            game: game.filter(|_| in_app),
+            game_id: game_id.filter(|_| in_app),
             server,
             last_online_secs_ago: last_seen.map(|t| now - t),
         });
