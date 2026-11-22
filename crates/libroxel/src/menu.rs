@@ -7,12 +7,10 @@
 use std::path::PathBuf;
 
 use bevy_egui::egui::{self, Color32, RichText};
-use libroxel_instance::place;
 
 use crate::browse::Platform;
-use crate::server::{BackgroundServer, HubUse, ServerSettings, data_dir};
-use crate::starter_games::{self, STARTER_GAMES};
-use crate::{games_dir, templates, theme};
+use crate::server::data_dir;
+use crate::{games_dir, theme};
 use libroxel_engine::character::{BodyColors, Hat, Look};
 use libroxel_instance::Color3;
 
@@ -45,26 +43,6 @@ impl Game {
             Game::File(path) => path.display().to_string(),
         }
     }
-
-    /// The game as a saved place, for a server.
-    fn text(&self) -> Result<String, String> {
-        match self {
-            Game::Starter(name) => {
-                let game =
-                    starter_games::starter(name).ok_or_else(|| format!("there is no starter game {name}"))?;
-                place::save(&(game.build)()).map_err(|e| e.to_string())
-            }
-            Game::Blank => place::save(&templates::blank()).map_err(|e| e.to_string()),
-            // A file from Roblox Studio is brought across first.
-            Game::File(path) if libroxel_rbx::is_roblox_file(path) => {
-                let opened = crate::open::open(path)?;
-                place::save(&opened.tree).map_err(|e| e.to_string())
-            }
-            Game::File(path) => {
-                std::fs::read_to_string(path).map_err(|e| format!("could not read {}: {e}", path.display()))
-            }
-        }
-    }
 }
 
 /// What a menu button asks for.
@@ -87,10 +65,7 @@ pub enum Tab {
     Home,
     Search,
     Friends,
-    Play,
-    Online,
     Create,
-    Host,
     Avatar,
 }
 
@@ -105,10 +80,7 @@ pub struct Menu {
     pub scanned: bool,
     /// A path typed in by hand.
     pub path: String,
-    pub code: String,
     pub name: String,
-    pub server_port: String,
-    pub servers: Vec<BackgroundServer>,
     pub error: Option<String>,
     /// How the player looks, read from the avatar file the first time it's needed.
     look: Option<Look>,
@@ -123,14 +95,11 @@ impl Default for Menu {
         Self {
             open: false,
             tab: Tab::Home,
-            game: Game::Starter(STARTER_GAMES[0].name),
+            game: Game::Blank,
             games: Vec::new(),
             scanned: false,
             path: String::new(),
-            code: String::new(),
             name: "Player".into(),
-            server_port: (libroxel_engine::net::DEFAULT_PORT + 1).to_string(),
-            servers: Vec::new(),
             error: None,
             look: None,
             picker: crate::file_picker::Picker::default(),
@@ -166,21 +135,6 @@ pub fn saved_games() -> Vec<PathBuf> {
 
 const ACCENT: Color32 = theme::ACCENT;
 const SOFT: Color32 = theme::MUTED;
-
-/// A secondary block button.
-fn big(ui: &mut egui::Ui, glyph: &str, text: &str) -> egui::Response {
-    theme::block_button(ui, theme::Kind::Plain, glyph, text, 42.0)
-}
-
-/// The block button for the main thing to do on a page.
-fn play_button(ui: &mut egui::Ui, kind: theme::Kind, glyph: &str, text: &str) -> egui::Response {
-    theme::block_button(ui, kind, glyph, text, 46.0)
-}
-
-/// A section's title inside a page.
-fn subheading(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).font(theme::display(17.0)).color(theme::TEXT));
-}
 
 /// A game's picture, worked out from its id: a cluster of cubes on a 4×4
 /// patch of grass, seen from above a corner. Each column's height comes
@@ -378,7 +332,6 @@ impl Menu {
             self.games = saved_games();
             self.scanned = true;
         }
-        self.servers.retain(|s| !s.finished() || !s.lines().is_empty());
         // You always play as your account's name: it can't be changed
         // here (a new name is claimed on the Avatar tab).
         platform.look_up_account();
@@ -428,10 +381,7 @@ impl Menu {
                     Tab::Friends => {
                         crate::hub_home::friends_tab(&mut self.home, ui, platform, &name, &mut self.tab)
                     }
-                    Tab::Play => self.play_tab(ui),
-                    Tab::Online => self.online_tab(ui, platform),
                     Tab::Create => self.create_tab(ui),
-                    Tab::Host => self.host_tab(ui),
                     Tab::Avatar => {
                         egui::ScrollArea::vertical()
                             .id_salt("avatar")
@@ -470,14 +420,11 @@ impl Menu {
         }
         ui.add_space(10.0);
         ui.spacing_mut().item_spacing.x = 2.0;
-        let more_label = "More";
-        let more_glyph = theme::icon::CARET_DOWN;
         let chip = player_chip_width(ui, &self.name);
         let right = chip + 52.0 + 24.0;
         let wide: f32 =
             TOP_TABS.iter().map(|(_, glyph, label)| theme::tab_width(ui, glyph, label)).sum::<f32>()
-                + theme::tab_width(ui, more_glyph, more_label)
-                + 2.0 * (TOP_TABS.len() as f32 + 1.0);
+                + 2.0 * TOP_TABS.len() as f32;
         let compact = wide > ui.available_width() - right;
         for (tab, glyph, label) in TOP_TABS {
             let shown = if compact { "" } else { label };
@@ -487,21 +434,11 @@ impl Menu {
                 self.go(tab);
             }
         }
-        // Less-used pages wait behind More.
-        let in_more = MORE_TABS.iter().any(|(tab, ..)| *tab == self.tab);
-        let more = theme::tab(ui, more_glyph, if compact { "" } else { more_label }, in_more);
-        let more = if compact { more.on_hover_text(more_label) } else { more };
-        egui::Popup::menu(&more).show(|ui| {
-            ui.set_min_width(190.0);
-            for (tab, glyph, label) in MORE_TABS {
-                if ui.selectable_label(self.tab == tab, format!("{glyph}  {label}")).clicked() {
-                    self.go(tab);
-                    ui.close();
-                }
-            }
-            #[cfg(target_os = "macos")]
-            {
-                ui.separator();
+        #[cfg(target_os = "macos")]
+        {
+            let more = theme::tab(ui, theme::icon::CARET_DOWN, "", false).on_hover_text("More");
+            egui::Popup::menu(&more).show(|ui| {
+                ui.set_min_width(190.0);
                 if ui
                     .button(format!("{}  Add the libroxel command", theme::icon::TERMINAL_WINDOW))
                     .on_hover_text("Links /usr/local/bin/libroxel to this app, so typing libroxel in Terminal opens it. Asks for your password.")
@@ -512,8 +449,8 @@ impl Menu {
                         self.error = Some(why);
                     }
                 }
-            }
-        });
+            });
+        }
         // Search and who you play as, at the right of the bar.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
@@ -603,8 +540,7 @@ impl Menu {
     /// The games on this computer, as tiles to pick from.
     fn game_tiles(&mut self, ui: &mut egui::Ui, with_blank: bool) -> Option<Game> {
         let mut chosen = None;
-        let mut tiles: Vec<_> =
-            STARTER_GAMES.iter().map(|g| (Game::Starter(g.name), g.symbol, g.about.to_owned())).collect();
+        let mut tiles: Vec<(Game, &str, String)> = Vec::new();
         if with_blank {
             tiles.insert(0, (Game::Blank, theme::icon::PLUS, "Start from an empty baseplate".to_owned()));
         }
@@ -625,91 +561,6 @@ impl Menu {
             }
         });
         chosen
-    }
-
-    fn play_tab(&mut self, ui: &mut egui::Ui) -> Option<Pick> {
-        let mut pick = None;
-        theme::heading(ui, "Your games");
-        ui.label(RichText::new("Pick one and press Play. Double-click to jump straight in.").color(SOFT));
-        ui.add_space(12.0);
-        if let Some(game) = self.game_tiles(ui, false) {
-            pick = Some(Pick::Play(game));
-        }
-        if self.games.is_empty() {
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new("Games you make in Create show up here once you save them.")
-                    .color(SOFT)
-                    .italics(),
-            );
-        }
-        ui.add_space(20.0);
-        ui.horizontal(|ui| {
-            let label = format!("Play {}", self.game.label());
-            if play_button(ui, theme::Kind::Go, theme::icon::PLAY, &label).clicked() {
-                pick = Some(Pick::Play(self.game.clone()));
-            }
-            ui.add_space(12.0);
-            if big(ui, theme::icon::USERS_THREE, "Play with friends")
-                .on_hover_text("Host it, so friends can join with a code or find it Online")
-                .clicked()
-            {
-                pick = Some(Pick::Host(self.game.clone()));
-            }
-        });
-        pick
-    }
-
-    fn online_tab(&mut self, ui: &mut egui::Ui, platform: &mut Platform) -> Option<Pick> {
-        egui::ScrollArea::vertical().id_salt("online").show(ui, |ui| self.online_inner(ui, platform)).inner
-    }
-
-    fn online_inner(&mut self, ui: &mut egui::Ui, platform: &mut Platform) -> Option<Pick> {
-        let mut pick = None;
-        if let Some(done) = platform.take_download() {
-            let game = Game::File(done.path);
-            pick = Some(if done.host { Pick::Host(game) } else { Pick::Play(game) });
-        }
-        theme::heading(ui, "Published games");
-        ui.label(
-            RichText::new("Games people have published. They play without anyone hosting; press With friends to host one yourself.")
-                .color(SOFT),
-        );
-        ui.add_space(10.0);
-        theme::panel().show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            platform.published_list(ui);
-        });
-        ui.add_space(20.0);
-        theme::heading(ui, "Games being played right now");
-        ui.label(RichText::new("Hosted games appear here. Press Join to play in one.").color(SOFT));
-        ui.add_space(10.0);
-        theme::panel().show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            if let Some((code, _)) = platform.list(ui) {
-                pick = Some(Pick::Join { code, name: self.name.trim().to_owned() });
-            }
-            ui.horizontal(|ui| {
-                if theme::tool_button(ui, theme::icon::ARROW_CLOCKWISE, "Refresh", false).clicked() {
-                    platform.refresh();
-                }
-            });
-        });
-        ui.add_space(20.0);
-        subheading(ui, "Join with a code");
-        ui.label(RichText::new("A friend who hosts can send you their join code. On your own network an address like 192.168.1.5:7420 works too.").color(SOFT));
-        ui.add_space(6.0);
-        theme::hidden_field(ui, &mut self.code, "Paste the code here", ui.available_width() - 40.0);
-        ui.add_space(6.0);
-        let ready = !self.code.trim().is_empty();
-        if ui
-            .add_enabled_ui(ready, |ui| play_button(ui, theme::Kind::Primary, theme::icon::SIGN_IN, "Join"))
-            .inner
-            .clicked()
-        {
-            pick = Some(Pick::Join { code: self.code.trim().to_owned(), name: self.name.trim().to_owned() });
-        }
-        pick
     }
 
     fn create_tab(&mut self, ui: &mut egui::Ui) -> Option<Pick> {
@@ -765,131 +616,14 @@ impl Menu {
         });
         pick
     }
-
-    fn host_tab(&mut self, ui: &mut egui::Ui) -> Option<Pick> {
-        let mut pick = None;
-        theme::heading(ui, "Share a game");
-        ui.horizontal(|ui| {
-            ui.label("Game");
-            egui::ComboBox::from_id_salt("host-game").selected_text(self.game.label()).show_ui(ui, |ui| {
-                for game in STARTER_GAMES {
-                    ui.selectable_value(&mut self.game, Game::Starter(game.name), game.name);
-                }
-                for path in self.games.clone() {
-                    let game = Game::File(path);
-                    let label = game.label();
-                    ui.selectable_value(&mut self.game, game, label);
-                }
-            });
-        });
-        ui.add_space(10.0);
-        theme::panel().show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            subheading(ui, "Host and play");
-            ui.label(
-                RichText::new("You play it and friends join you, with a join code or from Online.")
-                    .color(SOFT),
-            );
-            ui.add_space(6.0);
-            if play_button(ui, theme::Kind::Primary, theme::icon::BROADCAST, "Host and play").clicked() {
-                pick = Some(Pick::Host(self.game.clone()));
-            }
-        });
-        ui.add_space(12.0);
-        theme::panel().show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            self.server_section(ui);
-        });
-        pick
-    }
-
-    fn server_section(&mut self, ui: &mut egui::Ui) {
-        subheading(ui, "Run a server");
-        ui.label(
-            RichText::new("Runs the game in the background with no player of your own, so others can join while you play something else.")
-                .color(SOFT),
-        );
-        ui.horizontal(|ui| {
-            ui.label("Port");
-            ui.add(egui::TextEdit::singleline(&mut self.server_port).desired_width(60.0));
-            if big(ui, theme::icon::HARD_DRIVES, "Start server").clicked() {
-                match self.start_server() {
-                    Ok(server) => self.servers.push(server),
-                    Err(e) => self.error = Some(e),
-                }
-            }
-        });
-        let mut stop = None;
-        for (i, server) in self.servers.iter().enumerate() {
-            ui.add_space(6.0);
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    let state = if server.finished() { "stopped" } else { "running" };
-                    ui.label(
-                        RichText::new(format!("{} on port {} ({state})", server.game, server.port)).strong(),
-                    );
-                    let label = if server.finished() { "Dismiss" } else { "Stop" };
-                    if ui.small_button(label).clicked() {
-                        stop = Some(i);
-                    }
-                });
-                let lines = server.lines();
-                let code = lines.iter().position(|l| l.starts_with("Join code"));
-                if let Some(code) = code.and_then(|i| lines[i].split("\n\n").nth(1)).map(str::trim) {
-                    theme::hidden_text(ui, ("server-code", i), "Join code", code);
-                }
-                for line in lines.iter().rev().take(3).rev() {
-                    // The join code (it holds this computer's addresses) only shows above, behind Show IP.
-                    let first = line.lines().next().unwrap_or("");
-                    ui.label(RichText::new(first).small().color(SOFT));
-                }
-            });
-        }
-        if let Some(i) = stop {
-            let server = self.servers.remove(i);
-            server.stop();
-        }
-    }
-
-    fn start_server(&self) -> Result<BackgroundServer, String> {
-        let port: u16 =
-            self.server_port.trim().parse().map_err(|_| "The port needs to be a number.".to_owned())?;
-        if self.servers.iter().any(|s| s.port == port && !s.finished()) {
-            return Err(format!("A server already uses port {port}."));
-        }
-        let key = match &self.game {
-            Game::File(path) => path.with_file_name("server-identity.key"),
-            _ => data_dir().join("server-identity.key"),
-        };
-        let game = self.game.label();
-        Ok(BackgroundServer::start(ServerSettings {
-            name: format!("{game} server"),
-            game,
-            text: self.game.text()?,
-            key,
-            port,
-            hub: HubUse::usual(),
-            official: false,
-            max_players: 0,
-            game_id: crate::social::game_ref(&self.game).game_id,
-            udp_port: None,
-            stop_when_empty: None,
-        }))
-    }
 }
 
 /// The tabs along the top bar, after the mark (which is Home).
-const TOP_TABS: [(Tab, &str, &str); 5] = [
-    (Tab::Play, theme::icon::PLAY, "Play"),
-    (Tab::Online, theme::icon::GLOBE_HEMISPHERE_WEST, "Online"),
+const TOP_TABS: [(Tab, &str, &str); 3] = [
     (Tab::Friends, theme::icon::USERS, "Friends"),
-    (Tab::Create, theme::icon::HAMMER, "Create"),
     (Tab::Avatar, theme::icon::T_SHIRT, "Avatar"),
+    (Tab::Create, theme::icon::HAMMER, "Create"),
 ];
-
-/// The pages in the top bar's More menu.
-const MORE_TABS: [(Tab, &str, &str); 1] = [(Tab::Host, theme::icon::BROADCAST, "Host a server")];
 
 const CHIP_CAPS: &str = "Playing as";
 

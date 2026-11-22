@@ -11,7 +11,6 @@ use libroxel_instance::serde_json::Value as Json;
 use crate::browse::Platform;
 use crate::menu::{Game, Pick, Tab, paint_blocks, picture_colour};
 use crate::social::starter_id;
-use crate::starter_games::STARTER_GAMES;
 use crate::theme::{self, icon};
 
 const SOFT: Color32 = theme::MUTED;
@@ -51,7 +50,6 @@ pub struct HomeState {
 /// Where a game on the home screen comes from.
 #[derive(Clone)]
 enum Source {
-    Starter(&'static str),
     Official(Box<libroxel_hub::OfficialGame>),
     Published(Box<GameInfo>),
     /// Only known from servers that run it.
@@ -66,7 +64,7 @@ struct Entry {
     title: String,
     by: String,
     about: String,
-    symbol: &'static str,
+    symbol: String,
     source: Source,
     servers: Vec<ServerInfo>,
 }
@@ -85,31 +83,17 @@ impl Entry {
 /// Every game worth showing: the starter games, the published ones and any
 /// other game someone is hosting, each with its live servers.
 fn entries(platform: &Platform) -> Vec<Entry> {
-    let mut list: Vec<Entry> = STARTER_GAMES
-        .iter()
-        .map(|g| Entry {
-            key: starter_id(g.name),
-            title: g.name.to_owned(),
-            by: "Libroxel".into(),
-            about: g.about.to_owned(),
-            symbol: g.symbol,
-            source: Source::Starter(g.name),
-            servers: Vec::new(),
-        })
-        .collect();
+    let mut list: Vec<Entry> = Vec::new();
     for game in platform.official() {
-        match list.iter_mut().find(|e| e.title == game.name) {
-            Some(entry) => entry.about = game.about.clone(),
-            None => list.push(Entry {
-                key: starter_id(&game.name),
-                title: game.name.clone(),
-                by: "Libroxel".into(),
-                about: game.about.clone(),
-                symbol: icon::GAME_CONTROLLER,
-                source: Source::Official(Box::new(game.clone())),
-                servers: Vec::new(),
-            }),
-        }
+        list.push(Entry {
+            key: starter_id(&game.name),
+            title: game.name.clone(),
+            by: "Libroxel".into(),
+            about: game.about.clone(),
+            symbol: if game.symbol.is_empty() { icon::GAME_CONTROLLER.into() } else { game.symbol.clone() },
+            source: Source::Official(Box::new(game.clone())),
+            servers: Vec::new(),
+        });
     }
     for game in platform.games() {
         list.push(Entry {
@@ -117,7 +101,7 @@ fn entries(platform: &Platform) -> Vec<Entry> {
             title: game.title.clone(),
             by: game.author.clone(),
             about: game.description.clone(),
-            symbol: icon::GLOBE_HEMISPHERE_WEST,
+            symbol: icon::GLOBE_HEMISPHERE_WEST.into(),
             source: Source::Published(Box::new(game.clone())),
             servers: Vec::new(),
         });
@@ -135,7 +119,7 @@ fn entries(platform: &Platform) -> Vec<Entry> {
                 title: server.game.clone(),
                 by: "Someone hosting".into(),
                 about: String::new(),
-                symbol: icon::BROADCAST,
+                symbol: icon::BROADCAST.into(),
                 source: Source::Live,
                 servers: vec![server.clone()],
             }),
@@ -336,7 +320,7 @@ fn game_tile(ui: &mut egui::Ui, entry: &Entry, friends: &[&Friend]) -> egui::Res
     painter.text(
         chip.center(),
         egui::Align2::CENTER_CENTER,
-        entry.symbol,
+        &entry.symbol,
         egui::FontId::proportional(16.0),
         Color32::WHITE,
     );
@@ -633,13 +617,6 @@ fn follow_link(state: &mut HomeState, platform: &mut Platform, list: &[Entry], n
 /// Starts a new server of `entry` on this computer, with friends welcome.
 fn host(entry: &Entry, platform: &mut Platform) -> Option<Pick> {
     match &entry.source {
-        Source::Starter(name) => match platform.official().iter().find(|g| g.name == *name).cloned() {
-            Some(game) => {
-                platform.get_official(&game, true);
-                None
-            }
-            None => Some(Pick::Host(Game::Starter(name))),
-        },
         Source::Official(game) => {
             platform.get_official(game, true);
             None

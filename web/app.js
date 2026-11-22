@@ -25,14 +25,6 @@ const HUB = (() => {
   }
 })();
 
-// The starter games built into the app (crates/libroxel/src/starter_games.rs).
-const STARTER_GAMES = [
-  { name: 'Kart race', symbol: '', about: 'Three laps round the track in a kart' },
-  { name: 'Checkers', symbol: '', about: 'Checkers against the computer or anyone in the server' },
-  { name: 'Connect 4', symbol: '', about: 'Line up four discs before the other player does' },
-  { name: 'Kings in the Corner', symbol: '', about: 'Be first to play every card. For 2 to 4 players' },
-];
-
 const ICON = {
   house: '', users: '', play: '', broadcast: '', shirt: '',
   globe: '', left: '', right: '', signIn: '', userPlus: '',
@@ -372,11 +364,12 @@ async function setPassword(secret, playerId, password) {
 // What the Hub lists, kept fresh while the page is open
 // ---------------------------------------------------------------------------
 
-const data = { games: [], servers: [], friends: null, me: null, loaded: false, error: null };
+const data = { official: [], games: [], servers: [], friends: null, me: null, loaded: false, error: null };
 
 async function refresh() {
   try {
-    const [games, servers] = await Promise.all([api('/games'), api('/servers')]);
+    const [official, games, servers] = await Promise.all([api('/official'), api('/games'), api('/servers')]);
+    data.official = official;
     data.games = games;
     data.servers = servers;
     data.error = null;
@@ -414,8 +407,8 @@ function isRemembered() {
 
 /** Every game worth showing, with its live servers, busiest first. */
 function entries() {
-  const list = STARTER_GAMES.map((g) => ({
-    key: `starter:${g.name}`, title: g.name, by: 'Libroxel', about: g.about, symbol: g.symbol,
+  const list = data.official.map((g) => ({
+    key: `starter:${g.name}`, title: g.name, by: 'Libroxel', about: g.about, symbol: g.symbol || ICON.globe,
     source: 'starter', servers: [],
   }));
   for (const game of data.games) {
