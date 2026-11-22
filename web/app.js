@@ -1546,8 +1546,18 @@ window.addEventListener('hashchange', () => {
   window.scrollTo(0, 0);
   render();
 });
+function sayOnline() {
+  if (!session || document.hidden) return;
+  const time = Date.now();
+  const signature = signText(secretKey(), `libroxel web\n${session.playerId}\n${time}`);
+  api('/presence/web', { method: 'POST', body: { player_id: session.playerId, time, signature } }).catch(() => {});
+}
+
 render();
 refresh().then(render);
+sayOnline();
+setInterval(sayOnline, 15000);
+document.addEventListener('visibilitychange', sayOnline);
 setInterval(() => {
   // Keep lists fresh while someone looks, but don't redraw under their typing.
   if (document.hidden || ['sign-in', 'create', 'avatar'].includes(route.name)) return;

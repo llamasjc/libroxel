@@ -71,8 +71,8 @@ pub use security::{
     security_message, set_verified, two_step_code, two_step_link, two_step_message,
 };
 pub use social::{
-    Friend, FriendAction, FriendChange, FriendState, Friends, PresenceUpdate, friend_message,
-    friends_list_message, presence_message,
+    Friend, FriendAction, FriendChange, FriendState, Friends, PresenceUpdate, WebPresence, friend_message,
+    friends_list_message, presence_message, web_presence_message,
 };
 
 /// The port a Hub listens on unless told otherwise.
@@ -731,6 +731,7 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/friends", post(social::change_friend))
         .route("/friends/{id}", get(social::list_friends))
         .route("/presence", post(social::update_presence))
+        .route("/presence/web", post(social::update_web_presence))
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
         .layer(axum::middleware::from_fn_with_state(hub.limits.clone(), limits::every_request))
         // Any web page may call the Hub, as the app does: everything that
@@ -2045,6 +2046,14 @@ impl HubClient {
     pub fn presence(&self, update: &PresenceUpdate) -> Result<(), String> {
         self.agent
             .post(format!("{}/presence", self.base))
+            .send_json(update)
+            .map(|_| ())
+            .map_err(|e| format!("the Hub did not take your status: {e}"))
+    }
+
+    pub fn web_presence(&self, update: &WebPresence) -> Result<(), String> {
+        self.agent
+            .post(format!("{}/presence/web", self.base))
             .send_json(update)
             .map(|_| ())
             .map_err(|e| format!("the Hub did not take your status: {e}"))

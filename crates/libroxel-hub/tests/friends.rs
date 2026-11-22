@@ -2,8 +2,8 @@
 
 use libroxel_hub::{
     AccountUpdate, FriendAction, FriendChange, FriendState, Heartbeat, HostKind, HubClient, PresenceUpdate,
-    account_message, friend_message, friends_list_message, new_secret, player_id_of, presence_message, sign,
-    start,
+    WebPresence, account_message, friend_message, friends_list_message, new_secret, player_id_of,
+    presence_message, sign, start, web_presence_message,
 };
 
 struct Player {
@@ -133,6 +133,16 @@ fn friends_ask_accept_see_each_other_and_join() {
     let friend = &alice.friends(&hub).friends[0];
     assert!(!friend.online && friend.server.is_none() && friend.game.is_none());
     assert!(friend.last_online_secs_ago.is_some());
+
+    let time = ana.tick();
+    hub.web_presence(&WebPresence {
+        player_id: ana.id.clone(),
+        time,
+        signature: sign(&ana.key, &web_presence_message(&ana.id, time)),
+    })
+    .unwrap();
+    let friend = &alice.friends(&hub).friends[0];
+    assert!(friend.online && friend.game.is_none() && friend.server.is_none());
 
     // Only Alice can read Alice's list.
     let time = ana.tick();
