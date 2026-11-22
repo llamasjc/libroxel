@@ -5,10 +5,20 @@ local me = Players.LocalPlayer
 local mouse = me:GetMouse()
 local aim = ReplicatedStorage:WaitForChild("Aim")
 local sent = nil
+local RANGED = { "Blaster", "Scattergun", "Longshot" }
+
+local function holding(character)
+	for _, name in RANGED do
+		if character:FindFirstChild(name) then
+			return true
+		end
+	end
+	return false
+end
 
 local function send()
 	local character = me.Character
-	if not character or not character:FindFirstChild("Blaster") then
+	if not character or not holding(character) then
 		return
 	end
 	local at = mouse.Hit.Position

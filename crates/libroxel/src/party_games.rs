@@ -1,4 +1,4 @@
-//! Party games: Tag, Hide and seek and a small battle royale. Each is a
+//! Party games: Tag, Hide and seek and a battle royale. Each is a
 //! map built here and scripts written the way any creator writes them:
 //! a shared `Arena` module and the game's own script in
 //! ServerScriptService, and a `Hud` local script that builds its GUI in
@@ -355,8 +355,9 @@ fn weapon(tree: &mut InstanceTree, parent: InstanceId, name: &str, size: [f32; 3
     material(tree, handle, if neon { Material::Neon } else { Material::Metal });
 }
 
-/// A small battle royale on an island: cover, houses and crates, a lobby
-/// floating off the shore, and the storm ring that closes in.
+/// A battle royale on an island: cover, trees to chop, chests, a lobby
+/// floating off the shore, the airship everyone drops from, and the storm
+/// ring that closes in.
 pub fn battle_royale() -> InstanceTree {
     let mut tree = InstanceTree::new();
     let ws = tree.workspace();
@@ -429,11 +430,21 @@ pub fn battle_royale() -> InstanceTree {
         (-40.0, 0.0),
         (35.0, 55.0),
         (-15.0, -60.0),
+        (-60.0, -35.0),
+        (-75.0, -85.0),
+        (20.0, 70.0),
+        (85.0, 35.0),
+        (105.0, -60.0),
+        (-30.0, 105.0),
+        (55.0, -40.0),
+        (-105.0, -30.0),
+        (10.0, -80.0),
+        (-50.0, 55.0),
     ] {
         tree_at(&mut tree, island, x, z, 8.0);
     }
 
-    // Crates: walk into one to open it.
+    // Chests: walk into one to open it.
     let loot = add(&mut tree, ws, ClassKind::Folder, "Loot");
     for (x, z) in [
         (-70.0, 40.0),
@@ -453,15 +464,9 @@ pub fn battle_royale() -> InstanceTree {
         (-45.0, -95.0),
         (100.0, 40.0),
     ] {
-        let crate_part = block(&mut tree, loot, "Crate", [x, 1.25, z], [2.5, 2.5, 2.5], [245, 190, 60]);
-        material(&mut tree, crate_part, Material::Neon);
-        set(&mut tree, crate_part, Property::CanCollide, PropertyValue::Bool(false));
-    }
-    let drops = add(&mut tree, ws, ClassKind::Folder, "Drops");
-    for (i, angle) in (0..12).map(|i| i as f32 * 30.0).enumerate() {
-        let r = if i % 2 == 0 { 85.0 } else { 55.0 };
-        let (x, z) = (angle.to_radians().cos() * r, angle.to_radians().sin() * r);
-        marker(&mut tree, drops, &format!("Drop{}", i + 1), [x, 0.5, z]);
+        let chest = block(&mut tree, loot, "Chest", [x, 1.0, z], [3.0, 2.0, 2.0], [245, 190, 60]);
+        material(&mut tree, chest, Material::Neon);
+        set(&mut tree, chest, Property::CanCollide, PropertyValue::Bool(false));
     }
 
     // The storm ring: a see-through cylinder the script resizes.
@@ -472,6 +477,27 @@ pub fn battle_royale() -> InstanceTree {
     set(&mut tree, storm, Property::Transparency, PropertyValue::Number(0.75));
     set(&mut tree, storm, Property::CastShadow, PropertyValue::Bool(false));
     material(&mut tree, storm, Material::ForceField);
+    let next = block(&mut tree, ws, "NextRing", [0.0, 0.2, 0.0], [0.3, 1.0, 1.0], [255, 255, 255]);
+    shape(&mut tree, next, PartShape::Cylinder);
+    orient(&mut tree, next, [0.0, 0.0, 90.0]);
+    set(&mut tree, next, Property::CanCollide, PropertyValue::Bool(false));
+    set(&mut tree, next, Property::Transparency, PropertyValue::Number(1.0));
+    set(&mut tree, next, Property::CastShadow, PropertyValue::Bool(false));
+    material(&mut tree, next, Material::Neon);
+
+    let airship = add(&mut tree, ws, ClassKind::Folder, "Airship");
+    let hull = block(&mut tree, airship, "Hull", [0.0, 110.0, 260.0], [10.0, 3.0, 28.0], [150, 100, 60]);
+    material(&mut tree, hull, Material::WoodPlanks);
+    let balloon =
+        block(&mut tree, airship, "Balloon", [0.0, 126.0, 260.0], [16.0, 16.0, 34.0], [235, 90, 70]);
+    shape(&mut tree, balloon, PartShape::Ball);
+    set(&mut tree, balloon, Property::CanCollide, PropertyValue::Bool(false));
+    for x in [-4.5f32, 4.5] {
+        let rope = block(&mut tree, airship, "Rope", [x, 115.0, 260.0], [0.3, 7.0, 0.3], [90, 70, 50]);
+        set(&mut tree, rope, Property::CanCollide, PropertyValue::Bool(false));
+    }
+    let fin = block(&mut tree, airship, "Fin", [0.0, 113.0, 274.0], [0.6, 6.0, 4.0], [250, 200, 60]);
+    set(&mut tree, fin, Property::CanCollide, PropertyValue::Bool(false));
 
     // The lobby, on a platform out at sea.
     let lobby = add(&mut tree, ws, ClassKind::Folder, "Lobby");
@@ -492,10 +518,17 @@ pub fn battle_royale() -> InstanceTree {
     let storage = tree.service(ClassKind::ServerStorage).expect("every tree has ServerStorage");
     weapon(&mut tree, storage, "Sword", [0.4, 4.0, 0.4], [200, 210, 225], false);
     weapon(&mut tree, storage, "Blaster", [0.6, 0.9, 2.2], [90, 230, 255], true);
+    weapon(&mut tree, storage, "Scattergun", [0.8, 0.9, 1.8], [90, 230, 255], true);
+    weapon(&mut tree, storage, "Longshot", [0.4, 0.6, 3.4], [90, 230, 255], true);
+    let glider = block(&mut tree, storage, "Glider", [0.0, 0.0, 0.0], [7.0, 0.3, 3.0], [70, 160, 245]);
+    set(&mut tree, glider, Property::Anchored, PropertyValue::Bool(false));
+    set(&mut tree, glider, Property::CanCollide, PropertyValue::Bool(false));
+    set(&mut tree, glider, Property::Massless, PropertyValue::Bool(true));
     scripts(&mut tree, "BattleRoyale", include_str!("party_games/BattleRoyale.luau"));
     let starter =
         tree.starter_scripts(ClassKind::StarterPlayerScripts).expect("every tree has StarterPlayerScripts");
     code(&mut tree, starter, ClassKind::LocalScript, "Aim", include_str!("party_games/Aim.luau"));
+    code(&mut tree, starter, ClassKind::LocalScript, "Royale", include_str!("party_games/Royale.luau"));
     tree.drain_changes();
     tree
 }
@@ -659,105 +692,288 @@ mod tests {
         }
     }
 
-    #[test]
-    fn battle_royale_hands_out_swords_and_the_storm_closes() {
-        let mut session = start_on(battle_royale(), true).unwrap();
-        seconds(&mut session, 12.0);
-        assert_eq!(value(&session, "workspace.Player1:GetAttribute('Role')"), "Fighter");
-        assert_eq!(value(&session, "game.Players.Player1.Backpack:FindFirstChild('Sword') ~= nil"), "true");
-        assert_eq!(value(&session, "#workspace.Bots:GetChildren()"), "7");
-        // Leave one bot, standing still out of the way.
-        let bot = "workspace.Bots:GetChildren()[1]";
+    fn press(session: &mut PlaySession, key: libroxel_instance::KeyCode) {
+        session.input_began(libroxel_script::UserInput::Key(key), false);
+        seconds(session, 0.1);
+        session.input_ended(libroxel_script::UserInput::Key(key), false);
+    }
+
+    fn click(session: &mut PlaySession, times: usize, gap: f32) {
+        for _ in 0..times {
+            session.input_began(libroxel_script::UserInput::MouseButton1, false);
+            seconds(session, 0.1);
+            session.input_ended(libroxel_script::UserInput::MouseButton1, false);
+            seconds(session, gap);
+        }
+    }
+
+    fn number(session: &PlaySession, script: &str) -> f32 {
+        value(session, script).parse().unwrap_or_else(|_| panic!("{script}: {}", value(session, script)))
+    }
+
+    fn role_of(session: &PlaySession) -> String {
+        value(session, "workspace.Player1:GetAttribute('Role')")
+    }
+
+    /// Starts a battle royale, jumps out of the airship and glides down.
+    fn landed() -> PlaySession {
+        let mut session = start(battle_royale());
+        seconds(&mut session, 11.0);
+        assert_eq!(role_of(&session), "Riding");
+        press(&mut session, libroxel_instance::KeyCode::E);
+        for _ in 0..200 {
+            if role_of(&session) == "Fighter" {
+                break;
+            }
+            seconds(&mut session, 0.1);
+        }
+        assert_eq!(role_of(&session), "Fighter");
+        session
+    }
+
+    /// Leaves one bot, once it has landed, standing still where `at` says.
+    fn one_bot(session: &mut PlaySession, at: &str) {
+        session
+            .runtime()
+            .run("one bot", "for i, b in workspace.Bots:GetChildren() do if i > 1 then b:Destroy() end end")
+            .unwrap();
+        for _ in 0..400 {
+            if value(session, &format!("{BOT}:GetAttribute('Role')")) == "Fighter" {
+                break;
+            }
+            seconds(session, 0.1);
+        }
+        assert_eq!(value(session, &format!("{BOT}:GetAttribute('Role')")), "Fighter");
         session
             .runtime()
             .run(
-                "one bot",
+                "stand",
                 &format!(
-                    "for i, b in workspace.Bots:GetChildren() do if i > 1 then b:Destroy() end end
-                    {bot}.Humanoid.WalkSpeed = 0
-                    {bot}:PivotTo(CFrame.new(-60, 3, -60))
-                    workspace.Player1:PivotTo(CFrame.new(-60, 3, 60))"
+                    "workspace.Builds:ClearAllChildren() {BOT}.Humanoid.WalkSpeed = 0 {BOT}:PivotTo({at})"
                 ),
             )
             .unwrap();
-        let size = |s: &PlaySession| value(s, "workspace.Storm.Size.Z").parse::<f32>().unwrap();
+    }
+
+    const BOT: &str = "workspace.Bots:GetChildren()[1]";
+
+    #[test]
+    fn battle_royale_drops_everyone_from_the_airship() {
+        let mut session = start(battle_royale());
+        seconds(&mut session, 11.0);
+        assert_eq!(value(&session, "#workspace.Bots:GetChildren()"), "7");
+        assert_eq!(role_of(&session), "Riding");
+        assert!(number(&session, "workspace.Player1.HumanoidRootPart.Position.Y") > 100.0);
+        assert_eq!(value(&session, "game.Players.Player1.PlayerGui.Royale.Jump.Visible"), "true");
+        assert_eq!(value(&session, "game.Players.Player1.Backpack:FindFirstChild('Sword') ~= nil"), "true");
+        let ship = |s: &PlaySession| value(s, "workspace.Airship.Hull.Position");
+        let before = ship(&session);
+        seconds(&mut session, 1.0);
+        assert_ne!(ship(&session), before, "the airship flies");
+
+        press(&mut session, libroxel_instance::KeyCode::E);
+        seconds(&mut session, 1.0);
+        assert_eq!(role_of(&session), "Gliding");
+        assert_eq!(value(&session, "workspace.Player1:FindFirstChild('Glider') ~= nil"), "true");
+        let fall = number(&session, "workspace.Player1.HumanoidRootPart.AssemblyLinearVelocity.Y");
+        assert!(fall > -30.0, "gliding, not falling: {fall}");
+        for _ in 0..100 {
+            if role_of(&session) == "Fighter" {
+                break;
+            }
+            seconds(&mut session, 0.1);
+        }
+        assert_eq!(role_of(&session), "Fighter");
+        assert_eq!(value(&session, "workspace.Player1:FindFirstChild('Glider') == nil"), "true");
+        assert_eq!(value(&session, "game.Players.Player1.PlayerGui.Royale.Bars.Visible"), "true");
+        seconds(&mut session, 25.0);
+        let up = "(function() local n = 0 for _, m in workspace.Bots:GetChildren() do
+            local r = m:GetAttribute('Role') if r == 'Riding' or r == 'Gliding' then n += 1 end end return n end)()";
+        assert_eq!(value(&session, up), "0");
+        let errs = errors(&mut session);
+        assert!(errs.is_empty(), "{errs:?}");
+    }
+
+    #[test]
+    fn battle_royale_storm_closes_and_the_last_one_wins() {
+        let mut session = landed();
+        one_bot(&mut session, "CFrame.new(-60, 3, -60)");
+        session.runtime().run("me", "workspace.Player1:PivotTo(CFrame.new(-60, 3, 60))").unwrap();
+        let size = |s: &PlaySession| number(s, "workspace.Storm.Size.Z");
         let before = size(&session);
-        seconds(&mut session, 30.0);
+        assert!(number(&session, "workspace.NextRing.Transparency") < 1.0, "the next ring shows");
+        seconds(&mut session, 55.0);
         assert!(size(&session) < before, "the storm shrank: {before} -> {}", size(&session));
-        // Past the truce, a sword swing at a bot in front of you hurts it.
         session.toggle_tool(0);
         seconds(&mut session, 0.5);
-        assert_eq!(value(&session, "workspace.Player1:FindFirstChild('Sword') ~= nil"), "true");
         session
             .runtime()
             .run(
                 "line up",
                 &format!(
                     "local me = workspace.Player1.HumanoidRootPart
-                    {bot}:PivotTo(CFrame.new(me.Position + me.CFrame.LookVector * 3))"
+                    {BOT}:PivotTo(CFrame.new(me.Position + me.CFrame.LookVector * 3))"
                 ),
             )
             .unwrap();
-        let health = |s: &PlaySession| value(s, &format!("{bot}.Humanoid.Health")).parse::<f32>().unwrap();
+        let health = |s: &PlaySession| {
+            number(s, &format!("{BOT}.Humanoid.Health + ({BOT}:GetAttribute('Shield') or 0)"))
+        };
         let before = health(&session);
-        session.input_began(libroxel_script::UserInput::MouseButton1, false);
-        seconds(&mut session, 0.2);
-        session.input_ended(libroxel_script::UserInput::MouseButton1, false);
+        click(&mut session, 1, 0.1);
         assert!(health(&session) < before, "the sword hit: {before} -> {}", health(&session));
-        // Two left: hit it till it's out and you win.
-        for _ in 0..10 {
-            session.input_began(libroxel_script::UserInput::MouseButton1, false);
-            seconds(&mut session, 0.5);
-            session.input_ended(libroxel_script::UserInput::MouseButton1, false);
+        for _ in 0..60 {
+            if role_of(&session) == "Winner" {
+                break;
+            }
+            click(&mut session, 1, 0.4);
         }
         seconds(&mut session, 1.0);
-        assert_eq!(value(&session, "workspace.Player1:GetAttribute('Role')"), "Winner");
+        assert_eq!(role_of(&session), "Winner");
         assert_eq!(value(&session, "game.Players.Player1.leaderstats.Wins.Value"), "1");
-        assert!(errors(&mut session).is_empty(), "{:?}", errors(&mut session));
+        assert_eq!(value(&session, "game.Players.Player1.PlayerGui.Royale.Result.Visible"), "true");
+        assert_eq!(value(&session, "game.Players.Player1.PlayerGui.Royale.Result.Place.Text"), "#1");
+        let errs = errors(&mut session);
+        assert!(errs.is_empty(), "{errs:?}");
+    }
+
+    #[test]
+    fn battle_royale_chests_give_tiered_weapons_and_shields_soak_damage() {
+        let mut session = landed();
+        one_bot(&mut session, "CFrame.new(-60, 3, -60)");
+        let ranged = "(function() for _, n in {'Blaster', 'Scattergun', 'Longshot'} do
+            local t = game.Players.Player1.Backpack:FindFirstChild(n) if t then return t:GetAttribute('Tier') end end end)()";
+        let shield = |s: &PlaySession| number(s, "game.Players.Player1:GetAttribute('Shield') or 0");
+        for i in 1..=16 {
+            if value(&session, ranged) != "nil" && shield(&session) > 0.0 {
+                break;
+            }
+            session
+                .runtime()
+                .run(
+                    "chest",
+                    &format!(
+                        "local c = workspace.Loot:GetChildren()[{i}]
+                        workspace.Player1:PivotTo(CFrame.new(c.Position + Vector3.new(0, 3, 0)))"
+                    ),
+                )
+                .unwrap();
+            seconds(&mut session, 0.3);
+        }
+        let tier: u32 = value(&session, ranged).parse().unwrap();
+        assert!((1..=5).contains(&tier));
+        assert!(number(&session, "game.Players.Player1:GetAttribute('Wood')") >= 30.0);
+        assert!(shield(&session) > 0.0);
+        let before = shield(&session);
+        session.runtime().run("full", "workspace.Player1.Humanoid.Health = 100").unwrap();
+        session
+            .runtime()
+            .run(
+                "bot attacks",
+                &format!(
+                    "workspace.Builds:ClearAllChildren()
+                    workspace.Player1:PivotTo(CFrame.new(-20, 3, -20))
+                    {BOT}:PivotTo(CFrame.new(-20, 3, -17))"
+                ),
+            )
+            .unwrap();
+        for _ in 0..80 {
+            if shield(&session) < before {
+                break;
+            }
+            seconds(&mut session, 0.1);
+        }
+        assert!(shield(&session) < before, "the shield took the hit: {before} -> {}", shield(&session));
+        assert_eq!(number(&session, "workspace.Player1.Humanoid.Health"), 100.0);
+        let errs = errors(&mut session);
+        assert!(errs.is_empty(), "{errs:?}");
+    }
+
+    #[test]
+    fn battle_royale_chop_wood_and_build() {
+        let mut session = landed();
+        one_bot(&mut session, "CFrame.new(-60, 3, -60)");
+        let wood = |s: &PlaySession| number(s, "game.Players.Player1:GetAttribute('Wood')");
+        session
+            .runtime()
+            .run(
+                "by a tree",
+                "local trunk = workspace.Island.Trunk
+                local at = trunk.Position * Vector3.new(1, 0, 1) + Vector3.new(0, 3, 4)
+                workspace.Player1:PivotTo(CFrame.lookAt(at, Vector3.new(trunk.Position.X, 3, trunk.Position.Z)))",
+            )
+            .unwrap();
+        session.toggle_tool(0);
+        seconds(&mut session, 0.3);
+        let start = wood(&session);
+        click(&mut session, 3, 0.4);
+        assert_eq!(wood(&session), start + 30.0);
+
+        session
+            .runtime()
+            .run("open ground", "workspace.Player1:PivotTo(CFrame.lookAt(Vector3.new(-20, 3, -20), Vector3.new(-20, 3, -40)))")
+            .unwrap();
+        seconds(&mut session, 0.3);
+        press(&mut session, libroxel_instance::KeyCode::Z);
+        seconds(&mut session, 0.2);
+        assert_eq!(value(&session, "workspace.Builds:FindFirstChild('Wall') ~= nil"), "true");
+        assert_eq!(wood(&session), start + 20.0);
+        press(&mut session, libroxel_instance::KeyCode::C);
+        seconds(&mut session, 0.2);
+        assert_eq!(value(&session, "workspace.Builds:FindFirstChild('Ramp') ~= nil"), "true");
+        assert_eq!(wood(&session), start + 10.0);
+        press(&mut session, libroxel_instance::KeyCode::Z);
+        seconds(&mut session, 0.2);
+        assert_eq!(
+            value(&session, "#workspace.Builds:GetChildren()"),
+            "2",
+            "the same wall twice is one wall"
+        );
+
+        click(&mut session, 3, 0.4);
+        seconds(&mut session, 0.2);
+        assert_eq!(
+            value(&session, "workspace.Builds:FindFirstChild('Wall') == nil"),
+            "true",
+            "the sword broke the wall"
+        );
+        let errs = errors(&mut session);
+        assert!(errs.is_empty(), "{errs:?}");
     }
 
     #[test]
     fn battle_royale_blaster_fires_where_you_aim() {
-        let mut session = start_on(battle_royale(), true).unwrap();
-        seconds(&mut session, 12.0);
-        let bot = "workspace.Bots:GetChildren()[1]";
-        session
-            .runtime()
-            .run(
-                "one bot",
-                &format!(
-                    "for i, b in workspace.Bots:GetChildren() do if i > 1 then b:Destroy() end end
-                    {bot}.Humanoid.WalkSpeed = 0
-                    {bot}:PivotTo(CFrame.new(-60, 3, -60))"
-                ),
-            )
-            .unwrap();
+        let mut session = landed();
+        one_bot(&mut session, "CFrame.new(-60, 3, -60)");
         let has = "game.Players.Player1.Backpack:FindFirstChild('Blaster') ~= nil";
-        for i in 1..=40 {
+        for round in 0..20 {
             if value(&session, has) == "true" {
                 break;
             }
             session
                 .runtime()
                 .run(
-                    "crate",
+                    "chest",
                     &format!(
-                        "local c = workspace.Loot:GetChildren()[{i}]
-                        if c then workspace.Player1:PivotTo(CFrame.new(c.Position + Vector3.new(0, 3, 0))) end"
+                        "for _, c in workspace.Loot:GetChildren() do c:SetAttribute('Open', false) end
+                        local c = workspace.Loot:GetChildren()[{}]
+                        workspace.Player1:PivotTo(CFrame.new(c.Position + Vector3.new(0, 3, 0)))",
+                        round % 16 + 1
                     ),
                 )
                 .unwrap();
             seconds(&mut session, 0.3);
         }
         assert_eq!(value(&session, has), "true");
-        seconds(&mut session, 15.0);
         session
             .runtime()
             .run(
                 "behind",
                 &format!(
-                    "workspace.Player1:PivotTo(CFrame.new(0, 3, 0))
-                    {bot}:PivotTo(CFrame.new(0, 3, 25))"
+                    "for _, t in game.Players.Player1.Backpack:GetChildren() do if t.Name ~= 'Sword' and t.Name ~= 'Blaster' then t:Destroy() end end
+                    workspace.Builds:ClearAllChildren()
+                    workspace.Player1:PivotTo(CFrame.new(0, 3, 0))
+                    {BOT}:PivotTo(CFrame.new(0, 3, 25))"
                 ),
             )
             .unwrap();
@@ -765,7 +981,7 @@ mod tests {
         session.toggle_tool(1);
         seconds(&mut session, 0.3);
         assert_eq!(value(&session, "workspace.Player1:FindFirstChild('Blaster') ~= nil"), "true");
-        let at = value(&session, &format!("{bot}.HumanoidRootPart.Position"));
+        let at = value(&session, &format!("{BOT}.HumanoidRootPart.Position"));
         let at: Vec<f32> = at.split(',').map(|v| v.trim().parse().unwrap()).collect();
         session.set_mouse(Some(libroxel_script::MouseRay {
             origin: Vec3::new(at[0], at[1] + 20.0, at[2]),
@@ -774,13 +990,13 @@ mod tests {
             y: 0.0,
         }));
         seconds(&mut session, 0.3);
-        let health = |s: &PlaySession| value(s, &format!("{bot}.Humanoid.Health")).parse::<f32>().unwrap();
+        let health = |s: &PlaySession| {
+            number(s, &format!("{BOT}.Humanoid.Health + ({BOT}:GetAttribute('Shield') or 0)"))
+        };
         let before = health(&session);
-        session.input_began(libroxel_script::UserInput::MouseButton1, false);
-        seconds(&mut session, 0.2);
-        session.input_ended(libroxel_script::UserInput::MouseButton1, false);
-        seconds(&mut session, 0.2);
+        click(&mut session, 1, 0.2);
         assert!(health(&session) < before, "the blast hit: {before} -> {}", health(&session));
-        assert!(errors(&mut session).is_empty(), "{:?}", errors(&mut session));
+        let errs = errors(&mut session);
+        assert!(errs.is_empty(), "{errs:?}");
     }
 }
