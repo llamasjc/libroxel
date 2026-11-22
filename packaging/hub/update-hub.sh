@@ -87,6 +87,7 @@ install_hub() {
     done
     if [ "$healthy" = yes ]; then
         echo "$version" > "$state/release"
+        if [ -n "${commit:-}" ]; then echo "$commit" > "$state/commit"; else rm -f "$state/commit"; fi
         log "the Hub is on $version"
     else
         log "the Hub didn't start on $version; putting the old one back"

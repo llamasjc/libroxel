@@ -371,14 +371,18 @@ async function refresh() {
     if (e.status === 404) return [];
     throw e;
   });
-  try {
-    const [official, games, servers] = await Promise.all([list('/official'), list('/games'), list('/servers')]);
-    data.official = official;
-    data.games = games;
-    data.servers = servers;
-    data.error = null;
-  } catch (e) {
-    data.error = e.message;
+  for (let tries = 2; tries > 0; tries--) {
+    try {
+      const [official, games, servers] = await Promise.all([list('/official'), list('/games'), list('/servers')]);
+      data.official = official;
+      data.games = games;
+      data.servers = servers;
+      data.error = null;
+      break;
+    } catch (e) {
+      if (tries > 1) await new Promise((done) => setTimeout(done, 3000));
+      else data.error = e.message;
+    }
   }
   if (session) {
     try {

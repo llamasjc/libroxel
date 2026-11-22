@@ -88,9 +88,11 @@ the Hub's `hub.caddy` and leaves the rest alone.
    `/etc/caddy/sites/site.caddy` (with `www` sending people on to the domain
    itself), and reloads Caddy, which gets the HTTPS certificates by itself.
 
-From then on it **updates itself**: every 10 minutes a timer fetches `main`
-and, when it changed, puts the new site online with that version's own
-`setup-site.sh`. To update at once: `sudo libroxel-site-update --now`. The
+From then on it **updates itself**: every 10 minutes a timer puts online the
+same version the Hub on that server runs (its release, or its commit when it
+builds from `main`), with that version's own `setup-site.sh`, so the site never
+asks the Hub for something it doesn't have. Without a Hub there, it follows the
+latest release. To update at once: `sudo libroxel-site-update --now`. The
 settings are in `/etc/libroxel/site.conf`; run `setup-site.sh` again with new
 options to change them. `journalctl -u libroxel-site-update` shows what the
 updates did.
