@@ -21,6 +21,8 @@ pub const ASSET_PREFIX: &str = "asset://";
 pub struct OfficialGame {
     pub name: String,
     pub about: String,
+    #[serde(default)]
+    pub symbol: String,
     pub hash: String,
     pub size: u64,
 }
@@ -29,6 +31,8 @@ pub struct OfficialGame {
 pub struct StarterPlace {
     pub name: String,
     pub about: String,
+    #[serde(default)]
+    pub symbol: String,
     pub place: String,
 }
 
@@ -50,6 +54,7 @@ pub(crate) fn create_tables(db: &Connection) -> Result<(), String> {
         CREATE TABLE IF NOT EXISTS official (
             name        TEXT PRIMARY KEY,
             about       TEXT NOT NULL,
+            symbol      TEXT NOT NULL DEFAULT '',
             place       TEXT NOT NULL,
             hash        TEXT NOT NULL,
             position    INTEGER NOT NULL,
@@ -132,7 +137,7 @@ pub(crate) async fn list_official(State(db): State<Db>) -> Json<Vec<OfficialGame
 
 pub fn official(db: &Connection) -> Vec<OfficialGame> {
     let Ok(mut statement) =
-        db.prepare("SELECT name, about, hash, LENGTH(place) FROM official ORDER BY position, name")
+        db.prepare("SELECT name, about, hash, LENGTH(place), symbol FROM official ORDER BY position, name")
     else {
         return Vec::new();
     };
@@ -143,6 +148,7 @@ pub fn official(db: &Connection) -> Vec<OfficialGame> {
                 about: r.get(1)?,
                 hash: r.get(2)?,
                 size: r.get::<_, i64>(3)? as u64,
+                symbol: r.get(4)?,
             })
         })
         .map(|rows| rows.filter_map(Result::ok).collect())
@@ -166,11 +172,12 @@ pub fn set_official(db: &Connection, games: &[StarterPlace]) -> Result<(), Strin
     tx.execute("DELETE FROM official", []).map_err(fail)?;
     for (position, game) in games.iter().enumerate() {
         tx.execute(
-            "INSERT OR REPLACE INTO official (name, about, place, hash, position, updated)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT OR REPLACE INTO official (name, about, symbol, place, hash, position, updated)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 game.name,
                 game.about,
+                game.symbol,
                 game.place,
                 asset_hash(game.place.as_bytes()),
                 position as i64,

@@ -1052,36 +1052,6 @@ pub fn hidden_field(ui: &mut egui::Ui, text: &mut String, hint: &str, width: f32
     response
 }
 
-/// Shows `text` (a join code, or something with an IP in it) as dots
-/// until Show IP is pressed, with a Copy button that works either way.
-pub fn hidden_text(
-    ui: &mut egui::Ui,
-    id_salt: impl std::hash::Hash + std::fmt::Debug,
-    label: &str,
-    text: &str,
-) {
-    let id = ui.id().with(("hidden", id_salt));
-    let mut shown = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
-    ui.horizontal(|ui| {
-        ui.label(label);
-        if shown {
-            let short: String = text.chars().take(28).collect();
-            let more = if text.chars().count() > 28 { "…" } else { "" };
-            ui.label(RichText::new(format!("{short}{more}")).monospace());
-        } else {
-            ui.label(RichText::new("••••••••••••").monospace().color(MUTED));
-        }
-        let (word, tip) = if shown { ("Hide", "Hide it again") } else { ("Show IP", "Show it on screen") };
-        if ui.small_button(word).on_hover_text(tip).clicked() {
-            shown = !shown;
-        }
-        if ui.small_button(format!("{}  Copy", icon::COPY)).clicked() {
-            ui.ctx().copy_text(text.to_owned());
-        }
-    });
-    ui.data_mut(|d| d.insert_temp(id, shown));
-}
-
 /// A glossy little orb, for status lights and badges.
 pub fn orb(painter: &egui::Painter, centre: Pos2, radius: f32, colour: Color32) {
     radial(

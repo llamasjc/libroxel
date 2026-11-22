@@ -320,11 +320,12 @@ fn assets_are_kept_by_hash_and_handed_back() {
     let client = HubClient::new(&hub.url());
     let picture = b"\x89PNG not really a picture".to_vec();
     let hash = libroxel_hub::asset_hash(&picture);
-    assert_eq!(client.missing_assets(&[hash.clone()]).unwrap(), [hash.clone()]);
+    let hashes = [hash.clone()];
+    assert_eq!(client.missing_assets(&hashes).unwrap(), hashes);
     assert!(client.asset(&hash).is_err());
     assert_eq!(client.put_asset(&picture).unwrap(), hash);
     assert_eq!(client.put_asset(&picture).unwrap(), hash);
-    assert!(client.missing_assets(&[hash.clone()]).unwrap().is_empty());
+    assert!(client.missing_assets(&hashes).unwrap().is_empty());
     assert_eq!(client.asset(&hash).unwrap(), picture);
     let wrong = ureq::post(format!("{}/assets/{hash}", hub.url())).send(&b"something else"[..]);
     assert!(wrong.is_err());
@@ -338,6 +339,7 @@ fn official_games_come_from_the_hub() {
     let chess = libroxel_hub::StarterPlace {
         name: "Chess".into(),
         about: "Chess".into(),
+        symbol: String::new(),
         place: r#"{"format":"libroxel-place","children":[]}"#.into(),
     };
     libroxel_hub::set_official(&db, std::slice::from_ref(&chess)).unwrap();

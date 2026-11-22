@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use libroxel_engine::net::DEFAULT_PORT;
@@ -171,7 +171,12 @@ fn starters() -> Result<(), String> {
         .map(|game| {
             let place =
                 place::save(&(game.build)()).map_err(|e| format!("could not save {}: {e}", game.name))?;
-            Ok(libroxel_hub::StarterPlace { name: game.name.to_owned(), about: game.about.to_owned(), place })
+            Ok(libroxel_hub::StarterPlace {
+                name: game.name.to_owned(),
+                about: game.about.to_owned(),
+                symbol: game.symbol.to_owned(),
+                place,
+            })
         })
         .collect::<Result<Vec<_>, String>>()?;
     println!("{}", libroxel_instance::serde_json::to_string(&games).map_err(|e| e.to_string())?);
@@ -346,51 +351,4 @@ pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicB
     }
     say("Server stopped.".into());
     Ok(())
-}
-
-/// A server running inside the app, on a thread of its own.
-pub struct BackgroundServer {
-    pub game: String,
-    pub port: u16,
-    lines: Arc<Mutex<Vec<String>>>,
-    stop: Arc<AtomicBool>,
-    done: Arc<AtomicBool>,
-}
-
-impl BackgroundServer {
-    pub fn start(settings: ServerSettings) -> Self {
-        let lines = Arc::new(Mutex::new(Vec::new()));
-        let stop = Arc::new(AtomicBool::new(false));
-        let done = Arc::new(AtomicBool::new(false));
-        let (game, port) = (settings.game.clone(), settings.port);
-        let (l, s, d) = (lines.clone(), stop.clone(), done.clone());
-        std::thread::spawn(move || {
-            let mut say = |line: String| l.lock().unwrap_or_else(|e| e.into_inner()).push(line);
-            if let Err(e) = run(settings, &mut say, &s) {
-                say(format!("error: {e}"));
-            }
-            d.store(true, Ordering::Relaxed);
-        });
-        Self { game, port, lines, stop, done }
-    }
-
-    /// Everything the server has said so far.
-    pub fn lines(&self) -> Vec<String> {
-        self.lines.lock().unwrap_or_else(|e| e.into_inner()).clone()
-    }
-
-    /// Whether it has stopped (asked to, or because it failed).
-    pub fn finished(&self) -> bool {
-        self.done.load(Ordering::Relaxed)
-    }
-
-    pub fn stop(&self) {
-        self.stop.store(true, Ordering::Relaxed);
-    }
-}
-
-impl Drop for BackgroundServer {
-    fn drop(&mut self) {
-        self.stop();
-    }
 }
