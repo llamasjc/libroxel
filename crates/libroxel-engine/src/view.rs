@@ -216,6 +216,7 @@ pub enum EngineSet {
 impl Plugin for EnginePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PartEntities>()
+            .init_resource::<StepTime>()
             .init_resource::<PlayInput>()
             .init_resource::<InputCapture>()
             .configure_sets(Update, (EngineSet::Input, EngineSet::Simulate, EngineSet::Sync).chain())
@@ -224,12 +225,26 @@ impl Plugin for EnginePlugin {
     }
 }
 
-fn step_session(mut engine: NonSendMut<EngineState>, time: Res<Time>, input: Res<PlayInput>) {
+/// How long the last frame's game step (scripts and physics) took, in seconds.
+#[derive(Resource, Default)]
+pub struct StepTime(pub f32);
+
+fn step_session(
+    mut engine: NonSendMut<EngineState>,
+    time: Res<Time>,
+    input: Res<PlayInput>,
+    mut took: ResMut<StepTime>,
+) {
     let engine = &mut *engine;
-    let Some(session) = engine.session.as_mut() else { return };
+    let Some(session) = engine.session.as_mut() else {
+        took.0 = 0.0;
+        return;
+    };
     // Clamp long frames (a window drag, a breakpoint) so physics stays sane.
     let dt = time.delta_secs().min(0.1);
+    let began = std::time::Instant::now();
     session.step(dt, input.0);
+    took.0 = began.elapsed().as_secs_f32();
     engine.log.extend(session.take_log());
     engine.emits.extend(session.take_emits());
 }
@@ -901,12 +916,12 @@ fn setup_scene(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ima
     commands.spawn((
         Sun,
         DirectionalLight { illuminance: 9_000.0, shadow_maps_enabled: true, ..default() },
-        // Two shadow cascades instead of four: each one draws every part
+        // Three shadow cascades instead of four: each one draws every part
         // again, which a big map can't afford.
         bevy::light::CascadeShadowConfigBuilder {
-            num_cascades: 2,
-            first_cascade_far_bound: 40.0,
-            maximum_distance: 220.0,
+            num_cascades: 3,
+            first_cascade_far_bound: 50.0,
+            maximum_distance: 800.0,
             ..default()
         }
         .build(),
@@ -996,11 +1011,13 @@ impl GraphicsQuality {
 
 fn auto_quality(
     time: Res<Time>,
+    step: Res<StepTime>,
     mut quality: ResMut<GraphicsQuality>,
     mut cameras: Query<&mut Projection, With<CameraRig>>,
     mut sun: Query<&mut DirectionalLight, With<Sun>>,
 ) {
-    quality.frame(time.delta_secs());
+    // Slow scripts aren't helped by drawing less: only the rest counts.
+    quality.frame((time.delta_secs() - step.0).max(0.0));
     if quality.applied == Some(quality.level) {
         return;
     }
