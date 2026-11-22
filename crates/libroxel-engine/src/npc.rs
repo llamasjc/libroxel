@@ -146,10 +146,9 @@ impl Npcs {
             let rig = crate::character::find_rig(tree, pose.model);
             if let Some((head, limbs)) = rig {
                 let moved = Vec3::new(new_pos.x - pose.pos.x, 0.0, new_pos.z - pose.pos.z).length();
-                let speed = if dt > 0.0 { moved / dt } else { 0.0 };
                 let stride = self.strides.entry(pose.humanoid).or_insert(0.0);
-                *stride = if speed > 0.5 { (*stride + moved * 0.55) % std::f32::consts::TAU } else { 0.0 };
-                let swing = crate::character::swing_for(speed, *stride);
+                *stride = crate::character::stride_after(*stride, moved, dt);
+                let swing = crate::character::swing_for(*stride);
                 crate::character::pose_rig(
                     tree,
                     pose.root,

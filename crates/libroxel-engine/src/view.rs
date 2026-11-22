@@ -547,7 +547,7 @@ impl Plugin for RenderPlugin {
             // drawn later this frame line up with where the camera is now.
             .add_systems(
                 Update,
-                (follow_camera, refresh_camera_global, hide_self_in_first_person)
+                (follow_camera, refresh_camera_global, hide_self_in_first_person, lock_cursor)
                     .chain()
                     .after(EngineSet::Sync),
             )
@@ -920,9 +920,10 @@ fn setup_scene(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ima
 struct Sun;
 
 /// How much the 3D view draws, like Roblox's automatic graphics quality:
-/// when frames come too slowly for a few seconds it steps down (smoothing
-/// edges off, then shadows off, then a shorter view distance), and steps
-/// back up once there is room again.
+/// when frames come too slowly for a few seconds it steps down (shadows
+/// off, then a shorter view distance), and steps back up once there is room
+/// again. Edge smoothing stays as it is: changing it makes every material's
+/// shaders build again, and the whole map vanishes for a few frames.
 #[derive(Resource, Debug)]
 pub struct GraphicsQuality {
     /// 3 is everything; 0 is the least.
@@ -982,14 +983,9 @@ impl GraphicsQuality {
         false
     }
 
-    /// Whether edges are smoothed (multisampling).
-    pub fn smooth_edges(&self) -> bool {
-        self.level >= 3
-    }
-
     /// Whether the sun casts shadows.
     pub fn shadows(&self) -> bool {
-        self.level >= 2
+        self.level >= 3
     }
 
     /// How far away parts are still drawn, in studs.
@@ -1001,7 +997,7 @@ impl GraphicsQuality {
 fn auto_quality(
     time: Res<Time>,
     mut quality: ResMut<GraphicsQuality>,
-    mut cameras: Query<(&mut Msaa, &mut Projection), With<CameraRig>>,
+    mut cameras: Query<&mut Projection, With<CameraRig>>,
     mut sun: Query<&mut DirectionalLight, With<Sun>>,
 ) {
     quality.frame(time.delta_secs());
@@ -1009,11 +1005,7 @@ fn auto_quality(
         return;
     }
     quality.applied = Some(quality.level);
-    for (mut msaa, mut projection) in &mut cameras {
-        let want = if quality.smooth_edges() { Msaa::Sample4 } else { Msaa::Off };
-        if *msaa != want {
-            *msaa = want;
-        }
+    for mut projection in &mut cameras {
         if let Projection::Perspective(p) = &mut *projection {
             p.far = quality.view_distance();
         }
@@ -1468,7 +1460,7 @@ fn camera_controls(
     mut touch: ResMut<crate::devices::VirtualInput>,
     mut rigs: Query<(&mut CameraRig, &mut Transform)>,
 ) {
-    let looking = mouse.pressed(MouseButton::Right) && !capture.pointer;
+    let held = mouse.pressed(MouseButton::Right) && !capture.pointer;
     let pad = crate::devices::read_pads(gamepads.iter());
     // Fingers dragging and the right stick look round too.
     let turn = pad.look * crate::devices::LOOK_SPEED * time.delta_secs() + touch.look * 0.006;
@@ -1483,6 +1475,8 @@ fn camera_controls(
         }
     };
     for (mut rig, mut transform) in &mut rigs {
+        // In first person the mouse looks round without a button held.
+        let looking = held || (first_person(&rig) && !capture.keyboard);
         if looking {
             rig.yaw -= motion.delta.x * 0.005;
             rig.pitch = (rig.pitch - motion.delta.y * 0.005).clamp(-1.4, 1.4);
@@ -1675,7 +1669,7 @@ fn play_input(
     engine: NonSend<EngineState>,
     capture: Res<InputCapture>,
     keys: Res<ButtonInput<KeyCode>>,
-    rigs: Query<&Transform, With<CameraRig>>,
+    rigs: Query<(&Transform, &CameraRig)>,
     gamepads: Query<&Gamepad>,
     touch: Res<crate::devices::VirtualInput>,
     mut input: ResMut<PlayInput>,
@@ -1687,19 +1681,21 @@ fn play_input(
     // A controller's left stick and the on-screen stick walk (and drive).
     let pad = crate::devices::read_pads(gamepads.iter());
     let stick = (pad.stick + touch.stick).clamp_length_max(1.0);
-    let look = rigs.iter().next().map(|t| t.forward().as_vec3()).unwrap_or(Vec3::NEG_Z);
+    let look = rigs.iter().next().map(|(t, _)| t.forward().as_vec3()).unwrap_or(Vec3::NEG_Z);
     let walk = crate::devices::walk_direction(stick, look);
+    // In first person the character faces where the camera looks.
+    let face = rigs.iter().find(|(_, rig)| first_person(rig)).map(|(_, rig)| rig.yaw.to_degrees());
     input.0 = CharacterInput {
         move_dir: libroxel_instance::Vec3::new(walk.x, 0.0, walk.z),
         jump: pad.jump || touch.jump,
         throttle: stick.y,
         steer: stick.x,
+        face,
     };
     if capture.keyboard {
         return;
     }
     // Relative to where the camera looks, flattened onto the ground.
-    let look = rigs.iter().next().map(|t| t.forward().as_vec3()).unwrap_or(Vec3::NEG_Z);
     let forward = Vec3::new(look.x, 0.0, look.z).try_normalize().unwrap_or(Vec3::NEG_Z);
     let right = Vec3::new(-forward.z, 0.0, forward.x);
     let mut dir = Vec3::ZERO;
@@ -1933,6 +1929,31 @@ fn hide_self_in_first_person(
         }
     }
     *hidden = wanted;
+}
+
+/// In first person the mouse pointer is hidden and held in the middle of
+/// the window, so moving the mouse only looks round.
+fn lock_cursor(
+    engine: NonSend<EngineState>,
+    capture: Res<InputCapture>,
+    rigs: Query<&CameraRig>,
+    mut windows: Query<(&mut Window, &mut bevy::window::CursorOptions), With<bevy::window::PrimaryWindow>>,
+) {
+    let lock = engine.is_playing() && !capture.keyboard && rigs.iter().any(first_person);
+    for (mut window, mut cursor) in &mut windows {
+        let mode =
+            if lock { bevy::window::CursorGrabMode::Locked } else { bevy::window::CursorGrabMode::None };
+        if cursor.grab_mode != mode {
+            cursor.grab_mode = mode;
+            cursor.visible = !lock;
+        }
+        if lock && window.focused {
+            let middle = Vec2::new(window.width(), window.height()) / 2.0;
+            if window.cursor_position().is_some_and(|at| at.distance(middle) > 1.0) {
+                window.set_cursor_position(Some(middle));
+            }
+        }
+    }
 }
 
 /// Links a light entity to the light instance it shows.
