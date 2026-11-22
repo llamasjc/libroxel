@@ -303,6 +303,10 @@ code { font-family: ui-monospace, "IBM Plex Mono", monospace; font-size: 13px; b
 footer { padding: 14px 36px 40px; color: var(--heading); font-size: 13px; text-shadow: 0 0 6px rgba(255, 255, 255, 0.9); }
 footer a { color: var(--heading); text-decoration: underline; }
 
+.privacy { max-width: 760px; }
+.privacy ul { padding-left: 22px; }
+.privacy li { margin: 6px 0; }
+
 /* --- Phones ----------------------------------------------------------------- */
 
 @media (max-width: 860px) {
