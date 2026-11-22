@@ -18,6 +18,9 @@ jobs:
   build:
     name: Build (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    permissions:
+      actions: read
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -30,7 +33,7 @@ jobs:
             target: x86_64-pc-windows-msvc
     env:
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
-      SIGN: ${{ github.ref_type == 'tag' && secrets.AZURE_CLIENT_ID != '' }}
+      SIGN: ${{ github.ref_type == 'tag' && secrets.SIGNPATH_API_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -64,21 +67,6 @@ jobs:
         shell: bash
         run: |
           cargo build --locked --profile dist -p libroxel --target ${{ matrix.target }}
-
-      - name: Sign libroxel.exe
-        if: runner.os == 'Windows' && env.SIGN == 'true'
-        uses: azure/artifact-signing-action@v2
-        with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
-          files: ${{ github.workspace }}\target\${{ matrix.target }}\dist\libroxel.exe
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
 
       - name: Build AppImage and .deb
         if: runner.os == 'Linux'
@@ -138,20 +126,32 @@ jobs:
           iscc "/DVersion=$VERSION" "/DNumericVersion=$numeric" "/DSource=$(cygpath -w "$PWD/$src")" "/DOutput=$name" "/O$(cygpath -w "$PWD")" "$(cygpath -w packaging/windows/libroxel.iss)"
           echo "ASSET=$name.exe" >> "$GITHUB_ENV"
 
+      - name: Upload unsigned installer
+        id: unsigned
+        if: runner.os == 'Windows' && env.SIGN == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-${{ matrix.name }}
+          path: ${{ env.ASSET }}
+          retention-days: 1
+
       - name: Sign installer
         if: runner.os == 'Windows' && env.SIGN == 'true'
-        uses: azure/artifact-signing-action@v2
+        uses: signpath/github-action-submit-signing-request@v3
         with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
-          files: ${{ github.workspace }}\${{ env.ASSET }}
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: libroxel
+          signing-policy-slug: release-signing
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 18000
+          output-artifact-directory: signed
+
+      - name: Use signed installer
+        if: runner.os == 'Windows' && env.SIGN == 'true'
+        shell: bash
+        run: mv -f "signed/$ASSET" "$ASSET"
 
       - uses: actions/upload-artifact@v4
         with:
