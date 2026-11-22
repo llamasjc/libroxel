@@ -61,7 +61,11 @@ impl Track {
 pub(crate) struct Tracks {
     tracks: Vec<Track>,
     next: u64,
+    /// How many script objects stand for each track.
+    held: Held,
 }
+
+type Held = std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u64, u32>>>;
 
 fn with_track<R>(lua: &Lua, id: u64, f: impl FnOnce(&mut Track, f64) -> R) -> mlua::Result<R> {
     let host = host(lua);
@@ -76,8 +80,27 @@ fn with_track<R>(lua: &Lua, id: u64, f: impl FnOnce(&mut Track, f64) -> R) -> ml
 }
 
 /// A track, as scripts see it.
-#[derive(Clone, Copy)]
-struct LuaTrack(u64);
+struct LuaTrack(u64, Held);
+
+impl LuaTrack {
+    fn new(id: u64, held: &Held) -> Self {
+        *held.borrow_mut().entry(id).or_default() += 1;
+        Self(id, held.clone())
+    }
+}
+
+impl Drop for LuaTrack {
+    fn drop(&mut self) {
+        if let Ok(mut held) = self.1.try_borrow_mut()
+            && let Some(n) = held.get_mut(&self.0)
+        {
+            *n -= 1;
+            if *n == 0 {
+                held.remove(&self.0);
+            }
+        }
+    }
+}
 
 impl UserData for LuaTrack {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
@@ -306,21 +329,21 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
             fade_from: now,
             stopping: false,
         });
-        Ok(LuaTrack(id))
+        Ok(LuaTrack::new(id, &tracks.held))
     })?;
     lua.set_named_registry_value(LOAD_KEY, load)?;
     let playing = lua.create_function(|lua, this: Value| {
         let this = as_instance(&this).ok_or_else(|| runtime_err("call it with a colon"))?;
         let humanoid = humanoid_of(lua, this)?;
-        let ids: Vec<u64> = host(lua)
-            .animations
-            .borrow()
+        let host = host(lua);
+        let tracks = host.animations.borrow();
+        let ids: Vec<u64> = tracks
             .tracks
             .iter()
             .filter(|t| t.humanoid == humanoid && t.playing && !t.stopping)
             .map(|t| t.id)
             .collect();
-        Ok(ids.into_iter().map(LuaTrack).collect::<Vec<_>>())
+        Ok(ids.into_iter().map(|id| LuaTrack::new(id, &tracks.held)).collect::<Vec<_>>())
     })?;
     lua.set_named_registry_value(PLAYING_KEY, playing)?;
     Ok(())
@@ -344,14 +367,24 @@ pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> m
 }
 
 /// Ends tracks that ran out, firing their `Stopped`, and forgets tracks
-/// whose humanoid is gone.
+/// whose humanoid is gone or that no script holds and aren't playing.
 pub(crate) fn step(lua: &Lua) {
+    let mut forgotten = Vec::new();
     let ended: Vec<u64> = {
         let host = host(lua);
         let now = host.clock.get();
         let tree = host.tree.borrow();
         let mut tracks = host.animations.borrow_mut();
-        tracks.tracks.retain(|t| tree.exists(t.humanoid) && !tree.is_destroyed(t.humanoid).unwrap_or(true));
+        let held = tracks.held.clone();
+        let held = held.borrow();
+        tracks.tracks.retain(|t| {
+            let keep = tree.is_destroyed(t.humanoid) == Ok(false)
+                && (t.playing || t.stopping || held.contains_key(&t.id));
+            if !keep {
+                forgotten.push(t.id);
+            }
+            keep
+        });
         let mut ended = Vec::new();
         for t in &mut tracks.tracks {
             if t.playing && !t.stopping && !t.looped && t.time(now) >= t.clip.length {
@@ -372,6 +405,18 @@ pub(crate) fn step(lua: &Lua) {
     };
     for id in ended {
         fire(lua, SignalKind::AnimationStopped(id), || Ok(MultiValue::new()));
+    }
+    if !forgotten.is_empty() {
+        if let Ok(Value::Table(all)) = lua.named_registry_value::<Value>(EXTRA_KEY) {
+            for id in &forgotten {
+                let _ = all.raw_set(*id, Value::Nil);
+            }
+        }
+        let forgotten: std::collections::HashSet<u64> = forgotten.into_iter().collect();
+        crate::bindings::disconnect_where(
+            lua,
+            |s| matches!(s, SignalKind::AnimationStopped(id) if forgotten.contains(&id)),
+        );
     }
 }
 

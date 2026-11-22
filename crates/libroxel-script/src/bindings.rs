@@ -100,6 +100,38 @@ impl SignalKind {
             _ => None,
         }
     }
+
+    /// The instance the signal belongs to, if any.
+    fn target(self) -> Option<InstanceId> {
+        match self {
+            SignalKind::Touched(id)
+            | SignalKind::CharacterAdded(id)
+            | SignalKind::Died(id)
+            | SignalKind::ButtonClicked(id)
+            | SignalKind::ButtonActivated(id)
+            | SignalKind::MouseClick(id)
+            | SignalKind::PromptTriggered(id)
+            | SignalKind::PromptTriggerEnded(id)
+            | SignalKind::ServerEvent(id)
+            | SignalKind::ClientEvent(id)
+            | SignalKind::BindableEvent(id)
+            | SignalKind::ToolEquipped(id)
+            | SignalKind::ToolUnequipped(id)
+            | SignalKind::ToolActivated(id)
+            | SignalKind::ToolDeactivated(id)
+            | SignalKind::TextBoxFocused(id)
+            | SignalKind::MoveToFinished(id)
+            | SignalKind::TextBoxFocusLost(id)
+            | SignalKind::ExplosionHit(id)
+            | SignalKind::TouchEnded(id)
+            | SignalKind::CharacterRemoving(id)
+            | SignalKind::Seated(id)
+            | SignalKind::MouseEnter(id)
+            | SignalKind::MouseLeave(id)
+            | SignalKind::SoundEnded(id) => Some(id),
+            _ => self.watched(),
+        }
+    }
 }
 
 struct Connection {
@@ -122,6 +154,8 @@ pub(crate) struct Connections {
     watched: std::collections::HashMap<InstanceId, usize>,
     /// How many connections each script instance made.
     owners: std::collections::HashMap<InstanceId, usize>,
+    /// How many connections each instance's signals have.
+    targets: std::collections::HashMap<InstanceId, usize>,
     tags: usize,
     tools: usize,
 }
@@ -141,6 +175,13 @@ impl Connections {
             bump(n);
             if *n == 0 {
                 self.watched.remove(&id);
+            }
+        }
+        if let Some(id) = signal.target() {
+            let n = self.targets.entry(id).or_default();
+            bump(n);
+            if *n == 0 {
+                self.targets.remove(&id);
             }
         }
         match signal {
@@ -312,6 +353,8 @@ pub(crate) struct Host {
     deadline: Rc<Cell<Option<Instant>>>,
     watchdog: std::sync::Arc<Watchdog>,
     tweens: RefCell<Vec<TweenState>>,
+    /// Tweens whose script object was collected.
+    tween_drops: Rc<RefCell<Vec<u64>>>,
     next_tween: Cell<u64>,
     /// Keys and mouse buttons held down right now.
     pub(crate) inputs_down: RefCell<std::collections::HashSet<crate::UserInput>>,
@@ -1644,6 +1687,8 @@ struct TweenState {
     goals: Vec<(TweenTarget, Option<TweenValue>, TweenValue)>,
     elapsed: f64,
     phase: TweenPhase,
+    /// No script holds it any more: it goes once it isn't playing.
+    orphan: bool,
 }
 
 struct TweenService;
@@ -1740,11 +1785,55 @@ fn create_tween(lua: &Lua, target: Value, info: Value, goals: Table) -> mlua::Re
         goals: list,
         elapsed: 0.0,
         phase: TweenPhase::Idle,
+        orphan: false,
     });
-    Ok(LuaTween(tween))
+    Ok(LuaTween(tween, host.tween_drops.clone()))
 }
 
-struct LuaTween(u64);
+struct LuaTween(u64, Rc<RefCell<Vec<u64>>>);
+
+impl Drop for LuaTween {
+    fn drop(&mut self) {
+        if let Ok(mut drops) = self.1.try_borrow_mut() {
+            drops.push(self.0);
+        }
+    }
+}
+
+/// Lets go of tweens no script can reach: unheld ones that stopped, and
+/// ones whose instance was destroyed.
+fn forget_tweens(lua: &Lua) {
+    let gone: Vec<Connection> = {
+        let host = host(lua);
+        let drops = std::mem::take(&mut *host.tween_drops.borrow_mut());
+        let mut tweens = host.tweens.borrow_mut();
+        if !drops.is_empty() {
+            let drops: std::collections::HashSet<u64> = drops.into_iter().collect();
+            for t in tweens.iter_mut().filter(|t| drops.contains(&t.id)) {
+                t.orphan = true;
+            }
+        }
+        let tree = host.tree.borrow();
+        let mut removed = std::collections::HashSet::new();
+        tweens.retain(|t| {
+            let keep =
+                !(t.orphan && t.phase != TweenPhase::Playing) && tree.is_destroyed(t.instance) == Ok(false);
+            if !keep {
+                removed.insert(t.id);
+            }
+            keep
+        });
+        if removed.is_empty() {
+            return;
+        }
+        host.connections
+            .borrow_mut()
+            .take_where(|c| matches!(c.signal, SignalKind::TweenCompleted(id) if removed.contains(&id)))
+    };
+    for conn in gone {
+        let _ = lua.remove_registry_value(conn.handler);
+    }
+}
 
 impl LuaTween {
     fn with<R>(&self, lua: &Lua, f: impl FnOnce(&mut TweenState) -> R) -> Option<R> {
@@ -1860,6 +1949,9 @@ fn step_tweens(lua: &Lua, dt: f64) {
     }
     for tween in finished {
         fire(lua, SignalKind::TweenCompleted(tween), || Ok(MultiValue::new()));
+    }
+    if !host(lua).tween_drops.borrow().is_empty() {
+        forget_tweens(lua);
     }
 }
 
@@ -2104,6 +2196,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         destroys_seen: Cell::new(None),
         part_index: RefCell::new(libroxel_instance::geometry::PartIndex::new()),
         tweens: RefCell::new(Vec::new()),
+        tween_drops: Rc::new(RefCell::new(Vec::new())),
         next_tween: Cell::new(1),
         inputs_down: RefCell::new(Default::default()),
         data: RefCell::new(Default::default()),
@@ -2626,6 +2719,11 @@ const PLAYING_SHARE: f32 = 0.2;
 const LOADING_SHARE: f32 = 0.6;
 
 pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
+    // The collector lets garbage pile up to about twice what is in use
+    // before it catches up: past half the limit, collect it all now.
+    if lua.used_memory() > crate::MEMORY_LIMIT / 2 {
+        let _ = lua.gc_collect();
+    }
     let now = {
         let host = host(lua);
         host.clock.set(host.clock.get() + dt);
@@ -2759,6 +2857,50 @@ pub(crate) fn fire_plain(lua: &Lua, signal: SignalKind) -> Vec<ScriptError> {
 
 /// Fires change events for everything in `changes` that a script is listening to.
 pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
+    let errors = fire_heard_changes(lua, changes);
+    forget_destroyed(lua, changes);
+    errors
+}
+
+/// Disconnects every connection to the signals `gone` picks.
+pub(crate) fn disconnect_where(lua: &Lua, gone: impl Fn(SignalKind) -> bool) {
+    let gone = host(lua).connections.borrow_mut().take_where(|c| gone(c.signal));
+    for conn in gone {
+        let _ = lua.remove_registry_value(conn.handler);
+    }
+}
+
+/// Like Roblox, a destroyed instance's events are disconnected (after its
+/// `Destroying` fired), and what scripts kept on it is let go.
+fn forget_destroyed(lua: &Lua, changes: &[Change]) {
+    let mut dead: Vec<InstanceId> = Vec::new();
+    for change in changes {
+        if let Change::Destroyed(id) = change {
+            dead.push(*id);
+        }
+    }
+    if dead.is_empty() {
+        return;
+    }
+    let gone: Vec<Connection> = {
+        let host = host(lua);
+        let mut connections = host.connections.borrow_mut();
+        let dead: std::collections::HashSet<InstanceId> =
+            dead.iter().copied().filter(|id| connections.targets.contains_key(id)).collect();
+        if dead.is_empty() {
+            Vec::new()
+        } else {
+            connections.take_where(|c| c.signal.target().is_some_and(|t| dead.contains(&t)))
+        }
+    };
+    for conn in gone {
+        let _ = lua.remove_registry_value(conn.handler);
+    }
+    forget_tweens(lua);
+    crate::lenient::forget(lua, &dead);
+}
+
+fn fire_heard_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
     let (any_watched, tags_heard, tools_heard) = {
         let host = host(lua);
         let conns = host.connections.borrow();

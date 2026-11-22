@@ -1138,3 +1138,24 @@ fn cframes_from_two_directions_and_from_angles_in_any_order() {
     );
     assert_eq!(printed(&rt), vec!["1 0 0", "0 -1 0", "true", "true"]);
 }
+
+#[test]
+fn destroying_disconnects() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        for i = 1, 50 do
+            local p = Instance.new("Part", workspace)
+            p.Touched:Connect(function() end)
+            p.Changed:Connect(function() end)
+            p.Destroying:Connect(function() print("gone") end)
+            p:Destroy()
+        end
+    "#,
+    );
+    let changes = rt.tree().borrow_mut().drain_changes();
+    rt.fire_changes(&changes);
+    assert_eq!(printed(&rt).len(), 50);
+    assert_eq!(rt.connection_count(), 0);
+}

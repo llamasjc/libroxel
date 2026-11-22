@@ -137,6 +137,14 @@ fn groups(lua: &Lua, class: ClassKind, other: Option<&str>) -> mlua::Result<Tabl
     Ok(t)
 }
 
+/// Drops what scripts kept on destroyed instances.
+pub(crate) fn forget(lua: &Lua, ids: &[InstanceId]) {
+    let Ok(layer) = layer(lua) else { return };
+    let Ok(forget) = layer.get::<Function>("forget") else { return };
+    let keys: Vec<String> = ids.iter().map(|id| instance_key(*id)).collect();
+    let _ = forget.call::<()>(keys);
+}
+
 fn instance_key(id: InstanceId) -> String {
     id.to_bits().to_string()
 }
