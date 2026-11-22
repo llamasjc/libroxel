@@ -118,7 +118,7 @@ pub const GUI_INSET: f32 = 58.0;
 /// How much memory one game's scripts may use together. A script that
 /// tries to use more gets a "not enough memory" error instead of taking
 /// the whole computer (or server) down with it.
-pub const MEMORY_LIMIT: usize = 512 * 1024 * 1024;
+pub const MEMORY_LIMIT: usize = 2048 * 1024 * 1024;
 
 /// Script threads waiting at one place: see [`ScriptRuntime::waiting_report`].
 #[derive(Debug, Clone, PartialEq)]

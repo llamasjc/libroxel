@@ -3541,8 +3541,10 @@ function L.common(key_id, name, key)
 	return false
 end
 
-function L.forget(key_id)
-	store[key_id] = nil
+function L.forget(keys)
+	for _, key_id in ipairs(keys) do
+		store[key_id] = nil
+	end
 end
 
 ------------------------------------------------------------------------------
