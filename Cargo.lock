@@ -5095,6 +5095,8 @@ version = "0.0.1"
 dependencies = [
  "bevy",
  "bevy_egui",
+ "data-encoding",
+ "ed25519-dalek",
  "egui-phosphor",
  "libroxel-engine",
  "libroxel-hub",
@@ -5104,7 +5106,9 @@ dependencies = [
  "libroxel-script",
  "rfd",
  "serde_json",
+ "sha2 0.10.9",
  "transform-gizmo-egui",
+ "ureq",
  "winresource",
 ]
 

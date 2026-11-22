@@ -30,6 +30,7 @@ jobs:
             target: x86_64-pc-windows-msvc
     env:
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
+      SIGN: ${{ github.ref_type == 'tag' && secrets.AZURE_CLIENT_ID != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -38,6 +39,7 @@ jobs:
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+            echo "LIBROXEL_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
           else
             echo "VERSION=dev-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
           fi
@@ -62,6 +64,21 @@ jobs:
         shell: bash
         run: |
           cargo build --locked --profile dist -p libroxel --target ${{ matrix.target }}
+
+      - name: Sign libroxel.exe
+        if: runner.os == 'Windows' && env.SIGN == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\target\${{ matrix.target }}\dist\libroxel.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
 
       - name: Build AppImage and .deb
         if: runner.os == 'Linux'
@@ -121,6 +138,21 @@ jobs:
           iscc "/DVersion=$VERSION" "/DNumericVersion=$numeric" "/DSource=$(cygpath -w "$PWD/$src")" "/DOutput=$name" "/O$(cygpath -w "$PWD")" "$(cygpath -w packaging/windows/libroxel.iss)"
           echo "ASSET=$name.exe" >> "$GITHUB_ENV"
 
+      - name: Sign installer
+        if: runner.os == 'Windows' && env.SIGN == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\${{ env.ASSET }}
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
       - uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.name }}
@@ -149,7 +181,9 @@ jobs:
           key: dist-${{ matrix.name }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
-        run: cargo build --locked --profile dist -p libroxel --target ${{ matrix.target }}
+        run: |
+          [[ "$GITHUB_REF_TYPE" == "tag" ]] && export LIBROXEL_VERSION="${GITHUB_REF_NAME#v}"
+          cargo build --locked --profile dist -p libroxel --target ${{ matrix.target }}
       - name: Copy binary
         run: |
           mkdir -p half && cp target/${{ matrix.target }}/dist/libroxel half/libroxel-${{ matrix.target }}
@@ -164,6 +198,8 @@ jobs:
     name: Package (macOS universal)
     needs: mac-half
     runs-on: macos-latest
+    env:
+      NOTARIZE: ${{ github.ref_type == 'tag' && secrets.MACOS_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -171,8 +207,25 @@ jobs:
           pattern: half-*
           path: half
           merge-multiple: true
+      - name: Import certificate
+        if: env.NOTARIZE == 'true'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$MACOS_CERTIFICATE" | base64 --decode > cert.p12
+          security create-keychain -p ci build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p ci build.keychain
+          security import cert.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+          rm cert.p12
       - name: Build .dmg
         shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="dev-${GITHUB_SHA::7}"; fi
           dir="libroxel-$VERSION-macos-universal"
@@ -187,7 +240,11 @@ jobs:
             cp "packaging/icons/libroxel-$((size * 2)).png" "libroxel.iconset/icon_${size}x${size}@2x.png"
           done
           iconutil -c icns libroxel.iconset -o "$app/Contents/Resources/libroxel.icns"
-          codesign --force --deep --sign - "$app"
+          if [[ "$NOTARIZE" == true ]]; then
+            codesign --force --options runtime --timestamp --entitlements packaging/macos/entitlements.plist --sign "Developer ID Application" "$app"
+          else
+            codesign --force --deep --sign - "$app"
+          fi
           tiffutil -cathidpicheck packaging/macos/dmg-background.png packaging/macos/dmg-background@2x.png -out background.tiff
           HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install create-dmg
           create-dmg \
@@ -201,11 +258,19 @@ jobs:
             --app-drop-link 495 210 \
             --no-internet-enable \
             "$dir.dmg" "$dir/"
-          echo "ASSET=$dir.dmg" >> "$GITHUB_ENV"
+          if [[ "$NOTARIZE" == true ]]; then
+            codesign --force --timestamp --sign "Developer ID Application" "$dir.dmg"
+            xcrun notarytool submit "$dir.dmg" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+            xcrun stapler staple "$dir.dmg"
+            xcrun stapler staple "$app"
+          fi
+          mkdir dist
+          tar -czf "dist/$dir.app.tar.gz" -C "$dir" Libroxel.app
+          mv "$dir.dmg" dist/
       - uses: actions/upload-artifact@v4
         with:
           name: dist-macos-universal
-          path: ${{ env.ASSET }}
+          path: dist/*
           if-no-files-found: error
           retention-days: 7
 
@@ -246,11 +311,28 @@ jobs:
           merge-multiple: true
       - name: Check files
         run: |
-          for end in -windows-x86_64-setup.exe -macos-universal.dmg -linux-x86_64.AppImage -linux-x86_64.deb; do
+          for end in -windows-x86_64-setup.exe -macos-universal.dmg -macos-universal.app.tar.gz -linux-x86_64.AppImage -linux-x86_64.deb; do
             compgen -G "dist/libroxel-*$end" >/dev/null || { echo "::error::Missing libroxel-*$end"; exit 1; }
           done
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Update manifest
+        env:
+          UPDATE_KEY: ${{ secrets.UPDATE_KEY }}
+        run: |
+          if [[ -z "$UPDATE_KEY" ]]; then echo "::warning::UPDATE_KEY is not set, so apps won't update to this release"; exit 0; fi
+          cd dist
+          entry() { f=$(compgen -G "libroxel-*$1"); jq -n --arg n "$f" --arg s "$(sha256sum "$f" | cut -d' ' -f1)" '{name: $n, sha256: $s}'; }
+          jq -n --arg v "${GITHUB_REF_NAME#v}" \
+            --argjson windows "$(entry -windows-x86_64-setup.exe)" \
+            --argjson macos "$(entry -macos-universal.app.tar.gz)" \
+            --argjson appimage "$(entry -linux-x86_64.AppImage)" \
+            --argjson deb "$(entry -linux-x86_64.deb)" \
+            '{version: $v, files: {windows: $windows, macos: $macos, appimage: $appimage, deb: $deb}}' > latest.json
+          printf '%s\n' "$UPDATE_KEY" > ../key.pem
+          openssl pkeyutl -sign -rawin -inkey ../key.pem -in latest.json | base64 -w0 > latest.json.sig
+          rm ../key.pem
+          cat latest.json
       - name: Delete old drafts
         env:
           GH_TOKEN: ${{ github.token }}

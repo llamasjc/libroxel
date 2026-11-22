@@ -421,7 +421,7 @@ impl Menu {
         ui.add_space(10.0);
         ui.spacing_mut().item_spacing.x = 2.0;
         let chip = player_chip_width(ui, &self.name);
-        let right = chip + 52.0 + 24.0;
+        let right = chip + 52.0 + 24.0 + if crate::update::ready().is_some() { 110.0 } else { 0.0 };
         let wide: f32 =
             TOP_TABS.iter().map(|(_, glyph, label)| theme::tab_width(ui, glyph, label)).sum::<f32>()
                 + 2.0 * TOP_TABS.len() as f32;
@@ -460,6 +460,14 @@ impl Menu {
             let search = theme::tab(ui, theme::icon::MAGNIFYING_GLASS, "", self.tab == Tab::Search);
             if search.on_hover_text("Search for players and games").clicked() {
                 self.go(Tab::Search);
+            }
+            if let Some(version) = crate::update::ready() {
+                let update = theme::tab(ui, theme::icon::ARROW_CIRCLE_UP, "Update", false);
+                if update.on_hover_text(format!("Restart with {version}")).clicked()
+                    && let Err(why) = crate::update::restart()
+                {
+                    self.error = Some(why);
+                }
             }
         });
     }
