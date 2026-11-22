@@ -257,7 +257,7 @@ async function loadCommonPasswords() {
   if (commonPasswords) return commonPasswords;
   let text;
   try {
-    const response = await fetch('common-passwords.txt');
+    const response = await fetch('/common-passwords.txt');
     if (!response.ok) throw new Error();
     text = await response.text();
   } catch {
@@ -367,8 +367,12 @@ async function setPassword(secret, playerId, password) {
 const data = { official: [], games: [], servers: [], friends: null, me: null, loaded: false, error: null };
 
 async function refresh() {
+  const list = (path) => api(path).catch((e) => {
+    if (e.status === 404) return [];
+    throw e;
+  });
   try {
-    const [official, games, servers] = await Promise.all([api('/official'), api('/games'), api('/servers')]);
+    const [official, games, servers] = await Promise.all([list('/official'), list('/games'), list('/servers')]);
     data.official = official;
     data.games = games;
     data.servers = servers;
@@ -643,7 +647,7 @@ function launch(link, what) {
       el('h2', {}, 'Did Libroxel open?'),
       el('p', {}, "If your browser asked, choose Open Libroxel. If nothing happened, you may not have Libroxel yet: download it, open it once, then press Play again."),
       el('div', { class: 'actions' },
-        el('a', { class: 'btn go small', href: '#/download', onclick: close }, icon(ICON.download), 'Download Libroxel'),
+        el('a', { class: 'btn go small', href: '/download', onclick: close }, icon(ICON.download), 'Download Libroxel'),
         el('button', { class: 'btn small', onclick: () => { close(); launch(link, what); } }, 'Try again')),
     );
   }, 2500);
@@ -663,7 +667,7 @@ let route = { name: 'home' };
 let flash = null;
 
 function parseRoute() {
-  const parts = location.hash.replace(/^#\/?/, '').split('/').map((p) => {
+  const parts = location.pathname.replace(/^\/+|\/+$/g, '').split('/').map((p) => {
     try {
       return decodeURIComponent(p);
     } catch {
@@ -673,7 +677,7 @@ function parseRoute() {
   switch (parts[0]) {
     case 'game': return { name: 'game', key: parts.slice(1).join('/') };
     case 'user': return { name: 'user', id: parts[1] };
-    case 'search': case 'friends': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': return { name: parts[0] };
+    case 'search': case 'friends': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': return { name: parts[0] };
     default: return { name: 'home' };
   }
 }
@@ -682,27 +686,27 @@ function tabs() {
   const tab = (name, glyph, label, href) =>
     el('a', { class: `tab${route.name === name ? ' active' : ''}`, href }, icon(glyph), label);
   document.getElementById('tabs').replaceChildren(
-    tab('friends', ICON.users, 'Friends', '#/friends'),
-    tab('avatar', ICON.shirt, 'Avatar', '#/avatar'),
-    tab('download', ICON.download, 'Download', '#/download'),
+    tab('friends', ICON.users, 'Friends', '/friends'),
+    tab('avatar', ICON.shirt, 'Avatar', '/avatar'),
+    tab('download', ICON.download, 'Download', '/download'),
   );
   // The mark is Home, as in the app.
   document.getElementById('brand')?.classList.toggle('active', route.name === 'home');
   const who = document.getElementById('who');
   // Search sits at the right, by who you play as, as in the app.
-  const search = el('a', { class: `tab iconbtn${route.name === 'search' ? ' active' : ''}`, href: '#/search', title: 'Search for players and games' }, icon(ICON.search));
+  const search = el('a', { class: `tab iconbtn${route.name === 'search' ? ' active' : ''}`, href: '/search', title: 'Search for players and games' }, icon(ICON.search));
   if (session) {
     who.replaceChildren(
       search,
       el('span', { class: 'caps' }, 'Playing as'),
-      el('a', { class: 'name', href: `#/user/${data.me?.number ?? session.playerId}` }, session.name || 'You'),
+      el('a', { class: 'name', href: `/user/${data.me?.number ?? session.playerId}` }, session.name || 'You'),
       el('button', { class: 'chip iconbtn', title: 'Sign out', onclick: signOut }, icon(ICON.signOut)),
     );
   } else {
     who.replaceChildren(
       search,
-      el('a', { class: 'chip', href: '#/create' }, 'Make an account'),
-      el('a', { class: 'btn go small', href: '#/sign-in' }, icon(ICON.signIn), 'Sign in'),
+      el('a', { class: 'chip', href: '/create' }, 'Make an account'),
+      el('a', { class: 'btn go small', href: '/sign-in' }, icon(ICON.signIn), 'Sign in'),
     );
   }
 }
@@ -712,13 +716,15 @@ function signOut() {
   data.friends = null;
   data.me = null;
   flash = { text: 'Signed out. This browser no longer has your key.' };
-  goTo('#/');
+  goTo('/');
 }
 
-/** Goes to `hash`, drawing the page once (a hash change draws it by itself). */
-function goTo(hash) {
-  if (location.hash === hash) render();
-  else location.hash = hash;
+function goTo(path) {
+  if (location.pathname !== path) {
+    history.pushState(null, '', path);
+    window.scrollTo(0, 0);
+  }
+  render();
 }
 
 function status(text, kind = '') {
@@ -728,7 +734,7 @@ function status(text, kind = '') {
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, search: searchPage, friends: friendsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage };
+  const views = { home, game, search: searchPage, friends: friendsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
   // An account that signed in with an easy password sees nothing else until it sets a new one.
   const view = session?.mustChange ? passwordPage : views[route.name] || home;
   const nodes = [];
@@ -741,12 +747,24 @@ function render() {
   const nudge = emailNudge();
   if (nudge) nodes.push(nudge);
   page.replaceChildren(...nodes, ...[view()].flat(Infinity).filter(Boolean));
-  document.title = `${titleFor(route)} · Libroxel`;
+  document.title = route.name === 'home' ? 'Libroxel: play games people make' : `${titleFor(route)} · Libroxel`;
+  const description = DESCRIPTIONS[route.name] || DESCRIPTIONS.home;
+  document.querySelector('meta[name="description"]')?.setAttribute('content', description);
+  document.querySelector('link[rel="canonical"]')?.setAttribute('href', location.origin + location.pathname);
 }
+
+const DESCRIPTIONS = {
+  home: 'Play games people make, with your friends. Press Play and Libroxel opens straight into the game.',
+  download: 'Download Libroxel for Windows, macOS and Linux. Free and open source.',
+  privacy: 'What Libroxel keeps about you, why, and how to have it removed.',
+  search: 'Find players and games on Libroxel.',
+  'sign-in': 'Sign in to Libroxel.',
+  create: 'Make a Libroxel account.',
+};
 
 function titleFor(r) {
   if (r.name === 'game') return entries().find((e) => e.key === r.key)?.title || 'Game';
-  return { home: 'Home', search: 'Search', friends: 'Friends', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password' }[r.name] || 'Libroxel';
+  return { home: 'Home', search: 'Search', friends: 'Friends', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy' }[r.name] || 'Libroxel';
 }
 
 function whereabouts(friend) {
@@ -768,17 +786,17 @@ function home() {
         el('h1', {}, `Hello, ${session.name || 'there'}!`),
         el('div', { class: 'soft' }, online === 1 ? '1 friend is online.' : `${online} friends are online.`))));
     const list = friends();
-    out.push(el('h2', { class: 'section' }, `Friends (${list.length})`, el('a', { href: '#/friends' }, 'See all ', icon(ICON.right))));
+    out.push(el('h2', { class: 'section' }, `Friends (${list.length})`, el('a', { href: '/friends' }, 'See all ', icon(ICON.right))));
     const waiting = data.friends?.incoming?.length || 0;
     if (waiting) {
-      out.push(el('a', { class: 'waiting', href: '#/friends' }, icon(ICON.bell), waiting === 1 ? '1 friend request waiting' : `${waiting} friend requests waiting`));
+      out.push(el('a', { class: 'waiting', href: '/friends' }, icon(ICON.bell), waiting === 1 ? '1 friend request waiting' : `${waiting} friend requests waiting`));
     }
     out.push(el('div', { class: 'friend-row' },
-      el('a', { class: 'friend-tile', href: '#/friends' }, el('div', { class: 'add-face' }, icon(ICON.userPlus)), el('b', {}, 'Add friends')),
+      el('a', { class: 'friend-tile', href: '/friends' }, el('div', { class: 'add-face' }, icon(ICON.userPlus)), el('b', {}, 'Add friends')),
       list.map((f) => {
         const [where, colour] = whereabouts(f);
         const dot = f.online ? (f.game ? 'var(--link)' : 'var(--green)') : null;
-        const tile = el('a', { class: 'friend-tile', href: f.server ? '#' : `#/user/${f.number ?? f.player_id}`, title: f.server ? `Join ${f.name}` : f.name },
+        const tile = el('a', { class: 'friend-tile', href: f.server ? '#' : `/user/${f.number ?? f.player_id}`, title: f.server ? `Join ${f.name}` : f.name },
           el('div', { class: 'face' }, portrait(f.look, f.name, 78), dot && el('span', { class: 'dot', style: `background:${dot}` })),
           el('b', {}, f.name),
           el('small', { style: `color:${colour}` }, where));
@@ -790,7 +808,7 @@ function home() {
       el('div', {},
         el('h1', {}, 'Play games people make'),
         el('div', { class: 'soft' }, 'Find a game, press Play, and Libroxel opens straight into it. ',
-          el('a', { href: '#/sign-in' }, 'Sign in'), ' to see your friends.'))));
+          el('a', { href: '/sign-in' }, 'Sign in'), ' to see your friends.'))));
   }
   out.push(el('h2', { class: 'section' }, 'Games'));
   out.push(el('p', { class: 'note' }, 'Pick a game to see its servers, or press Play on its page to jump in.'));
@@ -805,7 +823,7 @@ function gameCard(entry) {
   if (inside.length) meta = el('div', { class: 'meta' }, icon(ICON.users), ` ${count(entry.playing)} playing · ${inside.map((f) => f.name).join(', ')}`);
   else if (entry.playing) meta = el('div', { class: 'meta live' }, icon(ICON.users), ` ${count(entry.playing)} playing`);
   else meta = el('div', { class: 'meta idle' }, `By ${entry.by}`);
-  return el('a', { class: 'game', href: `#/game/${encodeURIComponent(entry.key)}` },
+  return el('a', { class: 'game', href: `/game/${encodeURIComponent(entry.key)}` },
     el('div', { class: 'pic' },
       gamePicture(188, 150, entry.key),
       el('span', { class: 'badge', style: `background:${rgb(pictureColour(entry.key))}` }, icon(entry.symbol)),
@@ -820,7 +838,7 @@ const view = { hideFull: false };
 
 function game() {
   const entry = entries().find((e) => e.key === route.key);
-  const back = el('a', { class: 'back', href: '#/' }, icon(ICON.left), 'Home');
+  const back = el('a', { class: 'back', href: '/' }, icon(ICON.left), 'Home');
   if (!entry) {
     return [back, data.loaded ? el('div', { class: 'empty' }, "That game isn't here (any more).") : el('p', { class: 'soft' }, 'Loading…')];
   }
@@ -834,7 +852,7 @@ function game() {
     if (best) joinServer(best);
     else launch(appLink('play', entry.key), `Starting ${entry.title}.`);
   });
-  const by = entry.byId ? el('a', { href: `#/user/${entry.byId}` }, `By ${entry.by}`) : el('div', { style: 'color:var(--link)' }, `By ${entry.by}`);
+  const by = entry.byId ? el('a', { href: `/user/${entry.byId}` }, `By ${entry.by}`) : el('div', { style: 'color:var(--link)' }, `By ${entry.by}`);
   const out = [
     back,
     el('div', { class: 'hero' },
@@ -955,7 +973,7 @@ function personResult(p) {
   return el('div', { class: 'person' },
     portrait(null, p.name, 44),
     el('div', { class: 'what' },
-      el('a', { href: `#/user/${p.number ?? p.player_id}` }, el('b', {}, p.name), el('span', { class: 'soft' }, ` #${p.number ?? ''}`)),
+      el('a', { href: `/user/${p.number ?? p.player_id}` }, el('b', {}, p.name), el('span', { class: 'soft' }, ` #${p.number ?? ''}`)),
       el('small', { class: 'soft' }, note)),
     el('div', { class: 'buttons' }, action));
 }
@@ -989,8 +1007,8 @@ function needSignIn(why) {
     el('h1', { class: 'title' }, titleFor(route)),
     el('p', { class: 'note' }, why),
     el('div', { class: 'form-actions' },
-      el('a', { class: 'btn go', href: '#/sign-in' }, icon(ICON.signIn), 'Sign in'),
-      el('a', { href: '#/create' }, 'or make an account')),
+      el('a', { class: 'btn go', href: '/sign-in' }, icon(ICON.signIn), 'Sign in'),
+      el('a', { href: '/create' }, 'or make an account')),
   ];
 }
 
@@ -1005,7 +1023,7 @@ function friendsPage() {
     const text = friend.online && friend.game ? `Playing ${friend.game}${friend.server ? ` on ${friend.server.name}` : ''}` : where;
     left.push(el('div', { class: 'person' },
       portrait(friend.look, friend.name, 44),
-      el('div', { class: 'what' }, el('a', { href: `#/user/${friend.number ?? friend.player_id}` }, el('b', {}, friend.name)), el('small', { style: `color:${colour}` }, text)),
+      el('div', { class: 'what' }, el('a', { href: `/user/${friend.number ?? friend.player_id}` }, el('b', {}, friend.name)), el('small', { style: `color:${colour}` }, text)),
       el('div', { class: 'buttons' },
         friend.server && el('button', { class: 'btn go small', onclick: () => joinServer(friend.server) }, icon(ICON.signIn), 'Join'),
         el('button', {
@@ -1024,7 +1042,7 @@ function friendsPage() {
     for (const p of f.incoming) {
       right.push(el('div', { class: 'person' },
         portrait(null, p.name, 44),
-        el('div', { class: 'what' }, el('a', { href: `#/user/${p.number ?? p.player_id}` }, el('b', {}, p.name)), el('small', { class: 'soft' }, 'Wants to be your friend')),
+        el('div', { class: 'what' }, el('a', { href: `/user/${p.number ?? p.player_id}` }, el('b', {}, p.name)), el('small', { class: 'soft' }, 'Wants to be your friend')),
         el('div', { class: 'buttons' },
           el('button', { class: 'btn go small', onclick: () => changeFriend(p.player_id, 'add', `You and ${p.name} are friends now.`) }, icon(ICON.check), 'Accept'),
           el('button', { class: 'chip', onclick: () => changeFriend(p.player_id, 'remove', `Declined ${p.name}'s request.`) }, 'Decline'))));
@@ -1050,7 +1068,7 @@ const profiles = new Map();
 
 function user() {
   const id = route.id;
-  const back = el('a', { class: 'back', href: '#/' }, icon(ICON.left), 'Home');
+  const back = el('a', { class: 'back', href: '/' }, icon(ICON.left), 'Home');
   const known = profiles.get(id);
   if (!known) {
     api(`/accounts/${encodeURIComponent(id)}`)
@@ -1171,8 +1189,8 @@ function validEmail(email) {
 /** A note at the top of every page while your account has no proved email. */
 function emailNudge() {
   if (!session || !securityInfo || securityInfo.loading || securityInfo.error || route.name === 'avatar') return null;
-  if (!securityInfo.email) return el('div', { class: 'status wait' }, 'Your account has no email yet. ', el('a', { href: '#/avatar' }, 'Add one'), ' so you can prove the account is yours.');
-  if (!securityInfo.email_verified && securityInfo.sends_mail) return el('div', { class: 'status wait' }, `Prove your email: type the code we mailed to ${securityInfo.email} `, el('a', { href: '#/avatar' }, 'on your account page'), '.');
+  if (!securityInfo.email) return el('div', { class: 'status wait' }, 'Your account has no email yet. ', el('a', { href: '/avatar' }, 'Add one'), ' so you can prove the account is yours.');
+  if (!securityInfo.email_verified && securityInfo.sends_mail) return el('div', { class: 'status wait' }, `Prove your email: type the code we mailed to ${securityInfo.email} `, el('a', { href: '/avatar' }, 'on your account page'), '.');
   return null;
 }
 
@@ -1237,7 +1255,7 @@ function security() {
   add(panel, [
     el('p', { class: 'soft' }, `You are ${session.name}. `,
       securityInfo.has_password ? 'You have a password, so you can sign in anywhere. ' : 'Set a password to sign in on other computers. ',
-      el('a', { href: '#/password' }, securityInfo.has_password ? 'Change your password' : 'Set a password'), '.',
+      el('a', { href: '/password' }, securityInfo.has_password ? 'Change your password' : 'Set a password'), '.',
       ' ', securityInfo.two_step ? 'Two-step sign-in is on.' : 'Turn on two-step sign-in in the app, on its Avatar tab, for a code on top of your password.'),
     securityInfo.sign_ins?.length
       ? el('div', {}, el('div', { class: 'caps' }, 'Latest sign-ins'), el('ul', { class: 'signins' }, securityInfo.sign_ins.slice(0, 6).map((s) => el('li', {}, `${ago(s.secs_ago)} from ${s.from}`))))
@@ -1256,7 +1274,7 @@ let carry = null;
 /** The two tabs at the top of signing in and making an account. */
 function accountTabs(current) {
   const tab = (name, href, label) => el('a', { class: `chip${current === name ? ' on' : ''}`, href }, label);
-  return el('div', { class: 'hats', style: 'margin:4px 0 18px' }, tab('sign-in', '#/sign-in', 'Sign in'), tab('create', '#/create', 'Make an account'));
+  return el('div', { class: 'hats', style: 'margin:4px 0 18px' }, tab('sign-in', '/sign-in', 'Sign in'), tab('create', '/create', 'Make an account'));
 }
 
 /** Signed in already: say so, and offer to sign out to use another account. */
@@ -1271,7 +1289,7 @@ function passwordPage() {
   const form = el('form', { class: 'narrow' },
     el('label', { class: 'field' }, el('span', {}, `New password (at least ${MIN_PASSWORD} characters, not a common one, without your name in it)`), password),
     el('label', { class: 'field' }, el('span', {}, 'New password again'), again),
-    el('div', { class: 'form-actions' }, go, !forced && el('a', { href: '#/avatar' }, 'Cancel')),
+    el('div', { class: 'form-actions' }, go, !forced && el('a', { href: '/avatar' }, 'Cancel')),
     message);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1287,7 +1305,7 @@ function passwordPage() {
       saveSession(rest, isRemembered());
       securityInfo = null;
       flash = { text: 'Password set. Use it to sign in here and in the app.' };
-      goTo(forced ? '#/' : '#/avatar');
+      goTo(forced ? '/' : '/avatar');
     } catch (err) {
       say(err.message, 'error');
       go.disabled = false;
@@ -1298,7 +1316,7 @@ function passwordPage() {
     forced && status(`Your password is too easy to guess: ${forced.charAt(0).toLowerCase()}${forced.slice(1)} Set a new one to keep going.`, 'error'),
     el('p', { class: 'note' }, 'A few unrelated words work well. Your password never leaves this computer: it is turned into a key here, the same way the app does it.'),
     form,
-    forced && el('p', {}, el('button', { class: 'link', type: 'button', onclick: () => { saveSession(null); data.friends = null; data.me = null; goTo('#/sign-in'); } }, 'Sign out instead')),
+    forced && el('p', {}, el('button', { class: 'link', type: 'button', onclick: () => { saveSession(null); data.friends = null; data.me = null; goTo('/sign-in'); } }, 'Sign out instead')),
   ];
 }
 
@@ -1310,7 +1328,7 @@ function signedInAlready(next) {
       el('button', {
         class: 'btn go', onclick: () => { saveSession(null); data.friends = null; data.me = null; render(); },
       }, icon(ICON.signOut), next === 'create' ? 'Sign out and make another account' : 'Sign out and sign in as someone else'),
-      el('a', { href: '#/' }, 'Go home')),
+      el('a', { href: '/' }, 'Go home')),
   ];
 }
 
@@ -1364,7 +1382,7 @@ function signInPage() {
       pending = null;
       flash = { text: `Signed in. Welcome back, ${who}!` };
       await refresh();
-      goTo(weak ? '#/password' : '#/');
+      goTo(weak ? '/password' : '/');
     } catch (err) {
       if (err.status === 401 && pending?.keys && !needsCode) {
         render();
@@ -1380,7 +1398,7 @@ function signInPage() {
         return fail(`${existing.name} has no password yet, so it can only be used on the computer it was made on. Open Libroxel there and set a password on the Avatar tab, then sign in here.`);
       }
       carry = { name: n, password: password.value };
-      location.hash = '#/create';
+      goTo('/create');
     }
   });
   return [
@@ -1435,7 +1453,7 @@ function createPage() {
       securityInfo = null;
       flash = { text: `Welcome, ${n}! We mailed a code to ${email.value.trim()}: type it here to prove the email is yours.` };
       await refresh();
-      goTo('#/avatar');
+      goTo('/avatar');
     } catch (err) {
       say(err.message, 'error');
       go.disabled = false;
@@ -1538,14 +1556,63 @@ function download() {
   return out;
 }
 
+// --- Privacy -----------------------------------------------------------------
+
+const CONTACT = 'privacy@libroxel.com';
+
+function privacy() {
+  const h = (text) => el('h2', { class: 'section' }, text);
+  const p = (...parts) => el('p', {}, ...parts);
+  const list = (...items) => el('ul', {}, items.map((i) => el('li', {}, i)));
+  const mail = el('a', { href: `mailto:${CONTACT}` }, CONTACT);
+  return el('div', { class: 'privacy' },
+    el('h1', { class: 'title' }, 'Privacy policy'),
+    p(el('span', { class: 'soft' }, 'Last updated 22 November 2026')),
+    p('This policy covers the Libroxel app, this website and the Libroxel Hub (hub.libroxel.com), which keeps accounts, friends, games and server lists.'),
+    h('What we keep'),
+    list(
+      'Your account: your name, player number, avatar (colours and hat), the few words about yourself, and when the account was made.',
+      'Your password never leaves your device. The Hub keeps only a key made from it and your account key locked with it, so we cannot read your password.',
+      'Your email address, if you add one, and whether you proved it. We use it only to send codes and messages about your account.',
+      'Two-step sign-in, if you turn it on: the secret your code app uses.',
+      'Your friends and friend requests.',
+      'Whether you are online, which game and server you are in, and when you were last online. Your friends see this.',
+      'The time and IP address of your last 20 sign-ins, which your account page shows you so you can spot sign-ins that were not you.',
+      'Games and hats you publish, servers you host (their name, game, join code and player count) and anything you report.'),
+    p('Your name, number, avatar, about and published games are public: anyone can see them in the app and on this website.'),
+    h('What we don\'t do'),
+    list(
+      'No ads, no analytics and no tracking.',
+      'No cookies. This website keeps your signed-in key in your browser\'s storage until you sign out or close the tab.',
+      'We don\'t sell or share your information. The only others who handle it do so for us: the server that hosts the Hub and website, and the mail service that sends account emails.'),
+    p('To stop abuse, the Hub counts requests from each IP address for a short time, in memory only. The Download page asks GitHub for the newest release, and downloads come from GitHub, under GitHub\'s own privacy policy.'),
+    h('How long we keep it'),
+    p('We keep your information while your account exists. Nightly backups are kept for 14 days. Servers drop off the list a few minutes after they stop.'),
+    h('Your choices'),
+    p('You can change your name, avatar, about, email and password at any time on the Avatar page or in the app. To get a copy of your information, or to have your account and everything in it deleted, email ', mail, ' from the address on your account, or tell us your name and player number. We answer within 30 days.'),
+    h('Children'),
+    p('Libroxel is not meant for children under 13. If you believe a child under 13 has an account, email ', mail.cloneNode(true), ' and we will delete it.'),
+    h('Changes'),
+    p('When this policy changes, the new one goes on this page with a new date.'),
+    h('Contact'),
+    p(mail.cloneNode(true)));
+}
+
 // ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
 
-window.addEventListener('hashchange', () => {
-  window.scrollTo(0, 0);
-  render();
+if (location.hash.startsWith('#/')) history.replaceState(null, '', location.hash.slice(1) + location.search);
+document.addEventListener('click', (e) => {
+  if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const a = e.target.closest('a[href]');
+  if (!a || a.target || a.hasAttribute('download') || a.origin !== location.origin) return;
+  const path = a.getAttribute('href');
+  if (!path.startsWith('/') || path.startsWith('/downloads/')) return;
+  e.preventDefault();
+  goTo(a.pathname);
 });
+window.addEventListener('popstate', render);
 function sayOnline() {
   if (!session || document.hidden) return;
   const time = Date.now();

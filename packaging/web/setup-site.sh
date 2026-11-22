@@ -89,6 +89,7 @@ cp -r "$site"/. "$new"/
 sed -i -e "s#<meta name=\"libroxel-hub\" content=\"[^\"]*\">#<meta name=\"libroxel-hub\" content=\"$HUB\">#" \
     -e "s#<meta name=\"libroxel-repo\" content=\"[^\"]*\">#<meta name=\"libroxel-repo\" content=\"$REPO\">#" \
     "$new/index.html"
+sed -i "s#https://libroxel.com#https://$DOMAIN#g" "$new/index.html" "$new/robots.txt" "$new/sitemap.xml"
 chmod -R a+rX "$new"
 # Swap the files in, keeping the downloads; files gone from the site go.
 find /var/www/libroxel -mindepth 1 -maxdepth 1 ! -name downloads -exec rm -rf {} +
@@ -124,6 +125,7 @@ $DOMAIN {
     header Cache-Control "no-cache"
     @downloads path /downloads/*
     header @downloads Content-Disposition attachment
+    try_files {path} /index.html
     file_server
 }
 
