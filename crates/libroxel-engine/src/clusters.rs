@@ -35,6 +35,10 @@ const MIN_MEMBERS: usize = 3;
 /// At most this many parts are merged in one check, so a big map clusters
 /// over a few frames instead of in one long one.
 const BUDGET: usize = 6000;
+/// Frames a new cluster is drawn before its parts (or the cluster it
+/// replaces) are hidden. The GPU needs a few frames before a new mesh
+/// draws, and hiding the parts at once made whole areas blink out.
+const SWAP_FRAMES: u32 = 8;
 
 static COUNTS: [std::sync::atomic::AtomicUsize; 3] = [const { std::sync::atomic::AtomicUsize::new(0) }; 3];
 
@@ -76,6 +80,15 @@ pub(crate) struct Clusters {
     materials: FastMap<Surface, Handle<StandardMaterial>>,
     /// Parts whose visibility something else looks after.
     kept_apart: Vec<Entity>,
+    /// New clusters still showing alongside their parts, with the cluster
+    /// each replaces and the frame they take over.
+    swaps: Vec<Swap>,
+}
+
+struct Swap {
+    cluster: Entity,
+    old: Option<Entity>,
+    at: u32,
 }
 
 impl Clusters {
@@ -152,6 +165,26 @@ pub(crate) fn cluster_parts(
         dissolve(&mut commands, state, &mut parts, &clusters, cluster);
     }
 
+    let due: Vec<Swap> = {
+        let (due, waiting) = std::mem::take(&mut state.swaps).into_iter().partition(|s| frame >= s.at);
+        state.swaps = waiting;
+        due
+    };
+    for swap in due {
+        if let Ok(cluster) = clusters.get(swap.cluster) {
+            for member in &cluster.members {
+                if state.member_of.get(member) == Some(&swap.cluster)
+                    && let Ok(mut item) = parts.get_mut(*member)
+                {
+                    *item.7 = Visibility::Hidden;
+                }
+            }
+        }
+        if let Some(old) = swap.old {
+            commands.entity(old).despawn();
+        }
+    }
+
     if !frame.is_multiple_of(CHECK_EVERY) {
         return;
     }
@@ -183,12 +216,17 @@ pub(crate) fn cluster_parts(
         if done >= BUDGET {
             break;
         }
-        // Parts already merged here are merged again with the newcomers.
-        if let Some(old) = state.by_key.get(&key).copied() {
-            if let Ok(cluster) = clusters.get(old) {
-                members.extend(cluster.members.iter().copied());
+        // Parts already merged here are merged again with the newcomers;
+        // the old cluster stays until the new one takes over.
+        let old = state.by_key.get(&key).copied();
+        if let Some(old) = old {
+            let Ok(cluster) = clusters.get(old) else {
+                continue;
+            };
+            if state.swaps.iter().any(|s| s.cluster == old) {
+                continue;
             }
-            dissolve(&mut commands, state, &mut parts, &clusters, old);
+            members.extend(cluster.members.iter().copied());
         } else if members.len() < MIN_MEMBERS {
             continue;
         }
@@ -231,12 +269,10 @@ pub(crate) fn cluster_parts(
         let cluster = cluster.id();
         for member in &members {
             state.member_of.insert(*member, cluster);
-            if let Ok(mut item) = parts.get_mut(*member) {
-                *item.7 = Visibility::Hidden;
-            }
         }
         commands.entity(cluster).insert(Cluster { key, members });
         state.by_key.insert(key, cluster);
+        state.swaps.push(Swap { cluster, old, at: frame + SWAP_FRAMES });
     }
     use std::sync::atomic::Ordering::Relaxed;
     COUNTS[0].store(parts.iter().count(), Relaxed);
@@ -255,6 +291,11 @@ fn dissolve(
     let Ok(found) = clusters.get(cluster) else {
         return;
     };
+    if let Some(at) = state.swaps.iter().position(|s| s.cluster == cluster)
+        && let Some(old) = state.swaps.remove(at).old
+    {
+        commands.entity(old).despawn();
+    }
     if state.by_key.get(&found.key) == Some(&cluster) {
         state.by_key.remove(&found.key);
     }
