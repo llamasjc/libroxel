@@ -186,6 +186,7 @@ local evalBar = make("Frame", {
 	Size = UDim2.new(0.022, 0, 0.83, 0),
 	BackgroundColor3 = Color3.fromRGB(64, 61, 57),
 	ClipsDescendants = true,
+	Visible = false,
 }, column)
 round(evalBar, 3)
 local evalFill = make("Frame", {
@@ -197,6 +198,7 @@ local evalFill = make("Frame", {
 }, evalBar)
 local evalText = label(column, {
 	Name = "EvalText",
+	Visible = false,
 	Position = UDim2.new(0, -14, 0.918, 0),
 	Size = UDim2.new(0, 50, 0.02, 0),
 	TextSize = 11,
@@ -535,18 +537,20 @@ local declineDraw = button(drawBanner, "Decline", GREY, { AnchorPoint = Vector2.
 local actions = make("Frame", { Name = "Actions", Position = UDim2.new(0, 18, 1, -122), Size = UDim2.new(1, -36, 0, 42), BackgroundTransparency = 1 }, gamePage)
 make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6) }, actions)
 local function actionButton(text)
-	return button(actions, text, CARD, { Size = UDim2.new(0.25, -5, 1, 0), TextSize = 14 })
+	return button(actions, text, CARD, { Name = text, Size = UDim2.new(0.25, -5, 1, 0), TextSize = 14 })
 end
 local resignButton = actionButton("Resign")
 local drawButton = actionButton("Draw")
 local takebackButton = actionButton("Take back")
 local hintButton = actionButton("Hint")
+local engineButton = actionButton("Engine")
 local flipButton = actionButton("Flip")
+local showEngine = false
 
 -- Shares the row's width between the action buttons that show.
 local function fitActions()
 	local shown = {}
-	for _, b in { resignButton, drawButton, takebackButton, hintButton, flipButton } do
+	for _, b in { resignButton, drawButton, takebackButton, hintButton, engineButton, flipButton } do
 		if b.Visible then
 			table.insert(shown, b)
 		end
@@ -792,8 +796,11 @@ local RESULT_WORDS = {
 }
 
 local function drawThoughts()
-	local info = view.info
-	thoughts.Visible = view.vsBot or info ~= nil
+	local shown = view.vsBot and showEngine
+	local info = if shown then view.info else nil
+	thoughts.Visible = shown
+	evalBar.Visible = shown
+	evalText.Visible = shown
 	movesBox.Position = UDim2.new(0, 18, 0, if thoughts.Visible then 160 else 58)
 	movesBox.Size = UDim2.new(1, -36, 1, if thoughts.Visible then -340 else -238)
 	if info then
@@ -852,6 +859,8 @@ local function drawGame()
 	drawButton.Text = if view.drawOffer == side then "Offered" else "Draw"
 	takebackButton.Visible = view.vsBot
 	hintButton.Visible = view.vsBot
+	engineButton.Visible = view.vsBot
+	engineButton.BackgroundColor3 = if showEngine then GOOD else CARD
 	fitActions()
 	chatRow.Visible = not watching and not view.vsBot and playing
 	backButton.Visible = watching or not playing
@@ -1054,6 +1063,8 @@ local function showPage()
 		promotionCard.Visible = false
 		evalFill.Size = UDim2.fromScale(1, 0.5)
 		evalText.Text = ""
+		evalBar.Visible = false
+		evalText.Visible = false
 		flipped = false
 		drawBoard()
 		drawLobby()
@@ -1263,6 +1274,12 @@ end)
 hintButton.MouseButton1Click:Connect(function()
 	toast("Thinking…")
 	send("hint")
+end)
+engineButton.MouseButton1Click:Connect(function()
+	showEngine = not showEngine
+	if view then
+		drawGame()
+	end
 end)
 flipButton.MouseButton1Click:Connect(function()
 	flipped = not flipped

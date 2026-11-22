@@ -722,11 +722,13 @@ impl PlaySession {
                 self.sound_restarts.push(sound);
             }
         }
+        let sitting =
+            avatar.seating.seat().is_some() || tree.get_ref(character.humanoid, Property::SeatPart).is_some();
         let dir = input.move_dir;
-        if let Some(yaw) = input.face {
+        if let Some(yaw) = input.face.filter(|_| !sitting) {
             let facing = PropertyValue::Vec3(Vec3::new(0.0, yaw, 0.0));
             let _ = tree.set(character.root, Property::Orientation, facing);
-        } else if dir.x != 0.0 || dir.z != 0.0 {
+        } else if !sitting && (dir.x != 0.0 || dir.z != 0.0) {
             // Turn smoothly, the short way round, rather than snapping.
             let now = tree.get_vec3(character.root, Property::Orientation).unwrap_or_default().y;
             let yaw = crate::character::turn_toward(now, crate::character::yaw_of(dir), dt);
@@ -736,7 +738,6 @@ impl PlaySession {
         // Arms and legs swing with the walking speed.
         let v = self.physics.velocity(character.root);
         let speed = (v.x * v.x + v.z * v.z).sqrt();
-        let sitting = avatar.seating.seat().is_some();
         let moved = if sitting { 0.0 } else { speed * dt };
         avatar.stride = crate::character::stride_after(avatar.stride, moved, dt);
         let tool = tree.find_first_child_of_class(character.model, ClassKind::Tool).ok().flatten();

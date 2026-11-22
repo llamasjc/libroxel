@@ -126,7 +126,7 @@ local function gameView(g, viewer)
 		rated = g.rated,
 		vsBot = g.white.bot ~= nil or g.black.bot ~= nil,
 		thinking = g.thinking == true,
-		info = g.info and {
+		info = (g.white.bot ~= nil or g.black.bot ~= nil) and g.info and {
 			depth = g.info.depth,
 			score = g.info.score,
 			nodes = g.info.nodes,
@@ -711,6 +711,9 @@ end
 function handlers.hint(person)
 	local g = person.game
 	if not g or g.status ~= "playing" or sideOf(g, person) ~= g.pos.side then
+		return
+	end
+	if g.white.bot == nil and g.black.bot == nil then
 		return
 	end
 	local generation = g.generation
