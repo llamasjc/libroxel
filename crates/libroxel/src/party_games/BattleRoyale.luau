@@ -4,13 +4,14 @@
 
 local Players = game:GetService("Players")
 local ServerStorage = game:GetService("ServerStorage")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
 local Arena = require(script.Parent:WaitForChild("Arena"))
 
 local PLAYERS = 8
 local BREAK = 10
 local SWORD_DAMAGE, SWORD_REACH, SWORD_RATE = 25, 7, 0.45
-local BLASTER_DAMAGE, BLASTER_RANGE, BLASTER_RATE, BLASTER_AIM = 18, 120, 0.35, 0.94
+local BLASTER_DAMAGE, BLASTER_RANGE, BLASTER_RATE, BLASTER_SPREAD = 18, 120, 0.35, 3
 local BOT_DAMAGE, BOT_REACH, BOT_RATE = 8, 5, 1.1
 local BOT_SIGHT = 32 -- how far away bots notice someone to fight
 local PEACE = 15 -- seconds at the start to grab loot before anyone can fight
@@ -146,6 +147,54 @@ local function contestantFor(tool)
 	return model and fighters[model]
 end
 
+local aims = {}
+
+local aimEvent = Instance.new("RemoteEvent")
+aimEvent.Name = "Aim"
+aimEvent.Parent = ReplicatedStorage
+aimEvent.OnServerEvent:Connect(function(player, at)
+	if typeof(at) == "Vector3" then
+		aims[player] = at
+	end
+end)
+Players.PlayerRemoving:Connect(function(player)
+	aims[player] = nil
+end)
+
+local function shoot(c)
+	local from = c.root.Position + Vector3.new(0, 1.5, 0)
+	local at = aims[c.player]
+	local direction = at and (at - from).Magnitude > 1 and (at - from).Unit or c.root.CFrame.LookVector
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { c.model, zone }
+	local hit = workspace:Raycast(from, direction * BLASTER_RANGE, params)
+	local finish = hit and hit.Position or from + direction * BLASTER_RANGE
+	local victim = nil
+	if hit then
+		local owner = hit.Instance:FindFirstAncestorOfClass("Model")
+		victim = owner and fighters[owner]
+	end
+	if not victim then
+		local reach, best = (finish - from).Magnitude, BLASTER_SPREAD
+		for _, other in standing() do
+			if other.model ~= c.model then
+				local offset = other.root.Position - from
+				local along = offset:Dot(direction)
+				local off = (offset - direction * along).Magnitude
+				if along > 0 and along <= reach + 2 and off < best then
+					victim, best = other, off
+				end
+			end
+		end
+	end
+	if victim then
+		finish = victim.root.Position + Vector3.new(0, 1, 0)
+		hurt(victim, BLASTER_DAMAGE, c)
+	end
+	zap(from, finish)
+end
+
 local function give(player, name)
 	local template = ServerStorage:FindFirstChild(name)
 	local backpack = player:FindFirstChildOfClass("Backpack")
@@ -171,14 +220,7 @@ local function give(player, name)
 			end
 		elseif name == "Blaster" then
 			if ready(c, BLASTER_RATE) then
-				local from = c.root.Position + Vector3.new(0, 1.5, 0)
-				local victim = target(c, BLASTER_RANGE, BLASTER_AIM)
-				if victim then
-					zap(from, victim.root.Position + Vector3.new(0, 1.5, 0))
-					hurt(victim, BLASTER_DAMAGE, c)
-				else
-					zap(from, from + c.root.CFrame.LookVector * 40)
-				end
+				shoot(c)
 			end
 		end
 	end)
@@ -214,12 +256,12 @@ local function openCrates()
 						hasBlaster[c.model] = true
 						if c.player then
 							give(c.player, "Blaster")
-							Arena.tell("You found a blaster!", c.player)
+							Arena.tell("Blaster", c.player)
 						end
 					else
 						c.humanoid.Health = math.min(c.humanoid.MaxHealth, c.humanoid.Health + MEDKIT)
 						if c.player then
-							Arena.tell("Medkit: +" .. MEDKIT .. " health", c.player)
+							Arena.tell("+" .. MEDKIT .. " HP", c.player)
 						end
 					end
 					break
@@ -354,10 +396,10 @@ local function playRound()
 	end
 	roundOn = true
 	peaceUntil = time() + PEACE
-	Arena.tell("Grab loot! Fighting starts in " .. PEACE .. " seconds")
+	Arena.tell("Loot up")
 	task.delay(PEACE, function()
 		if roundOn then
-			Arena.tell("Fight! Stay inside the ring")
+			Arena.tell("Fight!")
 		end
 	end)
 
@@ -373,9 +415,9 @@ local function playRound()
 			break
 		end
 		if now < peaceUntil then
-			Arena.status("Grab loot! Fighting in " .. math.ceil(peaceUntil - now))
+			Arena.status("Fight in " .. math.ceil(peaceUntil - now))
 		else
-			Arena.status(#list .. " left")
+			Arena.status(#list .. " alive")
 		end
 
 		-- The storm.
@@ -390,7 +432,7 @@ local function playRound()
 				local angle = math.random() * math.pi * 2
 				local r = math.random() * room * 0.6
 				toCentre = fromCentre + Vector3.new(math.cos(angle) * r, 0, math.sin(angle) * r)
-				Arena.tell("The storm is closing in!")
+				Arena.tell("Storm closing")
 			end
 		else
 			local t = math.clamp((now - stageStart) / s.shrink, 0, 1)
@@ -429,10 +471,10 @@ local function playRound()
 	if winner then
 		Arena.bump(winner, "Wins")
 		Arena.role(winner, "Winner")
-		Arena.status(winner.name .. " wins!")
-		Arena.tell(winner.name .. " is the last one standing!")
+		Arena.status(winner.name .. " wins")
+		Arena.tell(winner.name .. " wins")
 	else
-		Arena.status("Nobody made it!")
+		Arena.status("No winner")
 	end
 	task.wait(5)
 	-- Everyone back to the lobby for the next round.
@@ -447,7 +489,7 @@ end
 
 drawZone()
 while true do
-	Arena.status("Battle royale starts soon")
+	Arena.status("Next round")
 	Arena.countdown(BREAK)
 	Arena.clock(nil)
 	playRound()

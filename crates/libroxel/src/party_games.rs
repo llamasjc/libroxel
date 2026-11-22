@@ -493,6 +493,9 @@ pub fn battle_royale() -> InstanceTree {
     weapon(&mut tree, storage, "Sword", [0.4, 4.0, 0.4], [200, 210, 225], false);
     weapon(&mut tree, storage, "Blaster", [0.6, 0.9, 2.2], [90, 230, 255], true);
     scripts(&mut tree, "BattleRoyale", include_str!("party_games/BattleRoyale.luau"));
+    let starter =
+        tree.starter_scripts(ClassKind::StarterPlayerScripts).expect("every tree has StarterPlayerScripts");
+    code(&mut tree, starter, ClassKind::LocalScript, "Aim", include_str!("party_games/Aim.luau"));
     tree.drain_changes();
     tree
 }
@@ -567,7 +570,7 @@ mod tests {
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(value(&session, "#workspace.Bots:GetChildren()"), "5");
         assert_eq!(roles(&session), "It,Runner,Runner,Runner,Runner,Runner");
-        assert!(notes.iter().any(|n| n.ends_with("is It! Run!")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.ends_with(" is It")), "{notes:?}");
         assert_ne!(value(&session, "game.Players.Player1.PlayerGui.RoundHud.Top.Status.Text"), "");
         // If the player is It, they tag a bot first. Then, with the player out
         // of reach, the bots chase each other down.
@@ -588,7 +591,7 @@ mod tests {
         let (notes, errors) = run(&mut session, 90.0);
         assert!(errors.is_empty(), "{errors:?}");
         assert!(notes.iter().any(|n| n.contains(" tagged ")), "{notes:?}");
-        assert!(notes.iter().any(|n| n.contains(" wins, It for only ")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.contains("s as It)")), "{notes:?}");
         // The bots' bodies went everywhere with them.
         let apart = "(function() local most = 0 for _, m in workspace.Bots:GetChildren() do
             local d = (m.Torso.Position - m.HumanoidRootPart.Position) * Vector3.new(1, 0, 1)
@@ -710,6 +713,74 @@ mod tests {
         seconds(&mut session, 1.0);
         assert_eq!(value(&session, "workspace.Player1:GetAttribute('Role')"), "Winner");
         assert_eq!(value(&session, "game.Players.Player1.leaderstats.Wins.Value"), "1");
+        assert!(errors(&mut session).is_empty(), "{:?}", errors(&mut session));
+    }
+
+    #[test]
+    fn battle_royale_blaster_fires_where_you_aim() {
+        let mut session = start_on(battle_royale(), true).unwrap();
+        seconds(&mut session, 12.0);
+        let bot = "workspace.Bots:GetChildren()[1]";
+        session
+            .runtime()
+            .run(
+                "one bot",
+                &format!(
+                    "for i, b in workspace.Bots:GetChildren() do if i > 1 then b:Destroy() end end
+                    {bot}.Humanoid.WalkSpeed = 0
+                    {bot}:PivotTo(CFrame.new(-60, 3, -60))"
+                ),
+            )
+            .unwrap();
+        let has = "game.Players.Player1.Backpack:FindFirstChild('Blaster') ~= nil";
+        for i in 1..=40 {
+            if value(&session, has) == "true" {
+                break;
+            }
+            session
+                .runtime()
+                .run(
+                    "crate",
+                    &format!(
+                        "local c = workspace.Loot:GetChildren()[{i}]
+                        if c then workspace.Player1:PivotTo(CFrame.new(c.Position + Vector3.new(0, 3, 0))) end"
+                    ),
+                )
+                .unwrap();
+            seconds(&mut session, 0.3);
+        }
+        assert_eq!(value(&session, has), "true");
+        seconds(&mut session, 15.0);
+        session
+            .runtime()
+            .run(
+                "behind",
+                &format!(
+                    "workspace.Player1:PivotTo(CFrame.new(0, 3, 0))
+                    {bot}:PivotTo(CFrame.new(0, 3, 25))"
+                ),
+            )
+            .unwrap();
+        seconds(&mut session, 0.3);
+        session.toggle_tool(1);
+        seconds(&mut session, 0.3);
+        assert_eq!(value(&session, "workspace.Player1:FindFirstChild('Blaster') ~= nil"), "true");
+        let at = value(&session, &format!("{bot}.HumanoidRootPart.Position"));
+        let at: Vec<f32> = at.split(',').map(|v| v.trim().parse().unwrap()).collect();
+        session.set_mouse(Some(libroxel_script::MouseRay {
+            origin: Vec3::new(at[0], at[1] + 20.0, at[2]),
+            direction: Vec3::new(0.0, -1.0, 0.0),
+            x: 0.0,
+            y: 0.0,
+        }));
+        seconds(&mut session, 0.3);
+        let health = |s: &PlaySession| value(s, &format!("{bot}.Humanoid.Health")).parse::<f32>().unwrap();
+        let before = health(&session);
+        session.input_began(libroxel_script::UserInput::MouseButton1, false);
+        seconds(&mut session, 0.2);
+        session.input_ended(libroxel_script::UserInput::MouseButton1, false);
+        seconds(&mut session, 0.2);
+        assert!(health(&session) < before, "the blast hit: {before} -> {}", health(&session));
         assert!(errors(&mut session).is_empty(), "{:?}", errors(&mut session));
     }
 }
