@@ -393,7 +393,7 @@ impl Menu {
                 };
                 if let Some(error) = &self.error {
                     ui.add_space(8.0);
-                    theme::status(ui, theme::RED, error);
+                    crate::report::status(ui, error);
                 }
             });
         });

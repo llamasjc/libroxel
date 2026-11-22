@@ -129,6 +129,9 @@ h1, h2, h3 { font-family: var(--display); font-weight: 600; margin: 0; color: va
 }
 .status.error { color: var(--red); }
 .status.wait { color: var(--amber); }
+.status .report { margin-left: 4px; font-size: 13px; }
+.crash { position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 50; display: flex; align-items: center; gap: 12px; padding: 4px 14px; background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15); }
+.crash .status { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .empty { padding: 18px; background: #fff; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); }
 
 /* --- Buttons --------------------------------------------------------------- */

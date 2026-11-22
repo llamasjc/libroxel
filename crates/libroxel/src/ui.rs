@@ -263,6 +263,7 @@ pub fn editor_ui(
     let mut actions: Vec<Action> = Vec::new();
     // Everything in the Output also goes to a log file.
     editor.log_file.write_new(&engine.log);
+    crate::report::crash_screen(&ctx, &mut editor.crash);
     // Model files dropped on the window come in as parts.
     for file in ctx.input(|i| i.raw.dropped_files.clone()) {
         let path = file.path();
@@ -997,7 +998,8 @@ fn session_status(
                         ui.ctx().copy_text(code);
                     }
                 } else if let Some(error) = tunnel.error() {
-                    ui.colored_label(red, "No join code").on_hover_text(error);
+                    ui.colored_label(red, "No join code").on_hover_text(&error);
+                    crate::report::button(ui, &format!("No join code: {error}"));
                 } else {
                     theme::status(ui, theme::AMBER, "Getting a join code…");
                 }
@@ -1008,7 +1010,8 @@ fn session_status(
                 _ => None,
             };
             if let Some(error) = tunnel.and_then(|t| t.error()) {
-                theme::status(ui, theme::RED, "Could not reach the host").on_hover_text(error);
+                theme::status(ui, theme::RED, "Could not reach the host").on_hover_text(&error);
+                crate::report::button(ui, &format!("Could not reach the host: {error}"));
             } else if session.disconnected() {
                 theme::status(ui, theme::RED, "Disconnected");
             } else if tunnel.is_some_and(|t| !t.connected()) {
@@ -2220,6 +2223,12 @@ fn output(
             ui.ctx().copy_text(text);
             ui.data_mut(|d| d.insert_temp(copied_at, (now, 1)));
         }
+        let last_error = engine.log.iter().rev().find(|e| e.level == LogLevel::Error);
+        if ui.add_enabled(last_error.is_some(), egui::Button::new("Report").small()).clicked()
+            && let Some(entry) = last_error
+        {
+            crate::report::open(&entry.text);
+        }
         let folder = ui.small_button(format!("{} Logs", icon::FOLDER_OPEN)).on_hover_text(format!(
             "Every Output is also saved to a file here (latest.log is the newest):\n{}",
             crate::debugging::logs_dir().display()
@@ -2321,6 +2330,9 @@ fn output(
                         .show(ui, |ui| {
                             ui.label(RichText::new(&p.detail).monospace().small());
                         });
+                        if p.level == LogLevel::Error {
+                            crate::report::button(ui, &p.detail);
+                        }
                     });
                 }
             });
@@ -2541,7 +2553,7 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
                         ui.colored_label(theme::GREEN, said);
                     }
                     Some(Err(why)) => {
-                        ui.colored_label(theme::RED, why);
+                        crate::report::error(ui, why);
                     }
                     None => {}
                 }
@@ -2736,7 +2748,8 @@ fn together_status(ui: &mut egui::Ui, coedit: &libroxel_engine::coedit::CoEdit, 
                     ui.ctx().copy_text(code);
                 }
             } else if let Some(error) = tunnel.error() {
-                ui.colored_label(red, "No edit code").on_hover_text(error);
+                ui.colored_label(red, "No edit code").on_hover_text(&error);
+                crate::report::button(ui, &format!("No edit code: {error}"));
             } else {
                 theme::status(ui, theme::AMBER, "Getting an edit code…");
             }
@@ -2745,7 +2758,8 @@ fn together_status(ui: &mut egui::Ui, coedit: &libroxel_engine::coedit::CoEdit, 
         Some(Tunnel::Join(tunnel)) => tunnel.error(),
         _ => None,
     } {
-        theme::status(ui, theme::RED, "Could not reach the shared game").on_hover_text(error);
+        theme::status(ui, theme::RED, "Could not reach the shared game").on_hover_text(&error);
+        crate::report::button(ui, &format!("Could not reach the shared game: {error}"));
     } else if coedit.disconnected() {
         theme::status(ui, theme::RED, "Disconnected");
     } else if !coedit.ready() {

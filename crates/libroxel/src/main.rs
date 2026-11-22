@@ -33,6 +33,7 @@ mod menu;
 mod mesh_import;
 mod open;
 mod party_games;
+mod report;
 mod rich_text;
 mod server;
 mod social;
@@ -192,6 +193,7 @@ pub struct Editor {
     pub show_errors: bool,
     /// Show an error or warning that repeats once, with how many times.
     pub group_repeats: bool,
+    pub crash: Option<String>,
 }
 
 /// A game carried over the internet with a join code.
@@ -260,6 +262,7 @@ impl Default for Editor {
             show_warnings: true,
             show_errors: true,
             group_repeats: true,
+            crash: None,
         }
     }
 }
@@ -306,7 +309,8 @@ fn main() {
     url_handler::register();
     // Typing `libroxel` in a terminal opens this copy too.
     command::install();
-    let mut editor = Editor { platform: browse::Platform::start(), ..Editor::default() };
+    let mut editor =
+        Editor { platform: browse::Platform::start(), crash: report::take_crash(), ..Editor::default() };
     let mut notes = Vec::new();
     let tree = match args.first().cloned() {
         Some(link) if url_handler::is_link(&link) => {
@@ -339,35 +343,36 @@ fn main() {
         }
     };
 
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Libroxel".into(),
-                // The window's app id (WM_CLASS), so Linux docks match it to
-                // the menu entry and show the Libroxel icon.
-                name: Some("libroxel".into()),
-                resolution: (1440, 900).into(),
-                ..default()
-            }),
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: "Libroxel".into(),
+            // The window's app id (WM_CLASS), so Linux docks match it to
+            // the menu entry and show the Libroxel icon.
+            name: Some("libroxel".into()),
+            resolution: (1440, 900).into(),
             ..default()
-        }))
-        .add_plugins(EguiPlugin::default())
-        .insert_non_send({
-            let mut engine = EngineState::new(tree);
-            engine.log.extend(notes.into_iter().map(|text| libroxel_engine::LogEntry {
-                level: libroxel_engine::LogLevel::Info,
-                time: 0.0,
-                text,
-            }));
-            engine
-        })
-        .insert_non_send(editor)
-        .add_plugins((EnginePlugin, RenderPlugin))
-        .add_systems(Startup, setup_ui_camera)
-        .add_systems(EguiPrimaryContextPass, ui::editor_ui)
-        .add_systems(Update, (viewport::draw_selection, viewport::draw_grid).after(EngineSet::Sync))
-        .add_systems(Update, (update_title, toggle_fullscreen))
-        .run();
+        }),
+        ..default()
+    }))
+    .add_plugins(EguiPlugin::default())
+    .insert_non_send({
+        let mut engine = EngineState::new(tree);
+        engine.log.extend(notes.into_iter().map(|text| libroxel_engine::LogEntry {
+            level: libroxel_engine::LogLevel::Info,
+            time: 0.0,
+            text,
+        }));
+        engine
+    })
+    .insert_non_send(editor)
+    .add_plugins((EnginePlugin, RenderPlugin))
+    .add_systems(Startup, setup_ui_camera)
+    .add_systems(EguiPrimaryContextPass, ui::editor_ui)
+    .add_systems(Update, (viewport::draw_selection, viewport::draw_grid).after(EngineSet::Sync))
+    .add_systems(Update, (update_title, toggle_fullscreen));
+    report::catch_panics();
+    report::run(&mut app);
 }
 
 /// Lets a windowless Windows build print to the terminal it was started

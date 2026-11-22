@@ -165,10 +165,12 @@ async function api(path, { method = 'GET', body, query } = {}) {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
+    remember(`${method} ${path} failed`);
     throw new HubError(0, 'Could not reach the Hub. Check your connection and try again.');
   }
   const text = await response.text();
   if (!response.ok) {
+    remember(`${method} ${path} ${response.status}`);
     const why = text.trim() || response.statusText || `error ${response.status}`;
     throw new HubError(response.status, why.charAt(0).toUpperCase() + why.slice(1));
   }
@@ -789,8 +791,60 @@ function goTo(path) {
 }
 
 function status(text, kind = '') {
-  return el('div', { class: `status ${kind}` }, text);
+  return el('div', { class: `status ${kind}` }, text, kind === 'error' && reportLink(text));
 }
+
+const ISSUES = 'https://github.com/llamasjc/libroxel/issues/new';
+const recent = [];
+
+function remember(line) {
+  recent.push(`${new Date().toISOString().slice(11, 19)} ${line}`);
+  if (recent.length > 20) recent.shift();
+}
+
+function scrub(text) {
+  return String(text)
+    .split('\n')
+    .map((line) => line
+      .replace(/((?:password|passwd|token|secret|authorization|bearer|api_?key)[^:=\n]*[:=]).*/i, '$1 [hidden]')
+      .replace(/[^\s"'()<>\[\],;`]+@[^\s"'()<>\[\],;`]+\.[A-Za-z]{2,}/g, '[email]')
+      .replace(/\b[0-9a-fA-F]{32,}\b/g, '[hidden]')
+      .replace(/[A-Za-z0-9_\-+/=]{24,}/g, (w) => (/\d/.test(w) && /[a-z]/.test(w) && /[A-Z]/.test(w) ? '[hidden]' : w)))
+    .join('\n');
+}
+
+function reportUrl(error) {
+  let message = scrub(error).trim();
+  const first = message.split('\n')[0];
+  const title = first.length > 80 ? `${first.slice(0, 77)}...` : first;
+  const log = scrub(recent.join('\n')).split('\n').filter(Boolean);
+  for (;;) {
+    let body = `**Error**\n\`\`\`\n${message}\n\`\`\`\n**Version** website\n**OS** ${navigator.userAgent}\n`;
+    if (log.length) body += `\n**Log**\n\`\`\`\n${log.join('\n')}\n\`\`\`\n`;
+    const url = `${ISSUES}?${new URLSearchParams({ title, body })}`;
+    if (url.length <= 7500) return url;
+    if (log.length) log.shift();
+    else message = message.slice(0, Math.floor(message.length * 0.75));
+  }
+}
+
+function reportLink(error) {
+  return el('a', { class: 'report', href: reportUrl(error), target: '_blank', rel: 'noopener' }, 'Report');
+}
+
+function crashed(error) {
+  const text = String(error?.stack || error?.message || error || 'Error');
+  remember(text.split('\n')[0]);
+  document.getElementById('crash')?.remove();
+  const close = el('button', { class: 'link', 'aria-label': 'Close' }, icon(ICON.x));
+  const bar = el('div', { id: 'crash', class: 'crash' }, status(text.split('\n')[0], 'error'), close);
+  bar.querySelector('.report').href = reportUrl(text);
+  close.addEventListener('click', () => bar.remove());
+  document.body.append(bar);
+}
+
+window.addEventListener('error', (e) => crashed(e.error || e.message));
+window.addEventListener('unhandledrejection', (e) => crashed(e.reason));
 
 function render() {
   route = parseRoute();
@@ -1455,7 +1509,7 @@ function signInPage() {
     e.preventDefault();
     go.disabled = true;
     const say = (...text) => message.replaceChildren(el('div', { class: 'status wait' }, ...text));
-    const fail = (...text) => message.replaceChildren(el('div', { class: 'status error' }, ...text));
+    const fail = (text) => message.replaceChildren(status(text, 'error'));
     try {
       if (!pending?.keys) {
         const n = name.value.trim();
