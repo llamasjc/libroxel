@@ -334,3 +334,22 @@ footer a { color: var(--heading); text-decoration: underline; }
   .hero h1 { font-size: 30px; }
   footer { padding: 20px 16px 30px; }
 }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; margin: 6px 0 8px; }
+.tiles > div { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.tiles b { display: block; font: 600 22px var(--display); color: var(--heading); }
+.chart { position: relative; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 10px 10px 4px; }
+.chart svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart .grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.chart .axis { font: 11px var(--body); fill: var(--muted); }
+.chart .line { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.chart .area { fill: var(--accent); opacity: 0.12; }
+.chart .mark { fill: var(--accent); }
+.chart .cross { stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; stroke-dasharray: 3 3; }
+.chart .dot { fill: var(--accent); stroke: #fff; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.chart .tip { position: absolute; top: 2px; transform: translateX(-50%); background: var(--heading); color: #fff; font-size: 13px; padding: 3px 8px; border-radius: 5px; pointer-events: none; white-space: nowrap; }
+.table-wrap { overflow-x: auto; }
+.numbers { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+.numbers th, .numbers td { padding: 8px 12px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.numbers th { font: 600 13px var(--display); color: var(--heading); }
+.numbers th:first-child, .numbers td:first-child { text-align: left; }
