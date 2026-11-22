@@ -366,7 +366,7 @@ fn main() {
         .add_systems(Startup, setup_ui_camera)
         .add_systems(EguiPrimaryContextPass, ui::editor_ui)
         .add_systems(Update, (viewport::draw_selection, viewport::draw_grid).after(EngineSet::Sync))
-        .add_systems(Update, update_title)
+        .add_systems(Update, (update_title, toggle_fullscreen))
         .run();
 }
 
@@ -408,6 +408,23 @@ fn setup_ui_camera(mut commands: Commands, mut settings: ResMut<EguiGlobalSettin
             ..default()
         },
     ));
+}
+
+fn toggle_fullscreen(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+) {
+    if !keys.just_pressed(KeyCode::F11) {
+        return;
+    }
+    for mut window in &mut windows {
+        window.mode = match window.mode {
+            bevy::window::WindowMode::Windowed => {
+                bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Current)
+            }
+            _ => bevy::window::WindowMode::Windowed,
+        };
+    }
 }
 
 fn update_title(editor: NonSend<Editor>, engine: NonSend<EngineState>, mut windows: Query<&mut Window>) {
