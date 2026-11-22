@@ -34,7 +34,7 @@
 //! [`HubClient`] is the blocking client the editor and servers use.
 
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -119,6 +119,8 @@ pub struct HubOptions {
     /// Game servers it runs itself, so Play sends players to this Hub's
     /// computer (see [`FleetOptions`]). `None`: only players host.
     pub fleet: Option<FleetOptions>,
+    /// The libroxel app to ask for the official games, if not the fleet's.
+    pub starters: Option<PathBuf>,
 }
 
 /// How often hosts should announce themselves.
@@ -1575,10 +1577,10 @@ pub fn run(addr: SocketAddr, db_path: &Path, options: HubOptions) -> Result<(), 
     let mut options = options;
     fleet_finds(&mut options, addr);
     let db = open_db(Some(db_path))?;
-    if let Some(fleet) = &options.fleet {
-        match official_from(&fleet.program).and_then(|games| set_official(&db, &games).map(|_| games.len())) {
-            Ok(n) => println!("{n} official games from {}", fleet.program.display()),
-            Err(e) => println!("No official games from {}: {e}", fleet.program.display()),
+    if let Some(program) = options.starters.as_ref().or(options.fleet.as_ref().map(|f| &f.program)) {
+        match official_from(program).and_then(|games| set_official(&db, &games).map(|_| games.len())) {
+            Ok(n) => println!("{n} official games from {}", program.display()),
+            Err(e) => println!("No official games from {}: {e}", program.display()),
         }
     }
     let runtime =

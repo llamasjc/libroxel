@@ -26,7 +26,7 @@ const HUB = (() => {
 })();
 
 const ICON = {
-  house: '', users: '', play: '', broadcast: '', shirt: '',
+  house: '', games: '', users: '', play: '', broadcast: '', shirt: '',
   globe: '', left: '', right: '', signIn: '', userPlus: '',
   userMinus: '', check: '', search: '', refresh: '', bell: '',
   download: '', signOut: '', signal: '', shield: '', crown: '',
@@ -39,11 +39,9 @@ const C = {
   portrait: [190, 226, 250],
 };
 
-// The Avatar tab's colours (crates/libroxel/src/menu.rs) and hats.
-const SKINS = [[255, 224, 196], [238, 196, 160], [222, 172, 128], [196, 140, 96], [160, 108, 72], [118, 78, 52], [86, 56, 38], [120, 200, 120]];
-const CLOTHES = [[236, 98, 74], [242, 170, 40], [250, 220, 70], [120, 200, 80], [32, 168, 150], [70, 150, 230], [50, 56, 84], [124, 92, 214], [226, 86, 150], [240, 240, 240], [150, 150, 160], [40, 40, 46], [120, 80, 50], [180, 40, 50], [20, 90, 60], [250, 200, 60]];
-const SHIRTS = [[236, 98, 74], [124, 92, 214], [32, 168, 150], [242, 170, 40], [226, 86, 150], [70, 150, 230]];
-const HATS = ['No hat', 'Cap', 'Tall hat', 'Crown', 'Halo', 'Antenna'];
+// The avatar, the same file the app is built with.
+const AVATAR = await fetch('/avatar.json').then((r) => r.json());
+const HATS = AVATAR.hats.map((h) => h.name);
 
 // The bot check for new accounts, and password stretching, as the Hub asks.
 const WORK_BITS = 20;
@@ -416,7 +414,7 @@ function isRemembered() {
 /** Every game worth showing, with its live servers, busiest first. */
 function entries() {
   const list = data.official.map((g) => ({
-    key: `starter:${g.name}`, title: g.name, by: 'Libroxel', about: g.about, symbol: g.symbol || ICON.globe,
+    key: `starter:${g.name}`, title: g.name, by: 'Libroxel', about: g.about, symbol: g.symbol || ICON.games,
     source: 'starter', servers: [],
   }));
   for (const game of data.games) {
@@ -524,30 +522,59 @@ function gamePicture(width, height, id) {
   return svg('svg', { viewBox: `0 0 ${width} ${height}`, class: 'scene', 'aria-hidden': 'true' }, ...shapes);
 }
 
-const usualLook = (name) => ({
-  hat: 'No hat', hat_color: [240, 200, 60], pants: [50, 56, 84],
-  shirt: SHIRTS[Number(seed(name) % BigInt(SHIRTS.length))], skin: [238, 196, 160],
+/** The usual look for player number `n` (`Look::for_player`). */
+const lookFor = (n) => ({
+  hat: 'No hat', hat_color: AVATAR.hat_color, pants: AVATAR.pants,
+  shirt: AVATAR.shirts[Number(n % BigInt(AVATAR.shirts.length))], skin: AVATAR.skin,
 });
+const usualLook = (name) => lookFor(seed(name));
 
-/** A look from the Hub, with anything missing taken from the usual one. */
-function readLook(look, name) {
-  const usual = usualLook(name);
+/** A catalog hat, if it fits (`CustomHat::from_json`). */
+function readItem(item) {
+  const v = (a, low) => Array.isArray(a) && a.length === 3 && a.every((n) => typeof n === 'number' && Number.isFinite(n) && n >= low && n <= 6) ? a : null;
+  const parts = item?.parts;
+  if (!Array.isArray(parts) || !parts.length || parts.length > 32) return null;
+  const out = [];
+  for (const p of parts) {
+    const c = p?.color;
+    if (!Array.isArray(c) || c.length !== 3 || !c.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) return null;
+    const size = v(p.size, 0.05);
+    const at = v(p.at, -6);
+    if (!size || !at) return null;
+    const turn = Array.isArray(p.turn) && p.turn.length === 3 && p.turn.every((n) => typeof n === 'number') ? p.turn : [0, 0, 0];
+    out.push({ size, at, turn, shape: ['Ball', 'Cylinder', 'Wedge'].includes(p.shape) ? p.shape : 'Block', color: c });
+  }
+  return { name: typeof item.name === 'string' ? [...item.name].slice(0, 40).join('') : 'Hat', parts: out, json: item };
+}
+
+/** A look from the Hub, with anything missing taken from `usual` (`Look::from_json`). */
+function readLook(look, name, usual = usualLook(name)) {
   const colour = (key) => {
     const v = look?.[key];
     return Array.isArray(v) && v.length === 3 && v.every((n) => Number.isInteger(n) && n >= 0 && n <= 255) ? v : usual[key];
   };
+  const hat = typeof look?.hat === 'string' ? (HATS.includes(look.hat) ? look.hat : 'No hat') : usual.hat;
   return {
     skin: colour('skin'), shirt: colour('shirt'), pants: colour('pants'), hat_color: colour('hat_color'),
-    hat: HATS.includes(look?.hat) ? look.hat : usual.hat,
-    item: look?.item,
+    hat,
+    item: look?.item === undefined ? usual.item : readItem(look.item) || undefined,
   };
 }
 
-/** A round portrait: head and shoulders in their own colours. */
+/** A look to save, as `Look::to_json` makes it. */
+function lookJson(l) {
+  const out = { skin: l.skin, shirt: l.shirt, pants: l.pants, hat: l.hat, hat_color: l.hat_color };
+  if (l.item) out.item = l.item.json;
+  return out;
+}
+
+let gradients = 0;
+
+/** A round portrait: head and shoulders in their own colours (`paint_avatar`). */
 function portrait(look, name, size) {
   const l = readLook(look, name);
   const r = 50;
-  const [cx, cy] = [50, 50];
+  const [cx, cy] = [52, 52];
   const cut = cy + r * 0.42;
   const half = Math.sqrt(Math.max(r * r - (cut - cy) ** 2, 0));
   const start = Math.atan2(cut - cy, half);
@@ -560,8 +587,17 @@ function portrait(look, name, size) {
   const [hw, hh] = [r * 0.86, r * 0.8];
   const [hx, hy] = [cx - hw / 2, cy - r * 0.08 - hh / 2];
   const dark = 'rgb(30, 26, 22)';
+  const id = `p${gradients++}`;
+  const k = 104 / size;
   const parts = [
-    svg('circle', { cx, cy, r, fill: rgb(C.portrait), stroke: '#fff', 'stroke-width': 3 }),
+    svg('defs', {},
+      svg('radialGradient', { id: `${id}b` },
+        svg('stop', { offset: 0, 'stop-color': 'rgb(236, 248, 255)' }),
+        svg('stop', { offset: 1, 'stop-color': 'rgb(160, 208, 244)' })),
+      svg('linearGradient', { id: `${id}g`, x1: 0, y1: 0, x2: 0, y2: 1 },
+        svg('stop', { offset: 0, 'stop-color': 'rgba(255, 255, 255, 0.47)' }),
+        svg('stop', { offset: 1, 'stop-color': 'rgba(255, 255, 255, 0)' }))),
+    svg('circle', { cx, cy, r, fill: `url(#${id}b)` }),
     svg('polygon', { points: pts.join(' '), fill: rgb(l.shirt) }),
     svg('rect', { x: hx, y: hy, width: hw, height: hh, rx: r * 0.16, fill: rgb(l.skin) }),
   ];
@@ -570,30 +606,50 @@ function portrait(look, name, size) {
   if (l.hat !== 'No hat' || l.item) {
     parts.push(svg('rect', { x: hx, y: hy - r * 0.12, width: hw, height: r * 0.18, rx: r * 0.08, fill: rgb(l.hat_color) }));
   }
-  return svg('svg', { viewBox: '0 0 100 100', width: size, height: size, 'aria-hidden': 'true' }, ...parts);
+  parts.push(
+    svg('rect', { x: cx - r * 0.75, y: cy - r * 0.95, width: r * 1.5, height: r * 0.9, rx: r * 0.45, fill: `url(#${id}g)` }),
+    svg('circle', { cx, cy, r, fill: 'none', stroke: '#fff', 'stroke-width': Math.min(Math.max((r / k) * 0.06, 1), 2.5) * k }),
+    svg('circle', { cx, cy, r: r + 0.5 * k, fill: 'none', stroke: 'rgba(30, 80, 140, 0.43)', 'stroke-width': k }));
+  return svg('svg', { viewBox: '0 0 104 104', width: size, height: size, 'aria-hidden': 'true' }, ...parts);
 }
 
-/** The whole figure from the front, for the Avatar tab. */
-function figure(look, name) {
-  const l = readLook(look, name);
+/** The whole figure from the front, for the Avatar tab (`draw_avatar`). */
+function figure(l) {
+  const f = AVATAR.front;
   const p = [];
-  const box = (x, y, w, h, c, rx = 3) => p.push(svg('rect', { x, y, width: w, height: h, rx, fill: rgb(c) }));
-  box(58, 228, 38, 82, shade(l.pants, 0.9)); // legs
-  box(100, 228, 38, 82, l.pants);
-  box(54, 140, 88, 90, l.shirt); // body
-  box(22, 140, 30, 82, l.skin); // arms
-  box(144, 140, 30, 82, l.skin);
-  box(66, 72, 64, 62, l.skin, 6); // head
-  p.push(svg('rect', { x: 82, y: 96, width: 9, height: 12, rx: 2, fill: 'rgb(30, 26, 22)' }));
-  p.push(svg('rect', { x: 105, y: 96, width: 9, height: 12, rx: 2, fill: 'rgb(30, 26, 22)' }));
-  const hat = l.hat_color;
-  if (l.hat === 'Cap') { box(64, 58, 68, 18, hat, 6); box(110, 70, 34, 7, shade(hat, 0.8)); }
-  if (l.hat === 'Tall hat') { box(70, 20, 56, 52, hat); box(58, 64, 80, 10, shade(hat, 0.85)); }
-  if (l.hat === 'Crown') p.push(svg('polygon', { points: '68,72 68,44 82,58 98,38 114,58 128,44 128,72', fill: rgb(hat) }));
-  if (l.hat === 'Halo') p.push(svg('ellipse', { cx: 98, cy: 54, rx: 34, ry: 7, fill: 'none', stroke: rgb(hat), 'stroke-width': 5 }));
-  if (l.hat === 'Antenna') { box(96, 40, 5, 34, shade(hat, 0.8), 1); p.push(svg('circle', { cx: 98.5, cy: 38, r: 8, fill: rgb(hat) })); }
-  if (l.item && l.hat === 'No hat') box(66, 56, 64, 16, hat, 5);
-  return svg('svg', { viewBox: '0 0 196 320', width: 196, height: 320, 'aria-hidden': 'true' }, ...p);
+  const at = (x, y) => [f.width / 2 + x * f.scale, f.hips - y * f.scale];
+  const block = (x, y, w, h, c) => {
+    const [mx, my] = at(x, y);
+    const [bw, bh] = [w * f.scale, h * f.scale];
+    p.push(svg('rect', { x: mx - bw / 2, y: my - bh / 2, width: bw, height: bh, rx: 1, fill: rgb(c) }));
+    p.push(svg('rect', { x: mx - bw / 2 + 0.75, y: my - bh / 2 + 0.75, width: Math.max(bw - 1.5, 0), height: Math.max(bh - 1.5, 0), rx: 0.25, fill: 'none', stroke: `rgba(${shade(c, f.edge).join(', ')}, ${f.edge})`, 'stroke-width': 1.5 }));
+  };
+  const ball = (x, y, w, c) => {
+    const [mx, my] = at(x, y);
+    p.push(svg('circle', { cx: mx, cy: my, r: (w * f.scale) / 2, fill: rgb(c) }));
+  };
+  const colours = { skin: l.skin, shirt: l.shirt, pants: l.pants, eye: f.eye };
+  for (const b of f.blocks) block(b.at[0], b.at[1], b.size[0], b.size[1], colours[b.color]);
+  if (l.item) {
+    const parts = [...l.item.parts].sort((a, b) => b.at[2] - a.at[2]);
+    for (const part of parts) {
+      const sideways = Math.abs(Math.abs(part.turn[2]) - 90) < 1;
+      const [w, h] = sideways ? [part.size[1], part.size[0]] : [part.size[0], part.size[1]];
+      const [x, y] = [part.at[0], f.head + part.at[1]];
+      if (part.shape === 'Ball') ball(x, y, w, part.color);
+      else block(x, y, w, h, part.color);
+    }
+  }
+  const hat = AVATAR.hats.find((h) => h.name === (l.item ? 'No hat' : l.hat));
+  for (const part of hat?.parts || []) {
+    const c = part.tinted ? l.hat_color : AVATAR.dark;
+    const [w, h] = part.turn ? [part.size[1], part.size[0]] : [part.size[0], part.size[1]];
+    const [x, y] = [part.at[0], f.head + part.at[1]];
+    if (part.shape === 'Ball') ball(x, y, w, c);
+    else block(x, y, w, h, c);
+  }
+  p.push(svg('text', { x: f.width / 2, y: f.height - 14, 'text-anchor': 'middle', 'dominant-baseline': 'central', class: 'figure-name' }, document.createTextNode(l.item ? l.item.name : l.hat)));
+  return svg('svg', { viewBox: `0 0 ${f.width} ${f.height}`, width: f.width, height: f.height, 'aria-hidden': 'true' }, ...p);
 }
 
 // The glassy cube (theme.rs `paint_logo`), the same as in index.html.
@@ -681,7 +737,7 @@ function parseRoute() {
   switch (parts[0]) {
     case 'game': return { name: 'game', key: parts.slice(1).join('/') };
     case 'user': return { name: 'user', id: parts[1] };
-    case 'search': case 'friends': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': return { name: parts[0] };
+    case 'games': case 'search': case 'friends': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': return { name: parts[0] };
     default: return { name: 'home' };
   }
 }
@@ -690,6 +746,7 @@ function tabs() {
   const tab = (name, glyph, label, href) =>
     el('a', { class: `tab${route.name === name ? ' active' : ''}`, href }, icon(glyph), label);
   document.getElementById('tabs').replaceChildren(
+    tab('games', ICON.games, 'Games', '/games'),
     tab('friends', ICON.users, 'Friends', '/friends'),
     tab('avatar', ICON.shirt, 'Avatar', '/avatar'),
     tab('download', ICON.download, 'Download', '/download'),
@@ -738,7 +795,7 @@ function status(text, kind = '') {
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, search: searchPage, friends: friendsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
+  const views = { home, game, games: gamesPage, search: searchPage, friends: friendsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
   // An account that signed in with an easy password sees nothing else until it sets a new one.
   const view = session?.mustChange ? passwordPage : views[route.name] || home;
   const nodes = [];
@@ -746,7 +803,7 @@ function render() {
     nodes.push(status(flash.text, flash.kind || ''));
     flash = null;
   }
-  if (data.error && ['home', 'game', 'friends'].includes(route.name)) nodes.push(status(data.error, 'error'));
+  if (data.error && ['home', 'game', 'games', 'friends'].includes(route.name)) nodes.push(status(data.error, 'error'));
   loadSecurity();
   const nudge = emailNudge();
   if (nudge) nodes.push(nudge);
@@ -768,7 +825,7 @@ const DESCRIPTIONS = {
 
 function titleFor(r) {
   if (r.name === 'game') return entries().find((e) => e.key === r.key)?.title || 'Game';
-  return { home: 'Home', search: 'Search', friends: 'Friends', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy' }[r.name] || 'Libroxel';
+  return { home: 'Home', games: 'Games', search: 'Search', friends: 'Friends', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy' }[r.name] || 'Libroxel';
 }
 
 function whereabouts(friend) {
@@ -814,12 +871,20 @@ function home() {
         el('div', { class: 'soft' }, 'Find a game, press Play, and Libroxel opens straight into it. ',
           el('a', { href: '/sign-in' }, 'Sign in'), ' to see your friends.'))));
   }
-  out.push(el('h2', { class: 'section' }, 'Games'));
-  out.push(el('p', { class: 'note' }, 'Pick a game to see its servers, or press Play on its page to jump in.'));
-  if (!data.loaded) out.push(el('p', { class: 'soft' }, 'Loading…'));
-  out.push(el('div', { class: 'games' }, entries().map(gameCard)));
+  out.push(gamesList());
   return out;
 }
+
+function gamesList() {
+  return [
+    el('h2', { class: 'section' }, 'Games'),
+    el('p', { class: 'note' }, 'Pick a game to see its servers, or press Play on its page to jump in.'),
+    !data.loaded && el('p', { class: 'soft' }, 'Loading…'),
+    el('div', { class: 'games' }, entries().map(gameCard)),
+  ];
+}
+
+const gamesPage = () => gamesList();
 
 function gameCard(entry) {
   const inside = friends().filter((f) => entry.servers.some((s) => s.server_id === f.server?.server_id));
@@ -1113,48 +1178,70 @@ function user() {
 // --- Avatar -----------------------------------------------------------------
 
 let draft = null;
+const catalog = { items: [], at: 0 };
+
+function loadCatalog() {
+  if (Date.now() - catalog.at < 5000) return;
+  catalog.at = Date.now();
+  api('/catalog').then((items) => { catalog.items = items; render(); }).catch(() => {});
+}
 
 function avatar() {
   if (!session) return needSignIn('Sign in to change how you look in every game you play.');
   if (!data.me) return [el('h1', { class: 'title' }, 'Your avatar'), el('p', { class: 'soft' }, data.loaded ? 'Your account could not be loaded.' : 'Loading…')];
   if (!draft || draft.for !== session.playerId) {
-    draft = { for: session.playerId, look: readLook(data.me.look, data.me.name), about: data.me.about || '', message: null };
+    draft = { for: session.playerId, look: readLook(data.me.look, data.me.name, lookFor(0n)), about: data.me.about || '', message: null };
   }
+  loadCatalog();
   const look = draft.look;
-  const row = (label, key, choices) => el('div', {},
-    el('div', {}, label),
-    el('div', { class: 'swatches' }, choices.map((c) => el('button', {
-      class: `swatch${look[key].join() === c.join() ? ' on' : ''}`, style: `background:${rgb(c)}`, title: rgb(c),
-      onclick: () => { look[key] = c; draft.message = null; render(); },
-    }))));
+  const changed = () => { draft.message = null; render(); };
+  const swatches = (key, choices) => {
+    const pick = el('input', { type: 'color', class: 'swatch pick', value: `#${look[key].map((v) => v.toString(16).padStart(2, '0')).join('')}` });
+    pick.addEventListener('change', () => { look[key] = pick.value.match(/[0-9a-f]{2}/gi).map((h) => parseInt(h, 16)); changed(); });
+    return el('div', { class: 'swatches' }, choices.map((c) => el('button', {
+      class: `swatch${look[key].join() === c.join() ? ' on' : ''}`, style: `--c:${c.join(', ')}`, title: rgb(c),
+      onclick: () => { look[key] = c; changed(); },
+    })), pick);
+  };
+  const row = (label, key, choices) => [el('div', { class: 'caps' }, label), swatches(key, choices)];
   const about = el('textarea', { rows: 3, maxlength: 2000 }, draft.about);
   about.addEventListener('input', () => { draft.about = about.value; });
   const save = el('button', { class: 'btn go', onclick: () => saveAccount(save) }, icon(ICON.check), 'Save');
+  const hats = catalog.items.map((item) => [item, readItem(item.data)]).filter(([, hat]) => hat);
+  const same = (hat) => look.item && JSON.stringify(look.item.json) === JSON.stringify(hat.json);
   return [
     el('h1', { class: 'title' }, 'Your avatar'),
     el('p', { class: 'note' }, 'How you look in every game you play or join. Other players see it too.'),
     el('div', { class: 'avatar-page' },
-      el('div', { class: 'figure' }, figure(look, data.me.name), el('div', {}, look.hat)),
+      el('div', { class: 'figure' }, figure(look)),
       el('div', { style: 'flex:1;min-width:280px' },
-        row('Skin', 'skin', SKINS),
-        row('Shirt', 'shirt', CLOTHES),
-        row('Trousers', 'pants', CLOTHES),
-        el('div', {}, 'Hat'),
-        el('div', { class: 'hats' }, HATS.map((h) => el('button', { class: `chip${look.hat === h ? ' on' : ''}`, onclick: () => { look.hat = h; delete look.item; render(); } }, h))),
-        (look.hat !== 'No hat' || look.item) && row('Hat colour', 'hat_color', CLOTHES),
-        el('label', { class: 'field' }, el('span', {}, 'About you'), about),
+        row('Skin', 'skin', AVATAR.skins),
+        row('Shirt', 'shirt', AVATAR.clothes),
+        row('Trousers', 'pants', AVATAR.clothes),
+        el('div', { class: 'caps' }, 'Hat'),
+        el('div', { class: 'hats' }, HATS.map((h) => el('button', { class: `chip${look.hat === h && !look.item ? ' on' : ''}`, onclick: () => { look.hat = h; delete look.item; changed(); } }, h))),
+        look.hat !== 'No hat' && swatches('hat_color', AVATAR.clothes),
         el('div', { class: 'form-actions' },
-          save,
-          el('button', { class: 'chip', onclick: () => { draft.look = usualLook(data.me.name); render(); } }, 'Back to the usual look')),
-        draft.message && status(draft.message.text, draft.message.kind))),
+          el('button', { class: 'chip', onclick: () => { draft.look = lookFor(0n); changed(); } }, 'Back to the usual look')))),
+    el('h2', { class: 'section' }, 'Catalog'),
+    el('p', { class: 'note' }, 'Hats people made and shared. To make one, build it from parts in the editor, select its model and use Model > Share as hat.'),
+    look.item && el('div', { class: 'form-actions' }, `Wearing ${look.item.name}`, el('button', { class: 'chip', onclick: () => { delete look.item; changed(); } }, 'Take it off')),
+    hats.length
+      ? el('div', { class: 'catalog' }, hats.map(([item, hat]) => el('div', { class: 'item' },
+        el('b', {}, item.name),
+        el('small', {}, `by ${item.creator} · worn ${item.wears}`),
+        el('button', { class: 'chip', disabled: same(hat), onclick: () => { look.item = hat; api(`/catalog/${encodeURIComponent(item.item_id)}/wear`, { method: 'POST' }).catch(() => {}); changed(); } }, same(hat) ? 'Wearing' : 'Wear'))))
+      : el('p', { class: 'soft' }, 'Nothing in the catalog yet.'),
+    el('label', { class: 'field' }, el('span', {}, 'About you'), about),
+    el('div', { class: 'form-actions' }, save),
+    draft.message && status(draft.message.text, draft.message.kind),
     security(),
   ];
 }
 
 async function saveAccount(button) {
   button.disabled = true;
-  const look = { ...draft.look };
-  if (!look.item) delete look.item;
+  const look = lookJson(draft.look);
   const name = data.me.name;
   const about = draft.about;
   const time = Math.max(nowSecs(), lastSigned.account + 1);
@@ -1164,7 +1251,7 @@ async function saveAccount(button) {
     await api('/accounts', { method: 'POST', body: { player_id: session.playerId, name, about, look, time, signature } });
     draft.message = { text: 'Saved. You look like this in every game now.' };
     await refresh();
-    draft.look = readLook(data.me.look, name);
+    draft.look = readLook(data.me.look, name, lookFor(0n));
   } catch (e) {
     draft.message = { text: e.message, kind: 'error' };
   }

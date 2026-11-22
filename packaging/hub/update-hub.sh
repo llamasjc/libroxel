@@ -193,9 +193,9 @@ for name in libroxel-hub-linux-x86_64 setup-hub.sh update-hub.sh SHA256SUMS.txt;
 done
 (cd "$work" && grep -E ' (libroxel-hub-linux-x86_64|setup-hub.sh|update-hub.sh)$' SHA256SUMS.txt | sha256sum --check --strict --quiet) \
     || { log "checksums don't match; not installing $tag"; exit 1; }
-# The app, for game servers, from the release's Debian package.
+# The app, from the release's Debian package.
 app="$(jq -r '.assets[] | select(.name | test("^libroxel-.*linux-x86_64\\.deb$")) | .name' <<<"$release" | head -n 1)"
-if [ "$GAME_SERVERS" = yes ] && [ -n "$app" ]; then
+if [ -n "$app" ]; then
     api application/octet-stream "$(asset_url "$app")" -o "$work/$app"
     if (cd "$work" && grep -F " $app" SHA256SUMS.txt | sha256sum --check --strict --quiet); then
         dpkg-deb -x "$work/$app" "$work/app"

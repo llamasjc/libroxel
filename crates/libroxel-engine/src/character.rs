@@ -75,19 +75,143 @@ pub struct BodyColors {
     pub pants: Color3,
 }
 
-/// Shirt colours, handed out to players in turn by their user id.
-pub const SHIRTS: [[u8; 3]; 6] =
-    [[236, 98, 74], [124, 92, 214], [32, 168, 150], [242, 170, 40], [226, 86, 150], [70, 150, 230]];
+/// The avatar's colours, hats and front view, shared with the website.
+pub struct Avatar {
+    pub skins: Vec<[u8; 3]>,
+    pub clothes: Vec<[u8; 3]>,
+    /// Shirt colours, handed out to players in turn by their user id.
+    pub shirts: Vec<[u8; 3]>,
+    pub skin: [u8; 3],
+    pub pants: [u8; 3],
+    pub hat_color: [u8; 3],
+    /// The colour of hat parts that aren't in the hat's colour.
+    pub dark: [u8; 3],
+    hats: Vec<Vec<HatPiece>>,
+    pub front: Front,
+}
+
+/// One part of a [`Hat`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct HatPiece {
+    pub name: String,
+    pub size: [f32; 3],
+    /// From the middle of the head.
+    pub at: [f32; 3],
+    /// Degrees about Z.
+    pub turn: f32,
+    pub shape: PartShape,
+    pub glow: bool,
+    /// In the hat's colour, or else [`Avatar::dark`].
+    pub tinted: bool,
+}
+
+/// How the Avatar tab draws the figure from the front.
+pub struct Front {
+    pub width: f32,
+    pub height: f32,
+    pub scale: f32,
+    pub hips: f32,
+    pub head: f32,
+    pub edge: f32,
+    pub eye: [u8; 3],
+    /// Middle, size, and which colour: skin, shirt, pants or eye.
+    pub blocks: Vec<([f32; 2], [f32; 2], String)>,
+}
+
+/// The avatar, from web/avatar.json.
+pub fn avatar() -> &'static Avatar {
+    static AVATAR: std::sync::LazyLock<Avatar> = std::sync::LazyLock::new(|| {
+        let text = include_str!("../../../web/avatar.json");
+        let json = libroxel_instance::serde_json::from_str(text).expect("avatar.json is JSON");
+        Avatar::from_json(&json).expect("avatar.json has everything")
+    });
+    &AVATAR
+}
+
+impl Avatar {
+    fn from_json(j: &libroxel_instance::serde_json::Value) -> Option<Avatar> {
+        use libroxel_instance::serde_json::Value;
+        let num = |v: &Value| v.as_f64().map(|n| n as f32);
+        let byte = |v: &Value| v.as_u64().filter(|n| *n <= 255).map(|n| n as u8);
+        let rgb = |v: &Value| -> Option<[u8; 3]> {
+            let a = v.as_array().filter(|a| a.len() == 3)?;
+            Some([byte(&a[0])?, byte(&a[1])?, byte(&a[2])?])
+        };
+        let floats = |v: &Value, n: usize| -> Option<Vec<f32>> {
+            let a = v.as_array().filter(|a| a.len() == n)?;
+            a.iter().map(num).collect()
+        };
+        let colours =
+            |key: &str| -> Option<Vec<[u8; 3]>> { j.get(key)?.as_array()?.iter().map(rgb).collect() };
+        let mut hats = Vec::new();
+        for (hat, entry) in Hat::ALL.into_iter().zip(j.get("hats")?.as_array()?) {
+            if entry.get("name")?.as_str()? != hat.name() {
+                return None;
+            }
+            let mut pieces = Vec::new();
+            for p in entry.get("parts")?.as_array()? {
+                let flag = |key: &str| p.get(key).and_then(Value::as_bool).unwrap_or(false);
+                let size = floats(p.get("size")?, 3)?;
+                let at = floats(p.get("at")?, 3)?;
+                pieces.push(HatPiece {
+                    name: p.get("name")?.as_str()?.to_owned(),
+                    size: [size[0], size[1], size[2]],
+                    at: [at[0], at[1], at[2]],
+                    turn: p.get("turn").and_then(num).unwrap_or(0.0),
+                    shape: match p.get("shape")?.as_str()? {
+                        "Ball" => PartShape::Ball,
+                        "Cylinder" => PartShape::Cylinder,
+                        "Wedge" => PartShape::Wedge,
+                        _ => PartShape::Block,
+                    },
+                    glow: flag("glow"),
+                    tinted: flag("tinted"),
+                });
+            }
+            hats.push(pieces);
+        }
+        if hats.len() != Hat::ALL.len() {
+            return None;
+        }
+        let f = j.get("front")?;
+        let mut blocks = Vec::new();
+        for b in f.get("blocks")?.as_array()? {
+            let (at, size) = (floats(b.get("at")?, 2)?, floats(b.get("size")?, 2)?);
+            blocks.push(([at[0], at[1]], [size[0], size[1]], b.get("color")?.as_str()?.to_owned()));
+        }
+        let fnum = |key: &str| f.get(key).and_then(num);
+        Some(Avatar {
+            skins: colours("skins")?,
+            clothes: colours("clothes")?,
+            shirts: colours("shirts")?,
+            skin: rgb(j.get("skin")?)?,
+            pants: rgb(j.get("pants")?)?,
+            hat_color: rgb(j.get("hat_color")?)?,
+            dark: rgb(j.get("dark")?)?,
+            hats,
+            front: Front {
+                width: fnum("width")?,
+                height: fnum("height")?,
+                scale: fnum("scale")?,
+                hips: fnum("hips")?,
+                head: fnum("head")?,
+                edge: fnum("edge")?,
+                eye: rgb(f.get("eye")?)?,
+                blocks,
+            },
+        })
+    }
+}
+
+fn color(c: [u8; 3]) -> Color3 {
+    Color3::from_rgb8(c[0], c[1], c[2])
+}
 
 impl BodyColors {
     /// The usual look, with the shirt for player number `n`.
     pub fn for_player(n: usize) -> BodyColors {
-        let [r, g, b] = SHIRTS[n % SHIRTS.len()];
-        BodyColors {
-            skin: Color3::from_rgb8(238, 196, 160),
-            shirt: Color3::from_rgb8(r, g, b),
-            pants: Color3::from_rgb8(50, 56, 84),
-        }
+        let a = avatar();
+        BodyColors { skin: color(a.skin), shirt: color(a.shirts[n % a.shirts.len()]), pants: color(a.pants) }
     }
 }
 
@@ -124,36 +248,9 @@ impl Hat {
         Hat::ALL.into_iter().find(|h| h.name() == name).unwrap_or_default()
     }
 
-    /// The parts it's made of: name, size, offset from the middle of the
-    /// head, turn (degrees), shape, whether it glows, and whether it's in
-    /// the hat's colour (or a fixed dark one).
-    #[allow(clippy::type_complexity)]
-    pub fn parts(self) -> &'static [(&'static str, [f32; 3], [f32; 3], f32, PartShape, bool, bool)] {
-        use PartShape::*;
-        match self {
-            Hat::None => &[],
-            Hat::Cap => &[
-                ("Top", [1.7, 0.4, 1.5], [0.0, 0.85, 0.0], 0.0, Block, false, true),
-                ("Brim", [1.7, 0.12, 0.7], [0.0, 0.7, -0.95], 0.0, Block, false, true),
-            ],
-            Hat::TallHat => &[
-                ("Brim", [2.2, 0.12, 2.0], [0.0, 0.76, 0.0], 0.0, Block, false, false),
-                ("Tower", [1.4, 1.4, 1.3], [0.0, 1.5, 0.0], 0.0, Block, false, false),
-                ("Band", [1.45, 0.25, 1.35], [0.0, 0.95, 0.0], 0.0, Block, false, true),
-            ],
-            Hat::Crown => &[
-                ("Base", [1.7, 0.4, 1.5], [0.0, 0.9, 0.0], 0.0, Block, false, true),
-                ("Point1", [0.35, 0.45, 0.35], [-0.65, 1.3, -0.55], 0.0, Block, false, true),
-                ("Point2", [0.35, 0.45, 0.35], [0.65, 1.3, -0.55], 0.0, Block, false, true),
-                ("Point3", [0.35, 0.45, 0.35], [-0.65, 1.3, 0.55], 0.0, Block, false, true),
-                ("Point4", [0.35, 0.45, 0.35], [0.65, 1.3, 0.55], 0.0, Block, false, true),
-            ],
-            Hat::Halo => &[("Ring", [0.12, 1.8, 1.8], [0.0, 1.3, 0.0], 90.0, Cylinder, true, true)],
-            Hat::Antenna => &[
-                ("Stick", [0.12, 1.0, 0.12], [0.0, 1.2, 0.0], 0.0, Block, false, false),
-                ("Tip", [0.45, 0.45, 0.45], [0.0, 1.85, 0.0], 0.0, Ball, true, true),
-            ],
-        }
+    /// The parts it's made of.
+    pub fn parts(self) -> &'static [HatPiece] {
+        &avatar().hats[self as usize]
     }
 }
 
@@ -339,7 +436,7 @@ impl Look {
         Look {
             colors: BodyColors::for_player(n),
             hat: Hat::None,
-            hat_color: Color3::from_rgb8(240, 200, 60),
+            hat_color: color(avatar().hat_color),
             item: None,
         }
     }
@@ -400,23 +497,23 @@ pub fn wear_hat(tree: &mut InstanceTree, model: InstanceId, hat: Hat, color: Col
     }
     let accessory = tree.create(ClassKind::Accessory, hat.name()).ok()?;
     tree.set_parent(accessory, Some(model)).ok()?;
-    for (name, size, offset, turn, shape, glow, tinted) in hat.parts() {
-        let id = tree.create(ClassKind::Part, *name).expect("parts can be created");
+    for part in hat.parts() {
+        let id = tree.create(ClassKind::Part, part.name.as_str()).expect("parts can be created");
         tree.set_parent(id, Some(accessory)).expect("fresh parts can be parented");
-        let size = Vec3::new(size[0], size[1], size[2]);
-        set(tree, id, Property::Size, PropertyValue::Vec3(size));
-        let color = if *tinted { color } else { Color3::from_rgb8(35, 35, 42) };
+        let [x, y, z] = part.size;
+        set(tree, id, Property::Size, PropertyValue::Vec3(Vec3::new(x, y, z)));
+        let color = if part.tinted { color } else { self::color(avatar().dark) };
         set(tree, id, Property::Color, PropertyValue::Color3(color));
         set(tree, id, Property::Anchored, PropertyValue::Bool(true));
         set(tree, id, Property::CanCollide, PropertyValue::Bool(false));
-        set(tree, id, Property::Shape, PropertyValue::Enum(EnumValue::Shape(*shape)));
-        if *glow {
+        set(tree, id, Property::Shape, PropertyValue::Enum(EnumValue::Shape(part.shape)));
+        if part.glow {
             set(tree, id, Property::Material, PropertyValue::Enum(EnumValue::Material(Material::Neon)));
         }
-        let offset = Vec3::new(offset[0], offset[1], offset[2]);
-        let _ = tree.set_attribute(id, names::HEAD_OFFSET, Some(PropertyValue::Vec3(offset)));
-        if *turn != 0.0 {
-            let turn = Vec3::new(0.0, 0.0, *turn);
+        let [x, y, z] = part.at;
+        let _ = tree.set_attribute(id, names::HEAD_OFFSET, Some(PropertyValue::Vec3(Vec3::new(x, y, z))));
+        if part.turn != 0.0 {
+            let turn = Vec3::new(0.0, 0.0, part.turn);
             let _ = tree.set_attribute(id, names::HEAD_ORIENTATION, Some(PropertyValue::Vec3(turn)));
         }
     }
@@ -1196,6 +1293,16 @@ pub fn fall_apart(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_avatar_file_has_every_hat() {
+        let a = avatar();
+        assert_eq!(a.skins.len(), 8);
+        assert_eq!(a.clothes.len(), 16);
+        assert_eq!(Hat::Cap.parts()[1].name, "Brim");
+        assert_eq!(Hat::Antenna.parts()[1].shape, PartShape::Ball);
+        assert!(Hat::None.parts().is_empty());
+    }
 
     #[test]
     fn turning_goes_the_short_way_and_takes_a_moment() {

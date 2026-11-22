@@ -63,6 +63,7 @@ pub enum Pick {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Home,
+    Games,
     Search,
     Friends,
     Create,
@@ -374,6 +375,7 @@ impl Menu {
                     Tab::Home => {
                         crate::hub_home::home_tab(&mut self.home, ui, platform, &name, &mut self.tab)
                     }
+                    Tab::Games => crate::hub_home::games_tab(&mut self.home, ui, platform, &name),
                     Tab::Search => {
                         crate::hub_home::search_tab(&mut self.home, ui, platform, &mut self.tab);
                         None
@@ -406,7 +408,7 @@ impl Menu {
     fn go(&mut self, tab: Tab) {
         self.tab = tab;
         self.error = None;
-        if tab == Tab::Home {
+        if matches!(tab, Tab::Home | Tab::Games) {
             self.home.view = crate::hub_home::View::Home;
         }
     }
@@ -637,7 +639,8 @@ impl Menu {
 }
 
 /// The tabs along the top bar, after the mark (which is Home).
-const TOP_TABS: [(Tab, &str, &str); 3] = [
+const TOP_TABS: [(Tab, &str, &str); 4] = [
+    (Tab::Games, theme::icon::GAME_CONTROLLER, "Games"),
     (Tab::Friends, theme::icon::USERS, "Friends"),
     (Tab::Avatar, theme::icon::T_SHIRT, "Avatar"),
     (Tab::Create, theme::icon::HAMMER, "Create"),
@@ -689,40 +692,11 @@ fn avatar_file() -> PathBuf {
     data_dir().join("avatar.json")
 }
 
-/// Colours to pick from on the Avatar tab, for skin and for clothes.
-const SKINS: [[u8; 3]; 8] = [
-    [255, 224, 196],
-    [238, 196, 160],
-    [222, 172, 128],
-    [196, 140, 96],
-    [160, 108, 72],
-    [118, 78, 52],
-    [86, 56, 38],
-    [120, 200, 120],
-];
-const CLOTHES: [[u8; 3]; 16] = [
-    [236, 98, 74],
-    [242, 170, 40],
-    [250, 220, 70],
-    [120, 200, 80],
-    [32, 168, 150],
-    [70, 150, 230],
-    [50, 56, 84],
-    [124, 92, 214],
-    [226, 86, 150],
-    [240, 240, 240],
-    [150, 150, 160],
-    [40, 40, 46],
-    [120, 80, 50],
-    [180, 40, 50],
-    [20, 90, 60],
-    [250, 200, 60],
-];
-
 /// A row of colour squares; the chosen one is outlined. The last square
 /// opens a picker for any colour.
 fn swatches(ui: &mut egui::Ui, color: &mut Color3, label: &str) {
-    let choices: &[[u8; 3]] = if label == "Skin" { &SKINS } else { &CLOTHES };
+    let avatar = libroxel_engine::character::avatar();
+    let choices = if label == "Skin" { &avatar.skins } else { &avatar.clothes };
     let rgb = |c: Color3| {
         let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         [byte(c.r), byte(c.g), byte(c.b)]
@@ -761,41 +735,45 @@ fn swatches(ui: &mut egui::Ui, color: &mut Color3, label: &str) {
 
 /// Draws the avatar from the front, the way the character is built.
 fn draw_avatar(ui: &mut egui::Ui, look: &Look) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(220.0, 300.0), egui::Sense::hover());
+    let avatar = libroxel_engine::character::avatar();
+    let front = &avatar.front;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(front.width, front.height), egui::Sense::hover());
     let painter = ui.painter_at(rect);
-    let scale = 42.0;
-    // The hips are the middle of the character; up is up the screen.
-    let hips = egui::pos2(rect.center().x, rect.min.y + 175.0);
+    let scale = front.scale;
+    let hips = egui::pos2(rect.center().x, rect.min.y + front.hips);
     let at = |x: f32, y: f32| egui::pos2(hips.x + x * scale, hips.y - y * scale);
     let colour = |c: Color3| {
         let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         Color32::from_rgb(byte(c.r), byte(c.g), byte(c.b))
     };
-    let shade = |c: Color32| c.gamma_multiply(0.82);
+    let rgb = |[r, g, b]: [u8; 3]| Color32::from_rgb(r, g, b);
     let block = |x: f32, y: f32, w: f32, h: f32, c: Color32| {
         let r = egui::Rect::from_center_size(at(x, y), egui::vec2(w * scale, h * scale));
         painter.rect_filled(r, 1.0, c);
-        painter.rect_stroke(r, 1.0, egui::Stroke::new(1.5, shade(c)), egui::StrokeKind::Inside);
+        painter.rect_stroke(
+            r,
+            1.0,
+            egui::Stroke::new(1.5, c.gamma_multiply(front.edge)),
+            egui::StrokeKind::Inside,
+        );
     };
     let BodyColors { skin, shirt, pants } = look.colors;
-    let (skin, shirt, pants) = (colour(skin), colour(shirt), colour(pants));
-    block(-0.5, -1.0, 0.95, 2.0, pants);
-    block(0.5, -1.0, 0.95, 2.0, pants);
-    block(-1.5, 0.85, 0.8, 1.9, skin);
-    block(1.5, 0.85, 0.8, 1.9, skin);
-    block(0.0, 0.9, 2.2, 1.8, shirt);
-    block(0.0, 2.55, 1.6, 1.4, skin);
-    let eye = Color32::from_rgb(30, 30, 40);
-    block(-0.35, 2.65, 0.25, 0.35, eye);
-    block(0.35, 2.65, 0.25, 0.35, eye);
+    for ([x, y], [w, h], part) in &front.blocks {
+        let c = match part.as_str() {
+            "skin" => colour(skin),
+            "shirt" => colour(shirt),
+            "pants" => colour(pants),
+            _ => rgb(front.eye),
+        };
+        block(*x, *y, *w, *h, c);
+    }
     if let Some(item) = &look.item {
-        // Seen from the front, sorted back to front so nearer parts cover farther ones.
         let mut parts: Vec<_> = item.parts.iter().collect();
         parts.sort_by(|a, b| b.offset.z.total_cmp(&a.offset.z));
         for part in parts {
             let sideways = (part.turn.z.abs() - 90.0).abs() < 1.0;
             let (w, h) = if sideways { (part.size.y, part.size.x) } else { (part.size.x, part.size.y) };
-            let (x, y) = (part.offset.x, 2.55 + part.offset.y);
+            let (x, y) = (part.offset.x, front.head + part.offset.y);
             if part.shape == libroxel_instance::PartShape::Ball {
                 painter.circle_filled(at(x, y), w * scale / 2.0, colour(part.color));
             } else {
@@ -804,12 +782,12 @@ fn draw_avatar(ui: &mut egui::Ui, look: &Look) {
         }
     }
     let hat = if look.item.is_some() { libroxel_engine::character::Hat::None } else { look.hat };
-    for (_, size, offset, turn, shape, _, tinted) in hat.parts() {
-        let c = if *tinted { colour(look.hat_color) } else { Color32::from_rgb(35, 35, 42) };
-        // A part turned on its side shows its other face.
-        let (w, h) = if *turn != 0.0 { (size[1], size[0]) } else { (size[0], size[1]) };
-        let (x, y) = (offset[0], 2.55 + offset[1]);
-        if *shape == libroxel_instance::PartShape::Ball {
+    for part in hat.parts() {
+        let c = if part.tinted { colour(look.hat_color) } else { rgb(avatar.dark) };
+        let [w, h] =
+            if part.turn != 0.0 { [part.size[1], part.size[0]] } else { [part.size[0], part.size[1]] };
+        let (x, y) = (part.at[0], front.head + part.at[1]);
+        if part.shape == libroxel_instance::PartShape::Ball {
             painter.circle_filled(at(x, y), w * scale / 2.0, c);
         } else {
             block(x, y, w, h, c);
