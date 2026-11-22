@@ -78,6 +78,7 @@ Root: HKCU; Subkey: "Software\Classes\libroxel\shell\open\command"; ValueType: s
 
 [Run]
 Filename: "{app}\libroxel.exe"; Description: "Open Libroxel now"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\libroxel.exe"; Flags: nowait; Check: WizardSilent
 
 [Code]
 const

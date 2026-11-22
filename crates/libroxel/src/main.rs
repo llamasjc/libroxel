@@ -42,6 +42,7 @@ mod terrain_tools;
 mod theme;
 mod touch;
 mod ui;
+mod update;
 mod url_handler;
 mod viewport;
 mod viewport_frame;
@@ -298,6 +299,8 @@ fn main() {
     if server::dispatch(&args) {
         return;
     }
+    update::on_start(&args);
+    update::start();
     hub_assets::start(&libroxel_hub::hub_address());
     // Play buttons on the website open this copy of the app.
     url_handler::register();
