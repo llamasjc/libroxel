@@ -615,7 +615,7 @@ impl Platform {
                 ui.colored_label(crate::theme::GREEN, said);
             }
             Some(Err(why)) => {
-                ui.colored_label(crate::theme::RED, why);
+                crate::report::error(ui, why);
             }
             None => {}
         }
@@ -918,7 +918,7 @@ impl Platform {
                 ui.colored_label(crate::theme::GREEN, said);
             }
             Some(Err(why)) => {
-                ui.colored_label(crate::theme::RED, why);
+                crate::report::error(ui, why);
             }
             None => {}
         }
@@ -1041,7 +1041,7 @@ impl Platform {
                 ui.colored_label(crate::theme::GREEN, said);
             }
             Some(Err(why)) => {
-                ui.colored_label(crate::theme::RED, why);
+                crate::report::error(ui, why);
             }
             None => {}
         }
@@ -1111,7 +1111,7 @@ impl Platform {
             ui.colored_label(crate::theme::AMBER, format!("Not yet: {problem}."));
         }
         if let Some(Err(why)) = &self.password_status {
-            ui.colored_label(crate::theme::RED, why);
+            crate::report::error(ui, why);
         }
     }
 
@@ -1198,7 +1198,7 @@ impl Platform {
                 ui.colored_label(crate::theme::GREEN, said);
             }
             Some(Err(why)) => {
-                ui.colored_label(crate::theme::RED, why);
+                crate::report::error(ui, why);
             }
             None => {}
         }
@@ -1325,7 +1325,7 @@ impl Platform {
                 ui.colored_label(crate::theme::GREEN, said);
             }
             Some(Err(why)) => {
-                ui.colored_label(crate::theme::RED, why);
+                crate::report::error(ui, why);
             }
             None => {}
         }
@@ -1513,7 +1513,7 @@ impl Platform {
             self.refresh();
         }
         if let Some(error) = &self.games_error {
-            ui.colored_label(crate::theme::RED, error);
+            crate::report::error(ui, error);
         } else if self.games.is_empty() {
             ui.label(if self.fetching {
                 "Looking…"
@@ -1522,7 +1522,7 @@ impl Platform {
             });
         }
         if let Some(error) = &self.download_error {
-            ui.colored_label(crate::theme::RED, error);
+            crate::report::error(ui, error);
         }
         if let Some(title) = &self.downloading {
             ui.horizontal(|ui| {
@@ -1624,7 +1624,7 @@ impl Platform {
         }
         let mut join = None;
         if let Some(error) = &self.error {
-            ui.colored_label(crate::theme::RED, error);
+            crate::report::error(ui, error);
         } else if self.servers.is_empty() {
             ui.label(if self.fetching {
                 "Looking…"

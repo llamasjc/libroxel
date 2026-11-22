@@ -905,7 +905,10 @@ fn game_page(
                     }
                 });
             } else if let Some(why) = &platform.find_error {
-                ui.colored_label(theme::RED, format!("{why} You can also host it yourself."));
+                ui.horizontal_wrapped(|ui| {
+                    ui.colored_label(theme::RED, format!("{why} You can also host it yourself."));
+                    crate::report::button(ui, why);
+                });
             }
             if let Some(title) = platform.downloading() {
                 ui.horizontal(|ui| {
@@ -1054,12 +1057,12 @@ pub fn friends_tab(
             theme::status(ui, theme::GREEN, said);
         }
         Some(Err(why)) => {
-            theme::status(ui, theme::RED, why);
+            crate::report::status(ui, why);
         }
         None => {}
     }
     if let Some(error) = &platform.social.friends_error {
-        theme::status(ui, theme::RED, error);
+        crate::report::status(ui, error);
     }
     ui.add_space(10.0);
     let friends = platform.social.friends.clone();
