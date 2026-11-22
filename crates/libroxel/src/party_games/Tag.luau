@@ -77,9 +77,9 @@ local function playRound()
 		end)
 		if by then
 			Arena.bump(by, "Tags")
-			Arena.tell(by.name .. " tagged " .. c.name .. "!")
+			Arena.tell(by.name .. " tagged " .. c.name)
 		else
-			Arena.tell(c.name .. " is It! Run!")
+			Arena.tell(c.name .. " is It")
 		end
 		Arena.status(c.name .. " is It")
 	end
@@ -202,14 +202,13 @@ local function playRound()
 	if winner then
 		Arena.bump(winner, "Wins")
 		Arena.role(winner, "Winner")
-		local caught = it and (it.name .. " was It at the end. ") or ""
-		Arena.status(winner.name .. " wins!")
-		Arena.tell(caught .. winner.name .. " wins, It for only " .. math.floor(least) .. "s!")
+		Arena.status(winner.name .. " wins")
+		Arena.tell(winner.name .. " wins (" .. math.floor(least) .. "s as It)")
 	end
 end
 
 while true do
-	Arena.status("Tag starts soon")
+	Arena.status("Next round")
 	Arena.countdown(BREAK)
 	Arena.clock(nil)
 	playRound()

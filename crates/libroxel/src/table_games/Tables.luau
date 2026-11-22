@@ -385,7 +385,7 @@ function Tables.run(folder, Rules)
 		end
 		person.seeking = true
 		if not tryPairing() then
-			toast(person.player, "Looking for someone to play…")
+			toast(person.player, "Searching…")
 		end
 		lobbyChanged()
 	end
@@ -409,7 +409,7 @@ function Tables.run(folder, Rules)
 		local id = newId()
 		challenges[id] = { id = id, from = person.player.UserId, to = target.player.UserId }
 		toast(target.player, person.player.Name .. " wants to play " .. Rules.TITLE .. " with you!")
-		toast(person.player, "Asked " .. target.player.Name .. " to play")
+		toast(person.player, "Sent to " .. target.player.Name)
 		lobbyChanged()
 	end
 

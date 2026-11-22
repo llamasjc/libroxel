@@ -344,7 +344,7 @@ local tabs = {}
 local tabLines = {}
 local tabPages = {}
 local currentTab = "computer"
-local TAB_NAMES = { { "computer", "Play the computer" }, { "people", "Play a person" }, { "watch", "Watch" } }
+local TAB_NAMES = { { "computer", "Computer" }, { "people", "Online" }, { "watch", "Watch" } }
 local TAB_WIDTHS = { 0.42, 0.36, 0.22 }
 local tabX = 0
 for i, info in TAB_NAMES do
@@ -451,9 +451,8 @@ for i, bot in Engine.BOTS do
 	botButtons[i] = { button = b, edge = edge }
 end
 local botsBottom = 24 + 4 * (ROW + 6)
-local botAbout = label(computerBody, { Position = UDim2.new(0, 2, 0, botsBottom), Size = UDim2.new(1, -4, 0, 20), TextSize = 13, TextColor3 = MUTED, Text = "" })
-controlRow(computerBody, "computer", botsBottom + 30)
-local colourY = botsBottom + 30 + 72
+controlRow(computerBody, "computer", botsBottom + 8)
+local colourY = botsBottom + 8 + 72
 sectionTitle(computerBody, "Play as", colourY)
 local chosenColour = "random"
 local colourButtons = {}
@@ -725,7 +724,7 @@ local function fillCard(card, seat, side)
 		return
 	end
 	local letter = if side == 0 then "w" else "b"
-	card.PlayerName.Text = seat.name .. "  (" .. seat.rating .. ")" .. (if seat.bot then "  · computer" else "")
+	card.PlayerName.Text = seat.name .. "  (" .. seat.rating .. ")" .. (if seat.bot then "" else "")
 	local taken, lead = capturedText(letter)
 	card.Detail.Text = (if side == 0 then "White" else "Black") .. (if taken ~= "" then "  ·  took " .. taken else "") .. (if lead > 0 then " +" .. lead else "")
 	card.Dot.BackgroundColor3 = if seat.bot and seat.colour then seat.colour else if side == 0 then Color3.fromRGB(240, 240, 240) else Color3.fromRGB(30, 30, 30)
@@ -753,7 +752,7 @@ local function updateClocks()
 	end
 	if view.firstMoveLeft and view.firstMoveLeft >= 0 and view.status == "playing" and not view.vsBot then
 		local left = math.max(0, view.firstMoveLeft - math.floor(elapsed / 1000))
-		gameSub.Text = (if position and position.side == 0 then "White" else "Black") .. " has " .. left .. "s to make a first move"
+		gameSub.Text = (if position and position.side == 0 then "White" else "Black") .. " to move: " .. left .. "s"
 	end
 end
 
@@ -798,10 +797,10 @@ local function drawThoughts()
 	movesBox.Position = UDim2.new(0, 18, 0, if thoughts.Visible then 160 else 58)
 	movesBox.Size = UDim2.new(1, -36, 1, if thoughts.Visible then -340 else -238)
 	if info then
-		thoughtsTitle.Text = (if info.by then info.by .. "'s thoughts" else "Engine") .. (if view.thinking then "  · thinking…" else "")
+		thoughtsTitle.Text = (if info.by then info.by else "Engine") .. (if view.thinking then "  …" else "")
 		thoughtsScore.Text = if info.book then "Book" else Engine.scoreText(info.score)
 		local speed = if info.time > 0.01 then math.floor(info.nodes / info.time / 1000) .. "k positions/s" else ""
-		thoughtsStats.Text = if info.book then "An opening it knows" else
+		thoughtsStats.Text = if info.book then "Opening book" else
 			"Depth " .. info.depth .. " · " .. info.nodes .. " positions\n" .. speed
 		thoughtsLine.Text = "Line: " .. table.concat(info.line, " ")
 		local share = Engine.whiteShare(info.score)
@@ -810,9 +809,9 @@ local function drawThoughts()
 		evalFill.Position = if flipped then UDim2.fromScale(0, 0) else UDim2.fromScale(0, 1)
 		evalText.Text = if info.book then "" else Engine.scoreText(info.score)
 	else
-		thoughtsTitle.Text = "The computer's thoughts"
+		thoughtsTitle.Text = "Engine"
 		thoughtsScore.Text = "0.00"
-		thoughtsStats.Text = "Waiting for its first move"
+		thoughtsStats.Text = ""
 		thoughtsLine.Text = ""
 		evalFill.Size = UDim2.fromScale(1, 0.5)
 		evalText.Text = ""
@@ -837,8 +836,8 @@ local function drawGame()
 	else
 		gameTitle.Text = RESULT_WORDS[view.result] or "Game over"
 	end
-	local kind = if view.vsBot then "Against the computer" elseif view.rated then "Rated" else "Casual"
-	gameSub.Text = kind .. " · " .. controlText(view.control) .. (if position:inCheck() and playing then " · Check!" else "")
+	local kind = if view.vsBot then "Computer" elseif view.rated then "Rated" else "Casual"
+	gameSub.Text = kind .. " · " .. controlText(view.control) .. (if position:inCheck() and playing then " · Check" else "")
 
 	drawThoughts()
 	drawMoves()
@@ -856,7 +855,7 @@ local function drawGame()
 	fitActions()
 	chatRow.Visible = not watching and not view.vsBot and playing
 	backButton.Visible = watching or not playing
-	backButton.Text = if watching then "<b>Back to lobby</b>" else "<b>New game</b>"
+	backButton.Text = if watching then "<b>Back</b>" else "<b>New game</b>"
 	if not view.vsBot and #view.chat > 0 then
 		chatLog.Text = view.chat[#view.chat]
 	else
@@ -876,7 +875,7 @@ local function drawGame()
 				resultTitle.Text = "You lose"
 			end
 		end
-		resultReason.Text = if view.reason == "aborted" then "Not enough moves were made" else "By " .. view.reason
+		resultReason.Text = if view.reason == "aborted" then "Aborted" else "By " .. view.reason
 		if view.change and side ~= nil then
 			local delta = view.change[side + 1]
 			local seat = if side == 0 then view.white else view.black
@@ -931,8 +930,7 @@ local function drawLobby()
 		b.button.BackgroundColor3 = if i == chosenBot then CARD_PICKED else CARD
 		b.edge.Transparency = if i == chosenBot then 0 else 1
 	end
-	botAbout.Text = bot.name .. ": " .. bot.about
-	playBotButton.Text = "<b>Play</b>  <font size=\"17\">vs " .. bot.name .. "</font>"
+	playBotButton.Text = "<b>Play</b>"
 	for control, b in controlButtons.computer do
 		b.BackgroundColor3 = if control == chosenControl then CARD_PICKED else CARD
 	end
@@ -943,10 +941,10 @@ local function drawLobby()
 		b.BackgroundColor3 = if colour == chosenColour then CARD_PICKED else CARD
 	end
 	if my.seeking ~= "" then
-		seekButton.Text = "Looking for a " .. controlText(my.seeking) .. " game…  <font size=\"15\">(cancel)</font>"
+		seekButton.Text = "Searching " .. controlText(my.seeking) .. "…  <font size=\"15\">Cancel</font>"
 		seekButton.BackgroundColor3 = ORANGE
 	else
-		seekButton.Text = "<b>Find a game</b>  <font size=\"16\">" .. controlText(chosenPeopleControl) .. "</font>"
+		seekButton.Text = "<b>Find game</b>  <font size=\"16\">" .. controlText(chosenPeopleControl) .. "</font>"
 		seekButton.BackgroundColor3 = PRIMARY
 	end
 
@@ -968,7 +966,7 @@ local function drawLobby()
 	end
 	for _, c in lobby.outgoing do
 		local row = rowFrame(challengeList, y, 44)
-		label(row, { Position = UDim2.new(0, 10, 0, 0), Size = UDim2.new(0.7, 0, 1, 0), TextSize = 14, Text = "You challenged " .. c.name .. " · " .. controlText(c.control) })
+		label(row, { Position = UDim2.new(0, 10, 0, 0), Size = UDim2.new(0.7, 0, 1, 0), TextSize = 14, Text = "Sent to " .. c.name .. " · " .. controlText(c.control) })
 		local cancel = button(row, "Cancel", GREY, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(76, 30), TextSize = 14 })
 		cancel.MouseButton1Click:Connect(function()
 			send("answer", { id = c.id, accept = false })
@@ -978,7 +976,7 @@ local function drawLobby()
 	if y == 0 then
 		local row = rowFrame(challengeList, 0, 30)
 		row.BackgroundTransparency = 1
-		label(row, { Position = UDim2.new(0, 2, 0, 0), Size = UDim2.new(1, 0, 1, 0), TextSize = 14, TextColor3 = MUTED, Text = "None yet. Challenge someone below." })
+		label(row, { Position = UDim2.new(0, 2, 0, 0), Size = UDim2.new(1, 0, 1, 0), TextSize = 14, TextColor3 = MUTED, Text = "No challenges" })
 		y = 34
 	end
 	playersTitle.Position = UDim2.new(0, 0, 0, 106 + y)
@@ -1000,7 +998,7 @@ local function drawLobby()
 	if #lobby.players == 0 then
 		local row = rowFrame(playerList, 0, 60)
 		row.BackgroundTransparency = 1
-		label(row, { Position = UDim2.new(0, 2, 0, 0), Size = UDim2.new(1, -4, 1, 0), TextSize = 14, TextColor3 = MUTED, TextWrapped = true, Text = "Nobody else is here yet. Host this game so friends can join, or play the computer meanwhile." })
+		label(row, { Position = UDim2.new(0, 2, 0, 0), Size = UDim2.new(1, -4, 1, 0), TextSize = 14, TextColor3 = MUTED, TextWrapped = true, Text = "No one else here" })
 	end
 	playerList.CanvasSize = UDim2.new(0, 0, 0, #lobby.players * 52)
 
@@ -1019,7 +1017,7 @@ local function drawLobby()
 	if #lobby.live == 0 then
 		local row = rowFrame(liveList, 0, 40)
 		row.BackgroundTransparency = 1
-		label(row, { Position = UDim2.new(0, 2, 0, 0), Size = UDim2.new(1, 0, 1, 0), TextSize = 14, TextColor3 = MUTED, Text = "No games right now." })
+		label(row, { Position = UDim2.new(0, 2, 0, 0), Size = UDim2.new(1, 0, 1, 0), TextSize = 14, TextColor3 = MUTED, Text = "No games" })
 	end
 	liveList.CanvasSize = UDim2.new(0, 0, 0, #lobby.live * 56)
 end
@@ -1035,14 +1033,14 @@ local function showPage()
 			card.Clock.Visible = false
 		end
 		local bot = Engine.BOTS[chosenBot]
-		topCard.PlayerName.Text = if currentTab == "people" then "Press Find a game, or challenge someone" else "Pick a game to watch"
-		topCard.Detail.Text = if currentTab == "people" then "You'll be paired with someone in this server" else "Games going on in this server"
+		topCard.PlayerName.Text = if currentTab == "people" then "Opponent" else "Watch"
+		topCard.Detail.Text = ""
 		topCard.Dot.BackgroundColor3 = CARD
 		topCard.Dot.Letter.Text = "?"
 		topCard.Dot.Letter.TextColor3 = TEXT
 		if currentTab == "computer" and bot then
 			topCard.PlayerName.Text = bot.name .. "  (" .. bot.rating .. ")  · computer"
-			topCard.Detail.Text = "Press Play to start"
+			topCard.Detail.Text = "Computer"
 			topCard.Dot.BackgroundColor3 = bot.colour
 			topCard.Dot.Letter.Text = string.sub(bot.name, 1, 1)
 			topCard.Dot.Letter.TextColor3 = Color3.fromRGB(30, 30, 30)
@@ -1157,7 +1155,7 @@ for sq, s in squares do
 		if not view then
 			-- Clicking the board in the lobby is a nudge towards Play.
 			if currentTab == "computer" then
-				toast("Press Play (bottom right) to start against " .. Engine.BOTS[chosenBot].name)
+				toast("Press Play")
 			end
 			return
 		end
@@ -1263,7 +1261,7 @@ takebackButton.MouseButton1Click:Connect(function()
 	send("takeback")
 end)
 hintButton.MouseButton1Click:Connect(function()
-	toast("Asking the engine…")
+	toast("Thinking…")
 	send("hint")
 end)
 flipButton.MouseButton1Click:Connect(function()

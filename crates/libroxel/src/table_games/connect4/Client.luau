@@ -19,7 +19,6 @@ local BLUE = Color3.fromRGB(30, 85, 190)
 
 local ui = Screen.new(script.Parent, folder, {
 	title = "Connect 4",
-	tagline = "Drop discs and line up four before the other player does",
 	levels = Rules.LEVELS,
 	level = 2,
 	background = Color3.fromRGB(60, 120, 200),
@@ -30,10 +29,9 @@ local ui = Screen.new(script.Parent, folder, {
 		return if seat == 1 then "Red discs" else "Yellow discs"
 	end,
 	rules = {
-		"Two players take turns dropping a disc into one of the seven columns. The disc falls to the lowest empty hole.",
-		"Get four of your discs in a row: across, up and down, or on a slant. The first to do it wins.",
-		"If all 42 holes fill up and nobody has four in a row, it's a draw.",
-		"Click anywhere in a column to drop your disc there.",
+		"Take turns dropping discs into a column.",
+		"Four in a row wins: across, down or diagonal.",
+		"Full board is a draw.",
 	},
 })
 

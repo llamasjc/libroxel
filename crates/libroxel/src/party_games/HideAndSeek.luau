@@ -76,8 +76,8 @@ local function playRound()
 	end
 
 	-- Hiding.
-	Arena.status("Hide! The seeker comes out soon")
-	Arena.tell("Hide! The seeker is counting to " .. HIDE)
+	Arena.status("Hide")
+	Arena.tell("Hide!")
 	Arena.countdown(HIDE, function()
 		for _, c in people do
 			if c.bot and hidingAt[c.model] and Arena.inGame(c) then
@@ -98,7 +98,7 @@ local function playRound()
 			end
 		end
 	end
-	Arena.tell("Ready or not, here they come!")
+	Arena.tell("Seeker is out")
 
 	local roamTo = {} -- where each seeking bot is heading, by model
 	local nextThink = 0
@@ -112,7 +112,7 @@ local function playRound()
 		return count
 	end
 	local allFound = Arena.countdown(SEEK, function()
-		Arena.status(left() .. " still hiding")
+		Arena.status(left() .. " hiding")
 		-- Finds.
 		for _, s in people do
 			if seekers[s.model] and Arena.inGame(s) then
@@ -125,7 +125,7 @@ local function playRound()
 							Arena.role(h, "Found")
 							Arena.mark(h, RED)
 							Arena.speed(h, h.bot and BOT_SEEKER_SPEED or SEEKER_SPEED)
-							Arena.tell(s.name .. " found " .. h.name .. "!")
+							Arena.tell(s.name .. " found " .. h.name)
 						end
 					end
 				end
@@ -178,8 +178,8 @@ local function playRound()
 	Arena.clock(nil)
 	local everyone = Arena.everyone()
 	if allFound then
-		Arena.status("Everyone was found! Seekers win")
-		Arena.tell("Everyone was found! Seekers win")
+		Arena.status("Seekers win")
+		Arena.tell("Seekers win")
 		for _, c in everyone do
 			Arena.reset(c)
 			if c.model == people[1].model then
@@ -198,13 +198,13 @@ local function playRound()
 				Arena.role(c, "Winner")
 			end
 		end
-		Arena.status("Time's up! Hiders win")
+		Arena.status("Hiders win")
 		Arena.tell("Never found: " .. table.concat(names, ", "))
 	end
 end
 
 while true do
-	Arena.status("Hide and seek starts soon")
+	Arena.status("Next round")
 	Arena.countdown(BREAK)
 	Arena.clock(nil)
 	playRound()

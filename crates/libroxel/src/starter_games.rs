@@ -18,49 +18,49 @@ pub const STARTER_GAMES: &[StarterGame] = &[
     StarterGame {
         name: "Kart race",
         symbol: crate::theme::icon::STEERING_WHEEL,
-        about: "Drift, boost and throw items against seven racers on three tracks",
+        about: "Race karts on three tracks",
         build: kart_race,
     },
     StarterGame {
         name: "Chess",
         symbol: crate::theme::icon::HORSE,
-        about: "Chess against eight computer players or anyone in the server",
+        about: "Play the computer or a friend",
         build: chess,
     },
     StarterGame {
         name: "Checkers",
         symbol: crate::theme::icon::CHECKERBOARD,
-        about: "Checkers against the computer or anyone in the server",
+        about: "Play the computer or a friend",
         build: checkers,
     },
     StarterGame {
         name: "Connect 4",
         symbol: crate::theme::icon::CIRCLES_FOUR,
-        about: "Line up four discs before the other player does",
+        about: "Get four in a row",
         build: connect_four,
     },
     StarterGame {
         name: "Kings in the Corner",
         symbol: crate::theme::icon::CROWN,
-        about: "Be first to play every card. For 2 to 4 players",
+        about: "Card game for 2 to 4",
         build: kings_in_the_corner,
     },
     StarterGame {
         name: "Tag",
         symbol: crate::theme::icon::PERSON_SIMPLE_RUN,
-        about: "Don't be It when the clock runs out",
+        about: "Don't be It at the end",
         build: crate::party_games::tag,
     },
     StarterGame {
         name: "Hide and seek",
         symbol: crate::theme::icon::EYE_CLOSED,
-        about: "Hide round the houses, or find everyone",
+        about: "Hide or seek",
         build: crate::party_games::hide_and_seek,
     },
     StarterGame {
         name: "Battle royale",
         symbol: crate::theme::icon::SWORD,
-        about: "Last one standing as the storm closes in",
+        about: "Last one standing wins",
         build: crate::party_games::battle_royale,
     },
 ];
@@ -721,7 +721,7 @@ mod tests {
         steps(&mut session, 10);
         let gui = "game.Players.Player1.PlayerGui.KartScreen";
         assert_eq!(value(&session, &format!("{gui}.Menu.Visible")), "true");
-        assert_eq!(value(&session, &format!("{gui}.Menu.Start.Text")), "START RACE");
+        assert_eq!(value(&session, &format!("{gui}.Menu.Start.Text")), "START");
         // One lap, on your own: it starts straight away.
         kart_control(&session, "'laps', 1");
         kart_control(&session, "'start'");

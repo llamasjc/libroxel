@@ -35,7 +35,6 @@ end
 Tracks.list = {
 	{
 		name = "Sunny Meadow",
-		blurb = "Wide bends, a jump and a sneaky S-bend",
 		ground = { Color3.fromRGB(104, 168, 80), Enum.Material.Grass },
 		shoulder = Color3.fromRGB(122, 180, 92),
 		road = Color3.fromRGB(70, 72, 80),
@@ -52,7 +51,6 @@ Tracks.list = {
 	},
 	{
 		name = "Dusty Canyon",
-		blurb = "A figure eight with a big bridge over the middle",
 		ground = { Color3.fromRGB(214, 184, 128), Enum.Material.Sand },
 		shoulder = Color3.fromRGB(196, 160, 104),
 		road = Color3.fromRGB(110, 86, 70),
@@ -65,7 +63,6 @@ Tracks.list = {
 	},
 	{
 		name = "Frosty Peaks",
-		blurb = "Tight hairpins, a hill and an icy jump",
 		ground = { Color3.fromRGB(236, 242, 250), Enum.Material.Snow },
 		shoulder = Color3.fromRGB(214, 226, 240),
 		road = Color3.fromRGB(58, 64, 82),
