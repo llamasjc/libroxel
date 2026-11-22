@@ -19,6 +19,8 @@ local ROLE_COLOURS = {
 	Fighter = Color3.fromRGB(240, 150, 40),
 	Out = Color3.fromRGB(110, 110, 120),
 	Winner = Color3.fromRGB(245, 195, 40),
+	Riding = Color3.fromRGB(70, 160, 245),
+	Gliding = Color3.fromRGB(70, 160, 245),
 }
 
 local function make(class, props, parent)
