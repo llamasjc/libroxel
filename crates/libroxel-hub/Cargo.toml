@@ -26,7 +26,8 @@ hmac = "0.12"
 sha1 = "0.10"
 sha2 = "0.10"
 # So web pages (such as the libroxel.com site) can call the Hub.
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.6", features = ["cors", "compression-gzip", "decompression-gzip"] }
+flate2 = "1"
 # Email codes, sent by SMTP (any mail provider: Resend, Brevo, Postmark, your own).
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "hostname", "rustls-tls"] }
 
