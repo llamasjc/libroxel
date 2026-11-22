@@ -30,7 +30,7 @@ const ICON = {
   globe: '', left: '', right: '', signIn: '', userPlus: '',
   userMinus: '', check: '', search: '', refresh: '', bell: '',
   download: '', signOut: '', signal: '', shield: '', crown: '',
-  seal: '', x: '', lock: '', user: '',
+  seal: '', x: '', lock: '', user: '', hammer: '',
 };
 
 // The app's colours, for drawing.
@@ -739,6 +739,7 @@ function parseRoute() {
   switch (parts[0]) {
     case 'game': return { name: 'game', key: parts.slice(1).join('/') };
     case 'user': return { name: 'user', id: parts[1] };
+    case 'creator': return { name: 'creator', id: parts[1] };
     case 'games': case 'search': case 'friends': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': return { name: parts[0] };
     default: return { name: 'home' };
   }
@@ -751,6 +752,7 @@ function tabs() {
     tab('games', ICON.games, 'Games', '/games'),
     tab('friends', ICON.users, 'Friends', '/friends'),
     tab('avatar', ICON.shirt, 'Avatar', '/avatar'),
+    tab('creator', ICON.hammer, 'Create', '/creator'),
     tab('download', ICON.download, 'Download', '/download'),
   );
   // The mark is Home, as in the app.
@@ -849,7 +851,7 @@ window.addEventListener('unhandledrejection', (e) => crashed(e.reason));
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, games: gamesPage, search: searchPage, friends: friendsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
+  const views = { home, game, games: gamesPage, creator: creatorPage, search: searchPage, friends: friendsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
   // An account that signed in with an easy password sees nothing else until it sets a new one.
   const view = session?.mustChange ? passwordPage : views[route.name] || home;
   const nodes = [];
@@ -879,7 +881,7 @@ const DESCRIPTIONS = {
 
 function titleFor(r) {
   if (r.name === 'game') return entries().find((e) => e.key === r.key)?.title || 'Game';
-  return { home: 'Home', games: 'Games', search: 'Search', friends: 'Friends', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy' }[r.name] || 'Libroxel';
+  return { home: 'Home', creator: 'Create', games: 'Games', search: 'Search', friends: 'Friends', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy' }[r.name] || 'Libroxel';
 }
 
 function whereabouts(friend) {
@@ -1410,6 +1412,126 @@ function security() {
   return panel;
 }
 
+// --- Create -----------------------------------------------------------------
+
+const creator = { days: 7, result: null, loading: false, error: null, for: null };
+
+function loadCreator() {
+  const key = `${session.playerId}/${creator.days}`;
+  if (creator.loading || creator.for === key) return;
+  creator.loading = true;
+  const time = Date.now();
+  const signature = signText(secretKey(), `libroxel creator\n${session.playerId}\n${time}`);
+  api(`/creator/${session.playerId}`, { query: { time, signature, days: creator.days } })
+    .then((r) => { creator.result = r; creator.error = null; })
+    .catch((e) => { creator.error = e.message; })
+    .finally(() => { creator.loading = false; creator.for = key; if (route.name === 'creator') render(); });
+}
+
+const minutes = (secs) => (secs < 60 ? `${secs}s` : secs < 3600 ? `${Math.round(secs / 60)} min` : `${(secs / 3600).toFixed(1)} h`);
+const percent = (r) => (r === null || r === undefined ? '–' : `${Math.round(r * 100)}%`);
+const dayName = (day) => new Date(day * 86400000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+const clock = (secs) => new Date(secs * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+function chart(points, { bars = false, label }) {
+  const w = 640, h = 170, l = 34, b = 22, t = 8;
+  const most = Math.max(2, ...points.map((p) => p.v));
+  const step = Math.pow(10, Math.floor(Math.log10(most)));
+  const top = Math.ceil(most / step) * step;
+  const x = (i) => l + ((w - l - 4) * (bars ? i + 0.5 : i)) / Math.max(1, bars ? points.length : points.length - 1);
+  const y = (v) => t + (h - t - b) * (1 - v / top);
+  const parts = [];
+  for (const v of [0, top / 2, top]) {
+    parts.push(svg('line', { x1: l, x2: w - 4, y1: y(v), y2: y(v), class: 'grid' }));
+    parts.push(svg('text', { x: l - 6, y: y(v), class: 'axis', 'text-anchor': 'end', 'dominant-baseline': 'central' }, document.createTextNode(count(Math.round(v)))));
+  }
+  const every = Math.max(1, Math.ceil(points.length / 7));
+  points.forEach((p, i) => {
+    if (i % every === 0) parts.push(svg('text', { x: x(i), y: h - 6, class: 'axis', 'text-anchor': 'middle' }, document.createTextNode(p.short)));
+  });
+  const slot = (w - l - 4) / Math.max(1, points.length);
+  if (bars) {
+    const bw = Math.max(2, Math.min(28, slot - 2));
+    points.forEach((p, i) => {
+      const top = y(p.v);
+      const ht = Math.max(0, h - b - top);
+      parts.push(svg('path', { class: 'mark', d: ht ? `M${x(i) - bw / 2},${h - b}V${top + Math.min(4, ht)}q0,-${Math.min(4, ht)} ${Math.min(4, bw / 2)},-${Math.min(4, ht)}H${x(i) + bw / 2 - Math.min(4, bw / 2)}q${Math.min(4, bw / 2)},0 ${Math.min(4, bw / 2)},${Math.min(4, ht)}V${h - b}Z` : '' }));
+    });
+  } else {
+    const line = points.map((p, i) => `${i ? 'L' : 'M'}${x(i)},${y(p.v)}`).join('');
+    parts.push(svg('path', { class: 'area', d: `${line}L${x(points.length - 1)},${h - b}L${x(0)},${h - b}Z` }));
+    parts.push(svg('path', { class: 'line', d: line }));
+  }
+  const hover = svg('g', { class: 'hover' });
+  parts.push(hover);
+  const tip = el('div', { class: 'tip' });
+  const box = el('div', { class: 'chart', role: 'img', 'aria-label': label });
+  const area = svg('svg', { viewBox: `0 0 ${w} ${h}` }, parts);
+  area.addEventListener('pointermove', (e) => {
+    const r = area.getBoundingClientRect();
+    const px = ((e.clientX - r.left) / r.width) * w;
+    const i = Math.max(0, Math.min(points.length - 1, Math.round(bars ? (px - l) / slot - 0.5 : ((px - l) / (w - l - 4)) * (points.length - 1))));
+    const p = points[i];
+    hover.replaceChildren(svg('line', { x1: x(i), x2: x(i), y1: t, y2: h - b, class: 'cross' }), !bars && svg('circle', { cx: x(i), cy: y(p.v), r: 4, class: 'dot' }));
+    tip.replaceChildren(el('b', {}, count(p.v)), ' ', p.long);
+    tip.style.left = `${(x(i) / w) * 100}%`;
+    tip.hidden = false;
+  });
+  area.addEventListener('pointerleave', () => { hover.replaceChildren(); tip.hidden = true; });
+  tip.hidden = true;
+  return add(box, [area, tip]);
+}
+
+function creatorPage() {
+  if (!session) return needSignIn('Sign in to see how your games are played.');
+  loadCreator();
+  const range = el('div', { class: 'hats' }, [1, 7, 30, 90].map((d) =>
+    el('button', { class: `chip${creator.days === d ? ' on' : ''}`, onclick: () => { creator.days = d; creator.for = null; render(); } }, d === 1 ? 'Today' : `${d} days`)));
+  const games = creator.result?.games || [];
+  const out = [];
+  if (route.id) {
+    const g = games.find((x) => x.game_id === route.id);
+    out.push(el('a', { class: 'back', href: '/creator' }, icon(ICON.left), 'Create'));
+    if (!g) {
+      out.push(creator.result ? el('div', { class: 'empty' }, "That isn't one of your games.") : el('p', { class: 'soft' }, 'Loading…'));
+      return out;
+    }
+    out.push(el('h1', { class: 'title' }, g.title), range);
+    const tiles = [
+      [count(g.visits), 'Visits'], [count(g.players), 'Players'], [count(g.playing), 'Playing now'], [count(g.peak), 'Most at once'],
+      [minutes(g.average_playtime_secs), 'Average playtime'], [percent(g.day1_retention), 'Day 1 back'], [percent(g.day7_retention), 'Day 7 back'],
+      [count(g.likes), 'Likes'], [count(g.favorites), 'Favorites'],
+    ];
+    out.push(el('div', { class: 'tiles' }, tiles.map(([v, l]) => el('div', {}, el('b', {}, v), el('span', { class: 'caps' }, l)))));
+    const every = g.concurrent_every_secs;
+    const from = creator.result.from;
+    out.push(el('h2', { class: 'section' }, 'Players online'),
+      chart(g.concurrent.map((v, i) => ({ v, short: creator.days === 1 ? new Date((from + i * every) * 1000).toLocaleTimeString(undefined, { hour: 'numeric' }) : dayName(Math.floor((from + i * every) / 86400)), long: clock(from + i * every) })), { label: 'Players online over time' }));
+    const daily = (key, label) => chart(g.days.map((d) => ({ v: d[key], short: dayName(d.day), long: dayName(d.day) })), { bars: true, label });
+    if (creator.days > 1) {
+      out.push(el('h2', { class: 'section' }, 'Visits'), daily('visits', 'Visits each day'));
+      out.push(el('h2', { class: 'section' }, 'Players'), daily('players', 'Players each day'));
+      out.push(el('h2', { class: 'section' }, 'New players'), daily('new_players', 'New players each day'));
+      out.push(el('h2', { class: 'section' }, 'Likes'), daily('likes', 'Likes each day'));
+    }
+    return out;
+  }
+  out.push(el('h1', { class: 'title' }, 'Create'), range);
+  if (creator.error) out.push(status(creator.error, 'error'));
+  if (!creator.result) out.push(el('p', { class: 'soft' }, 'Loading…'));
+  else if (!games.length) out.push(el('div', { class: 'empty' }, 'No published games yet.'));
+  else {
+    const head = ['Game', 'Visits', 'Players', 'Playtime', 'Day 1', 'Day 7', 'Likes', 'Favorites'];
+    out.push(el('div', { class: 'table-wrap' }, el('table', { class: 'numbers' },
+      el('thead', {}, el('tr', {}, head.map((h) => el('th', {}, h)))),
+      el('tbody', {}, games.map((g) => el('tr', {},
+        el('td', {}, el('a', { href: `/creator/${encodeURIComponent(g.game_id)}` }, g.title)),
+        [count(g.visits), count(g.players), minutes(g.average_playtime_secs), percent(g.day1_retention), percent(g.day7_retention), count(g.likes), count(g.favorites)].map((v) => el('td', {}, v))))))));
+  }
+  return out;
+}
+
+
 // --- Sign in, make an account -------------------------------------------------
 
 let pending = null;
@@ -1723,11 +1845,12 @@ function privacy() {
       'Your friends and friend requests.',
       'Whether you are online, which game and server you are in, and when you were last online. Your friends see this.',
       'The time and IP address of your last 20 sign-ins, which your account page shows you so you can spot sign-ins that were not you.',
-      'Games and hats you publish, servers you host (their name, game, join code and player count) and anything you report.'),
+      'Games and hats you publish, servers you host (their name, game, join code and player count) and anything you report.',
+      'When and how long you play each published game, for 90 days, under a code that can\'t be tied to your account. Its creator sees only totals.'),
     p('Your name, number, avatar, about and published games are public: anyone can see them in the app and on this website.'),
     h('What we don\'t do'),
     list(
-      'No ads, no analytics and no tracking.',
+      'No ads and no tracking.',
       'No cookies. This website keeps your signed-in key in your browser\'s storage until you sign out or close the tab.',
       'We don\'t sell or share your information. The only others who handle it do so for us: the server that hosts the Hub and website, and the mail service that sends account emails.'),
     p('To stop abuse, the Hub counts requests from each IP address for a short time, in memory only. The Download page asks GitHub for the newest release, and downloads come from GitHub, under GitHub\'s own privacy policy.'),
@@ -1772,7 +1895,7 @@ setInterval(sayOnline, 15000);
 document.addEventListener('visibilitychange', sayOnline);
 setInterval(() => {
   // Keep lists fresh while someone looks, but don't redraw under their typing.
-  if (document.hidden || ['sign-in', 'create', 'avatar'].includes(route.name)) return;
+  if (document.hidden || ['sign-in', 'create', 'avatar', 'creator'].includes(route.name)) return;
   if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
   refresh().then(render);
 }, 20000);

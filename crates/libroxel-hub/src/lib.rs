@@ -47,6 +47,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
+mod analytics;
+pub use analytics::{Creator, DayStats, GameStats, KEEP_DAYS, creator_message, creator_stats, record};
 mod assets;
 pub use assets::{
     ASSET_PREFIX, MAX_ASSET, OfficialGame, StarterPlace, asset_hash, official, official_from, set_official,
@@ -671,6 +673,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     email::create_tables(&db)?;
     fleet::create_tables(&db)?;
     assets::create_tables(&db)?;
+    analytics::create_tables(&db)?;
     Ok(db)
 }
 
@@ -739,6 +742,7 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/friends/{id}", get(social::list_friends))
         .route("/presence", post(social::update_presence))
         .route("/presence/web", post(social::update_web_presence))
+        .route("/creator/{id}", get(analytics::creator))
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
         .layer(axum::middleware::from_fn_with_state(hub.limits.clone(), limits::every_request))
         // Any web page may call the Hub, as the app does: everything that
@@ -1273,6 +1277,9 @@ pub fn take_down(db: &Connection, kind: &str, target: &str) -> Result<(), String
     if gone == 0 {
         return Err(format!("there is no {kind} {target}"));
     }
+    if kind == "game" {
+        analytics::forget_game(db, target);
+    }
     Ok(())
 }
 
@@ -1352,7 +1359,10 @@ async fn unpublish(
     let db = db.lock().unwrap();
     match db.execute("DELETE FROM games WHERE game_id = ?1 AND secret = ?2", params![id, secret.secret]) {
         Ok(0) => StatusCode::NOT_FOUND,
-        Ok(_) => StatusCode::NO_CONTENT,
+        Ok(_) => {
+            analytics::forget_game(&db, &id);
+            StatusCode::NO_CONTENT
+        }
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

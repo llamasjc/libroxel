@@ -334,6 +334,9 @@ pub(crate) async fn update_presence(
         ],
     )
     .map_err(internal)?;
+    if let Some(game_id) = text(&update.game_id).filter(|_| update.online) {
+        let _ = crate::analytics::record(&db, &game_id, &update.player_id, now());
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
