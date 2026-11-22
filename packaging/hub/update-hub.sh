@@ -14,7 +14,7 @@
 #
 # Either way it backs the database up first, sets up with that version's own
 # setup-hub.sh, and puts the old Hub back if the new one doesn't answer
-# within 30 seconds (and then leaves that version alone).
+# within 30 seconds (and then tries that version again an hour later).
 set -euo pipefail
 
 [ "$(id -u)" = 0 ] || { echo "Run it with sudo."; exit 1; }
@@ -59,8 +59,9 @@ case "${1:-}" in
         set_conf UPDATE_FROM releases
         rm -f "$state/skipped"
         ;;
-    --now) by_hand=yes ;;
+    --now) by_hand=yes; rm -f "$state/skipped" ;;
 esac
+skipped() { [ "$1" = "$(cat "$state/skipped" 2>/dev/null || true)" ] && [ -n "$(find "$state/skipped" -mmin -60)" ]; }
 
 # Puts the Hub in $1 (with setup-hub.sh and update-hub.sh beside it) in
 # place as version $2, and keeps it only if it answers.
@@ -126,7 +127,7 @@ if [ "$UPDATE_FROM" = source ]; then
     commit="$(as_user "cd '$dir' && git rev-parse origin/main")"
     version="main-${commit:0:7}"
     current="$(cat "$state/release" 2>/dev/null || true)"
-    if [ "$by_hand" = no ] && { [ "$version" = "$current" ] || [ "$version" = "$(cat "$state/skipped" 2>/dev/null || true)" ]; }; then
+    if [ "$by_hand" = no ] && { [ "$version" = "$current" ] || skipped "$version"; }; then
         exit 0
     fi
     log "building $version in $dir (the first time takes a few minutes)"
@@ -177,7 +178,7 @@ if [ "$tag" = "$current" ]; then
     [ "$by_hand" = yes ] && log "already on $tag"
     exit 0
 fi
-if [ "$tag" = "$(cat "$state/skipped" 2>/dev/null || true)" ]; then
+if skipped "$tag"; then
     exit 0
 fi
 asset_url() { jq -r --arg n "$1" '.assets[] | select(.name == $n) | .url' <<<"$release"; }

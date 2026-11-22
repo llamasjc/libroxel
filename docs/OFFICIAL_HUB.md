@@ -39,7 +39,7 @@ Every 10 minutes the server looks at `main` on GitHub. When it has changed,
 it builds it in `~/libroxel`, backs the database up
 (`backups/before-main-<commit>.sqlite`), sets itself up again with that
 version's own `setup-hub.sh`, and checks the Hub answers. If it doesn't
-within 30 seconds, the old Hub goes back and that version is skipped.
+within 30 seconds, the old Hub goes back and that version is tried again an hour later.
 `~/libroxel` always matches `main`, so don't keep changes of your own there.
 
 - Update now: `sudo libroxel-hub-update --now`
