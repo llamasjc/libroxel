@@ -563,7 +563,7 @@ function handlers.seek(person, data)
 	local control = if CONTROLS[data.control] then data.control else "5+0"
 	person.seeking = control
 	if not tryPairing(person) then
-		toast(person.player, "Looking for someone to play " .. (if control == "none" then "without a clock" else control) .. "…")
+		toast(person.player, "Searching " .. (if control == "none" then "no clock" else control) .. "…")
 	end
 	lobbyChanged()
 end
@@ -774,7 +774,7 @@ function handlers.watch(person, data)
 		return
 	end
 	if person.game and person.game.status == "playing" then
-		toast(person.player, "Finish your own game first")
+		toast(person.player, "Finish your game first")
 		return
 	end
 	leaveGame(person)

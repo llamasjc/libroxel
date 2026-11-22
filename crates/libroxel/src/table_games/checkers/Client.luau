@@ -25,7 +25,6 @@ local EDGE = {
 
 local ui = Screen.new(script.Parent, folder, {
 	title = "Checkers",
-	tagline = "Jump your way across the board and take every piece",
 	levels = Rules.LEVELS,
 	level = 2,
 	background = Color3.fromRGB(70, 110, 75),
@@ -46,11 +45,10 @@ local ui = Screen.new(script.Parent, folder, {
 		return (if seat == 1 then "Black" else "Red") .. " · " .. men + kings .. " pieces" .. (if kings > 0 then ", " .. kings .. " kings" else "")
 	end,
 	rules = {
-		"Black moves first, then you take turns. Pieces move one square forward on a slant, onto the dark squares only.",
-		"Jump over an enemy piece next to you, onto the empty square behind it, to take it. If you can jump, you must, and if you land where you can jump again, keep going.",
-		"Reach the far side and your piece is crowned a king (it gets a crown). Kings move and jump forwards and backwards.",
-		"You win when the other player has no pieces left, or can't move. If 40 moves each go by with nothing taken and no plain piece moved, it's a draw.",
-		"Click your piece (the ones that can move have a gold outline), then the square to go to. Green dots show where it can go.",
+		"Black goes first. Pieces move one square diagonally forward.",
+		"Jump an enemy piece to take it. Jumps are forced. Keep jumping if you can.",
+		"Reach the far side to become a king. Kings move both ways.",
+		"Take every piece or leave them stuck to win. 40 moves with no capture or pawn move is a draw.",
 	},
 })
 
@@ -288,7 +286,7 @@ for sq, s in squares do
 				return
 			end
 			if #path > 1 then
-				ui.toast("Keep jumping: click the next green dot")
+				ui.toast("Keep jumping")
 				return
 			end
 		end
@@ -301,7 +299,7 @@ for sq, s in squares do
 			end
 		end
 		if #path == 0 and Rules.ownerOf(shown[sq]) == ui.view.you then
-			ui.toast(if ui.view.game.mustJump then "You have to jump with a piece that can" else "That piece can't move")
+			ui.toast(if ui.view.game.mustJump then "You must jump" else "That piece can't move")
 		end
 		draw()
 	end)

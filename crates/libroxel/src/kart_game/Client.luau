@@ -1,5 +1,5 @@
 -- The kart race screen: the start menu (pick a track, the computer
--- racers' level and how many laps, then press START RACE), the racing HUD
+-- racers' level and how many laps, then press START), the racing HUD
 -- (place, lap, time, item, drift sparks, the map and everyone's places),
 -- the results, and the camera that chases your kart.
 --
@@ -190,10 +190,9 @@ local menu = panel(screen, {
 	Name = "Menu",
 	AnchorPoint = Vector2.new(0.5, 0.5),
 	Position = UDim2.new(0.5, 0, 0.5, 0),
-	Size = UDim2.new(0, 760, 0, 500),
+	Size = UDim2.new(0, 760, 0, 470),
 })
-text(menu, { Name = "Title", Text = "KART RACE", TextSize = 44, TextColor3 = YELLOW, Size = UDim2.new(1, 0, 0, 56), Position = UDim2.new(0, 0, 0, 14) })
-text(menu, { Text = "Pick a track, then press START RACE", TextSize = 18, TextColor3 = SOFT, Size = UDim2.new(1, 0, 0, 24), Position = UDim2.new(0, 0, 0, 68) })
+text(menu, { Name = "Title", Text = "KART", TextSize = 44, TextColor3 = YELLOW, Size = UDim2.new(1, 0, 0, 56), Position = UDim2.new(0, 0, 0, 14) })
 
 local cards = {}
 for i, track in Tracks.list do
@@ -202,8 +201,8 @@ for i, track in Tracks.list do
 		Text = "",
 		BackgroundColor3 = Color3.fromRGB(40, 44, 60),
 		BorderSizePixel = 0,
-		Position = UDim2.new(0, 24 + (i - 1) * 242, 0, 104),
-		Size = UDim2.new(0, 228, 0, 232),
+		Position = UDim2.new(0, 24 + (i - 1) * 242, 0, 84),
+		Size = UDim2.new(0, 228, 0, 212),
 	}, menu)
 	round(card, 12)
 	local outline = make("UIStroke", { Color = YELLOW, Thickness = 4, Enabled = false }, card)
@@ -217,15 +216,12 @@ for i, track in Tracks.list do
 	round(map, 8)
 	drawMap(map, i, 130, 5, Color3.fromRGB(50, 50, 60))
 	text(card, { Text = track.name, TextSize = 22, Position = UDim2.new(0, 0, 0, 150), Size = UDim2.new(1, 0, 0, 28) })
-	text(card, { Text = track.blurb, TextSize = 14, TextColor3 = SOFT, TextWrapped = true, Position = UDim2.new(0, 12, 0, 178), Size = UDim2.new(1, -24, 0, 34) })
 	local votes = text(card, { Name = "Votes", Text = "", TextSize = 14, TextColor3 = YELLOW, Position = UDim2.new(0, 0, 1, -24), Size = UDim2.new(1, 0, 0, 20) })
 	card.MouseButton1Click:Connect(function()
 		sounds.beep:Play()
 		Control:FireServer("track", i)
 	end)
-	local picked = text(card, { Name = "Picked", Text = "PICKED", TextSize = 13, TextColor3 = INK, BackgroundTransparency = 0, BackgroundColor3 = YELLOW, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -20, 0, 18), Size = UDim2.new(0, 64, 0, 22), Visible = false })
-	round(picked, 6)
-	cards[i] = { card = card, outline = outline, votes = votes, picked = picked }
+	cards[i] = { card = card, outline = outline, votes = votes }
 end
 
 local function choiceRow(y, title, options, attribute, send)
@@ -253,14 +249,14 @@ local function choiceRow(y, title, options, attribute, send)
 	folder:GetAttributeChangedSignal(attribute):Connect(show)
 	show()
 end
-choiceRow(350, "Computer racers", { "Easy", "Normal", "Hard" }, "Level", "level")
-choiceRow(394, "Laps", { 1, 3, 5 }, "Laps", "laps")
+choiceRow(320, "CPU", { "Easy", "Normal", "Hard" }, "Level", "level")
+choiceRow(364, "Laps", { 1, 3, 5 }, "Laps", "laps")
 
-local startButton = button(menu, "START RACE", GREEN, {
+local startButton = button(menu, "START", GREEN, {
 	Name = "Start",
 	TextSize = 26,
 	AnchorPoint = Vector2.new(1, 0),
-	Position = UDim2.new(1, -24, 0, 350),
+	Position = UDim2.new(1, -24, 0, 320),
 	Size = UDim2.new(0, 210, 0, 80),
 })
 startButton.MouseButton1Click:Connect(function()
@@ -268,14 +264,14 @@ startButton.MouseButton1Click:Connect(function()
 	Control:FireServer("start")
 end)
 local helpLine = text(menu, {
-	Text = "W/S or arrows drive  ·  A/D steer  ·  hold Space or Shift to drift  ·  E uses your item",
+	Text = "W/S  Drive     A/D  Steer     Space  Drift     E  Item",
 	TextSize = 15,
 	TextColor3 = SOFT,
 	Position = UDim2.new(0, 0, 1, -40),
 	Size = UDim2.new(1, 0, 0, 24),
 })
 if UserInputService.TouchEnabled then
-	helpLine.Text = "Left stick drives  ·  DRIFT starts and ends a drift  ·  ITEM uses your item"
+	helpLine.Text = ""
 end
 local who = text(menu, { Text = "", TextSize = 14, TextColor3 = SOFT, Position = UDim2.new(0, 0, 1, -20), Size = UDim2.new(1, 0, 0, 18) })
 
@@ -284,17 +280,16 @@ local function showMenu()
 	for i, c in cards do
 		c.outline.Enabled = i == current
 		c.card.BackgroundColor3 = if i == current then Color3.fromRGB(92, 80, 28) else Color3.fromRGB(40, 44, 60)
-		c.picked.Visible = i == current
 		local n = folder:GetAttribute("Votes" .. i) or 0
 		c.votes.Text = if n == 1 then "1 vote" elseif n > 1 then n .. " votes" else ""
 	end
 	local startsIn = folder:GetAttribute("StartsIn") or -1
-	startButton.Text = if startsIn > 0 then "STARTING IN " .. math.ceil(startsIn) else "START RACE"
+	startButton.Text = if startsIn > 0 then "STARTING " .. math.ceil(startsIn) else "START"
 	local names = {}
 	for _, p in Players:GetPlayers() do
 		table.insert(names, p.Name)
 	end
-	who.Text = if #names > 1 then "Racing: " .. table.concat(names, ", ") else ""
+	who.Text = if #names > 1 then table.concat(names, "  ") else ""
 end
 
 ------------------------------------------------------------------------
@@ -398,8 +393,8 @@ for i = 1, 8 do
 		points = text(row, { Text = "", TextSize = 18, TextColor3 = GREEN, Position = UDim2.new(1, -90, 0, 0), Size = UDim2.new(0, 80, 1, 0) }),
 	}
 end
-local againButton = button(resultsPanel, "RACE AGAIN", GREEN, { Name = "Again", TextSize = 22, Position = UDim2.new(0.5, 10, 1, -66), Size = UDim2.new(0.5, -30, 0, 50) })
-local menuButton = button(resultsPanel, "PICK A TRACK", BLUE, { Name = "PickTrack", TextSize = 22, Position = UDim2.new(0, 20, 1, -66), Size = UDim2.new(0.5, -30, 0, 50) })
+local againButton = button(resultsPanel, "AGAIN", GREEN, { Name = "Again", TextSize = 22, Position = UDim2.new(0.5, 10, 1, -66), Size = UDim2.new(0.5, -30, 0, 50) })
+local menuButton = button(resultsPanel, "TRACKS", BLUE, { Name = "PickTrack", TextSize = 22, Position = UDim2.new(0, 20, 1, -66), Size = UDim2.new(0.5, -30, 0, 50) })
 againButton.MouseButton1Click:Connect(function()
 	sounds.go:Play()
 	Control:FireServer("start")
@@ -416,7 +411,7 @@ local function showResults(list)
 		if entry then
 			row.name.Text = entry.name
 			row.name.TextColor3 = if entry.userId == me.UserId then YELLOW else WHITE
-			row.time.Text = if entry.time >= 0 then clockText(entry.time) else "did not finish"
+			row.time.Text = if entry.time >= 0 then clockText(entry.time) else "DNF"
 			row.points.Text = "+" .. entry.points
 			row.frame.BackgroundColor3 = if entry.userId == me.UserId then Color3.fromRGB(70, 64, 40) else Color3.fromRGB(40, 44, 60)
 		end
@@ -491,12 +486,12 @@ Race.OnClientEvent:Connect(function(what, a, b)
 		if a == b then
 			shout("FINAL LAP", RED, 1.6)
 		else
-			say("Lap " .. a .. " of " .. b)
+			say("LAP " .. a .. "/" .. b)
 		end
 		sounds.go:Play()
 	elseif what == "finish" then
 		shout(ordinal(a) .. "!", PLACE_COLOURS[a] or WHITE, 3)
-		say("Finished in " .. clockText(b), 3)
+		say(clockText(b), 3)
 		sounds.go:Play()
 	elseif what == "roll" then
 		sounds.coin:Play()
@@ -515,16 +510,16 @@ Race.OnClientEvent:Connect(function(what, a, b)
 		say("Trick!", 0.8)
 	elseif what == "hit" then
 		sounds.boom:Play()
-		say(if b then "Hit by " .. b .. "'s " .. a .. "!" else "Spun out!", 1.5)
+		say(if b then b .. "'s " .. a else "Spun out", 1.5)
 		flash.BackgroundTransparency = 0.6
 	elseif what == "landed" then
-		say("Got " .. b .. "!", 1.2)
+		say(b, 1.2)
 	elseif what == "bonk" then
 		sounds.bonk:Play()
 	elseif what == "storm" then
 		flash.BackgroundTransparency = 0.3
 		if a ~= me.Name then
-			say(a .. " used a Storm!", 1.5)
+			say(a .. " used Storm", 1.5)
 		end
 	elseif what == "results" then
 		showResults(a)
@@ -638,7 +633,7 @@ local function updateHud(kart, karts)
 	else
 		lapLabel.Text = "WATCHING"
 		placeLabel.Text = ""
-		speedLabel.Text = "You'll race in the next one"
+		speedLabel.Text = "Next race"
 		itemName.Text = ""
 		chargeBar.Visible = false
 	end

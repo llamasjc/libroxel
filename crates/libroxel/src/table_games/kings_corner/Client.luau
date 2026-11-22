@@ -22,7 +22,6 @@ local SEAT_COLOURS = {
 
 local ui = Screen.new(script.Parent, folder, {
 	title = "Kings in the Corner",
-	tagline = "Kings in the corners: be the first to play every card",
 	levels = Rules.LEVELS,
 	level = 2,
 	players = { 2, 4 },
@@ -35,11 +34,10 @@ local ui = Screen.new(script.Parent, folder, {
 		return n .. (if n == 1 then " card left" else " cards left")
 	end,
 	rules = {
-		"Everyone gets 7 cards. Four cards go face up beside the draw pile, one on each side. The four corners start empty.",
-		"On your turn you draw a card first (that happens by itself). Then play as many cards as you like: a card goes on a pile if it is one lower and the other colour, like a black 6 on a red 7. Aces are lowest.",
-		"Only a King can start a corner. Any card can go in an empty side spot. You can also move a whole side pile onto another pile when its bottom card fits there, which frees that side spot.",
-		"Press End turn when you're done. The first to play every card wins. If the draw pile runs out and nobody can play for a whole round, the fewest cards wins.",
-		"Click a card in your hand, then the pile to put it on. Piles it can go on light up. To move a pile, click it, then where it goes.",
+		"7 cards each. Four piles start face up around the deck.",
+		"You draw at the start of your turn. Play one lower in the other colour, like a black 6 on a red 7. Aces are low.",
+		"Only Kings go in the corners. Any card fills an empty side. Move a whole pile if its bottom card fits.",
+		"First to empty their hand wins. If the deck runs out and no one can play, fewest cards wins.",
 	},
 })
 
@@ -240,7 +238,7 @@ local function draw()
 		p.top.Rim.Edge.Transparency = if selected and selected.kind == "pile" and selected.from == i then 0 else 0.6
 	end
 	stock.Visible = g.stock > 0
-	stockCount.Text = if g.stock > 0 then g.stock .. " to draw" else "Draw pile empty"
+	stockCount.Text = if g.stock > 0 then tostring(g.stock) else "Empty"
 
 	-- The hand, fanned out to fit.
 	local hand = g.hand
@@ -305,7 +303,7 @@ local function draw()
 	endButton.Visible = ui.myTurn()
 	if v.status == "playing" then
 		if ui.myTurn() and g.drew ~= 0 and not g.played then
-			logLine.Text = "You drew the " .. Rules.name(g.drew) .. " (outlined in blue)."
+			logLine.Text = "Drew " .. Rules.name(g.drew)
 		elseif g.log ~= "" then
 			local who = v.seats[v.turn] and v.seats[v.turn].name or ""
 			logLine.Text = (if ui.myTurn() then "You" else who) .. ": " .. g.log
@@ -328,7 +326,7 @@ ui.onTable = function(v, fresh)
 	if selected and selected.kind == "pile" and #v.game.piles[selected.from] == 0 then
 		selected = nil
 	end
-	ui.subText = if v.game.stock > 0 then v.game.stock .. " cards to draw" else "the draw pile is empty"
+	ui.subText = if v.game.stock > 0 then v.game.stock .. " in deck" else "deck empty"
 	draw()
 	if not fresh then
 		ui.sounds.move:Play()
@@ -352,7 +350,7 @@ local function clickPile(i)
 		elseif Rules.isCorner(i) and #g.piles[i] == 0 then
 			ui.toast("Only a King can start a corner")
 		else
-			ui.toast("It has to be one lower and the other colour")
+			ui.toast("One lower, other colour")
 		end
 		draw()
 		return
@@ -364,13 +362,13 @@ local function clickPile(i)
 			ui.send({ kind = "pile", from = selected.from, to = i })
 			selected = nil
 		else
-			ui.toast("The bottom card of that pile doesn't fit there")
+			ui.toast("Doesn't fit")
 		end
 		draw()
 		return
 	end
 	if Rules.isCorner(i) or #g.piles[i] == 0 then
-		ui.toast("Pick a card from your hand first")
+		ui.toast("Pick a card first")
 		return
 	end
 	local anywhere = false
@@ -382,7 +380,7 @@ local function clickPile(i)
 	if anywhere then
 		selected = { kind = "pile", from = i }
 	else
-		ui.toast("Pick a card from your hand, then click this pile")
+		ui.toast("Pick a card first")
 	end
 	draw()
 end

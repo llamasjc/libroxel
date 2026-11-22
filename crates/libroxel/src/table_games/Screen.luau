@@ -83,7 +83,7 @@ local function clear(parent, class)
 	end
 end
 
--- config: title, tagline, rules (lines of text), levels (computer player
+-- config: title, rules (lines of text), levels (computer player
 -- names, easiest first), level (the one picked at first), background,
 -- players = { min, max } for games of more than two, colourOf(seat) for
 -- the dot by each player's name, and seatNote(view, seat) for a line
@@ -119,17 +119,15 @@ function Screen.new(screen, folder, config)
 	})
 	make("UISizeConstraint", { MinSize = Vector2.new(340, 460), MaxSize = Vector2.new(560, 660) }, menu)
 	label(menu, { Name = "Title", Position = UDim2.new(0, 28, 0, 20), Size = UDim2.new(1, -56, 0, 44), TextSize = 38, Text = config.title })
-	label(menu, { Name = "Tagline", Position = UDim2.new(0, 28, 0, 64), Size = UDim2.new(1, -56, 0, 22), TextSize = 16, TextColor3 = Screen.SOFT, Text = config.tagline })
 
 	local playButton = button(menu, "Play", Screen.GREEN, {
 		Name = "PlayButton",
-		Position = UDim2.new(0, 28, 0, 102),
+		Position = UDim2.new(0, 28, 0, 78),
 		Size = UDim2.new(1, -56, 0, 64),
 		TextSize = 28,
 	})
-	local playNote = label(menu, { Name = "PlayNote", Position = UDim2.new(0, 28, 0, 170), Size = UDim2.new(1, -56, 0, 20), TextSize = 14, TextColor3 = Screen.SOFT, TextXAlignment = Enum.TextXAlignment.Center })
 
-	local y = 200
+	local y = 160
 	local function optionRow(title, choices, chosen, onPick)
 		label(menu, { Position = UDim2.new(0, 28, 0, y), Size = UDim2.new(0, 110, 0, 36), TextSize = 16, Text = title })
 		local buttons = {}
@@ -173,19 +171,12 @@ function Screen.new(screen, folder, config)
 			chosenPlayers = config.players[1] + i - 1
 		end)
 	else
-		optionRow("Who starts", { "Me", "Computer" }, 1, function(i)
+		optionRow("First", { "Me", "Computer" }, 1, function(i)
 			chosenFirst = i
 		end)
 	end
-	local function describe()
-		local text = "Against " .. config.levels[chosenLevel]
-		if config.players and chosenPlayers > 2 then
-			text = "Against " .. (chosenPlayers - 1) .. " computer players (" .. config.levels[chosenLevel] .. ")"
-		end
-		playNote.Text = text .. ". Or play with people below."
-	end
 
-	local rulesButton = button(menu, "How to play", Screen.LIGHT, {
+	local rulesButton = button(menu, "Rules", Screen.LIGHT, {
 		Name = "RulesButton",
 		Position = UDim2.new(0, 28, 0, y),
 		Size = UDim2.new(1, -56, 0, 34),
@@ -196,7 +187,7 @@ function Screen.new(screen, folder, config)
 
 	make("Frame", { Position = UDim2.new(0, 28, 0, y), Size = UDim2.new(1, -56, 0, 1), BackgroundColor3 = Color3.fromRGB(220, 220, 225), BorderSizePixel = 0 }, menu)
 	y += 12
-	label(menu, { Position = UDim2.new(0, 28, 0, y), Size = UDim2.new(0.6, 0, 0, 26), TextSize = 19, Text = "Play with people here" })
+	label(menu, { Position = UDim2.new(0, 28, 0, y), Size = UDim2.new(0.6, 0, 0, 26), TextSize = 19, Text = "Online" })
 	local stats = label(menu, { Name = "Stats", AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -28, 0, y + 4), Size = UDim2.new(0.4, -28, 0, 20), TextSize = 14, TextColor3 = Screen.SOFT, TextXAlignment = Enum.TextXAlignment.Right })
 	y += 32
 	local seekButton = button(menu, "Find a game", Screen.BLUE, {
@@ -249,7 +240,7 @@ function Screen.new(screen, folder, config)
 	local sub = label(panel, { Name = "Sub", Position = UDim2.new(0, 18, 0, 102), Size = UDim2.new(1, -36, 0, 40), TextSize = 14, TextColor3 = Screen.SOFT, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top })
 	local seatList = make("Frame", { Name = "Seats", Position = UDim2.new(0, 12, 0, 146), Size = UDim2.new(1, -24, 0, 0), BackgroundTransparency = 1 }, panel)
 	ui.extra = make("Frame", { Name = "Extra", Position = UDim2.new(0, 12, 0, 146), Size = UDim2.new(1, -24, 0, 120), BackgroundTransparency = 1 }, panel)
-	local panelRules = button(panel, "How to play", Screen.LIGHT, {
+	local panelRules = button(panel, "Rules", Screen.LIGHT, {
 		Name = "RulesButton",
 		AnchorPoint = Vector2.new(0, 1),
 		Position = UDim2.new(0, 12, 1, -62),
@@ -257,7 +248,7 @@ function Screen.new(screen, folder, config)
 		TextSize = 15,
 		TextColor3 = Screen.INK,
 	})
-	local leaveButton = button(panel, "Leave game", Screen.RED, {
+	local leaveButton = button(panel, "Leave", Screen.RED, {
 		Name = "LeaveButton",
 		AnchorPoint = Vector2.new(0, 1),
 		Position = UDim2.new(0, 12, 1, -14),
@@ -291,7 +282,7 @@ function Screen.new(screen, folder, config)
 		ZIndex = 20,
 	})
 	make("UISizeConstraint", { MinSize = Vector2.new(320, 300), MaxSize = Vector2.new(600, 640) }, rules)
-	label(rules, { Position = UDim2.new(0, 24, 0, 16), Size = UDim2.new(1, -48, 0, 34), TextSize = 26, Text = "How to play " .. config.title, ZIndex = 21 })
+	label(rules, { Position = UDim2.new(0, 24, 0, 16), Size = UDim2.new(1, -48, 0, 34), TextSize = 26, Text = "Rules", ZIndex = 21 })
 	label(rules, {
 		Position = UDim2.new(0, 24, 0, 58),
 		Size = UDim2.new(1, -48, 1, -130),
@@ -301,7 +292,7 @@ function Screen.new(screen, folder, config)
 		Text = table.concat(config.rules, "\n\n"),
 		ZIndex = 21,
 	})
-	local rulesClose = button(rules, "Got it", Screen.GREEN, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -16), Size = UDim2.fromOffset(180, 46), ZIndex = 21 })
+	local rulesClose = button(rules, "OK", Screen.GREEN, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -16), Size = UDim2.fromOffset(180, 46), ZIndex = 21 })
 
 	-- Messages at the top of the screen.
 	local toastBox = make("TextLabel", {
@@ -362,9 +353,9 @@ function Screen.new(screen, folder, config)
 		if not lobby then
 			return
 		end
-		stats.Text = "You've won " .. lobby.me.wins .. " of " .. lobby.me.played
+		stats.Text = lobby.me.wins .. " / " .. lobby.me.played .. " won"
 		if lobby.me.seeking then
-			seekButton.Text = "Looking for a game… (cancel)"
+			seekButton.Text = "Searching…  Cancel"
 			seekButton.BackgroundColor3 = Color3.fromRGB(220, 140, 40)
 		else
 			seekButton.Text = "Find a game"
@@ -393,7 +384,7 @@ function Screen.new(screen, folder, config)
 		end
 		for _, c in lobby.outgoing do
 			local r = row(46)
-			label(r, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(0.65, 0, 1, 0), TextSize = 15, Text = "Waiting for " .. c.name .. "…" })
+			label(r, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(0.65, 0, 1, 0), TextSize = 15, Text = "Sent to " .. c.name })
 			local cancel = button(r, "Cancel", Screen.GREY, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(80, 32), TextSize = 15 })
 			cancel.MouseButton1Click:Connect(function()
 				send("answer", { id = c.id, accept = false })
@@ -413,7 +404,7 @@ function Screen.new(screen, folder, config)
 		if #lobby.players == 0 and #lobby.incoming == 0 then
 			local r = row(54)
 			r.BackgroundTransparency = 1
-			label(r, { Position = UDim2.new(0, 2, 0, 0), Size = UDim2.new(1, -4, 1, 0), TextSize = 14, TextColor3 = Screen.SOFT, TextWrapped = true, Text = "Nobody else is here yet. Host this game so friends can join, and play the computer meanwhile." })
+			label(r, { Position = UDim2.new(0, 2, 0, 0), Size = UDim2.new(1, -4, 1, 0), TextSize = 14, TextColor3 = Screen.SOFT, TextWrapped = true, Text = "No one else here" })
 		end
 		people.CanvasSize = UDim2.new(0, 0, 0, rowY)
 	end
@@ -464,9 +455,9 @@ function Screen.new(screen, folder, config)
 			status.BackgroundColor3 = Screen.LIGHT
 			ui.extra.Visible = false
 		end
-		sub.Text = (if v.vsBot then "Against the computer" else "Against people in this server") .. (if ui.subText then " · " .. ui.subText else "")
+		sub.Text = (if v.vsBot then "Computer" else "Online") .. (if ui.subText then " · " .. ui.subText else "")
 		drawSeats()
-		leaveButton.Text = if v.status == "playing" then "Leave game" else "Back to menu"
+		leaveButton.Text = if v.status == "playing" then "Leave" else "Back to menu"
 		result.Visible = v.status == "over" and not resultHidden
 		if v.status == "over" then
 			if v.you ~= 0 and v.winner == v.you then
@@ -487,7 +478,7 @@ function Screen.new(screen, folder, config)
 					theyAsked = true
 				end
 			end
-			againButton.Text = if asked then "Asked…" elseif theyAsked then "Play again!" else "Play again"
+			againButton.Text = if asked then "Asked…" elseif theyAsked then "Accept" else "Play again"
 		end
 	end
 
@@ -498,7 +489,6 @@ function Screen.new(screen, folder, config)
 		panel.Visible = inGame
 		if not inGame then
 			result.Visible = false
-			describe()
 			drawLobby()
 		end
 	end

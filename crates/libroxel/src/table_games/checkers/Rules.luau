@@ -212,7 +212,7 @@ function Rules.play(state, seat, path)
 		end
 	end
 	if mustJump then
-		return false, "You have to jump when you can"
+		return false, "You must jump"
 	end
 	return false, "That move isn't allowed"
 end

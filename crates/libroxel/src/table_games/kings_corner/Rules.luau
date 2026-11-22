@@ -191,7 +191,7 @@ function Rules.play(state, seat, move)
 			if isCorner(pile) and #state.piles[pile] == 0 then
 				return false, "Only a King can start a corner"
 			end
-			return false, "It has to be one lower and the other colour"
+			return false, "One lower, other colour"
 		end
 		table.remove(hand, at)
 		table.insert(state.piles[pile], move.card)
@@ -233,7 +233,7 @@ function Rules.result(state)
 		end
 		return {
 			winner = best,
-			reason = if best then "Nobody could play: fewest cards left" else "Nobody could play, and it's a tie",
+			reason = if best then "Fewest cards" else "Tie",
 		}
 	end
 	return nil

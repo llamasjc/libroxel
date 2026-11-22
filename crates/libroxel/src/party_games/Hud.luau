@@ -1,7 +1,3 @@
--- The round HUD: what's happening and the time left at the top, your
--- role in a coloured badge, messages in the middle, and a blindfold when
--- the game says you mustn't look.
-
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -13,7 +9,7 @@ local notify = round:WaitForChild("Notify")
 local screen = script.Parent
 
 local WHITE = Color3.fromRGB(255, 255, 255)
-local DARK = Color3.fromRGB(20, 24, 32)
+local INK = Color3.fromRGB(15, 17, 22)
 local ROLE_COLOURS = {
 	It = Color3.fromRGB(225, 60, 55),
 	Runner = Color3.fromRGB(60, 170, 90),
@@ -34,68 +30,64 @@ local function make(class, props, parent)
 	return object
 end
 
-local function corner(object, radius)
-	make("UICorner", { CornerRadius = UDim.new(0, radius) }, object)
+local function outline(object, thickness)
+	make("UIStroke", { Color = INK, Thickness = thickness }, object)
 end
 
 local top = make("Frame", {
 	Name = "Top",
 	AnchorPoint = Vector2.new(0.5, 0),
-	Position = UDim2.new(0.5, 0, 0, 10),
-	Size = UDim2.new(0, 520, 0, 44),
-	BackgroundColor3 = DARK,
-	BackgroundTransparency = 0.25,
-}, screen)
-corner(top, 10)
-local statusLabel = make("TextLabel", {
-	Name = "Status",
-	Position = UDim2.new(0, 14, 0, 0),
-	Size = UDim2.new(1, -100, 1, 0),
+	Position = UDim2.new(0.5, 0, 0, 12),
+	Size = UDim2.new(0, 420, 0, 64),
 	BackgroundTransparency = 1,
-	TextColor3 = WHITE,
-	TextSize = 19,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	Text = "",
-}, top)
+}, screen)
 local clockLabel = make("TextLabel", {
 	Name = "Clock",
-	AnchorPoint = Vector2.new(1, 0.5),
-	Position = UDim2.new(1, -6, 0.5, 0),
-	Size = UDim2.new(0, 76, 0, 34),
-	BackgroundColor3 = WHITE,
-	BackgroundTransparency = 0.1,
-	TextColor3 = DARK,
+	AnchorPoint = Vector2.new(0.5, 0),
+	Position = UDim2.new(0.5, 0, 0, 0),
+	Size = UDim2.new(0, 120, 0, 36),
+	BackgroundTransparency = 1,
+	TextColor3 = WHITE,
+	TextSize = 32,
+	Text = "",
+}, top)
+outline(clockLabel, 3)
+local statusLabel = make("TextLabel", {
+	Name = "Status",
+	Position = UDim2.new(0, 0, 0, 38),
+	Size = UDim2.new(1, 0, 0, 24),
+	BackgroundTransparency = 1,
+	TextColor3 = WHITE,
 	TextSize = 20,
 	Text = "",
 }, top)
-corner(clockLabel, 8)
+outline(statusLabel, 2)
 
 local badge = make("TextLabel", {
 	Name = "Role",
-	AnchorPoint = Vector2.new(0.5, 0),
-	Position = UDim2.new(0.5, 0, 0, 60),
-	Size = UDim2.new(0, 200, 0, 34),
-	BackgroundColor3 = DARK,
+	AnchorPoint = Vector2.new(0, 1),
+	Position = UDim2.new(0, 16, 1, -16),
+	Size = UDim2.new(0, 120, 0, 30),
+	BackgroundColor3 = INK,
 	TextColor3 = WHITE,
 	TextSize = 18,
 	Text = "",
 	Visible = false,
 }, screen)
-corner(badge, 17)
+make("UICorner", { CornerRadius = UDim.new(0, 6) }, badge)
 
 local message = make("TextLabel", {
 	Name = "Message",
 	AnchorPoint = Vector2.new(0.5, 0.5),
-	Position = UDim2.new(0.5, 0, 0.32, 0),
-	Size = UDim2.new(0, 560, 0, 52),
-	BackgroundColor3 = DARK,
-	BackgroundTransparency = 0.2,
+	Position = UDim2.new(0.5, 0, 0.28, 0),
+	Size = UDim2.new(0, 700, 0, 48),
+	BackgroundTransparency = 1,
 	TextColor3 = WHITE,
-	TextSize = 24,
+	TextSize = 34,
 	Text = "",
 	Visible = false,
 }, screen)
-corner(message, 12)
+outline(message, 3)
 
 local blindfold = make("Frame", {
 	Name = "Blindfold",
@@ -111,8 +103,8 @@ make("TextLabel", {
 	Size = UDim2.new(0, 600, 0, 80),
 	BackgroundTransparency = 1,
 	TextColor3 = WHITE,
-	TextSize = 30,
-	Text = "You're the seeker. No peeking!",
+	TextSize = 40,
+	Text = "Eyes closed",
 	ZIndex = 6,
 }, blindfold)
 
@@ -126,7 +118,7 @@ local function showRole()
 	local role = me:GetAttribute("Role") or ""
 	badge.Visible = role ~= ""
 	badge.Text = role
-	badge.BackgroundColor3 = ROLE_COLOURS[role] or DARK
+	badge.BackgroundColor3 = ROLE_COLOURS[role] or INK
 	blindfold.Visible = me:GetAttribute("Blind") == true
 end
 
@@ -146,7 +138,7 @@ notify.OnClientEvent:Connect(function(text)
 	local mine = shown
 	message.Text = text
 	message.Visible = true
-	task.wait(3)
+	task.wait(2.5)
 	if shown == mine then
 		message.Visible = false
 	end
