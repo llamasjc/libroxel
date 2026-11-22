@@ -14,7 +14,16 @@ pub const MAX_DISTANCE: f32 = 128.0;
 /// At or below this, the camera is in first person.
 pub const FIRST_PERSON: f32 = 1.0;
 /// How high above the root part the camera looks at (studs): the head.
-pub const FOCUS_HEIGHT: f32 = 1.5;
+pub const FOCUS_HEIGHT: f32 = 2.55;
+/// Within this distance of the head, the character starts to fade.
+const FADE_FROM: f32 = 3.0;
+
+/// How see-through the player's own character is with the camera
+/// `distance` from the head: clear far out, gone in first person.
+pub fn self_fade(distance: f32) -> f32 {
+    let fade = ((FADE_FROM - distance) / (FADE_FROM - FIRST_PERSON)).clamp(0.0, 1.0);
+    (fade * 10.0).round() / 10.0
+}
 
 /// The distance after zooming by `lines` mouse-wheel notches (in is
 /// positive). Each notch moves a share of the way, so zooming feels the
@@ -96,6 +105,15 @@ mod tests {
             d = ease(d, 10.0, 1.0 / 60.0);
         }
         assert!((d - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_character_fades_in_close() {
+        assert_eq!(self_fade(START_DISTANCE), 0.0);
+        assert_eq!(self_fade(FADE_FROM), 0.0);
+        assert_eq!(self_fade(2.0), 0.5);
+        assert_eq!(self_fade(FIRST_PERSON), 1.0);
+        assert_eq!(self_fade(MIN_DISTANCE), 1.0);
     }
 
     #[test]

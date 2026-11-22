@@ -1518,6 +1518,7 @@ fn camera_controls(
                 zoom_lines -= 1.0;
             }
         }
+        rig.yaw = (rig.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
         transform.rotation = rig.rotation();
         match rig.mode {
             CameraMode::Fly => {
@@ -1821,7 +1822,7 @@ fn place_follow(
 
 /// Whether the follow camera is in the character's head.
 pub fn first_person(rig: &CameraRig) -> bool {
-    rig.mode == CameraMode::Follow && rig.following.is_some() && rig.shown <= crate::camera::FIRST_PERSON
+    rig.mode == CameraMode::Follow && rig.following.is_some() && rig.zoom <= crate::camera::FIRST_PERSON
 }
 
 fn follow_camera(
@@ -1911,41 +1912,67 @@ fn follow_camera(
     }
 }
 
-/// In first person, hides the player's own body so it doesn't fill the
-/// view; shows it again when the camera pulls back out.
+/// Fades the player's own body as the camera comes in close, and hides it
+/// in first person. Held tools stay.
 fn hide_self_in_first_person(
     engine: NonSend<EngineState>,
     entities: Res<PartEntities>,
     rigs: Query<&CameraRig>,
-    mut hidden: Local<Vec<InstanceId>>,
-    mut parts: Query<(&PartAppearance, &mut Visibility), With<PartLink>>,
+    mut faded: Local<std::collections::HashMap<Entity, (f32, f32)>>,
+    mut parts: Query<&mut PartAppearance, With<PartLink>>,
     mut clusters: ResMut<crate::clusters::Clusters>,
 ) {
-    let inside = rigs.iter().any(first_person);
-    let wanted: Vec<InstanceId> = match engine.session.as_ref().and_then(|s| s.character()) {
-        Some(c) if inside => engine.tree.borrow().descendants_of_class(c.model, ClassKind::Part),
+    let shown = rigs
+        .iter()
+        .filter(|rig| rig.mode == CameraMode::Follow && rig.following.is_some())
+        .map(|rig| rig.shown)
+        .reduce(f32::min);
+    let fade = shown.map_or(0.0, crate::camera::self_fade);
+    let wanted: Vec<Entity> = match engine.session.as_ref().and_then(|s| s.character()) {
+        Some(c) if fade > 0.0 => {
+            let tree = engine.tree.borrow();
+            tree.descendants_of_class(c.model, ClassKind::Part)
+                .into_iter()
+                .filter(|id| {
+                    let mut at = tree.parent(*id).ok().flatten();
+                    while let Some(a) = at.filter(|a| *a != c.model) {
+                        if tree.class(a) == Ok(ClassKind::Tool) {
+                            return false;
+                        }
+                        at = tree.parent(a).ok().flatten();
+                    }
+                    true
+                })
+                .filter_map(|id| entities.0.get(&id).copied())
+                .collect()
+        }
         _ => Vec::new(),
     };
-    if wanted == *hidden {
-        return;
-    }
-    for id in hidden.iter().filter(|id| !wanted.contains(id)) {
-        if let Some(entity) = entities.0.get(id)
-            && let Ok((appearance, mut visibility)) = parts.get_mut(*entity)
+    faded.retain(|entity, (own, put)| {
+        if wanted.contains(entity) {
+            return true;
+        }
+        if let Ok(mut appearance) = parts.get_mut(*entity)
+            && appearance.transparency == *put
         {
-            visibility.set_if_neq(visibility_for(appearance));
+            appearance.transparency = *own;
             clusters.keep_apart(*entity);
         }
-    }
-    for id in &wanted {
-        if let Some(entity) = entities.0.get(id)
-            && let Ok((_, mut visibility)) = parts.get_mut(*entity)
-        {
-            visibility.set_if_neq(Visibility::Hidden);
-            clusters.keep_apart(*entity);
+        false
+    });
+    for entity in wanted {
+        let Ok(mut appearance) = parts.get_mut(entity) else { continue };
+        let own = match faded.get(&entity) {
+            Some((own, put)) if appearance.transparency == *put => *own,
+            _ => appearance.transparency,
+        };
+        let put = 1.0 - (1.0 - own) * (1.0 - fade);
+        if appearance.transparency != put {
+            appearance.transparency = put;
+            clusters.keep_apart(entity);
         }
+        faded.insert(entity, (own, put));
     }
-    *hidden = wanted;
 }
 
 /// In first person the mouse pointer is hidden and held in the middle of

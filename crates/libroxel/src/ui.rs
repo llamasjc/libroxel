@@ -3716,10 +3716,8 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             }
         }
         Action::ClickPart(id) => {
-            let clickable = engine.session.as_mut().is_some_and(|s| s.click_part(id));
-            if !clickable {
-                editor.reveal_selection = true;
-                editor.selection = Some(id);
+            if let Some(session) = engine.session.as_mut() {
+                session.click_part(id);
             }
         }
         Action::Reparent(child, parent) => {
