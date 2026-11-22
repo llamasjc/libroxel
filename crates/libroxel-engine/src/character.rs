@@ -24,6 +24,8 @@ pub struct CharacterInput {
     pub throttle: f32,
     /// The right (1) and left (-1) keys, for driving a vehicle seat.
     pub steer: f32,
+    /// The way to face (yaw, in degrees), in first person.
+    pub face: Option<f32>,
 }
 
 /// The instances that make up a character.
@@ -729,6 +731,12 @@ fn joint_place(
             }
             _ => None,
         };
+    // As on Roblox, a script's Transform holds for the frame it was set in:
+    // scripts that pose a joint set it every frame.
+    if script.is_some() {
+        let _ = tree.set_extra(joint, "TransformPosition", None);
+        let _ = tree.set_extra(joint, "TransformOrientation", None);
+    }
     // A Transform a script set takes over from the walk and animations.
     let transform = script.unwrap_or_else(|| CFrame::new(Vec3::ZERO, rest.transpose() * r * rest));
     let angle = tree.get_number(joint, Property::CurrentAngle).unwrap_or(0.0) as f32;
@@ -780,11 +788,14 @@ pub fn pose_rig(tree: &mut InstanceTree, root: InstanceId, head: InstanceId, lim
         Some((a, legs)) => (Some(a), legs),
         None => (None, false),
     };
-    let at = at + Vec3::new(0.0, anim.map_or(0.0, |a| a.bob), 0.0);
+    // Walking, the hips drop as the legs spread, so both feet stay down.
+    let walking = !pose.sitting && !anim_legs;
+    let drop = if walking { LEG_SIZE.y * (1.0 - pose.swing.cos()) } else { 0.0 };
+    let at = at + Vec3::new(0.0, anim.map_or(0.0, |a| a.bob) - drop, 0.0);
     // A limb swung forward by `tilt` and out to the side by `roll` (radians).
     let limb = |tilt: f32, roll: f32| Rotation::about_x(tilt) * Rotation::about_z(roll);
     let (legs, arms) =
-        if pose.sitting { (90f32.to_radians(), 20f32.to_radians()) } else { (pose.swing, pose.swing) };
+        if pose.sitting { (90f32.to_radians(), 20f32.to_radians()) } else { (pose.swing, pose.swing * 0.7) };
     let (left_leg, right_leg) = if pose.sitting { (legs, legs) } else { (legs, -legs) };
     let (left_arm, right_arm) = if pose.sitting { (arms, arms) } else { (-arms, arms) };
     let mut left_arm = limb(left_arm, 0.0);
@@ -834,9 +845,24 @@ pub fn pose_rig(tree: &mut InstanceTree, root: InstanceId, head: InstanceId, lim
     }
 }
 
-/// How far limbs swing at `speed` studs per second, `phase` radians into a stride.
-pub fn swing_for(speed: f32, phase: f32) -> f32 {
-    phase.sin() * 0.7 * (speed / 12.0).min(1.0)
+/// Radians of stride per stud walked.
+pub const STRIDE_PER_STUD: f32 = 0.9;
+
+/// How far the legs swing from straight down, `phase` radians into a stride.
+pub fn swing_for(phase: f32) -> f32 {
+    phase.sin() * 0.6
+}
+
+/// The stride after moving `moved` studs in `dt` seconds: on while
+/// walking, and easing back to standing still once stopped.
+pub fn stride_after(stride: f32, moved: f32, dt: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    if moved > 0.5 * dt {
+        return (stride + moved * STRIDE_PER_STUD) % TAU;
+    }
+    let rest = (stride / PI).round() * PI;
+    let eased = stride + (rest - stride) * (1.0 - (-12.0 * dt).exp());
+    if (rest - eased).abs() < 1e-3 { rest % TAU } else { eased }
 }
 
 /// Where a new character should appear: on top of the first spawn location.

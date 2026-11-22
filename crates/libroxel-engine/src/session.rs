@@ -88,9 +88,6 @@ pub struct Blast {
 /// How long an explosion's flash lasts, in seconds.
 pub const BLAST_TIME: f32 = 0.6;
 
-/// Radians of stride per stud walked.
-const STRIDE_PER_STUD: f32 = 0.55;
-
 /// The number keys that pick hotbar slots 1 to 9.
 const SLOT_KEYS: [KeyCode; 9] = [
     KeyCode::One,
@@ -726,7 +723,10 @@ impl PlaySession {
             }
         }
         let dir = input.move_dir;
-        if dir.x != 0.0 || dir.z != 0.0 {
+        if let Some(yaw) = input.face {
+            let facing = PropertyValue::Vec3(Vec3::new(0.0, yaw, 0.0));
+            let _ = tree.set(character.root, Property::Orientation, facing);
+        } else if dir.x != 0.0 || dir.z != 0.0 {
             // Turn smoothly, the short way round, rather than snapping.
             let now = tree.get_vec3(character.root, Property::Orientation).unwrap_or_default().y;
             let yaw = crate::character::turn_toward(now, crate::character::yaw_of(dir), dt);
@@ -737,13 +737,10 @@ impl PlaySession {
         let v = self.physics.velocity(character.root);
         let speed = (v.x * v.x + v.z * v.z).sqrt();
         let sitting = avatar.seating.seat().is_some();
-        if speed > 0.5 && !sitting {
-            avatar.stride = (avatar.stride + speed * dt * STRIDE_PER_STUD) % std::f32::consts::TAU;
-        } else {
-            avatar.stride = 0.0;
-        }
+        let moved = if sitting { 0.0 } else { speed * dt };
+        avatar.stride = crate::character::stride_after(avatar.stride, moved, dt);
         let tool = tree.find_first_child_of_class(character.model, ClassKind::Tool).ok().flatten();
-        let swing = crate::character::swing_for(speed, avatar.stride);
+        let swing = crate::character::swing_for(avatar.stride);
         if tool.is_none() {
             avatar.slash = 0.0;
         }

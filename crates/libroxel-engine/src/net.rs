@@ -175,7 +175,16 @@ pub(crate) struct Joined {
     own_model: Option<InstanceId>,
     /// The latest of the host's teleports of our character we have taken.
     teleports: u64,
+    /// Where the host last put each part that moves, for it to glide
+    /// there: the host's updates come unevenly, and set straight away they
+    /// stutter.
+    glide: HashMap<InstanceId, (Vec3, Vec3)>,
 }
+
+/// How quickly a part glides to where the host put it, a second.
+const GLIDE_RATE: f32 = 18.0;
+/// A part put further than this away jumps there.
+const GLIDE_JUMP: f32 = 40.0;
 
 /// Something a joined player did, for the host to act on.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -417,7 +426,25 @@ impl Joined {
                     }
                     Self::fields(tree, id, &op, &mut links);
                 } else {
+                    let moves = op.get("v").and_then(Json::as_object).is_some_and(|v| {
+                        v.contains_key(Property::Position.file_name())
+                            || v.contains_key(Property::Orientation.file_name())
+                    });
+                    let was = moves.then(|| {
+                        (tree.get_vec3(id, Property::Position), tree.get_vec3(id, Property::Orientation))
+                    });
                     Self::fields(tree, id, op, &mut links);
+                    if let Some((Some(from), Some(turn))) = was {
+                        let to = tree.get_vec3(id, Property::Position).unwrap_or(from);
+                        let to_turn = tree.get_vec3(id, Property::Orientation).unwrap_or(turn);
+                        if (to - from).length() < GLIDE_JUMP {
+                            let _ = tree.set(id, Property::Position, PropertyValue::Vec3(from));
+                            let _ = tree.set(id, Property::Orientation, PropertyValue::Vec3(turn));
+                            self.glide.insert(id, (to, to_turn));
+                        } else {
+                            self.glide.remove(&id);
+                        }
+                    }
                 }
                 if let Some(parent) = op.get("p") {
                     let _ = tree.set_parent(id, self.local_of(parent));
@@ -445,6 +472,32 @@ impl Joined {
         let mut found = Vec::new();
         set_fields(tree, id, op, &mut found);
         links.extend(found.into_iter().map(|(id, property, to)| (id, property, to.as_u64())));
+    }
+
+    /// Moves parts on toward where the host last put them.
+    fn glide(&mut self, tree: &mut InstanceTree, dt: f32) {
+        if self.glide.is_empty() {
+            return;
+        }
+        let step = 1.0 - (-GLIDE_RATE * dt).exp();
+        self.glide.retain(|id, (to, to_turn)| {
+            let (Some(at), Some(turn)) =
+                (tree.get_vec3(*id, Property::Position), tree.get_vec3(*id, Property::Orientation))
+            else {
+                return false;
+            };
+            let there = (*to - at).length() < 1e-3 && (*to_turn - turn).length() < 1e-2;
+            let (pos, orientation) = if there {
+                (*to, *to_turn)
+            } else {
+                let from = libroxel_instance::Rotation::from_orientation(turn);
+                let goal = libroxel_instance::Rotation::from_orientation(*to_turn);
+                (at.lerp(*to, step), from.slerp(goal, step).to_orientation())
+            };
+            let _ = tree.set(*id, Property::Position, PropertyValue::Vec3(pos));
+            let _ = tree.set(*id, Property::Orientation, PropertyValue::Vec3(orientation));
+            !there
+        });
     }
 
     /// Rewrites instances in script values from the host's ids to ours.
@@ -527,6 +580,7 @@ fn input_from(message: &Json) -> CharacterInput {
         jump: message.get("jump").and_then(Json::as_bool).unwrap_or(false),
         throttle: f(message.get("throttle")).clamp(-1.0, 1.0),
         steer: f(message.get("steer")).clamp(-1.0, 1.0),
+        face: None,
     }
 }
 
@@ -594,6 +648,7 @@ impl PlaySession {
             owning: false,
             own_model: None,
             teleports: 0,
+            glide: HashMap::new(),
         }));
         session.info("🔗 Joining the game (its address stays hidden here)".to_owned());
         Ok(session)
@@ -960,6 +1015,7 @@ impl PlaySession {
         }
 
         self.adopt_player(&mut joined);
+        joined.glide(&mut tree.borrow_mut(), dt);
 
         let changes = tree.borrow_mut().drain_changes();
         let errors = self.runtime.fire_changes(&changes);
@@ -993,6 +1049,7 @@ impl PlaySession {
         });
         self.emits.extend(self.runtime.take_emit_requests());
 
+        let input = CharacterInput { face: None, ..input };
         if joined.sent_input != Some(input) {
             joined.sent_input = Some(input);
             joined.conn.send(&move_json(input));
