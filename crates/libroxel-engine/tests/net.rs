@@ -315,3 +315,34 @@ fn bad_words_are_not_allowed_in_names() {
     until(&mut host, &mut guest, CharacterInput::default(), |h, _| h.joined_players().len() == 1);
     assert!(host.joined_players()[0].1.starts_with("Player"), "{:?}", host.joined_players());
 }
+
+#[test]
+fn a_joined_player_in_a_seat_faces_the_seat_way() {
+    let mut tree = game();
+    let ws = tree.workspace();
+    let seat = add(&mut tree, ClassKind::Seat, ws, "Bench");
+    tree.set(seat, Property::Position, PropertyValue::Vec3(Vec3::new(-15.0, 0.5, 0.0))).unwrap();
+    tree.set(seat, Property::Size, PropertyValue::Vec3(Vec3::new(2.0, 1.0, 2.0))).unwrap();
+    tree.set(seat, Property::Anchored, PropertyValue::Bool(true)).unwrap();
+    let mut host = PlaySession::host(Rc::new(RefCell::new(tree)), 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| g.character().is_some());
+    host.runtime().run("sit", "workspace.Bench:Sit(workspace.Bea.Humanoid)").unwrap();
+    let seated = |g: &PlaySession| {
+        let c = g.character().unwrap();
+        g.runtime().tree().borrow().get_ref(c.humanoid, Property::SeatPart).is_some()
+    };
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| seated(g));
+    let look = CharacterInput { face: Some(90.0), ..Default::default() };
+    for _ in 0..30 {
+        host.step(DT, CharacterInput::default());
+        guest.step(DT, look);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let c = guest.character().unwrap();
+    let yaw = guest.runtime().tree().borrow().get_vec3(c.root, Property::Orientation).unwrap().y;
+    assert!(yaw.abs() < 1.0, "turned in the seat: {yaw}");
+}

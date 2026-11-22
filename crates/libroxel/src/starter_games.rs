@@ -303,6 +303,20 @@ mod tests {
         assert_eq!(value(&session, &format!("#{moves}:GetChildren()")), "2");
         let answer = format!("{moves}:FindFirstChildOfClass('TextLabel'):GetChildren()[3].Text");
         assert_ne!(value(&session, &answer), "", "the computer answered");
+        // The engine stays hidden until the Engine button turns it on.
+        assert_eq!(value(&session, &format!("{gui}.BoardColumn.EvalBar.Visible")), "false");
+        assert_eq!(value(&session, &format!("{gui}.Panel.Game.Thoughts.Visible")), "false");
+        let engine = {
+            let tree = session.runtime().tree().clone();
+            let t = tree.borrow();
+            let actions =
+                t.descendants(t.root()).unwrap().into_iter().find(|&id| t.name(id).ok() == Some("Actions"));
+            t.find_first_child(actions.unwrap(), "Engine").unwrap().unwrap()
+        };
+        session.click_button(engine);
+        steps(&mut session, 2);
+        assert_eq!(value(&session, &format!("{gui}.BoardColumn.EvalBar.Visible")), "true");
+        assert_eq!(value(&session, &format!("{gui}.Panel.Game.Thoughts.Visible")), "true");
         assert_eq!(
             value(&session, &format!("{gui}.BoardColumn.BottomPlayer.PlayerName.Text")),
             "Player1  (1200)"
