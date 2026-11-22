@@ -100,7 +100,7 @@ pub fn upload(client: &HubClient, place: &str) -> Result<String, String> {
         }
     });
     if files.is_empty() {
-        return Ok(place.to_owned());
+        return Ok(doc.to_string());
     }
     let hashes: Vec<String> = files.values().map(|(h, ..)| h.clone()).collect();
     let missing = client.missing_assets(&hashes)?;
@@ -114,7 +114,7 @@ pub fn upload(client: &HubClient, place: &str) -> Result<String, String> {
             *name = format!("{ASSET_PREFIX}{hash}.{ending}");
         }
     });
-    Ok(serde_json::to_string_pretty(&doc).expect("JSON values always serialise"))
+    Ok(doc.to_string())
 }
 
 pub fn official_dir() -> PathBuf {
@@ -172,7 +172,7 @@ mod tests {
         let hash = asset_hash(picture);
         let name = format!("{ASSET_PREFIX}{hash}.png");
         assert_eq!(published.matches(&name).count(), 2, "{published}");
-        assert!(published.contains(r#""name": "logo.png""#));
+        assert!(published.contains(r#""name":"logo.png""#));
         assert_eq!(client.asset(&hash).unwrap(), picture);
 
         let cache = root.join("cache");

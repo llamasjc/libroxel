@@ -33,6 +33,7 @@
 //!
 //! [`HubClient`] is the blocking client the editor and servers use.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -43,6 +44,7 @@ use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
 mod assets;
@@ -136,7 +138,7 @@ const MAX_TEXT: usize = 600;
 const MAX_DESCRIPTION: usize = 2000;
 
 /// The biggest saved place the Hub takes, in bytes.
-pub const MAX_PLACE: usize = 16 * 1024 * 1024;
+pub const MAX_PLACE: usize = 100 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // What goes over the wire
@@ -698,7 +700,10 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         });
     }
     // Only publishing carries a whole place; everything else is small.
-    let big = axum::extract::DefaultBodyLimit::max(MAX_PLACE * 2 + 64 * 1024);
+    let big = (
+        tower_http::decompression::RequestDecompressionLayer::new(),
+        axum::extract::DefaultBodyLimit::max(MAX_PLACE * 2 + 64 * 1024),
+    );
     Router::new()
         .route("/", get(status))
         .route("/servers", get(list_servers))
@@ -707,7 +712,7 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/play", post(play))
         .route("/games", get(list_games).post(publish).layer(big))
         .route("/games/{id}", get(game_info).delete(unpublish))
-        .route("/games/{id}/place", get(download))
+        .route("/games/{id}/place", get(download).layer(tower_http::compression::CompressionLayer::new()))
         .route("/assets/missing", post(assets::missing_assets))
         .route(
             "/assets/{hash}",
@@ -884,7 +889,7 @@ async fn publish(
         return bad("that game is too big to publish here");
     }
     // Only saved places: a JSON object, as `.lrx` files are.
-    if !serde_json::from_str::<serde_json::Value>(&game.place).is_ok_and(|v| v.is_object()) {
+    if serde_json::from_str::<HashMap<String, IgnoredAny>>(&game.place).is_err() {
         return bad("that is not a saved game");
     }
     let author_id = match (&game.author_id, &game.author_signature) {
@@ -1748,12 +1753,17 @@ impl HubClient {
 
     /// Publishes a game, or a new version of one.
     pub fn publish(&self, game: &Publish) -> Result<Published, String> {
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        serde_json::to_writer(&mut gz, game).map_err(|e| e.to_string())?;
+        let body = gz.finish().map_err(|e| e.to_string())?;
         self.slow
             .post(format!("{}/games", self.base))
+            .header("content-type", "application/json")
+            .header("content-encoding", "gzip")
             .config()
             .http_status_as_error(false)
             .build()
-            .send_json(game)
+            .send(&body[..])
             .map_err(|e| format!("could not reach the Hub: {e}"))
             .and_then(|mut r| {
                 if r.status().is_success() {
