@@ -662,25 +662,10 @@ pub fn home_tab(
     name: &str,
     tab: &mut Tab,
 ) -> Option<Pick> {
-    platform.refresh_if_old();
-    let mut pick = None;
-    if let Some(done) = platform.take_download() {
-        let game = Game::File(done.path);
-        pick = Some(if done.host { Pick::Host(game) } else { Pick::Play(game) });
-    }
-    let list = entries(platform);
-    if let Some(launched) = follow_link(state, platform, &list, name) {
-        return Some(launched);
-    }
-    if let Some(joining) = found(state, platform, &list, name) {
-        return Some(joining);
-    }
-    if let View::Game(key) = state.view.clone() {
-        match list.iter().find(|e| e.key == key) {
-            Some(entry) => return game_page(state, ui, platform, entry, name).or(pick),
-            None => state.view = View::Home,
-        }
-    }
+    let (list, mut pick) = match start(state, ui, platform, name) {
+        Ok(list) => list,
+        Err(pick) => return pick,
+    };
     // Hello, with your own face.
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(64.0, 64.0), egui::Sense::hover());
@@ -742,7 +727,69 @@ pub fn home_tab(
         });
     });
     ui.add_space(18.0);
-    // Games, busiest first.
+    games(state, ui, &list, &friends);
+    getting(ui, platform);
+    pick
+}
+
+/// The Games tab: every game, as on Home.
+pub fn games_tab(
+    state: &mut HomeState,
+    ui: &mut egui::Ui,
+    platform: &mut Platform,
+    name: &str,
+) -> Option<Pick> {
+    let (list, pick) = match start(state, ui, platform, name) {
+        Ok(list) => list,
+        Err(pick) => return pick,
+    };
+    let friends = platform.social.friends.friends.clone();
+    games(state, ui, &list, &friends);
+    getting(ui, platform);
+    pick
+}
+
+/// What Home and Games do first: Play, links and an open game's page.
+fn start(
+    state: &mut HomeState,
+    ui: &mut egui::Ui,
+    platform: &mut Platform,
+    name: &str,
+) -> Result<(Vec<Entry>, Option<Pick>), Option<Pick>> {
+    platform.refresh_if_old();
+    let mut pick = None;
+    if let Some(done) = platform.take_download() {
+        let game = Game::File(done.path);
+        pick = Some(if done.host { Pick::Host(game) } else { Pick::Play(game) });
+    }
+    let list = entries(platform);
+    if let Some(launched) = follow_link(state, platform, &list, name) {
+        return Err(Some(launched));
+    }
+    if let Some(joining) = found(state, platform, &list, name) {
+        return Err(Some(joining));
+    }
+    if let View::Game(key) = state.view.clone() {
+        match list.iter().find(|e| e.key == key) {
+            Some(entry) => return Err(game_page(state, ui, platform, entry, name).or(pick)),
+            None => state.view = View::Home,
+        }
+    }
+    Ok((list, pick))
+}
+
+fn getting(ui: &mut egui::Ui, platform: &Platform) {
+    if let Some(title) = platform.downloading() {
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(format!("Getting {title}…"));
+        });
+    }
+}
+
+/// Games, busiest first.
+fn games(state: &mut HomeState, ui: &mut egui::Ui, list: &[Entry], friends: &[Friend]) {
     let in_games: Vec<&Friend> = friends.iter().filter(|f| f.game.is_some()).collect();
     section(ui, "Games", None);
     ui.label(
@@ -751,7 +798,7 @@ pub fn home_tab(
     ui.add_space(10.0);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(18.0, 18.0);
-        for entry in &list {
+        for entry in list {
             let here: Vec<&Friend> = in_games
                 .iter()
                 .copied()
@@ -765,14 +812,6 @@ pub fn home_tab(
             }
         }
     });
-    if let Some(title) = platform.downloading() {
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label(format!("Getting {title}…"));
-        });
-    }
-    pick
 }
 
 /// One game's page: its picture, Play, and every server running it.

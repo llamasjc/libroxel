@@ -112,23 +112,26 @@ fi
 
 echo "== Game servers"
 game_flags=""
+if [ -f "$here/libroxel" ]; then
+    install -m 755 "$here/libroxel" /usr/local/bin/libroxel.new
+    mv -f /usr/local/bin/libroxel.new /usr/local/bin/libroxel
+fi
+if [ -x /usr/local/bin/libroxel ]; then
+    # What the app needs to run, even with no screen (sound and input libraries).
+    if ! ldconfig -p | grep -q 'libasound.so.2' || ! ldconfig -p | grep -q 'libudev.so.1'; then
+        apt-get update -q
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -q libudev1 \
+            || true
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -q libasound2t64 2>/dev/null \
+            || DEBIAN_FRONTEND=noninteractive apt-get install -y -q libasound2
+    fi
+    game_flags="--starters /usr/local/bin/libroxel"
+fi
 if [ "$GAME_SERVERS" = yes ]; then
     # The game server is the Libroxel app itself, run as `libroxel server` with no window.
-    if [ -f "$here/libroxel" ]; then
-        install -m 755 "$here/libroxel" /usr/local/bin/libroxel.new
-        mv -f /usr/local/bin/libroxel.new /usr/local/bin/libroxel
-    fi
     if [ -x /usr/local/bin/libroxel ]; then
-        # What the app needs to run, even with no screen (sound and input libraries).
-        if ! ldconfig -p | grep -q 'libasound.so.2' || ! ldconfig -p | grep -q 'libudev.so.1'; then
-            apt-get update -q
-            DEBIAN_FRONTEND=noninteractive apt-get install -y -q libudev1 \
-                || true
-            DEBIAN_FRONTEND=noninteractive apt-get install -y -q libasound2t64 2>/dev/null \
-                || DEBIAN_FRONTEND=noninteractive apt-get install -y -q libasound2
-        fi
         install -d -o libroxel -g libroxel -m 750 /var/lib/libroxel/game-servers
-        game_flags="--game-servers /usr/local/bin/libroxel --game-server-dir /var/lib/libroxel/game-servers"
+        game_flags="$game_flags --game-servers /usr/local/bin/libroxel --game-server-dir /var/lib/libroxel/game-servers"
         game_flags="$game_flags --max-game-servers $MAX_GAME_SERVERS --players-per-server $PLAYERS_PER_SERVER"
         game_flags="$game_flags --first-udp-port $FIRST_UDP_PORT"
         echo "Up to $MAX_GAME_SERVERS game servers of $PLAYERS_PER_SERVER players each."

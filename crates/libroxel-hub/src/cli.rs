@@ -21,6 +21,8 @@ pub const HUB_HELP: &str = "\
       --stop-empty-after <s>   a server stops once empty this long (default 120)
       --game-server-dir <dir>  their keys and logs (default: game-servers next
                                to --data)
+      --starters <program>     the libroxel app to list the official games from
+                               (default: the --game-servers one)
   reports                      list reported games and hats (and which are hidden)
   clear <game|item> <id>       say a reported one is fine: list it again
   remove <game|item> <id>      take one down for good
@@ -88,6 +90,7 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
             "--players-per-server",
             "--first-udp-port",
             "--stop-empty-after",
+            "--starters",
         ],
     )?;
     let port = flags.number("--port", crate::DEFAULT_PORT)?;
@@ -114,6 +117,7 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
         behind_proxy: flags.has("--behind-proxy"),
         mail: crate::Mail::from_env()?,
         fleet,
+        starters: flags.get("--starters").map(PathBuf::from),
         ..Default::default()
     };
     let words: Vec<&str> = flags.rest.iter().map(String::as_str).collect();
