@@ -138,6 +138,13 @@ pub(crate) fn check_code(db: &Connection, player_id: &str, code: Option<&str>) -
         .map_err(|e| e.to_string())?;
     let Some((secret, last_step)) = row else { return Ok(()) };
     let Some(code) = code.filter(|c| !c.trim().is_empty()) else { return Err(NEEDS_CODE.into()) };
+    if crate::recovery::is_recovery_code(code) {
+        return if crate::recovery::use_recovery_code(db, player_id, code) {
+            Ok(())
+        } else {
+            Err("wrong recovery code".into())
+        };
+    }
     match code_step(&secret, code, now()) {
         Some(step) if step > last_step => {
             db.execute("UPDATE two_step SET last_step = ?2 WHERE player_id = ?1", params![player_id, step])
@@ -152,7 +159,7 @@ pub(crate) fn check_code(db: &Connection, player_id: &str, code: Option<&str>) -
 pub(crate) async fn set_two_step(
     State(db): State<Db>,
     Json(set): Json<TwoStepSet>,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<Json<crate::recovery::RecoveryCodes>, (StatusCode, String)> {
     if !verify(&set.player_id, &two_step_message(&set), &set.signature) {
         return Err((StatusCode::FORBIDDEN, "the signature does not match that player".into()));
     }
@@ -183,14 +190,17 @@ pub(crate) async fn set_two_step(
                 params![set.player_id, secret, step],
             )
             .map_err(internal)?;
+            let codes = crate::recovery::make_recovery_codes(&db, &set.player_id)?;
+            Ok(Json(crate::recovery::RecoveryCodes { codes }))
         }
         None => {
             check_code(&db, &set.player_id, Some(&set.code)).map_err(|e| (StatusCode::FORBIDDEN, e))?;
             db.execute("DELETE FROM two_step WHERE player_id = ?1", params![set.player_id])
                 .map_err(internal)?;
+            crate::recovery::forget_recovery_codes(&db, &set.player_id);
+            Ok(Json(crate::recovery::RecoveryCodes::default()))
         }
     }
-    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +240,11 @@ pub struct Security {
     pub warnings: Vec<crate::Warning>,
     #[serde(default)]
     pub muted_secs: Option<i64>,
+    /// Devices signed in, latest first.
+    #[serde(default)]
+    pub sessions: Vec<crate::recovery::SessionInfo>,
+    #[serde(default)]
+    pub recovery_codes_left: u32,
 }
 
 /// Remembers a sign-in on another computer.
@@ -250,6 +265,8 @@ pub(crate) fn record_sign_in(db: &Connection, player_id: &str, from: &str) {
 pub(crate) struct Signed {
     time: i64,
     signature: String,
+    #[serde(default)]
+    session: Option<String>,
 }
 
 pub(crate) async fn security(
@@ -265,6 +282,9 @@ pub(crate) async fn security(
         return Err((StatusCode::BAD_REQUEST, "this computer's clock is too far off".into()));
     }
     let db = db.lock().unwrap();
+    if crate::recovery::was_moved(&db, &id) {
+        return Err((StatusCode::GONE, crate::recovery::SIGNED_OUT.into()));
+    }
     let has = |table: &str| -> bool {
         db.query_row(&format!("SELECT 1 FROM {table} WHERE player_id = ?1"), params![id], |_| Ok(()))
             .optional()
@@ -292,6 +312,8 @@ pub(crate) async fn security(
         sign_ins,
         warnings: crate::moderate::unseen_warnings(&db, &id),
         muted_secs: crate::moderate::muted_for(&db, &id),
+        sessions: crate::recovery::sessions(&db, &id, signed.session.as_deref()),
+        recovery_codes_left: crate::recovery::recovery_codes_left(&db, &id),
     }))
 }
 
