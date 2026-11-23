@@ -242,7 +242,7 @@ pub fn editor_ui(
     time: Res<Time>,
     mut touch_input: ResMut<libroxel_engine::devices::VirtualInput>,
     adapter: Option<Res<bevy::render::renderer::RenderAdapterInfo>>,
-    quality: Option<Res<libroxel_engine::view::GraphicsQuality>>,
+    mut quality: Option<ResMut<libroxel_engine::view::GraphicsQuality>>,
 ) -> Result {
     let ui_began = std::time::Instant::now();
     let ctx = contexts.ctx_mut()?.clone();
@@ -534,13 +534,15 @@ pub fn editor_ui(
             }
             if let Some(session) = engine.session.as_mut() {
                 let adapter = editor.graphics_adapter.clone();
-                let level = quality.as_ref().map_or(3, |q| q.level);
+                let level = quality.as_ref().map_or_else(String::new, |q| {
+                    format!("{}{}", q.level, if q.auto { " (auto)" } else { "" })
+                });
                 let about = || {
                     let tree = tree_rc.borrow();
                     let all = tree.descendants(tree.root()).map(|d| d.len()).unwrap_or(0);
                     let parts = tree.descendants_of_class(tree.workspace(), ClassKind::Part).len();
                     format!(
-                        "Graphics: {}, quality level {level} of 3 (it drops by itself when frames are slow)\nWindow: {:.0} x {:.0}\nInstances: {all}, parts in Workspace: {parts}",
+                        "Graphics: {}, quality {level}\nWindow: {:.0} x {:.0}\nInstances: {all}, parts in Workspace: {parts}",
                         adapter,
                         ui.ctx().content_rect().width(),
                         ui.ctx().content_rect().height(),
@@ -574,7 +576,7 @@ pub fn editor_ui(
     }
 
     if editor.player_mode {
-        game_menu(&ctx, editor, engine.session.as_ref(), central, &mut actions);
+        game_menu(&ctx, editor, engine.session.as_ref(), central, &mut actions, quality.as_deref_mut());
     }
 
     // Touch screens get on-screen controls while playing.
@@ -1111,6 +1113,7 @@ fn game_menu(
     session: Option<&PlaySession>,
     view: egui::Rect,
     actions: &mut Vec<Action>,
+    quality: Option<&mut libroxel_engine::view::GraphicsQuality>,
 ) {
     if !editor.paused {
         if editor.touch.seen {
@@ -1152,6 +1155,10 @@ fn game_menu(
                         editor.paused = false;
                         actions.push(Action::Stop);
                     }
+                    if let Some(quality) = quality {
+                        ui.add_space(14.0);
+                        graphics_picker(ui, quality);
+                    }
                     if session.is_some_and(|s| s.host_address().is_some() || s.is_joined()) {
                         ui.add_space(12.0);
                         ui.horizontal_wrapped(|ui| session_status(ui, editor, session, actions));
@@ -1159,6 +1166,40 @@ fn game_menu(
                 });
             });
         });
+}
+
+fn graphics_picker(ui: &mut egui::Ui, quality: &mut libroxel_engine::view::GraphicsQuality) {
+    use libroxel_engine::view::GraphicsQuality;
+    theme::label_caps(ui, "Graphics");
+    ui.add_space(4.0);
+    let mut pick = None;
+    ui.horizontal(|ui| {
+        if ui.selectable_label(quality.auto, "Auto").clicked() {
+            pick = Some((!quality.auto, quality.level));
+        }
+        ui.add_space(6.0);
+        let bar = egui::vec2(14.0, 22.0);
+        for level in 1..=GraphicsQuality::MAX {
+            let (rect, response) = ui.allocate_exact_size(bar, egui::Sense::click());
+            let on = level <= quality.level;
+            let colour = match (on, quality.auto) {
+                (true, false) => theme::ACCENT,
+                (true, true) => theme::MUTED,
+                _ => theme::LINE,
+            };
+            let height = bar.y * (0.4 + 0.6 * f32::from(level) / f32::from(GraphicsQuality::MAX));
+            let fill =
+                egui::Rect::from_min_max(egui::pos2(rect.left() + 2.0, rect.bottom() - height), rect.max);
+            ui.painter().rect_filled(fill, 2.0, colour);
+            if response.on_hover_text(level.to_string()).clicked() {
+                pick = Some((false, level));
+            }
+        }
+    });
+    if let Some((auto, level)) = pick {
+        quality.set(auto, level);
+        crate::save_graphics(auto, level);
+    }
 }
 
 /// The terrain tool's options, under the toolbar.

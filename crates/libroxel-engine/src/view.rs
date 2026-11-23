@@ -934,63 +934,93 @@ fn setup_scene(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ima
 #[derive(Component)]
 struct Sun;
 
-/// How much the 3D view draws, like Roblox's automatic graphics quality:
-/// when frames come too slowly for a few seconds it steps down (shadows
-/// off, then a shorter view distance), and steps back up once there is room
-/// again. Edge smoothing stays as it is: changing it makes every material's
-/// shaders build again, and the whole map vanishes for a few frames.
+/// How much the 3D view draws, like Roblox's graphics quality: 1 is the
+/// least and 10 everything. On automatic it steps down when frames come
+/// slower than the screen shows them (up to 60 a second) and back up once
+/// there is room again.
 #[derive(Resource, Debug)]
 pub struct GraphicsQuality {
-    /// 3 is everything; 0 is the least.
+    pub auto: bool,
+    /// 1 to 10.
     pub level: u8,
-    /// The highest level to go back up to for now (lowered when a level
-    /// turned out too slow, so it doesn't flip back and forth).
     ceiling: u8,
-    /// Smoothed seconds a frame.
+    /// Frames a second to keep up.
+    target: f32,
     average: f32,
     slow_for: f32,
     fast_for: f32,
     since_drop: f32,
+    /// Automatic turned edge smoothing off; it stays off until a manual pick.
+    smoothing_dropped: bool,
     applied: Option<u8>,
 }
 
 impl Default for GraphicsQuality {
     fn default() -> Self {
-        Self {
-            level: 3,
-            ceiling: 3,
-            average: 1.0 / 60.0,
-            slow_for: 0.0,
-            fast_for: 0.0,
-            since_drop: 0.0,
-            applied: None,
-        }
+        Self::new(true, 6)
     }
 }
 
 impl GraphicsQuality {
-    /// How far away parts are still drawn at each level, in studs.
-    const VIEW_DISTANCE: [f32; 4] = [350.0, 600.0, 1000.0, 1000.0];
+    pub const MAX: u8 = 10;
+    const VIEW_DISTANCE: [f32; 10] = [150.0, 200.0, 275.0, 350.0, 450.0, 600.0, 750.0, 900.0, 1000.0, 1500.0];
+    const LIGHTS: [usize; 10] = [0, 0, 4, 8, 16, 32, usize::MAX, usize::MAX, usize::MAX, usize::MAX];
+    const PARTICLES: [f32; 10] = [0.2, 0.3, 0.4, 0.5, 0.6, 0.75, 0.9, 1.0, 1.0, 1.0];
+
+    pub fn new(auto: bool, level: u8) -> Self {
+        let level = level.clamp(1, Self::MAX);
+        Self {
+            auto,
+            level,
+            ceiling: Self::MAX,
+            target: 60.0,
+            average: 1.0 / 60.0,
+            slow_for: 0.0,
+            fast_for: 0.0,
+            since_drop: 0.0,
+            smoothing_dropped: false,
+            applied: None,
+        }
+    }
+
+    /// Switches to automatic, or to a fixed level.
+    pub fn set(&mut self, auto: bool, level: u8) {
+        let target = self.target;
+        let average = self.average;
+        *self = Self::new(auto, level);
+        self.target = target;
+        self.average = average;
+    }
+
+    /// The frame rate automatic aims for: the screen's, at most 60.
+    pub fn set_target(&mut self, fps: f32) {
+        self.target = fps.clamp(24.0, 60.0);
+    }
 
     /// Counts one frame of `dt` seconds; returns whether the level changed.
     pub fn frame(&mut self, dt: f32) -> bool {
+        if !self.auto {
+            return false;
+        }
         let dt = dt.clamp(0.0, 0.5);
+        let goal = 1.0 / self.target;
         self.average += (dt - self.average) * 0.1;
         self.since_drop += dt;
-        self.slow_for = if self.average > 1.0 / 40.0 { self.slow_for + dt } else { 0.0 };
-        self.fast_for = if self.average < 1.0 / 55.0 { self.fast_for + dt } else { 0.0 };
-        // A minute after a drop, the level that was too slow may be tried again.
+        self.slow_for = if self.average > goal * 1.1 { self.slow_for + dt } else { 0.0 };
+        self.fast_for = if self.average < goal * 1.04 { self.fast_for + dt } else { 0.0 };
         if self.since_drop > 60.0 {
-            self.ceiling = 3;
+            self.ceiling = Self::MAX;
         }
-        if self.slow_for > 2.0 && self.level > 0 {
-            self.ceiling = self.level - 1;
-            self.level -= 1;
+        if self.slow_for > 1.5 && self.level > 1 {
+            let step = if self.average > goal * 1.6 { 2 } else { 1 };
+            self.level = self.level.saturating_sub(step).max(1);
+            self.ceiling = self.level;
             self.slow_for = 0.0;
+            self.fast_for = 0.0;
             self.since_drop = 0.0;
             return true;
         }
-        if self.fast_for > 6.0 && self.level < self.ceiling {
+        if self.fast_for > 4.0 && self.level < self.ceiling {
             self.level += 1;
             self.fast_for = 0.0;
             return true;
@@ -998,37 +1028,92 @@ impl GraphicsQuality {
         false
     }
 
+    fn index(&self) -> usize {
+        usize::from(self.level.clamp(1, Self::MAX) - 1)
+    }
+
     /// Whether the sun casts shadows.
     pub fn shadows(&self) -> bool {
-        self.level >= 3
+        self.level >= 5
+    }
+
+    /// Shadow cascades, and the size of each one's map.
+    pub fn shadow_detail(&self) -> (usize, usize) {
+        match self.level {
+            0..=5 => (1, 1024),
+            6 => (2, 1024),
+            7 => (2, 2048),
+            8 | 9 => (3, 2048),
+            _ => (3, 4096),
+        }
+    }
+
+    /// Whether edges are smoothed (MSAA).
+    pub fn smoothing(&self) -> bool {
+        self.level >= 4 && !self.smoothing_dropped
+    }
+
+    pub fn bloom(&self) -> bool {
+        self.level >= 6
+    }
+
+    /// How many point and spot lights are drawn (the nearest ones).
+    pub fn lights(&self) -> usize {
+        Self::LIGHTS[self.index()]
+    }
+
+    /// How many of the particles emitters ask for are sent out.
+    pub fn particles(&self) -> f32 {
+        Self::PARTICLES[self.index()]
     }
 
     /// How far away parts are still drawn, in studs.
     pub fn view_distance(&self) -> f32 {
-        Self::VIEW_DISTANCE[usize::from(self.level.min(3))]
+        Self::VIEW_DISTANCE[self.index()]
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn auto_quality(
     time: Res<Time>,
     step: Res<StepTime>,
+    monitors: Query<&bevy::window::Monitor, With<bevy::window::PrimaryMonitor>>,
     mut quality: ResMut<GraphicsQuality>,
-    mut cameras: Query<&mut Projection, With<CameraRig>>,
-    mut sun: Query<&mut DirectionalLight, With<Sun>>,
+    mut shadow_map: ResMut<bevy::light::DirectionalLightShadowMap>,
+    mut cameras: Query<(&mut Projection, &mut Msaa), With<CameraRig>>,
+    mut sun: Query<(&mut DirectionalLight, &mut bevy::light::CascadeShadowConfig), With<Sun>>,
 ) {
-    // Slow scripts aren't helped by drawing less: only the rest counts.
+    if let Some(hz) = monitors.iter().next().and_then(|m| m.refresh_rate_millihertz) {
+        quality.set_target(hz as f32 / 1000.0);
+    }
     quality.frame((time.delta_secs() - step.0).max(0.0));
     if quality.applied == Some(quality.level) {
         return;
     }
+    if quality.auto && quality.level < 4 {
+        quality.smoothing_dropped = true;
+    }
     quality.applied = Some(quality.level);
-    for mut projection in &mut cameras {
+    let msaa = if quality.smoothing() { Msaa::Sample4 } else { Msaa::Off };
+    for (mut projection, mut samples) in &mut cameras {
         if let Projection::Perspective(p) = &mut *projection {
             p.far = quality.view_distance();
         }
+        samples.set_if_neq(msaa);
     }
-    for mut light in &mut sun {
+    let (cascades, size) = quality.shadow_detail();
+    if shadow_map.size != size {
+        shadow_map.size = size;
+    }
+    for (mut light, mut config) in &mut sun {
         light.shadow_maps_enabled = quality.shadows();
+        *config = bevy::light::CascadeShadowConfigBuilder {
+            num_cascades: cascades,
+            first_cascade_far_bound: 50.0,
+            maximum_distance: quality.view_distance().min(800.0),
+            ..default()
+        }
+        .build();
     }
 }
 
@@ -2019,6 +2104,8 @@ fn sync_lights(
     mut commands: Commands,
     mut points: Query<(Entity, &LightLink, &mut PointLight, &mut Transform), Without<SpotLight>>,
     mut spots: Query<(Entity, &LightLink, &mut SpotLight, &mut Transform), Without<PointLight>>,
+    cameras: Query<&GlobalTransform, With<CameraRig>>,
+    quality: Res<GraphicsQuality>,
 ) {
     let tree = engine.tree.borrow();
     let mut wanted: HashMap<InstanceId, (bool, Transform, Color, f32, f32, f32)> = HashMap::new();
@@ -2049,6 +2136,16 @@ fn sync_lights(
                 ),
             );
         }
+    }
+    let most = quality.lights();
+    if wanted.len() > most {
+        let eye = cameras.iter().next().map_or(Vec3::ZERO, |t| t.translation());
+        let mut near: Vec<_> = wanted.drain().collect();
+        near.sort_by(|a, b| {
+            a.1.1.translation.distance_squared(eye).total_cmp(&b.1.1.translation.distance_squared(eye))
+        });
+        near.truncate(most);
+        wanted.extend(near);
     }
     // Brightness 1 lights the edge of the range about as much as a dim room.
     let intensity = |brightness: f32, range: f32| brightness * 4_000.0 * range.max(1.0).powi(2);
@@ -2388,6 +2485,30 @@ fn draw_blasts(
 mod tests {
     use super::*;
     use libroxel_instance::Vec3 as V;
+
+    #[test]
+    fn auto_quality_holds_sixty() {
+        let mut q = GraphicsQuality::new(true, 10);
+        for _ in 0..600 {
+            q.frame(1.0 / 30.0);
+        }
+        assert!(q.level <= 3, "{}", q.level);
+        let low = q.level;
+        for _ in 0..600 {
+            q.frame(1.0 / 60.0);
+        }
+        assert_eq!(q.level, low);
+        for _ in 0..(70 * 60) {
+            q.frame(1.0 / 60.0);
+        }
+        assert!(q.level > low);
+        let mut fixed = GraphicsQuality::new(false, 1);
+        for _ in 0..600 {
+            fixed.frame(1.0 / 200.0);
+        }
+        assert_eq!(fixed.level, 1);
+        assert!(!fixed.shadows() && !fixed.smoothing() && fixed.lights() == 0);
+    }
 
     fn close(a: Vec3, b: Vec3) -> bool {
         (a - b).length() < 1e-4
