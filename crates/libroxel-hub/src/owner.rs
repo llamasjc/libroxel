@@ -21,20 +21,28 @@ pub(crate) fn create_tables(db: &Connection) -> Result<(), String> {
             since       INTEGER NOT NULL
         );",
     )
-    .map_err(|e| format!("could not set up the Hub database: {e}"))
+    .map_err(|e| format!("could not set up the Hub database: {e}"))?;
+    let _ = db.execute("ALTER TABLE banned ADD COLUMN until INTEGER", []);
+    Ok(())
 }
+
+const BAN_LIVE: &str = "(b.until IS NULL OR b.until > CAST(strftime('%s', 'now') AS INTEGER))";
 
 /// SQL that holds when the player id in `column` is banned.
 pub(crate) fn banned_sql(column: &str) -> String {
-    format!("EXISTS (SELECT 1 FROM banned b WHERE b.player_id = {column})")
+    format!("EXISTS (SELECT 1 FROM banned b WHERE b.player_id = {column} AND {BAN_LIVE})")
 }
 
 pub(crate) fn is_banned(db: &Connection, player_id: &str) -> bool {
-    db.query_row("SELECT 1 FROM banned WHERE player_id = ?1", params![player_id], |_| Ok(()))
-        .optional()
-        .ok()
-        .flatten()
-        .is_some()
+    db.query_row(
+        &format!("SELECT 1 FROM banned b WHERE b.player_id = ?1 AND {BAN_LIVE}"),
+        params![player_id],
+        |_| Ok(()),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .is_some()
 }
 
 pub(crate) fn is_owner(db: &Connection, player_id: &str) -> bool {
@@ -46,7 +54,7 @@ pub(crate) fn is_owner(db: &Connection, player_id: &str) -> bool {
 }
 
 /// The player id for `who`: an account name, or a player id as it is.
-fn resolve(db: &Connection, who: &str) -> Result<String, String> {
+pub(crate) fn resolve(db: &Connection, who: &str) -> Result<String, String> {
     let found: Option<String> = db
         .query_row("SELECT player_id FROM accounts WHERE name = ?1", params![who], |r| r.get(0))
         .optional()
@@ -73,13 +81,13 @@ pub struct AccountRow {
 pub fn accounts(db: &Connection, search: &str) -> Vec<AccountRow> {
     let pattern = format!("%{}%", search.trim().replace(['%', '_'], ""));
     let now = now();
-    let Ok(mut statement) = db.prepare(
+    let Ok(mut statement) = db.prepare(&format!(
         "SELECT a.player_id, a.name, a.created,
              EXISTS (SELECT 1 FROM passwords p WHERE p.player_id = a.player_id),
              EXISTS (SELECT 1 FROM owners o WHERE o.player_id = a.player_id),
-             (SELECT b.reason FROM banned b WHERE b.player_id = a.player_id)
-         FROM accounts a WHERE a.name LIKE ?1 ORDER BY a.name",
-    ) else {
+             (SELECT b.reason FROM banned b WHERE b.player_id = a.player_id AND {BAN_LIVE})
+         FROM accounts a WHERE a.name LIKE ?1 ORDER BY a.name"
+    )) else {
         return Vec::new();
     };
     statement
@@ -131,14 +139,18 @@ pub fn owners(db: &Connection) -> Vec<(String, Option<String>)> {
 /// share, report or befriend anyone, and their page, games and items stop
 /// being listed. Their name stays taken. Returns their player id.
 pub fn ban(db: &Connection, who: &str, reason: &str) -> Result<String, String> {
+    ban_until(db, who, reason, None)
+}
+
+pub fn ban_until(db: &Connection, who: &str, reason: &str, until: Option<i64>) -> Result<String, String> {
     let id = resolve(db, who)?;
     if is_owner(db, &id) {
         return Err(format!("{who} is an owner; remove them as one first"));
     }
     db.execute(
-        "INSERT INTO banned (player_id, reason, since) VALUES (?1, ?2, ?3)
-         ON CONFLICT(player_id) DO UPDATE SET reason = ?2",
-        params![id, reason.trim(), now()],
+        "INSERT INTO banned (player_id, reason, since, until) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(player_id) DO UPDATE SET reason = ?2, since = ?3, until = ?4",
+        params![id, reason.trim(), now(), until],
     )
     .map_err(|e| e.to_string())?;
     let _ = db.execute("DELETE FROM presence WHERE player_id = ?1", params![id]);

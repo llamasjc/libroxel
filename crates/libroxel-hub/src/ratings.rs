@@ -352,6 +352,7 @@ pub(crate) async fn add_comment(
         &new.signature,
         new.time,
     )?;
+    crate::moderate::not_muted(&db, &new.player_id)?;
     let Some(text) = crate::filter::clean(text) else {
         return Err((StatusCode::BAD_REQUEST, "that comment isn't allowed".into()));
     };

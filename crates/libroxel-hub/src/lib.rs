@@ -74,9 +74,14 @@ pub use groups::{
 };
 mod limits;
 mod messages;
+mod moderate;
 pub use cli::{HUB_HELP, cli};
 pub use messages::{
     Conversation, MAX_MESSAGE, Message, Moderation, NewMessage, message_message, read_messages_message,
+};
+pub use moderate::{
+    Dashboard, LogEntry, ModAction, ModChange, Penalty, Queued, ReportReason, Warning, WarningsSeen,
+    moderate_message, moderation_message, warnings_seen_message,
 };
 mod owner;
 mod password;
@@ -84,7 +89,7 @@ mod ratings;
 mod security;
 mod social;
 use limits::{Caller, Limit, Limits, too_many};
-pub use owner::{AccountRow, accounts, add_owner, ban, owners, remove_owner, rename, unban};
+pub use owner::{AccountRow, accounts, add_owner, ban, ban_until, owners, remove_owner, rename, unban};
 pub use password::{
     MIN_PASSWORD, PASSWORD_MEMORY_KIB, PASSWORD_PASSES, PasswordSet, SignIn, SignInSalt, SignedIn,
     password_message, password_problem, seal_password, seal_password_with, sign_in_message, weak_password,
@@ -723,6 +728,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     analytics::create_tables(&db)?;
     ratings::create_tables(&db)?;
     charts::create_tables(&db)?;
+    moderate::create_tables(&db)?;
     Ok(db)
 }
 
@@ -803,6 +809,9 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/catalog/{id}", delete(unlist_item))
         .route("/catalog/{id}/wear", post(wear_item))
         .route("/reports", post(report))
+        .route("/moderation", post(moderate::moderate))
+        .route("/moderation/{id}", get(moderate::get_dashboard))
+        .route("/accounts/warnings/seen", post(moderate::warnings_seen))
         .route("/charts", get(charts::get_charts))
         .route("/for-you/{id}", get(charts::for_you))
         .route("/groups", get(groups::list_groups).post(groups::change_group))
@@ -1280,8 +1289,8 @@ async fn report(
         return Err(too_many("reports"));
     }
     let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
-    if !["game", "item", "comment", "message", "group"].contains(&report.kind.as_str()) {
-        return bad("only games, items, comments, messages and groups can be reported");
+    if !["game", "item", "comment", "message", "group", "post"].contains(&report.kind.as_str()) {
+        return bad("only games, items, comments, messages, groups and posts can be reported");
     }
     if report.reason.trim().is_empty() || report.reason.chars().count() > 300 {
         return bad("a report needs a short reason");
@@ -1300,6 +1309,7 @@ async fn report(
         "item" => "items WHERE item_id = ?1",
         "comment" => "game_comments WHERE comment_id = ?1",
         "group" => "groups WHERE group_id = ?1",
+        "post" => "group_posts WHERE post_id = ?1",
         _ => "messages WHERE message_id = ?1 AND to_id = ?2",
     };
     let exists: Option<i64> = db
@@ -1333,6 +1343,7 @@ pub fn reports(db: &Connection) -> Vec<Reported> {
                              WHEN 'item' THEN (SELECT name FROM items WHERE item_id = r.target)
                              WHEN 'comment' THEN (SELECT text FROM game_comments WHERE comment_id = r.target)
                              WHEN 'group' THEN (SELECT name FROM groups WHERE group_id = r.target)
+                             WHEN 'post' THEN (SELECT text FROM group_posts WHERE post_id = r.target)
                              ELSE (SELECT a.name || ': ' || m.text FROM messages m
                                    LEFT JOIN accounts a ON a.player_id = m.from_id WHERE m.message_id = r.target) END
              FROM reports r GROUP BY r.kind, r.target ORDER BY COUNT(*) DESC",
@@ -1371,6 +1382,7 @@ pub fn take_down(db: &Connection, kind: &str, target: &str) -> Result<(), String
         "item" => "DELETE FROM items WHERE item_id = ?1",
         "comment" => "DELETE FROM game_comments WHERE comment_id = ?1",
         "message" => "DELETE FROM messages WHERE message_id = ?1",
+        "post" => "DELETE FROM group_posts WHERE post_id = ?1",
         "group" => "",
         _ => return Err(format!("there are no {kind}s on a Hub")),
     };
@@ -2187,6 +2199,35 @@ impl HubClient {
             .send_json(serde_json::json!({ "secret": signature }))
             .map(|_| ())
             .map_err(|e| e.to_string())
+    }
+
+    pub fn dashboard(&self, moderator_id: &str, time: i64, signature: &str) -> Result<Dashboard, String> {
+        let request = self
+            .agent
+            .get(format!("{}/moderation/{moderator_id}", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call();
+        self.answer(request)
+    }
+
+    pub fn moderate(&self, change: &ModChange) -> Result<(), String> {
+        let mut r = self
+            .agent
+            .post(format!("{}/moderation", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(change)
+            .map_err(|e| format!("could not reach the Hub: {e}"))?;
+        if r.status().is_success() {
+            Ok(())
+        } else {
+            Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+        }
     }
 
     /// Reports a game or item as not OK.

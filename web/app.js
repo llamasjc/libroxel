@@ -186,7 +186,7 @@ async function api(path, { method = 'GET', body, query } = {}) {
 
 const SESSION_KEY = 'libroxel.session';
 let session = loadSession();
-let lastSigned = { friends: 0, account: 0, rate: 0, message: 0, group: 0 };
+let lastSigned = { friends: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0 };
 
 function loadSession() {
   for (const store of [sessionStorage, localStorage]) {
@@ -754,7 +754,7 @@ function parseRoute() {
     case 'user': return { name: 'user', id: parts[1] };
     case 'creator': return { name: 'creator', id: parts[1] };
     case 'messages': return { name: 'messages', id: parts[1] };
-    case 'games': case 'charts': case 'profile': case 'search': case 'friends': case 'groups': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': return { name: parts[0] };
+    case 'games': case 'charts': case 'profile': case 'search': case 'friends': case 'groups': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': case 'moderation': return { name: parts[0] };
     case 'group': return { name: 'group', id: parts[1] };
     default: return { name: 'home' };
   }
@@ -783,6 +783,7 @@ function tabs() {
       icon(ICON.chat), unread > 0 && el('span', { class: 'badge' }, unread > 99 ? '99+' : unread));
     who.replaceChildren(
       search,
+      data.me?.admin && el('a', { class: `tab iconbtn${route.name === 'moderation' ? ' active' : ''}`, href: '/moderation', title: 'Moderation' }, icon(ICON.flag)),
       messages,
       el('span', { class: 'caps' }, 'Playing as'),
       el('a', { class: 'name', href: '/profile' }, session.name || 'You'),
@@ -875,7 +876,7 @@ window.addEventListener('unhandledrejection', (e) => crashed(e.reason));
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, games: gamesPage, charts: chartsPage, profile, creator: creatorPage, search: searchPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
+  const views = { home, game, games: gamesPage, charts: chartsPage, profile, creator: creatorPage, search: searchPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
   // An account that signed in with an easy password sees nothing else until it sets a new one.
   loadFamily();
   const needsBirthday = session && familyInfo && !familyInfo.loading && !familyInfo.error && !familyInfo.has_birthday;
@@ -889,6 +890,7 @@ function render() {
   loadSecurity();
   const nudge = emailNudge();
   if (nudge) nodes.push(nudge);
+  if (session && securityInfo?.warnings?.length) nodes.push(warningsBar());
   page.replaceChildren(...nodes, ...[view()].flat(Infinity).filter(Boolean));
   document.title = route.name === 'home' ? 'Libroxel: play games people make' : `${titleFor(route)} · Libroxel`;
   const description = DESCRIPTIONS[route.name] || DESCRIPTIONS.home;
@@ -909,7 +911,7 @@ const DESCRIPTIONS = {
 function titleFor(r) {
   if (r.name === 'game') return entries().find((e) => e.key === r.key)?.title || 'Game';
   if (r.name === 'group') return groupPages.get(r.id)?.group?.name || 'Group';
-  return { home: 'Home', creator: 'Create', games: 'Games', charts: 'Charts', profile: 'Profile', search: 'Search', friends: 'Friends', groups: 'Groups', group: 'Group', messages: 'Messages', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy' }[r.name] || 'Libroxel';
+  return { home: 'Home', creator: 'Create', games: 'Games', charts: 'Charts', profile: 'Profile', search: 'Search', friends: 'Friends', groups: 'Groups', group: 'Group', messages: 'Messages', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy', moderation: 'Moderation' }[r.name] || 'Libroxel';
 }
 
 function whereabouts(friend) {
@@ -1706,7 +1708,8 @@ function groupPage() {
     const mine = session?.playerId === post.player_id;
     wall.push(el('div', { class: 'post' },
       el('div', {}, el('a', { href: `/user/${post.player_id}` }, el('b', {}, post.name)), el('span', { class: 'soft' }, ` · ${ago(post.secs_ago)}`),
-        (mine || admin) && el('button', { class: 'link', title: 'Remove', onclick: () => changeGroup('unpost', id, { other_id: String(post.post_id) }) }, icon(ICON.x))),
+        (mine || admin) && el('button', { class: 'link', title: 'Remove', onclick: () => changeGroup('unpost', id, { other_id: String(post.post_id) }) }, icon(ICON.x)),
+        session && !mine && el('button', { class: 'link', title: 'Report', onclick: () => reportPost(post) }, icon(ICON.flag))),
       el('div', {}, post.text)));
   }
 
@@ -1743,6 +1746,144 @@ function groupPage() {
     }
   }
   return [...out, ...gameList, el('div', { class: 'columns' }, el('div', {}, wall), el('div', {}, side))];
+}
+
+async function reportPost(post) {
+  const time = nowSecs();
+  const target = String(post.post_id);
+  const reason = 'Not OK';
+  const signature = signText(secretKey(), `libroxel report\n${session.playerId}\npost\n${target}\n${reason}\n${time}`);
+  try {
+    await api('/reports', { method: 'POST', body: { reporter_id: session.playerId, kind: 'post', target, reason, time, signature } });
+    flash = { text: 'Reported. Thanks.' };
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  render();
+}
+
+// --- Moderation -------------------------------------------------------------
+
+const mod = { board: null, error: null, busy: false, for: null, at: 0 };
+const HOURS = [[1, '1 hour'], [24, '1 day'], [168, '7 days'], [720, '30 days']];
+const KINDS = { game: 'Game', item: 'Item', comment: 'Comment', message: 'Message', group: 'Group', post: 'Post' };
+
+function loadModeration() {
+  mod.for = session.playerId;
+  mod.at = Date.now();
+  const time = Date.now();
+  const signature = signText(secretKey(), `libroxel moderation\n${session.playerId}\n${time}`);
+  api(`/moderation/${session.playerId}`, { query: { time, signature } })
+    .then((b) => { mod.board = b; mod.error = null; })
+    .catch((e) => { mod.error = e.message; })
+    .finally(() => route.name === 'moderation' && render());
+}
+
+async function moderate(action, fields, done) {
+  const time = Math.max(Date.now(), lastSigned.moderate + 1);
+  lastSigned.moderate = time;
+  const c = { moderator_id: session.playerId, action, kind: '', target: '', player_id: '', reason: '', hours: 0, time, ...fields };
+  c.signature = signText(secretKey(), `libroxel moderate\n${c.moderator_id}\n${c.action}\n${c.kind}\n${c.target}\n${c.player_id}\n${c.reason}\n${c.hours}\n${c.time}`);
+  mod.busy = true;
+  render();
+  try {
+    await api('/moderation', { method: 'POST', body: c });
+    flash = { text: done };
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  mod.busy = false;
+  loadModeration();
+}
+
+const lasts = (secs) => (secs === null || secs === undefined ? 'Forever' : secs < 3600 ? `${Math.ceil(secs / 60)} min` : secs < 172800 ? `${Math.ceil(secs / 3600)} h` : `${Math.ceil(secs / 86400)} days`);
+const pick = (list) => el('select', {}, list.map(([h, label]) => el('option', { value: h }, label)));
+const playerLink = (id, name) => el('a', { href: `/user/${id}` }, el('b', {}, name || id.slice(0, 8)));
+
+function placeOf(q) {
+  if (q.text === null) return null;
+  if (q.kind === 'game') return `/game/${q.target}`;
+  if (q.kind === 'comment') return `/game/${q.place}`;
+  if (q.kind === 'group' || q.kind === 'post') return `/group/${q.place}`;
+  return null;
+}
+
+function reportCard(q) {
+  const reason = el('input', { type: 'text', placeholder: 'Reason', maxlength: 300 });
+  const muteFor = pick(HOURS);
+  const banFor = pick([...HOURS, [0, 'Forever']]);
+  const step = (action, extra, done) => moderate(action, { kind: q.kind, target: q.target, reason: reason.value.trim(), ...extra }, done);
+  const href = placeOf(q);
+  const n = q.reports.length;
+  return el('div', { class: 'report-card' },
+    el('div', {},
+      el('span', { class: 'tag kind' }, KINDS[q.kind] || q.kind), ' ',
+      q.author_id ? playerLink(q.author_id, q.author) : el('span', { class: 'soft' }, 'Gone'),
+      el('span', { class: 'soft' }, ` · ${n} ${n === 1 ? 'report' : 'reports'}`),
+      q.hidden && el('span', { class: 'tag admin', style: 'margin-left:6px' }, 'Hidden')),
+    q.text !== null && el('div', { class: 'text' }, href ? el('a', { href }, q.text) : q.text),
+    el('ul', { class: 'reasons soft' }, q.reports.map((r) => el('li', {}, `${r.reporter || 'Someone'}: ${r.reason} · ${ago(r.secs_ago)}`))),
+    el('div', { class: 'buttons' },
+      reason,
+      q.text !== null && el('button', { class: 'chip', disabled: mod.busy, onclick: () => step('remove', {}, 'Removed.') }, icon(ICON.trash), 'Remove'),
+      el('button', { class: 'chip', disabled: mod.busy, onclick: () => step('dismiss', {}, 'Dismissed.') }, icon(ICON.check), 'Dismiss')),
+    q.author_id && el('div', { class: 'buttons' },
+      el('button', { class: 'chip', disabled: mod.busy, onclick: () => step('warn', {}, 'Warned.') }, icon(ICON.bell), 'Warn'),
+      muteFor,
+      el('button', { class: 'chip', disabled: mod.busy, onclick: () => step('mute', { hours: Number(muteFor.value) }, 'Muted.') }, icon(ICON.chat), 'Mute'),
+      banFor,
+      el('button', { class: 'chip', disabled: mod.busy, onclick: () => step('ban', { hours: Number(banFor.value) }, 'Banned.') }, icon(ICON.lock), 'Ban')));
+}
+
+function penaltyRow(p, action, done) {
+  return el('div', { class: 'person' },
+    el('div', { class: 'what' }, playerLink(p.player_id, p.name),
+      el('small', { class: 'soft' }, `${p.reason} · ${lasts(p.left_secs)}`)),
+    el('div', { class: 'buttons' }, el('button', { class: 'chip', disabled: mod.busy, onclick: () => moderate(action, { player_id: p.player_id }, done) }, 'Lift')));
+}
+
+function logRow(l) {
+  return el('div', { class: 'post' },
+    el('b', {}, l.moderator || 'Hub'), ` ${l.action}`,
+    l.player_id && [' ', playerLink(l.player_id, l.player)],
+    l.kind && el('span', { class: 'soft' }, ` ${KINDS[l.kind] || l.kind}`),
+    l.hours > 0 && el('span', { class: 'soft' }, ` ${lasts(l.hours * 3600)}`),
+    el('span', { class: 'soft' }, ` · ${ago(l.secs_ago)}`),
+    l.reason && el('div', {}, l.reason),
+    l.text && el('div', { class: 'soft' }, l.text));
+}
+
+function moderationPage() {
+  if (!session) return needSignIn('Sign in to moderate.');
+  if (mod.for !== session.playerId || (!mod.busy && Date.now() - mod.at > 30000)) loadModeration();
+  const out = [el('h1', { class: 'title' }, 'Moderation')];
+  if (mod.error) return [...out, status(mod.error, 'error')];
+  const b = mod.board;
+  if (!b) return [...out, el('p', { class: 'soft' }, 'Loading…')];
+  out.push(el('h2', { class: 'section' }, `Reports (${b.reports.length})`));
+  out.push(b.reports.length ? b.reports.map(reportCard) : el('div', { class: 'empty' }, 'Nothing reported.'));
+  out.push(el('div', { class: 'columns' },
+    el('div', {}, el('h2', { class: 'subhead' }, `Banned (${b.banned.length})`), b.banned.map((p) => penaltyRow(p, 'unban', 'Unbanned.'))),
+    el('div', {}, el('h2', { class: 'subhead' }, `Muted (${b.muted.length})`), b.muted.map((p) => penaltyRow(p, 'unmute', 'Unmuted.')))));
+  out.push(el('h2', { class: 'section' }, 'Log'));
+  out.push(b.log.length ? b.log.map(logRow) : el('p', { class: 'soft' }, 'Nothing yet.'));
+  return out;
+}
+
+function warningsBar() {
+  const seen = async () => {
+    const time = Date.now();
+    const signature = signText(secretKey(), `libroxel warnings seen\n${session.playerId}\n${time}`);
+    try {
+      await api('/accounts/warnings/seen', { method: 'POST', body: { player_id: session.playerId, time, signature } });
+      securityInfo.warnings = [];
+    } catch (e) {
+      flash = { text: e.message, kind: 'error' };
+    }
+    render();
+  };
+  return el('div', { class: 'status error' }, `Warning: ${securityInfo.warnings.map((w) => w.reason).join(' · ')}`,
+    el('button', { class: 'chip', onclick: seen }, 'OK'));
 }
 
 // --- Avatar -----------------------------------------------------------------

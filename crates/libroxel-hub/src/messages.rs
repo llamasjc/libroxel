@@ -191,6 +191,7 @@ pub(crate) async fn send_message(
         if crate::owner::is_banned(&db, &message.from_id) {
             return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
         }
+        crate::moderate::not_muted(&db, &message.from_id)?;
         if !friends(&db, &message.from_id, &message.to_id)? {
             return Err((StatusCode::FORBIDDEN, "you can only message your friends".into()));
         }
