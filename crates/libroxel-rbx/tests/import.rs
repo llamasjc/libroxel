@@ -356,3 +356,50 @@ fn published_unions_take_their_shape_from_a_saved_asset() {
     assert_eq!(tree.get_string(find(&tree, "Online"), Property::MeshId).unwrap(), "rbxassetid://456");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn unions_saved_as_their_parts_are_rebuilt() {
+    let binary = |dom: &WeakDom| {
+        let mut out = Vec::new();
+        rbx_binary::to_writer(&mut out, dom, dom.root().children()).unwrap();
+        out
+    };
+    let block = |size: Vector3, y: f32| {
+        InstanceBuilder::new("Part")
+            .with_property("Size", size)
+            .with_property("CFrame", CFrame::new(Vector3::new(0.0, y, 0.0), Matrix3::identity()))
+    };
+    let hole = binary(&WeakDom::new(
+        InstanceBuilder::new("DataModel").with_child(block(Vector3::new(2.0, 2.0, 2.0), 0.0)),
+    ));
+    let parts = binary(&WeakDom::new(
+        InstanceBuilder::new("DataModel").with_child(block(Vector3::new(4.0, 4.0, 4.0), 0.0)).with_child(
+            InstanceBuilder::new("NegateOperation")
+                .with_property("Size", Vector3::new(2.0, 2.0, 2.0))
+                .with_property("CFrame", CFrame::new(Vector3::new(0.0, 2.0, 0.0), Matrix3::identity()))
+                .with_property("ChildData", Variant::BinaryString(hole.into())),
+        ),
+    ));
+    let dom = WeakDom::new(
+        InstanceBuilder::new("DataModel").with_child(
+            InstanceBuilder::new("Workspace").with_child(
+                InstanceBuilder::new("UnionOperation")
+                    .with_name("Cup")
+                    .with_property("Size", Vector3::new(4.0, 4.0, 4.0))
+                    .with_property("ChildData", Variant::BinaryString(parts.into())),
+            ),
+        ),
+    );
+    let mut tree = InstanceTree::new();
+    let report = libroxel_rbx::import_place(&mut tree, &dom);
+    let name = tree.get_string(find(&tree, "Cup"), Property::MeshId).unwrap();
+    let (_, text) = report.files.iter().find(|(n, _)| *n == name).expect("its model is made");
+    let text = String::from_utf8_lossy(text);
+    let tops: Vec<f32> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("v "))
+        .map(|l| l.split(' ').nth(1).unwrap().parse().unwrap())
+        .collect();
+    assert!(tops.iter().all(|y| (-2.0..=2.0).contains(y)), "{tops:?}");
+    assert!(tops.contains(&1.0), "the hole's floor is at y = 1");
+}
