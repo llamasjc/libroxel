@@ -35,7 +35,7 @@ impl Triangles {
 
     /// As .obj text.
     pub fn to_obj(&self) -> String {
-        let mut out = String::from("# Made by Libroxel from a union in an imported file\n");
+        let mut out = String::from("# Made by Libroxel from an imported file\n");
         for p in &self.positions {
             let _ = writeln!(out, "v {} {} {}", p[0], p[1], p[2]);
         }
@@ -107,22 +107,38 @@ pub fn union_graphics(bytes: &[u8]) -> Option<Triangles> {
 /// pieces. Good enough to show the shape when the drawn one isn't in the file.
 pub fn union_physics(bytes: &[u8]) -> Option<Triangles> {
     let mut t = Triangles::default();
-    let mut add = |m: &rbx_mesh::union_physics::Mesh| {
-        t.add_indexed(&m.positions, m.faces.iter().map(|f| [f[0].0, f[1].0, f[2].0]));
+    for p in union_pieces(bytes)? {
+        t.add_indexed(&p.positions, p.corners.as_chunks::<3>().0.iter().copied());
+    }
+    (!t.is_empty()).then_some(t)
+}
+
+/// Each convex piece of a union's collision shape.
+pub fn union_pieces(bytes: &[u8]) -> Option<Vec<Triangles>> {
+    let mut out = Vec::new();
+    let mut add = |positions: &[[f32; 3]], faces: &mut dyn Iterator<Item = [u32; 3]>| {
+        let mut t = Triangles::default();
+        t.add_indexed(positions, faces);
+        if !t.is_empty() {
+            out.push(t);
+        }
+    };
+    let mut mesh = |m: &rbx_mesh::union_physics::Mesh| {
+        add(&m.positions, &mut m.faces.iter().map(|f| [f[0].0, f[1].0, f[2].0]))
     };
     match rbx_mesh::read_union_physics_versioned(std::io::Cursor::new(bytes)).ok()? {
         UnionPhysics::CSGK(_) | UnionPhysics::Block(_) => return None,
-        UnionPhysics::V3(p) => p.meshes.iter().for_each(&mut add),
-        UnionPhysics::V5(p) => p.meshes.iter().for_each(&mut add),
-        UnionPhysics::V6(p) => add(&p.mesh),
-        UnionPhysics::V7(p) => p.meshes.iter().for_each(&mut add),
+        UnionPhysics::V3(p) => p.meshes.iter().for_each(&mut mesh),
+        UnionPhysics::V5(p) => p.meshes.iter().for_each(&mut mesh),
+        UnionPhysics::V6(p) => mesh(&p.mesh),
+        UnionPhysics::V7(p) => p.meshes.iter().for_each(&mut mesh),
         UnionPhysics::V8(p) => {
             for hull in p.mesh.hulls.iter_hulls() {
-                t.add_indexed(hull.positions, hull.faces.iter().copied());
+                add(hull.positions, &mut hull.faces.iter().copied());
             }
         }
     }
-    (!t.is_empty()).then_some(t)
+    (!out.is_empty()).then_some(out)
 }
 
 /// A union's collision shape as .obj text with one `o` group per convex

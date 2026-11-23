@@ -19,8 +19,10 @@ use libroxel_script::names;
 use rbx_dom_weak::types::{Ref, Variant};
 use rbx_dom_weak::{Instance, WeakDom};
 
+mod csg;
 pub mod meshes;
 pub mod terrain;
+mod unions;
 
 /// Why a file couldn't be opened.
 #[derive(Debug)]
@@ -289,13 +291,12 @@ impl<'a> Importer<'a> {
     }
 
     /// Gives a model to a part whose shape Libroxel has no setting for:
-    /// a union's shape stored in the file, or a corner wedge.
+    /// a union or mesh part shape stored in the file, or a corner wedge.
     fn shape_from_file(&mut self, tree: &mut InstanceTree, inst: &Instance, id: InstanceId) {
         let made = match inst.class.as_str() {
             "UnionOperation" | "NegateOperation" | "PartOperation" => {
-                let own =
-                    |name: &str| inst.properties.get(&name.into()).and_then(bytes_of).map(<[u8]>::to_vec);
-                let (mut mesh, mut physics) = (own("MeshData"), own("PhysicsData"));
+                let mut mesh = unions::graphics(inst);
+                let mut physics = unions::physics_bytes(inst).map(<[u8]>::to_vec);
                 let online =
                     match inst.properties.get(&"AssetId".into()).or(inst.properties.get(&"Content".into())) {
                         Some(Variant::ContentId(c)) => Some(c.as_str().to_owned()),
@@ -303,15 +304,15 @@ impl<'a> Importer<'a> {
                         _ => None,
                     }
                     .filter(|u| !u.trim().is_empty());
-                if mesh.as_ref().is_none_or(|m| m.is_empty())
+                if mesh.is_none()
                     && let Some(id) = online.as_deref().and_then(asset_number)
                     && let Some((m, p)) = self.union_asset(&id)
                 {
-                    (mesh, physics) = (Some(m), p.or(physics));
+                    mesh = meshes::union_graphics(&m);
+                    physics = p.or(physics);
                 }
                 let shape = mesh
-                    .as_deref()
-                    .and_then(meshes::union_graphics)
+                    .or_else(|| unions::from_parts(inst))
                     .or_else(|| physics.as_deref().and_then(meshes::union_physics));
                 match shape {
                     Some(shape) => {
@@ -336,6 +337,27 @@ impl<'a> Importer<'a> {
                         }
                         None
                     }
+                }
+            }
+            "MeshPart" => {
+                let missing = tree
+                    .get_string(id, Property::MeshId)
+                    .and_then(|m| asset_number(&m))
+                    .is_some_and(|n| !self.has_asset(&n, &["", ".mesh", ".obj"]));
+                let physics = unions::physics_bytes(inst).filter(|_| missing);
+                match physics.and_then(meshes::union_physics) {
+                    Some(shape) => {
+                        let text = shape.to_obj();
+                        let name = meshes::file_name("mesh", &text);
+                        if let Some(collision) = physics.and_then(meshes::union_collision) {
+                            let file = format!("{}.collision.obj", name.trim_end_matches(".obj"));
+                            if !self.report.files.iter().any(|(n, _)| *n == file) {
+                                self.report.files.push((file, collision.into_bytes()));
+                            }
+                        }
+                        Some((name, text))
+                    }
+                    None => None,
                 }
             }
             "TrussPart" => {
@@ -363,6 +385,10 @@ impl<'a> Importer<'a> {
         if !self.report.files.iter().any(|(n, _)| *n == name) {
             self.report.files.push((name, text.into_bytes()));
         }
+    }
+
+    fn has_asset(&self, id: &str, endings: &[&str]) -> bool {
+        self.assets.as_ref().is_some_and(|dir| endings.iter().any(|e| dir.join(format!("{id}{e}")).is_file()))
     }
 
     /// A union's shape saved from its asset number, as a file in `assets`
