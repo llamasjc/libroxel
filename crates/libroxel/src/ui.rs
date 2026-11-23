@@ -2104,16 +2104,10 @@ fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree, platform: &mut crate::bro
                             ui.end_row();
                         }
                         let address = platform.hub_address.clone();
-                        let tag = platform.badges.tag(|| libroxel_hub::HubClient::new(&address), name);
+                        let badge = platform.badges.of(|| libroxel_hub::HubClient::new(&address), name);
                         ui.horizontal(|ui| {
-                            if let Some(tag) = tag {
-                                ui.label(
-                                    RichText::new(format!(" {tag} "))
-                                        .small()
-                                        .strong()
-                                        .color(Color32::WHITE)
-                                        .background_color(crate::groups::BADGE),
-                                );
+                            if let Some(badge) = badge {
+                                crate::groups::badge(ui, &badge);
                             }
                             ui.label(RichText::new(name).color(theme::TEXT));
                         });

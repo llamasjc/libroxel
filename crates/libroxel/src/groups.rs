@@ -3,7 +3,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bevy_egui::egui::{self, Color32, RichText};
-use libroxel_hub::{GroupAction, GroupBadge, GroupChange, GroupInfo, GroupPage, GroupRole, HubClient};
+use libroxel_hub::{
+    GROUP_COLORS, GroupAction, GroupBadge, GroupChange, GroupInfo, GroupJoin, GroupPage, GroupRole,
+    HubClient, MAX_TAG, group_color,
+};
 use libroxel_instance::serde_json::Value as Json;
 
 use crate::browse::Platform;
@@ -12,9 +15,13 @@ use crate::menu::Tab;
 use crate::theme::{self, icon};
 
 type Slot<T> = Arc<Mutex<Option<Result<T, String>>>>;
-type Found = Arc<Mutex<Vec<(String, Option<String>)>>>;
+type Found = Arc<Mutex<Vec<(String, Option<GroupBadge>)>>>;
+type Act = (GroupAction, String, String, String, Option<GroupRole>, String);
 
-pub const BADGE: Color32 = Color32::from_rgb(120, 80, 200);
+pub fn colour(name: &str) -> Color32 {
+    let [r, g, b] = group_color(name);
+    Color32::from_rgb(r, g, b)
+}
 
 pub fn badge(ui: &mut egui::Ui, group: &GroupBadge) -> egui::Response {
     ui.label(
@@ -22,9 +29,44 @@ pub fn badge(ui: &mut egui::Ui, group: &GroupBadge) -> egui::Response {
             .small()
             .strong()
             .color(Color32::WHITE)
-            .background_color(BADGE),
+            .background_color(colour(&group.color)),
     )
     .on_hover_text(&group.name)
+}
+
+fn join_name(join: GroupJoin) -> &'static str {
+    match join {
+        GroupJoin::Open => "Anyone can join",
+        GroupJoin::Request => "Ask to join",
+        GroupJoin::Invite => "Invite only",
+    }
+}
+
+fn pick_colour(ui: &mut egui::Ui, id: &str, chosen: &mut String) {
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(RichText::new(chosen.as_str()).color(colour(chosen)))
+        .show_ui(ui, |ui| {
+            for (name, _) in GROUP_COLORS {
+                ui.selectable_value(chosen, name.to_owned(), RichText::new(name).color(colour(name)));
+            }
+        });
+}
+
+fn pick_join(ui: &mut egui::Ui, id: &str, chosen: &mut GroupJoin) {
+    egui::ComboBox::from_id_salt(id).selected_text(join_name(*chosen)).show_ui(ui, |ui| {
+        for join in [GroupJoin::Open, GroupJoin::Request, GroupJoin::Invite] {
+            ui.selectable_value(chosen, join, join_name(join));
+        }
+    });
+}
+
+#[derive(Clone)]
+struct Edit {
+    name: String,
+    tag: String,
+    about: String,
+    color: String,
+    join: GroupJoin,
 }
 
 #[derive(Default)]
@@ -42,8 +84,13 @@ pub struct Groups {
     name: String,
     tag: String,
     about: String,
+    color: String,
+    join: GroupJoin,
     post: String,
-    edit: Option<(String, String, String)>,
+    edit: Option<Edit>,
+    invite: String,
+    invites: Vec<GroupInfo>,
+    invites_slot: Slot<Vec<GroupInfo>>,
     clock: i64,
 }
 
@@ -63,6 +110,9 @@ impl Groups {
                 Err(e) => self.status = Some(Err(e)),
             }
         }
+        if let Some(Ok(invites)) = self.invites_slot.lock().unwrap().take() {
+            self.invites = invites;
+        }
         if let Some(result) = self.page_slot.lock().unwrap().take() {
             match result {
                 Ok(page) if Some(&page.group.group_id) == self.open.as_ref() => self.page = Some(page),
@@ -80,14 +130,36 @@ impl Groups {
         let client = platform.client();
         let search = self.search.trim().to_owned();
         let out = self.list_slot.clone();
-        std::thread::spawn(move || *out.lock().unwrap() = Some(client.groups(&search)));
+        let invites = self.invites_slot.clone();
+        let time = self.stamp();
+        let signed_in = platform.account.is_some();
+        std::thread::spawn(move || {
+            *out.lock().unwrap() = Some(client.groups(&search));
+            if signed_in && let Ok(me) = crate::identity() {
+                let id = me.player_id();
+                let signature = me.sign(&libroxel_hub::group_invites_message(&id, time));
+                *invites.lock().unwrap() = Some(client.group_invites(&id, time, &signature));
+            }
+        });
     }
 
     fn load(&mut self, platform: &Platform, group_id: &str) {
         let client = platform.client();
         let id = group_id.to_owned();
         let out = self.page_slot.clone();
-        std::thread::spawn(move || *out.lock().unwrap() = Some(client.group(&id)));
+        let time = self.stamp();
+        let signed_in = platform.account.is_some();
+        std::thread::spawn(move || {
+            let page = match crate::identity() {
+                Ok(me) if signed_in => {
+                    let who = me.player_id();
+                    let signature = me.sign(&libroxel_hub::group_view_message(&who, &id, time));
+                    client.group_as(&id, &who, time, &signature)
+                }
+                _ => client.group(&id),
+            };
+            *out.lock().unwrap() = Some(page);
+        });
     }
 
     fn open(&mut self, platform: &Platform, group_id: &str) {
@@ -106,6 +178,18 @@ impl Groups {
         said: String,
         edit: impl FnOnce(&mut GroupChange) + Send + 'static,
     ) {
+        self.send(platform, action, group_id, said, None, edit);
+    }
+
+    fn send(
+        &mut self,
+        platform: &Platform,
+        action: GroupAction,
+        group_id: &str,
+        said: String,
+        lookup: Option<String>,
+        edit: impl FnOnce(&mut GroupChange) + Send + 'static,
+    ) {
         let time = self.stamp();
         self.busy = true;
         self.status = None;
@@ -116,6 +200,10 @@ impl Groups {
             let result = crate::identity().and_then(|me| {
                 let mut change = GroupChange::new(&me.player_id(), action, &group_id, time);
                 edit(&mut change);
+                if let Some(name) = &lookup {
+                    let found = client.profile(name)?.ok_or_else(|| format!("Nobody is called {name}."))?;
+                    change.other_id = found.player_id;
+                }
                 change.signature = me.sign(&libroxel_hub::group_message(&change));
                 client.change_group(&change).map(|c| c.group_id)
             });
@@ -186,7 +274,7 @@ pub fn groups_tab(
             ui.label(RichText::new("No groups found.").color(theme::MUTED));
         }
         for g in &groups.list {
-            let status = format!("{} members · owned by {}", g.members, g.owner);
+            let status = format!("{} members · owned by {} · {}", g.members, g.owner, join_name(g.join));
             person_row(ui, &Json::Null, &format!("{}  [{}]", g.name, g.tag), (&status, theme::MUTED), |ui| {
                 if ui.button("Open").clicked() {
                     open = Some(g.group_id.clone());
@@ -194,6 +282,27 @@ pub fn groups_tab(
             });
         }
         let ui = &mut columns[1];
+        if !groups.invites.is_empty() {
+            ui.label(
+                RichText::new(format!("Invites ({})", groups.invites.len()))
+                    .font(theme::display(18.0))
+                    .color(theme::AMBER),
+            );
+            for g in &groups.invites {
+                person_row(
+                    ui,
+                    &Json::Null,
+                    &format!("{}  [{}]", g.name, g.tag),
+                    ("Invited you", theme::MUTED),
+                    |ui| {
+                        if ui.button("Open").clicked() {
+                            open = Some(g.group_id.clone());
+                        }
+                    },
+                );
+            }
+            ui.add_space(10.0);
+        }
         ui.label(RichText::new("Make a group").font(theme::display(18.0)).color(theme::TEXT));
         ui.add_space(4.0);
         if platform.account.is_none() {
@@ -201,7 +310,19 @@ pub fn groups_tab(
             return;
         }
         ui.add(egui::TextEdit::singleline(&mut groups.name).hint_text("Name").char_limit(30));
-        ui.add(egui::TextEdit::singleline(&mut groups.tag).hint_text("Tag").char_limit(5));
+        if groups.color.is_empty() {
+            groups.color = "purple".into();
+        }
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut groups.tag)
+                    .hint_text(format!("Tag (2 to {MAX_TAG})"))
+                    .char_limit(MAX_TAG)
+                    .desired_width(110.0),
+            );
+            pick_colour(ui, "new-group-colour", &mut groups.color);
+            pick_join(ui, "new-group-join", &mut groups.join);
+        });
         ui.add(
             egui::TextEdit::multiline(&mut groups.about).hint_text("About").desired_rows(3).char_limit(1000),
         );
@@ -213,10 +334,12 @@ pub fn groups_tab(
             .inner
             .clicked()
         {
-            let (name, tag, about) = (
+            let (name, tag, about, color, join) = (
                 groups.name.trim().to_owned(),
                 groups.tag.trim().to_ascii_uppercase(),
                 groups.about.trim().to_owned(),
+                groups.color.clone(),
+                groups.join,
             );
             groups.name.clear();
             groups.tag.clear();
@@ -226,6 +349,8 @@ pub fn groups_tab(
                 c.name = name;
                 c.tag = tag;
                 c.about = about;
+                c.color = color;
+                c.join = Some(join);
             });
         }
     });
@@ -265,18 +390,31 @@ fn group_page(
     let admin = mine.is_some_and(|r| r >= GroupRole::Admin);
     let shown = platform.account.as_ref().and_then(|a| a.badge.as_ref()).is_some_and(|b| b.group_id == id);
     let busy = groups.busy;
-    let mut act: Option<(GroupAction, String, String, String, Option<GroupRole>, String)> = None;
+    let mut act: Option<Act> = None;
+    let plain = |action: GroupAction, said: String| -> Act {
+        (action, id.clone(), String::new(), String::new(), None, said)
+    };
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.label(RichText::new(&page.group.name).font(theme::display(26.0)).color(theme::HEADING));
         badge(
             ui,
-            &GroupBadge { group_id: id.clone(), name: page.group.name.clone(), tag: page.group.tag.clone() },
+            &GroupBadge {
+                group_id: id.clone(),
+                name: page.group.name.clone(),
+                tag: page.group.tag.clone(),
+                color: page.group.color.clone(),
+            },
         );
     });
     ui.label(
-        RichText::new(format!("{} members · owned by {}", page.group.members, page.group.owner))
-            .color(theme::MUTED),
+        RichText::new(format!(
+            "{} members · owned by {} · {}",
+            page.group.members,
+            page.group.owner,
+            join_name(page.group.join)
+        ))
+        .color(theme::MUTED),
     );
     if !page.group.about.is_empty() {
         ui.add_space(4.0);
@@ -285,18 +423,52 @@ fn group_page(
     ui.add_space(6.0);
     ui.add_enabled_ui(!busy, |ui| {
         ui.horizontal(|ui| {
-            if me.is_some()
-                && mine.is_none()
-                && theme::block_button(ui, theme::Kind::Primary, icon::USER_PLUS, "Join", 32.0).clicked()
-            {
-                act = Some((
-                    GroupAction::Join,
-                    id.clone(),
-                    String::new(),
-                    String::new(),
-                    None,
-                    format!("You joined {}.", page.group.name),
-                ));
+            if me.is_some() && mine.is_none() {
+                let joined = format!("You joined {}.", page.group.name);
+                if page.invited {
+                    if theme::block_button(ui, theme::Kind::Primary, icon::CHECK, "Accept invite", 32.0)
+                        .clicked()
+                    {
+                        act = Some(plain(GroupAction::Join, joined));
+                    }
+                    if ui.button("Decline").clicked() {
+                        act = Some(plain(GroupAction::Leave, "Declined.".into()));
+                    }
+                } else if page.requested {
+                    ui.label(RichText::new("Request sent").color(theme::MUTED));
+                    if ui.button("Cancel").clicked() {
+                        act = Some(plain(GroupAction::Leave, "Request taken back.".into()));
+                    }
+                } else {
+                    match page.group.join {
+                        GroupJoin::Open => {
+                            if theme::block_button(ui, theme::Kind::Primary, icon::USER_PLUS, "Join", 32.0)
+                                .clicked()
+                            {
+                                act = Some(plain(GroupAction::Join, joined));
+                            }
+                        }
+                        GroupJoin::Request => {
+                            if theme::block_button(
+                                ui,
+                                theme::Kind::Primary,
+                                icon::USER_PLUS,
+                                "Ask to join",
+                                32.0,
+                            )
+                            .clicked()
+                            {
+                                act = Some(plain(
+                                    GroupAction::Join,
+                                    format!("Asked to join {}.", page.group.name),
+                                ));
+                            }
+                        }
+                        GroupJoin::Invite => {
+                            ui.label(RichText::new("Invite only").color(theme::MUTED));
+                        }
+                    }
+                }
             }
             if mine.is_some() {
                 let (label, target, said) = if shown {
@@ -319,24 +491,29 @@ fn group_page(
                 }
             }
             if mine == Some(GroupRole::Owner) && groups.edit.is_none() && ui.button("Edit").clicked() {
-                groups.edit =
-                    Some((page.group.name.clone(), page.group.tag.clone(), page.group.about.clone()));
+                groups.edit = Some(Edit {
+                    name: page.group.name.clone(),
+                    tag: page.group.tag.clone(),
+                    about: page.group.about.clone(),
+                    color: page.group.color.clone(),
+                    join: page.group.join,
+                });
             }
         });
     });
     let mut save = None;
-    if let Some((name, tag, about)) = &mut groups.edit {
+    if let Some(edit) = &mut groups.edit {
         theme::panel().show(ui, |ui| {
-            ui.add(egui::TextEdit::singleline(name).char_limit(30));
-            ui.add(egui::TextEdit::singleline(tag).char_limit(5));
-            ui.add(egui::TextEdit::multiline(about).desired_rows(3).char_limit(1000));
+            ui.add(egui::TextEdit::singleline(&mut edit.name).char_limit(30));
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut edit.tag).char_limit(MAX_TAG).desired_width(110.0));
+                pick_colour(ui, "edit-group-colour", &mut edit.color);
+                pick_join(ui, "edit-group-join", &mut edit.join);
+            });
+            ui.add(egui::TextEdit::multiline(&mut edit.about).desired_rows(3).char_limit(1000));
             ui.horizontal(|ui| {
                 if ui.button("Save").clicked() {
-                    save = Some(Some((
-                        name.trim().to_owned(),
-                        tag.trim().to_ascii_uppercase(),
-                        about.trim().to_owned(),
-                    )));
+                    save = Some(Some(edit.clone()));
                 }
                 if ui.button("Cancel").clicked() {
                     save = Some(None);
@@ -346,12 +523,72 @@ fn group_page(
     }
     if let Some(saved) = save {
         groups.edit = None;
-        if let Some((name, tag, about)) = saved {
+        if let Some(edit) = saved {
             groups.change(platform, GroupAction::Edit, &id, "Saved.".into(), move |c| {
-                c.name = name;
-                c.tag = tag;
-                c.about = about;
+                c.name = edit.name.trim().to_owned();
+                c.tag = edit.tag.trim().to_ascii_uppercase();
+                c.about = edit.about.trim().to_owned();
+                c.color = edit.color;
+                c.join = Some(edit.join);
             });
+        }
+    }
+    if admin {
+        ui.add_space(6.0);
+        let mut invite = None;
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut groups.invite).hint_text("Their name").desired_width(180.0),
+            );
+            if ui
+                .add_enabled(!busy && !groups.invite.trim().is_empty(), egui::Button::new("Invite"))
+                .clicked()
+            {
+                invite = Some(groups.invite.trim().to_owned());
+            }
+        });
+        for p in &page.requests {
+            person_row(ui, &Json::Null, &p.name, ("Wants to join", theme::AMBER), |ui| {
+                if ui.add_enabled(!busy, egui::Button::new("Decline")).clicked() {
+                    act = Some((
+                        GroupAction::Decline,
+                        id.clone(),
+                        p.player_id.clone(),
+                        String::new(),
+                        None,
+                        "Declined.".into(),
+                    ));
+                }
+                if ui.add_enabled(!busy, egui::Button::new("Accept")).clicked() {
+                    act = Some((
+                        GroupAction::Accept,
+                        id.clone(),
+                        p.player_id.clone(),
+                        String::new(),
+                        None,
+                        format!("{} joined.", p.name),
+                    ));
+                }
+            });
+        }
+        for p in &page.invites {
+            person_row(ui, &Json::Null, &p.name, ("Invited", theme::MUTED), |ui| {
+                if ui.add_enabled(!busy, egui::Button::new("Cancel")).clicked() {
+                    act = Some((
+                        GroupAction::Decline,
+                        id.clone(),
+                        p.player_id.clone(),
+                        String::new(),
+                        None,
+                        "Invite taken back.".into(),
+                    ));
+                }
+            });
+        }
+        if let Some(name) = invite {
+            groups.invite.clear();
+            let said = format!("Invited {name}.");
+            groups.send(platform, GroupAction::Invite, &id, said, Some(name), |_| {});
         }
     }
     ui.add_space(10.0);
@@ -512,14 +749,14 @@ fn group_page(
 
 #[derive(Default)]
 pub struct Badges {
-    known: HashMap<String, (Instant, Option<String>)>,
+    known: HashMap<String, (Instant, Option<GroupBadge>)>,
     slot: Found,
 }
 
 const BADGE_EVERY: Duration = Duration::from_secs(120);
 
 impl Badges {
-    pub fn tag(&mut self, client: impl FnOnce() -> HubClient, name: &str) -> Option<String> {
+    pub fn of(&mut self, client: impl FnOnce() -> HubClient, name: &str) -> Option<GroupBadge> {
         for (who, tag) in self.slot.lock().unwrap().drain(..) {
             self.known.insert(who, (Instant::now(), tag));
         }
@@ -532,7 +769,7 @@ impl Badges {
                 let out = self.slot.clone();
                 let who = name.to_owned();
                 std::thread::spawn(move || {
-                    let tag = client.profile(&who).ok().flatten().and_then(|p| p.badge).map(|b| b.tag);
+                    let tag = client.profile(&who).ok().flatten().and_then(|p| p.badge);
                     out.lock().unwrap().push((who, tag));
                 });
                 tag

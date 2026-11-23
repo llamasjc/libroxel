@@ -1,6 +1,6 @@
 use libroxel_hub::{
-    AccountUpdate, GroupAction, GroupChange, GroupRole, HubClient, Publish, account_message, group_message,
-    new_secret, player_id_of, publish_message, sign, start,
+    AccountUpdate, GroupAction, GroupChange, GroupJoin, GroupRole, HubClient, Publish, account_message,
+    group_message, new_secret, player_id_of, publish_message, sign, start,
 };
 
 struct Player {
@@ -48,6 +48,12 @@ impl Player {
         edit(&mut change);
         change.signature = sign(&self.key, &group_message(&change));
         hub.change_group(&change).map(|c| c.group_id)
+    }
+
+    fn view(&self, hub: &HubClient, group: &str) -> libroxel_hub::GroupPage {
+        let time = self.tick();
+        let signature = sign(&self.key, &libroxel_hub::group_view_message(&self.id, group, time));
+        hub.group_as(group, &self.id, time, &signature).unwrap()
     }
 }
 
@@ -146,4 +152,62 @@ fn groups_have_roles_a_wall_games_and_badges() {
     assert!(hub.profile(&bo.id).unwrap().unwrap().badge.is_none());
     bo.change(&hub, GroupAction::Leave, &id, |_| {}).unwrap();
     assert!(hub.group(&id).is_err());
+}
+
+#[test]
+fn tags_and_colours_are_claimed_and_groups_can_be_closed() {
+    let running = start("127.0.0.1:0".parse().unwrap(), None).unwrap();
+    let hub = HubClient::new(&running.url());
+    let (owner, asker, guest) = (Player::new(11), Player::new(12), Player::new(13));
+    owner.claim(&hub, "Owner1");
+    asker.claim(&hub, "Asker1");
+    guest.claim(&hub, "Guest1");
+    let make = |p: &Player, name: &str, tag: &str, color: &str, join: GroupJoin| {
+        let (name, tag, color) = (name.to_owned(), tag.to_owned(), color.to_owned());
+        p.change(&hub, GroupAction::Create, "", move |c| {
+            c.name = name;
+            c.tag = tag;
+            c.color = color;
+            c.join = Some(join);
+        })
+    };
+    let id = make(&owner, "Red Team", "RT", "red", GroupJoin::Request).unwrap();
+    assert!(make(&asker, "Other Team", "rt", "red", GroupJoin::Open).unwrap_err().contains("RT in red"));
+    let blue = make(&asker, "Blue Team", "RT", "blue", GroupJoin::Open).unwrap();
+    assert!(make(&guest, "Rainbow", "RB", "rainbow", GroupJoin::Open).is_err());
+    assert!(make(&guest, "Too Long", "TOOLNG", "red", GroupJoin::Open).is_err());
+    assert!(make(&guest, "Libroxel Staff", "LS", "red", GroupJoin::Open).is_err());
+    assert_eq!(hub.group(&blue).unwrap().group.color, "blue");
+
+    asker.change(&hub, GroupAction::Join, &id, |_| {}).unwrap();
+    let seen = asker.view(&hub, &id);
+    assert!(seen.requested && seen.members.len() == 1 && seen.requests.is_empty());
+    let mine = owner.view(&hub, &id);
+    assert_eq!(mine.requests.len(), 1);
+    assert!(asker.change(&hub, GroupAction::Accept, &id, |c| c.other_id = guest.id.clone()).is_err());
+    owner.change(&hub, GroupAction::Accept, &id, |c| c.other_id = asker.id.clone()).unwrap();
+    assert_eq!(hub.group(&id).unwrap().members.len(), 2);
+
+    owner
+        .change(&hub, GroupAction::Edit, &id, |c| {
+            c.name = "Red Team".into();
+            c.tag = "RT".into();
+            c.color = "red".into();
+            c.join = Some(GroupJoin::Invite);
+        })
+        .unwrap();
+    assert!(guest.change(&hub, GroupAction::Join, &id, |_| {}).unwrap_err().contains("invite only"));
+    owner.change(&hub, GroupAction::Invite, &id, |c| c.other_id = guest.id.clone()).unwrap();
+    assert!(guest.view(&hub, &id).invited);
+    let time = guest.tick();
+    let invites = hub
+        .group_invites(
+            &guest.id,
+            time,
+            &sign(&guest.key, &libroxel_hub::group_invites_message(&guest.id, time)),
+        )
+        .unwrap();
+    assert_eq!(invites.len(), 1);
+    guest.change(&hub, GroupAction::Join, &id, |_| {}).unwrap();
+    assert_eq!(hub.group(&id).unwrap().members.len(), 3);
 }

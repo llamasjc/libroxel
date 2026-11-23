@@ -69,8 +69,9 @@ mod fleet;
 pub use fleet::{FleetOptions, PlayAnswer, PlayRequest, play_message};
 mod groups;
 pub use groups::{
-    GroupAction, GroupBadge, GroupChange, GroupChanged, GroupInfo, GroupMember, GroupPage, GroupPost,
-    GroupRole, group_message, valid_group_name, valid_group_tag,
+    GROUP_COLORS, GroupAction, GroupBadge, GroupChange, GroupChanged, GroupInfo, GroupJoin, GroupMember,
+    GroupPage, GroupPost, GroupRole, MAX_TAG, group_color, group_invites_message, group_message,
+    group_view_message, valid_group_name, valid_group_tag,
 };
 mod limits;
 mod messages;
@@ -831,6 +832,7 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/for-you/{id}", get(charts::for_you))
         .route("/groups", get(groups::list_groups).post(groups::change_group))
         .route("/groups/{id}", get(groups::group_page))
+        .route("/groups/invites/{id}", get(groups::group_invites))
         .route("/friends", post(social::change_friend))
         .route("/friends/{id}", get(social::list_friends))
         .route("/presence", post(social::update_presence))
@@ -899,7 +901,7 @@ const GAME_COLUMNS: &str = concat!(
     (SELECT COUNT(*) FROM game_votes v WHERE v.game_id = g.game_id AND v.vote = 1),
     (SELECT COUNT(*) FROM game_votes v WHERE v.game_id = g.game_id AND v.vote = -1),
     (SELECT COUNT(*) FROM game_favorites f WHERE f.game_id = g.game_id),
-    gr.group_id, gr.name, gr.tag"
+    gr.group_id, gr.name, gr.tag, gr.color"
 );
 const GAMES: &str = "games g LEFT JOIN accounts a ON a.player_id = g.author_id
     LEFT JOIN group_games gg ON gg.game_id = g.game_id LEFT JOIN groups gr ON gr.group_id = gg.group_id";
@@ -930,7 +932,9 @@ fn game_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<GameInfo> {
         dislikes: r.get::<_, i64>(12)? as u32,
         favorites: r.get::<_, i64>(13)? as u32,
         group: match r.get::<_, Option<String>>(14)? {
-            Some(group_id) => Some(GroupBadge { group_id, name: r.get(15)?, tag: r.get(16)? }),
+            Some(group_id) => {
+                Some(GroupBadge { group_id, name: r.get(15)?, tag: r.get(16)?, color: r.get(17)? })
+            }
             None => None,
         },
     })
@@ -2455,6 +2459,38 @@ impl HubClient {
             .call()
             .and_then(|mut r| r.body_mut().read_json())
             .map_err(|e| format!("could not get that group: {e}"))
+    }
+
+    pub fn group_as(
+        &self,
+        group_id: &str,
+        viewer: &str,
+        time: i64,
+        signature: &str,
+    ) -> Result<GroupPage, String> {
+        self.agent
+            .get(format!("{}/groups/{group_id}", self.base))
+            .query("viewer", viewer)
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not get that group: {e}"))
+    }
+
+    pub fn group_invites(
+        &self,
+        player_id: &str,
+        time: i64,
+        signature: &str,
+    ) -> Result<Vec<GroupInfo>, String> {
+        self.agent
+            .get(format!("{}/groups/invites/{player_id}", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not get your group invites: {e}"))
     }
 
     pub fn change_group(&self, change: &GroupChange) -> Result<GroupChanged, String> {
