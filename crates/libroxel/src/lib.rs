@@ -405,12 +405,31 @@ pub fn run() {
     })
     .insert_non_send(editor)
     .add_plugins((EnginePlugin, RenderPlugin))
+    .insert_resource(load_graphics())
     .add_systems(Startup, setup_ui_camera)
     .add_systems(EguiPrimaryContextPass, ui::editor_ui)
     .add_systems(Update, (viewport::draw_selection, viewport::draw_grid).after(EngineSet::Sync))
     .add_systems(Update, (update_title, toggle_fullscreen));
     report::catch_panics();
     report::run(&mut app);
+}
+
+fn graphics_file() -> std::path::PathBuf {
+    server::data_dir().join("graphics")
+}
+
+fn load_graphics() -> libroxel_engine::view::GraphicsQuality {
+    let text = std::fs::read_to_string(graphics_file()).unwrap_or_default();
+    match text.trim().parse::<u8>() {
+        Ok(level) => libroxel_engine::view::GraphicsQuality::new(false, level),
+        Err(_) => libroxel_engine::view::GraphicsQuality::default(),
+    }
+}
+
+pub(crate) fn save_graphics(auto: bool, level: u8) {
+    let _ = std::fs::create_dir_all(server::data_dir());
+    let text = if auto { "auto".to_string() } else { level.to_string() };
+    let _ = std::fs::write(graphics_file(), text);
 }
 
 /// Lets a windowless Windows build print to the terminal it was started
