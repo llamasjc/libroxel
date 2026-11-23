@@ -61,6 +61,47 @@ pub fn clear_weak_password() {
     let _ = std::fs::remove_file(weak_path(&crate::identity_path()));
 }
 
+/// This device's session on the Hub for the account in use, if it has one.
+pub fn session() -> Option<String> {
+    let identity = crate::identity_path();
+    let note = std::fs::read_to_string(session_path(&identity)).ok()?;
+    let (player_id, session) = note.trim().split_once('\n')?;
+    (load(&identity).ok()?.player_id() == player_id).then(|| session.to_owned())
+}
+
+/// Keeps `session` as this device's session for `player_id`.
+pub fn set_session(player_id: &str, session: &str) {
+    let path = session_path(&crate::identity_path());
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, format!("{player_id}\n{session}"));
+}
+
+/// Uses `key` from now on in place of the account in use, which was moved
+/// to it; the old key is dropped.
+pub fn moved_to(key: &[u8; 32]) -> Result<(), String> {
+    moved_at(&crate::identity_path(), key)
+}
+
+/// Drops the account in use, whose key was signed out, and starts a new, empty one.
+pub fn signed_out() -> Result<(), String> {
+    moved_at(&crate::identity_path(), &Identity::generate().secret_bytes())
+}
+
+fn moved_at(identity: &Path, key: &[u8; 32]) -> Result<(), String> {
+    if let Ok(old) = load(identity) {
+        let dir = folder(identity);
+        let _ = std::fs::remove_file(dir.join(format!("{}.key", old.player_id())));
+        let _ = std::fs::remove_file(dir.join(format!("{}.name", old.player_id())));
+    }
+    Identity::from_secret_bytes(key).save_over(identity).map_err(|e| format!("Could not save the key: {e}"))
+}
+
+fn session_path(identity: &Path) -> PathBuf {
+    identity.parent().map(|dir| dir.join("session")).unwrap_or_else(|| PathBuf::from("session"))
+}
+
 fn weak_path(identity: &Path) -> PathBuf {
     identity.parent().map(|dir| dir.join("weak-password")).unwrap_or_else(|| PathBuf::from("weak-password"))
 }
@@ -147,6 +188,11 @@ mod tests {
         switch_at(&identity, &fresh).unwrap();
         assert_eq!(load(&identity).unwrap().player_id(), fresh);
         assert!(switch_at(&identity, "nobody").is_err());
+
+        // A key moved away is dropped, saved copy and all.
+        moved_at(&identity, &[9u8; 32]).unwrap();
+        assert_eq!(load(&identity).unwrap().player_id(), Identity::from_secret_bytes(&[9u8; 32]).player_id());
+        assert!(saved_at(&identity).iter().all(|s| s.player_id != fresh));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

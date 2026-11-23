@@ -110,6 +110,18 @@ pub struct Platform {
     email_done: Slot<String>,
     email_status: Option<Result<String, String>>,
     two_step_status: Option<Result<String, String>>,
+    reset_open: bool,
+    reset_sent: bool,
+    reset_code: String,
+    reset_two_step: String,
+    reset_password: String,
+    reset_again: String,
+    reset_done: Slot<String>,
+    recovery_codes: Option<Vec<String>>,
+    recovery_done: Slot<Vec<String>>,
+    out_password: String,
+    out_code: String,
+    moved_done: Slot<String>,
     /// The catalog: things to wear that people made.
     pub items: Vec<Item>,
     fetched_items: Slot<Vec<Item>>,
@@ -192,6 +204,18 @@ impl Default for Platform {
             email_done: Arc::default(),
             email_status: None,
             two_step_status: None,
+            reset_open: false,
+            reset_sent: false,
+            reset_code: String::new(),
+            reset_two_step: String::new(),
+            reset_password: String::new(),
+            reset_again: String::new(),
+            reset_done: Arc::default(),
+            recovery_codes: None,
+            recovery_done: Arc::default(),
+            out_password: String::new(),
+            out_code: String::new(),
+            moved_done: Arc::default(),
             items: Vec::new(),
             fetched_items: Arc::default(),
             item_shared: Arc::default(),
@@ -319,6 +343,7 @@ impl Platform {
                     self.account = None;
                     self.look_to_save = None;
                 }
+                Err(e) if e == libroxel_hub::SIGNED_OUT => self.signed_out(),
                 Err(e) => self.account_status = Some(Err(e)),
             }
         }
@@ -332,8 +357,38 @@ impl Platform {
             self.account_status = Some(result);
         }
         self.family.tick();
-        if let Some(Ok(security)) = self.security_found.lock().unwrap().take() {
-            self.security = Some(security);
+        let taken = self.security_found.lock().unwrap().take();
+        match taken {
+            Some(Ok(security)) => self.security = Some(security),
+            Some(Err(e)) if e == libroxel_hub::SIGNED_OUT => self.signed_out(),
+            _ => {}
+        }
+        let taken = self.recovery_done.lock().unwrap().take();
+        match taken {
+            Some(Ok(codes)) => {
+                self.recovery_codes = Some(codes);
+                self.fetch_security();
+            }
+            Some(Err(e)) => self.two_step_status = Some(Err(e)),
+            None => {}
+        }
+        let taken = self.moved_done.lock().unwrap().take();
+        if let Some(result) = taken {
+            self.password_busy = false;
+            match result {
+                Ok(said) => {
+                    self.out_password.clear();
+                    self.out_code.clear();
+                    self.account_changed(Ok(said));
+                }
+                Err(e) => self.two_step_status = Some(Err(e)),
+            }
+        }
+        let taken = self.reset_done.lock().unwrap().take();
+        if let Some(result) = taken {
+            self.password_busy = false;
+            self.reset_sent |= result.is_ok();
+            self.password_status = Some(result);
         }
         let taken = self.two_step_done.lock().unwrap().take();
         if let Some(result) = taken {
@@ -362,6 +417,12 @@ impl Platform {
                 self.password_again.clear();
                 self.sign_in_password.clear();
                 self.sign_in_code.clear();
+                self.reset_open = false;
+                self.reset_sent = false;
+                self.reset_code.clear();
+                self.reset_two_step.clear();
+                self.reset_password.clear();
+                self.reset_again.clear();
                 // A sign-in may have changed whose account this is.
                 self.account_hub = None;
             }
@@ -795,8 +856,9 @@ impl Platform {
         let code = Some(self.sign_in_code.trim().to_owned()).filter(|c| !c.is_empty());
         let out = self.password_done.clone();
         std::thread::spawn(move || {
-            let result = client.sign_in(&name, &password, code.as_deref()).and_then(|key| {
+            let result = client.sign_in_on(&name, &password, code.as_deref(), Some(&device_name())).and_then(|(key, session)| {
                 let me = libroxel_net::Identity::from_secret_bytes(&key);
+                crate::accounts::set_session(&me.player_id(), &session);
                 let kept = me
                     .save_replacing(&crate::identity_path())
                     .map_err(|e| format!("Signed in, but could not save the key here: {e}"))?;
@@ -950,8 +1012,14 @@ impl Platform {
         std::thread::spawn(move || {
             let result = crate::identity().and_then(|me| {
                 let id = me.player_id();
+                let session = crate::accounts::session().or_else(|| {
+                    let session = client.start_session(&me.secret_bytes(), &device_name()).ok()?;
+                    crate::accounts::set_session(&id, &session);
+                    Some(session)
+                });
                 let time = libroxel_hub_now_ms();
-                client.security(&id, time, &me.sign(&libroxel_hub::security_message(&id, time)))
+                let signature = me.sign(&libroxel_hub::security_message(&id, time));
+                client.security_on(&id, time, &signature, session.as_deref())
             });
             *out.lock().unwrap() = Some(result);
         });
@@ -967,6 +1035,7 @@ impl Platform {
         let client = self.client();
         let code = self.two_step_code.trim().to_owned();
         let out = self.two_step_done.clone();
+        let codes_out = self.recovery_done.clone();
         std::thread::spawn(move || {
             let result = crate::identity().and_then(|me| {
                 let turning_on = secret.is_some();
@@ -978,7 +1047,10 @@ impl Platform {
                     signature: String::new(),
                 };
                 set.signature = me.sign(&libroxel_hub::two_step_message(&set));
-                client.set_two_step(&set)?;
+                let codes = client.set_two_step(&set)?;
+                if !codes.is_empty() {
+                    *codes_out.lock().unwrap() = Some(Ok(codes));
+                }
                 Ok(if turning_on {
                     "Two-step sign-in is on. Signing in on another computer now needs a code from your app."
                         .to_owned()
@@ -988,6 +1060,138 @@ impl Platform {
             });
             *out.lock().unwrap() = Some(result);
         });
+    }
+
+    fn signed_out(&mut self) {
+        let said = crate::accounts::signed_out().map(|()| "This device was signed out.".to_owned());
+        self.account_changed(said);
+    }
+
+    fn new_recovery_codes(&mut self) {
+        let client = self.client();
+        let out = self.recovery_done.clone();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| client.recovery_codes(&me.secret_bytes()));
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    fn sign_out_everywhere(&mut self) {
+        if self.password_busy {
+            return;
+        }
+        self.password_busy = true;
+        self.two_step_status = None;
+        let client = self.client();
+        let name = self.account.as_ref().map(|a| a.name.clone()).unwrap_or_default();
+        let password = self.out_password.clone();
+        let code = Some(self.out_code.trim().to_owned()).filter(|c| !c.is_empty());
+        let out = self.moved_done.clone();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| {
+                let (key, session) = client.sign_out_everywhere(
+                    &me.secret_bytes(),
+                    &name,
+                    &password,
+                    code.as_deref(),
+                    Some(&device_name()),
+                )?;
+                crate::accounts::moved_to(&key)?;
+                crate::accounts::set_session(&libroxel_hub::player_id_of(&key), &session);
+                Ok("Signed out everywhere else.".to_owned())
+            });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    fn ask_reset(&mut self) {
+        if self.password_busy {
+            return;
+        }
+        self.password_busy = true;
+        self.password_status = None;
+        let client = self.client();
+        let name = self.sign_in_name.trim().to_owned();
+        let out = self.reset_done.clone();
+        std::thread::spawn(move || {
+            let result = client.ask_reset(&name).map(|()| "Code sent. Check your email.".to_owned());
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    fn finish_reset(&mut self) {
+        if self.password_busy {
+            return;
+        }
+        self.password_busy = true;
+        self.password_status = None;
+        let client = self.client();
+        let name = self.sign_in_name.trim().to_owned();
+        let code = self.reset_code.trim().to_owned();
+        let two_step = Some(self.reset_two_step.trim().to_owned()).filter(|c| !c.is_empty());
+        let password = self.reset_password.clone();
+        let out = self.password_done.clone();
+        std::thread::spawn(move || {
+            let result = client
+                .finish_reset(&name, &code, two_step.as_deref(), &password, Some(&device_name()))
+                .and_then(|(key, session)| {
+                    let me = libroxel_net::Identity::from_secret_bytes(&key);
+                    me.save_replacing(&crate::identity_path())
+                        .map_err(|e| format!("Could not save the key here: {e}"))?;
+                    crate::accounts::set_session(&me.player_id(), &session);
+                    Ok(format!("Password reset. Signed in as {name}."))
+                });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    fn reset_ui(&mut self, ui: &mut egui::Ui) {
+        if !self.reset_open {
+            if ui.small_button("Forgot password?").clicked() {
+                self.reset_open = true;
+                self.reset_sent = false;
+                self.password_status = None;
+            }
+            return;
+        }
+        let name_ok = libroxel_hub::valid_account_name(self.sign_in_name.trim());
+        ui.horizontal(|ui| {
+            let label = if self.reset_sent { "Send again" } else { "Email me a code" };
+            if ui.add_enabled(name_ok && !self.password_busy, egui::Button::new(label)).clicked() {
+                self.ask_reset();
+            }
+            if ui.small_button("Cancel").clicked() {
+                self.reset_open = false;
+            }
+        });
+        if !self.reset_sent {
+            return;
+        }
+        egui::Grid::new("account-reset-grid").num_columns(2).show(ui, |ui| {
+            ui.label("Code from the email");
+            ui.add(egui::TextEdit::singleline(&mut self.reset_code).char_limit(6));
+            ui.end_row();
+            if self.needs_code {
+                ui.label("Two-step or recovery code");
+                ui.add(egui::TextEdit::singleline(&mut self.reset_two_step).char_limit(12));
+                ui.end_row();
+            }
+            ui.label("New password");
+            ui.add(egui::TextEdit::singleline(&mut self.reset_password).password(true).char_limit(256));
+            ui.end_row();
+            ui.label("Again");
+            ui.add(egui::TextEdit::singleline(&mut self.reset_again).password(true).char_limit(256));
+            ui.end_row();
+        });
+        let problem = libroxel_hub::password_problem(&self.reset_password, self.sign_in_name.trim())
+            .or_else(|| (self.reset_password != self.reset_again).then(|| "the two don't match".to_owned()));
+        let ready = problem.is_none() && self.reset_code.trim().len() == 6 && !self.password_busy;
+        if ui.add_enabled(ready, egui::Button::new("Reset password")).clicked() {
+            self.finish_reset();
+        }
+        if let Some(problem) = problem.filter(|_| !self.reset_password.is_empty()) {
+            ui.colored_label(crate::theme::AMBER, format!("Not yet: {problem}."));
+        }
     }
 
     /// Two-step sign-in and recent sign-ins, for an account with a password.
@@ -1004,7 +1208,9 @@ impl Platform {
             );
             ui.horizontal(|ui| {
                 ui.label("Code from the app");
-                ui.add(egui::TextEdit::singleline(&mut self.two_step_code).char_limit(7).desired_width(70.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.two_step_code).char_limit(12).desired_width(70.0),
+                );
                 let ready = self.two_step_code.trim().len() >= 6 && !self.password_busy;
                 if ui.add_enabled(ready, egui::Button::new("Turn off")).clicked() {
                     self.change_two_step(None);
@@ -1064,20 +1270,60 @@ impl Platform {
             }
             None => {}
         }
+        if security.two_step {
+            ui.horizontal(|ui| {
+                ui.label(format!("Recovery codes left: {}", security.recovery_codes_left));
+                if ui.small_button("New codes").clicked() {
+                    self.new_recovery_codes();
+                }
+            });
+        }
+        if let Some(codes) = self.recovery_codes.clone() {
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                for code in &codes {
+                    ui.label(RichText::new(code).monospace().color(crate::theme::TEXT));
+                }
+                ui.horizontal(|ui| {
+                    if ui.small_button("Copy").clicked() {
+                        ui.ctx().copy_text(codes.join("\n"));
+                    }
+                    if ui.small_button("Done").clicked() {
+                        self.recovery_codes = None;
+                    }
+                });
+            });
+        }
         ui.add_space(6.0);
-        ui.label(RichText::new("Sign-ins on other computers").strong());
-        if security.sign_ins.is_empty() {
-            ui.label(RichText::new("None yet.").color(crate::theme::MUTED));
+        ui.label(RichText::new("Devices").strong());
+        for session in &security.sessions {
+            let this = if session.this { " (this one)" } else { "" };
+            ui.label(format!(
+                "  • {}{this}, {}, {}",
+                session.device,
+                session.from,
+                ago(session.seen_secs_ago)
+            ));
         }
-        for record in security.sign_ins.iter().take(5) {
-            ui.label(format!("  • {} from {}", ago(record.secs_ago), record.from));
-        }
-        if !security.sign_ins.is_empty() {
-            ui.label(
-                RichText::new("Not you? Set a new password and turn on two-step sign-in.")
-                    .small()
-                    .color(crate::theme::MUTED),
-            );
+        if security.has_password {
+            ui.horizontal(|ui| {
+                ui.label("Password");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.out_password)
+                        .password(true)
+                        .char_limit(256)
+                        .desired_width(140.0),
+                );
+                if security.two_step {
+                    ui.label("Code");
+                    ui.add(egui::TextEdit::singleline(&mut self.out_code).char_limit(12).desired_width(90.0));
+                }
+                let ready = !self.out_password.is_empty()
+                    && (!security.two_step || !self.out_code.trim().is_empty())
+                    && !self.password_busy;
+                if ui.add_enabled(ready, egui::Button::new("Sign out everywhere")).clicked() {
+                    self.sign_out_everywhere();
+                }
+            });
         }
     }
 
@@ -1196,7 +1442,7 @@ impl Platform {
                     ui.end_row();
                     if self.needs_code {
                         ui.label("Code from your app");
-                        ui.add(egui::TextEdit::singleline(&mut self.sign_in_code).char_limit(7));
+                        ui.add(egui::TextEdit::singleline(&mut self.sign_in_code).char_limit(12));
                         ui.end_row();
                     }
                 });
@@ -1211,6 +1457,7 @@ impl Platform {
                         ui.spinner();
                     }
                 });
+                self.reset_ui(ui);
             });
         match &self.password_status {
             Some(Ok(said)) => {
@@ -1233,6 +1480,7 @@ impl Platform {
         self.account_status = None;
         self.security = None;
         self.two_step_secret = None;
+        self.recovery_codes = None;
         self.password_status = Some(said);
         self.saved_accounts = None;
         self.weak_password = None;
@@ -1798,6 +2046,18 @@ const REPORT_REASONS: [&str; 4] = [
 /// A small ⚑ button to report a `what` ("game" or "hat").
 fn report_button(ui: &mut egui::Ui, what: &str) -> bool {
     ui.small_button(crate::theme::icon::FLAG).on_hover_text(format!("Report this {what}")).clicked()
+}
+
+fn device_name() -> String {
+    match std::env::consts::OS {
+        "windows" => "Windows",
+        "macos" => "macOS",
+        "linux" => "Linux",
+        "android" => "Android",
+        "ios" => "iOS",
+        other => other,
+    }
+    .to_owned()
 }
 
 fn libroxel_hub_now_ms() -> i64 {
