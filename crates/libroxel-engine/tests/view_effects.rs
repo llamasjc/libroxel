@@ -2,7 +2,7 @@
 //! boxes and beams ask the renderer for.
 
 use libroxel_engine::view::atmosphere_fog;
-use libroxel_engine::view_effects::{beams, bloom_look, grading, selection_boxes};
+use libroxel_engine::view_effects::{base_grading, beams, bloom_look, grading, selection_boxes};
 use libroxel_instance::{ClassKind, Color3, InstanceId, InstanceTree, Property, PropertyValue, Vec3};
 
 fn add(tree: &mut InstanceTree, class: ClassKind, parent: InstanceId) -> InstanceId {
@@ -15,7 +15,7 @@ fn add(tree: &mut InstanceTree, class: ClassKind, parent: InstanceId) -> Instanc
 fn bloom_and_colour_correction_come_from_lighting() {
     let mut tree = InstanceTree::new();
     assert_eq!(bloom_look(&tree), None);
-    assert_eq!(grading(&tree), Default::default());
+    assert_eq!(grading(&tree), base_grading());
     let lighting = tree.service(ClassKind::Lighting).unwrap();
     let bloom = add(&mut tree, ClassKind::BloomEffect, lighting);
     let look = bloom_look(&tree).expect("a bloom");
@@ -24,12 +24,12 @@ fn bloom_and_colour_correction_come_from_lighting() {
     assert_eq!(bloom_look(&tree), None, "a turned-off bloom does nothing");
 
     let cc = add(&mut tree, ClassKind::ColorCorrectionEffect, lighting);
-    assert_eq!(grading(&tree), Default::default(), "the defaults change nothing");
+    assert_eq!(grading(&tree), base_grading(), "the defaults change nothing");
     tree.set(cc, Property::Saturation, PropertyValue::Number(-1.0)).unwrap();
     tree.set(cc, Property::Contrast, PropertyValue::Number(0.5)).unwrap();
     let g = grading(&tree);
     assert_eq!(g.global.post_saturation, 0.0);
-    assert_eq!(g.midtones.contrast, 1.5);
+    assert_eq!(g.midtones.contrast, base_grading().midtones.contrast * 1.5);
     tree.set(cc, Property::TintColor, PropertyValue::Color3(Color3::new(1.0, 0.8, 0.6))).unwrap();
     assert!(grading(&tree).global.temperature > 0.0, "an orange tint warms the picture");
 }

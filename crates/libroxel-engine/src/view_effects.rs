@@ -51,17 +51,26 @@ pub fn bloom_look(tree: &InstanceTree) -> Option<BloomLook> {
     })
 }
 
+pub fn base_grading() -> ColorGrading {
+    let mut out = ColorGrading::default();
+    out.global.post_saturation = 1.3;
+    for section in [&mut out.shadows, &mut out.midtones, &mut out.highlights] {
+        section.contrast = 1.1;
+    }
+    out
+}
+
 /// The colour grading the tree's colour correction asks for (the default
 /// when there's none).
 pub fn grading(tree: &InstanceTree) -> ColorGrading {
-    let mut out = ColorGrading::default();
+    let mut out = base_grading();
     let Some(id) = effect(tree, ClassKind::ColorCorrectionEffect) else { return out };
     let n = |p| tree.get_number(id, p).unwrap_or(0.0) as f32;
     out.global.exposure = n(Property::Brightness) * 2.0;
-    out.global.post_saturation = (1.0 + n(Property::Saturation)).max(0.0);
+    out.global.post_saturation *= (1.0 + n(Property::Saturation)).max(0.0);
     let contrast = (1.0 + n(Property::Contrast)).max(0.0);
     for section in [&mut out.shadows, &mut out.midtones, &mut out.highlights] {
-        section.contrast = contrast;
+        section.contrast *= contrast;
     }
     // A tint warms (more red) or cools (more blue) the picture, and tints
     // it green or magenta.

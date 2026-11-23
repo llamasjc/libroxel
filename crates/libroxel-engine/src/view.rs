@@ -927,7 +927,7 @@ fn setup_scene(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ima
         .build(),
         Transform::from_xyz(8.0, 20.0, 6.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
-    commands.insert_resource(ClearColor(Color::srgb(0.53, 0.72, 0.9)));
+    commands.insert_resource(ClearColor(Color::srgb(0.42, 0.66, 0.96)));
 }
 
 /// The world's main light, moved by the time of day.
@@ -1033,7 +1033,7 @@ fn auto_quality(
 }
 
 /// How the sky and sun look at a time of day (hours, 0 to 24) and brightness.
-pub fn sky_at(clock: f32, brightness: f32) -> (Vec3, f32, Color, f32) {
+pub fn sky_at(clock: f32, brightness: f32) -> (Vec3, f32, Color, Color) {
     use std::f32::consts::PI;
     // Sunrise at 6, noon overhead, sunset at 18.
     let angle = (clock - 6.0) / 12.0 * PI;
@@ -1042,13 +1042,16 @@ pub fn sky_at(clock: f32, brightness: f32) -> (Vec3, f32, Color, f32) {
     let day = (height * 3.0 + 0.4).clamp(0.0, 1.0);
     let dusk = (1.0 - (height.abs() * 4.0)).clamp(0.0, 1.0);
     let night = Vec3::new(0.02, 0.03, 0.09);
-    let noon = Vec3::new(0.53, 0.72, 0.9);
+    let noon = Vec3::new(0.42, 0.66, 0.96);
     let glow = Vec3::new(0.95, 0.55, 0.35);
     let sky = night.lerp(noon, day).lerp(glow, dusk * 0.5 * day.max(0.3));
     let scale = (brightness / 2.0).clamp(0.0, 3.0);
-    let illuminance = (300.0 + 8_700.0 * day) * scale;
-    let ambient = (60.0 + 440.0 * day) * scale.max(0.2);
-    (dir, illuminance, Color::srgb(sky.x, sky.y, sky.z), ambient)
+    let illuminance = (300.0 + 9_700.0 * day) * scale;
+    let moon = Vec3::new(0.6, 0.7, 1.0);
+    let white = Vec3::new(1.0, 0.95, 0.86);
+    let sunset = Vec3::new(1.0, 0.55, 0.3);
+    let sun = moon.lerp(white, day).lerp(sunset, dusk * day);
+    (dir, illuminance, Color::srgb(sky.x, sky.y, sky.z), Color::srgb(sun.x, sun.y, sun.z))
 }
 
 fn update_lighting(
@@ -1094,7 +1097,7 @@ fn update_lighting(
             atmosphere.map(|a| atmosphere_fog(&tree, a)),
         )
     };
-    let (dir, illuminance, sky, _) = sky_at(clock, brightness);
+    let (dir, illuminance, sky, sun_colour) = sky_at(clock, brightness);
     // Exposure brightens (or darkens) everything, a stop at a time.
     let exposure = 2f32.powf(exposure);
     let illuminance = illuminance * exposure;
@@ -1102,9 +1105,12 @@ fn update_lighting(
     // Roblox: a game that keeps it bright at night has bright nights. 0.5 grey
     // is the normal amount; coloured ambient tints the shadows.
     let strongest = tint.r.max(tint.g).max(tint.b);
-    let ambient_brightness = 500.0 * strongest * 2.0 * exposure;
+    let ambient_brightness = 400.0 * strongest * 2.0 * exposure;
+    let sky_tint = sky.to_srgba();
+    let sky_top = sky_tint.red.max(sky_tint.green).max(sky_tint.blue).max(0.01);
     let ambient_color = if strongest > 0.0 {
-        Color::srgb(tint.r / strongest, tint.g / strongest, tint.b / strongest)
+        let mix = |c: f32, s: f32| c / strongest * (0.65 + 0.35 * s / sky_top);
+        Color::srgb(mix(tint.r, sky_tint.red), mix(tint.g, sky_tint.green), mix(tint.b, sky_tint.blue))
     } else {
         Color::WHITE
     };
@@ -1142,6 +1148,9 @@ fn update_lighting(
     for (mut light, mut transform) in &mut sun {
         if (light.illuminance - illuminance).abs() > 0.5 {
             light.illuminance = illuminance;
+        }
+        if light.color != sun_colour {
+            light.color = sun_colour;
         }
         let wanted = Transform::from_translation(dir * 30.0).looking_at(Vec3::ZERO, Vec3::Y);
         if transform.rotation.angle_between(wanted.rotation) > 1e-4 {
