@@ -90,7 +90,7 @@ impl UserData for UserInputService {
 
 /// What an input event passes to scripts.
 /// A key or button, and whether it just went down.
-struct InputObject(UserInput, bool);
+pub(crate) struct InputObject(pub UserInput, pub bool);
 
 impl UserData for InputObject {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
@@ -112,6 +112,16 @@ impl UserData for InputObject {
             };
             Ok(LuaEnumItem(EnumValue::UserInputType(kind)))
         });
+        fields.add_field_method_get(user_input::POSITION, |lua, this| {
+            let at = match this.0 {
+                UserInput::Key(_) => None,
+                _ => host(lua).mouse.get(),
+            };
+            Ok(LuaVector3(
+                at.map_or(libroxel_instance::Vec3::ZERO, |m| libroxel_instance::Vec3::new(m.x, m.y, 0.0)),
+            ))
+        });
+        fields.add_field_method_get(user_input::DELTA, |_, _| Ok(LuaVector3(libroxel_instance::Vec3::ZERO)));
         fields.add_meta_field(MetaMethod::Type, user_input::INPUT_OBJECT_TYPE_NAME);
     }
 }

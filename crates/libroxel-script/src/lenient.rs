@@ -347,6 +347,14 @@ pub(crate) fn fire_mouse(lua: &Lua, id: InstanceId, key: &str) -> mlua::Result<(
     layer(lua)?.get::<Function>("fire_mouse")?.call((instance_key(id), key))
 }
 
+pub(crate) fn fire_event(lua: &Lua, id: InstanceId, key: &str, args: MultiValue) -> mlua::Result<()> {
+    let mut all = MultiValue::new();
+    all.push_back(Value::String(lua.create_string(instance_key(id))?));
+    all.push_back(Value::String(lua.create_string(key)?));
+    all.extend(args);
+    layer(lua)?.get::<Function>("fire_event")?.call::<()>(all)
+}
+
 /// Gives a service made as a plain table (see compat.rs) the rest of its
 /// members: the layer's extras for it, what every instance has, and the
 /// class database's properties. Anything else is "not a valid member".

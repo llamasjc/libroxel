@@ -3425,6 +3425,14 @@ function L.fire_mouse(key_id, key)
 	sig:Fire(x, y)
 end
 
+function L.fire_event(key_id, key, ...)
+	local s = store[key_id]
+	local sig = s and s.signals[key]
+	if sig then
+		sig:Fire(...)
+	end
+end
+
 -- The event for changes to member `key` of an object, made when first asked.
 function L.changed_signal(key_id, key)
 	local s = slot(key_id)

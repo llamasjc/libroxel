@@ -3107,6 +3107,23 @@ pub(crate) fn press_button(lua: &Lua, button: InstanceId, down: bool) -> Vec<Scr
     take_errors(lua)
 }
 
+/// Fires a GUI object's `InputBegan` (or `InputEnded`) for a mouse button.
+pub(crate) fn gui_input(
+    lua: &Lua,
+    object: InstanceId,
+    input: crate::UserInput,
+    began: bool,
+) -> Vec<ScriptError> {
+    let key = if began { "InputBegan" } else { "InputEnded" };
+    let args = lua
+        .create_userdata(crate::services::InputObject(input, began))
+        .map(|o| std::iter::once(Value::UserData(o)).collect());
+    if let Err(err) = args.and_then(|a| crate::lenient::fire_event(lua, object, key, a)) {
+        host(lua).errors.borrow_mut().push(ScriptError { script: key.to_owned(), message: err.to_string() });
+    }
+    take_errors(lua)
+}
+
 /// Fires a text button's click events.
 pub(crate) fn click_button(lua: &Lua, button: InstanceId) -> Vec<ScriptError> {
     fire(lua, SignalKind::ButtonClicked(button), || Ok(MultiValue::new()));
