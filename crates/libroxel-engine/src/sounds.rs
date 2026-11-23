@@ -3,7 +3,9 @@
 //! A sound name is a WAV or OGG file, looked for in the same folders as
 //! pictures (see [`crate::pictures::set_folders`]). Names starting with
 //! `libroxel://` are sounds made by Libroxel itself: `coin`, `jump`, `boom`,
-//! `click`, `splash`, `chime` and `hum` (which loops smoothly), and the
+//! `click`, `splash`, `chime` and `hum` (which loops smoothly), the `wood/`
+//! chess sounds (`move`, `capture`, `notify`, `lowtime`, `confirm` and
+//! `social`), and the
 //! files in [`FILES`] (`lichess/sfx/move`, `aisleriot/click` and so on).
 //!
 //! A sound inside a part sounds quieter the further the camera is from it:
@@ -23,7 +25,21 @@ use crate::pictures::BUILT_IN;
 use crate::view::{EngineState, to_bevy};
 
 /// Built-in sounds, by name after [`BUILT_IN`].
-pub const SOUNDS: &[&str] = &["coin", "jump", "boom", "click", "splash", "chime", "hum"];
+pub const SOUNDS: &[&str] = &[
+    "coin",
+    "jump",
+    "boom",
+    "click",
+    "splash",
+    "chime",
+    "hum",
+    "wood/move",
+    "wood/capture",
+    "wood/notify",
+    "wood/lowtime",
+    "wood/confirm",
+    "wood/social",
+];
 
 /// Sound files built in, by name after [`BUILT_IN`]. See `assets/SOUNDS.md`.
 pub const FILES: &[(&str, &[u8])] = &[
@@ -213,9 +229,79 @@ pub fn synth(name: &str) -> Option<Vec<f32>> {
                     + (TAU * 220.0 * t).sin() * 0.08
             })
             .collect(),
+        "wood/move" => (0..len(0.1)).map(|i| knock(t(i), 240.0, 0.0, &mut noise)).collect(),
+        "wood/capture" => (0..len(0.16))
+            .map(|i| {
+                let t = t(i);
+                knock(t, 300.0, 0.0, &mut noise) * 0.9 + knock(t, 190.0, 0.022, &mut noise) * 0.8
+            })
+            .collect(),
+        // A soft two-note bell.
+        "wood/notify" => (0..len(1.0)).map(|i| bell(t(i), 784.0, 0.0) + bell(t(i), 587.0, 0.17)).collect(),
+        // Three quiet beeps.
+        "wood/lowtime" => (0..len(0.42))
+            .map(|i| {
+                let t = t(i);
+                let k = (t / 0.14).floor();
+                let local = t - k * 0.14;
+                if local < 0.05 {
+                    (TAU * 988.0 * t).sin() * 0.35 * (1.0 - local / 0.05) * (1.0 - k * 0.25)
+                } else {
+                    0.0
+                }
+            })
+            .collect(),
+        // A small pop.
+        "wood/confirm" => {
+            let mut phase = 0.0f32;
+            (0..len(0.09))
+                .map(|i| {
+                    let t = t(i);
+                    phase += TAU * (520.0 + 4000.0 * t) / rate;
+                    phase.sin() * 0.5 * (-t * 45.0).exp()
+                })
+                .collect()
+        }
+        // Two plucked notes.
+        "wood/social" => (0..len(0.5))
+            .map(|i| {
+                let t = t(i);
+                let pluck = |f: f32, at: f32| {
+                    if t < at {
+                        0.0
+                    } else {
+                        let u = t - at;
+                        ((TAU * f * u).sin() + 0.4 * (TAU * 2.0 * f * u).sin()) * 0.3 * (-u * 13.0).exp()
+                    }
+                };
+                pluck(1047.0, 0.0) + pluck(1319.0, 0.09)
+            })
+            .collect(),
         _ => return None,
     };
     Some(samples)
+}
+
+/// A piece set down on a wooden board: a short thud with a click on top,
+/// starting `at` seconds in.
+fn knock(t: f32, freq: f32, at: f32, noise: &mut Noise) -> f32 {
+    let grit = noise.next();
+    if t < at {
+        return 0.0;
+    }
+    let u = t - at;
+    let body = (TAU * (freq - 60.0 * u / 0.1) * u).sin() * (-u * 60.0).exp();
+    let click = grit * (-u * 900.0).exp();
+    body * 0.75 + click * 0.45
+}
+
+/// A bell note starting `at` seconds in.
+fn bell(t: f32, freq: f32, at: f32) -> f32 {
+    if t < at {
+        return 0.0;
+    }
+    let u = t - at;
+    ((TAU * freq * u).sin() + 0.25 * (TAU * 2.76 * freq * u).sin()) * 0.32 * (-u * 5.0).exp()
 }
 
 /// A mono 16-bit WAV file of `samples`.
