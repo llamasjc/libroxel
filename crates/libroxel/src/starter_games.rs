@@ -221,7 +221,9 @@ mod tests {
     }
 
     fn value(session: &libroxel_engine::session::PlaySession, script: &str) -> String {
-        session.runtime().run("check", &format!("print({script})")).unwrap();
+        if let Err(e) = session.runtime().run("check", &format!("print({script})")) {
+            return e.message;
+        }
         session.runtime().take_output().last().map(|l| l.text.clone()).unwrap_or_default()
     }
 

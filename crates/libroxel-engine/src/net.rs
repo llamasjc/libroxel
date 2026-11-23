@@ -19,9 +19,10 @@
 //! Characters move on the host, so a joined player sees their own
 //! character's moves once the host has made them.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::time::Duration;
 
 use libroxel_instance::serde_json::{self, Map, Value as Json, json};
@@ -37,6 +38,11 @@ pub const DEFAULT_PORT: u16 = 7420;
 pub const PROTOCOL: u64 = 1;
 /// How much unsent data a connection may build up before it is dropped.
 const MAX_BACKLOG: usize = 64 * 1024 * 1024;
+const MAX_QUEUED: usize = 100_000;
+const SEND_AHEAD: usize = 2 * 1024 * 1024;
+const READ_BUDGET: usize = 1024 * 1024;
+const CHUNK: usize = 500;
+const APPLY_BUDGET: Duration = Duration::from_millis(8);
 
 /// The services whose contents every computer sees.
 const SHARED: [ClassKind; 6] = [
@@ -62,6 +68,7 @@ fn unshared(class: ClassKind) -> bool {
 pub(crate) struct Conn {
     stream: TcpStream,
     received: Vec<u8>,
+    scanned: usize,
     unsent: Vec<u8>,
     pub(crate) closed: bool,
 }
@@ -70,7 +77,7 @@ impl Conn {
     pub(crate) fn new(stream: TcpStream) -> std::io::Result<Self> {
         stream.set_nonblocking(true)?;
         stream.set_nodelay(true)?;
-        Ok(Self { stream, received: Vec::new(), unsent: Vec::new(), closed: false })
+        Ok(Self { stream, received: Vec::new(), scanned: 0, unsent: Vec::new(), closed: false })
     }
 
     pub(crate) fn send(&mut self, message: &Json) {
@@ -87,39 +94,63 @@ impl Conn {
     }
 
     pub(crate) fn flush(&mut self) {
-        while !self.closed && !self.unsent.is_empty() {
-            match self.stream.write(&self.unsent) {
+        let mut sent = 0;
+        while !self.closed && sent < self.unsent.len() {
+            match self.stream.write(&self.unsent[sent..]) {
+                Ok(0) => self.closed = true,
+                Ok(n) => sent += n,
+                Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(_) => self.closed = true,
+            }
+        }
+        self.unsent.drain(..sent);
+    }
+
+    /// Every whole message that has arrived.
+    pub(crate) fn receive(&mut self) -> Vec<Json> {
+        let mut buf = vec![0u8; 256 * 1024];
+        let mut read = 0;
+        while !self.closed && read < READ_BUDGET {
+            match self.stream.read(&mut buf) {
                 Ok(0) => self.closed = true,
                 Ok(n) => {
-                    self.unsent.drain(..n);
+                    self.received.extend_from_slice(&buf[..n]);
+                    read += n;
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => break,
                 Err(e) if e.kind() == ErrorKind::Interrupted => {}
                 Err(_) => self.closed = true,
             }
         }
-    }
-
-    /// Every whole message that has arrived.
-    pub(crate) fn receive(&mut self) -> Vec<Json> {
-        let mut buf = [0u8; 64 * 1024];
-        while !self.closed {
-            match self.stream.read(&mut buf) {
-                Ok(0) => self.closed = true,
-                Ok(n) => self.received.extend_from_slice(&buf[..n]),
-                Err(e) if e.kind() == ErrorKind::WouldBlock => break,
-                Err(e) if e.kind() == ErrorKind::Interrupted => {}
-                Err(_) => self.closed = true,
-            }
-        }
         let mut messages = Vec::new();
-        while let Some(end) = self.received.iter().position(|b| *b == b'\n') {
-            let line: Vec<u8> = self.received.drain(..=end).collect();
-            if let Ok(message) = serde_json::from_slice::<Json>(&line[..line.len() - 1]) {
+        let mut start = 0;
+        let mut from = self.scanned;
+        while let Some(at) = self.received[from..].iter().position(|b| *b == b'\n') {
+            let end = from + at;
+            if let Ok(message) = serde_json::from_slice::<Json>(&self.received[start..end]) {
                 messages.push(message);
             }
+            start = end + 1;
+            from = start;
         }
+        self.received.drain(..start);
+        self.scanned = self.received.len();
         messages
+    }
+
+    fn send_line(&mut self, line: &[u8]) {
+        if self.closed {
+            return;
+        }
+        self.unsent.extend_from_slice(line);
+        if self.unsent.len() > MAX_BACKLOG {
+            self.closed = true;
+        }
+    }
+
+    fn unsent_len(&self) -> usize {
+        self.unsent.len()
     }
 }
 
@@ -137,7 +168,8 @@ pub(crate) enum Link {
 pub(crate) struct Hosting {
     listener: TcpListener,
     peers: Vec<Peer>,
-    replicator: Replicator,
+    replicator: Option<Replicator>,
+    priming: Option<Receiver<Replicator>>,
     /// Teleports found but not sent yet: player, number, where, facing.
     teleports: Vec<(InstanceId, u64, Vec3, f32)>,
     /// The names of players removed from this game, who can't join again.
@@ -152,6 +184,79 @@ struct Peer {
     fresh: bool,
     /// The name they asked to play as.
     asked: String,
+    queue: VecDeque<Out>,
+    world: Option<Receiver<Vec<Vec<u8>>>>,
+}
+
+enum Out {
+    Message(Json),
+    Line(Vec<u8>),
+    World,
+}
+
+impl Peer {
+    fn send(&mut self, message: Json) {
+        if self.queue.is_empty() && self.conn.unsent_len() < SEND_AHEAD {
+            self.conn.send(&message);
+        } else {
+            self.queue.push_back(Out::Message(message));
+            if self.queue.len() > MAX_QUEUED {
+                self.conn.closed = true;
+            }
+        }
+    }
+
+    fn send_world(&mut self, tree: InstanceTree, primed: Option<Sender<Replicator>>) {
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let mut replicator = Replicator::default();
+            let lines = world_lines(&replicator.delta(&tree));
+            drop(tree);
+            let _ = tx.send(lines);
+            if let Some(primed) = primed {
+                let _ = primed.send(replicator);
+            }
+        });
+        self.world = Some(rx);
+        self.queue.push_back(Out::World);
+    }
+
+    fn pump(&mut self) {
+        for _ in 0..2 {
+            while self.conn.unsent_len() < SEND_AHEAD {
+                match self.queue.front() {
+                    None => break,
+                    Some(Out::World) => {
+                        let Some(world) = &self.world else {
+                            self.queue.pop_front();
+                            continue;
+                        };
+                        match world.try_recv() {
+                            Ok(lines) => {
+                                self.world = None;
+                                self.queue.pop_front();
+                                for line in lines.into_iter().rev() {
+                                    self.queue.push_front(Out::Line(line));
+                                }
+                            }
+                            Err(TryRecvError::Empty) => break,
+                            Err(TryRecvError::Disconnected) => {
+                                self.world = None;
+                                self.conn.closed = true;
+                                break;
+                            }
+                        }
+                    }
+                    Some(_) => match self.queue.pop_front() {
+                        Some(Out::Message(message)) => self.conn.send(&message),
+                        Some(Out::Line(line)) => self.conn.send_line(&line),
+                        _ => {}
+                    },
+                }
+            }
+            self.conn.flush();
+        }
+    }
 }
 
 /// A joined game: the connection and how the host's ids map to ours.
@@ -179,6 +284,10 @@ pub(crate) struct Joined {
     /// there: the host's updates come unevenly, and set straight away they
     /// stutter.
     glide: HashMap<InstanceId, (Vec3, Vec3)>,
+    inbox: VecDeque<Json>,
+    waiting: Vec<(InstanceId, Property, u64)>,
+    total: usize,
+    got: usize,
 }
 
 /// How quickly a part glides to where the host put it, a second.
@@ -239,6 +348,16 @@ fn snapshot(tree: &InstanceTree, id: InstanceId) -> Option<Sent> {
     })
 }
 
+fn world_lines(ops: &[Json]) -> Vec<Vec<u8>> {
+    ops.chunks(CHUNK)
+        .filter_map(|ops| {
+            let mut line = serde_json::to_vec(&json!({ "t": "rep", "ops": ops })).ok()?;
+            line.push(b'\n');
+            Some(line)
+        })
+        .collect()
+}
+
 pub(crate) fn bits(id: InstanceId) -> Json {
     json!(id.to_bits())
 }
@@ -286,11 +405,6 @@ impl Replicator {
             ops.push(json!({ "d": bits(id) }));
         }
         ops
-    }
-
-    /// Everything shared, as operations for a computer that has nothing.
-    fn everything(tree: &InstanceTree) -> Vec<Json> {
-        Replicator::default().delta(tree)
     }
 
     fn visit(
@@ -401,7 +515,9 @@ impl Joined {
     fn apply(&mut self, tree: &mut InstanceTree, ops: &[Json]) {
         let mut links: Vec<(InstanceId, Property, Option<u64>)> = Vec::new();
         for op in ops {
-            if let Some(host_id) = op.get("c").and_then(Json::as_u64) {
+            if let Some(host_id) = op.get("c").and_then(Json::as_u64)
+                && !self.ids.contains_key(&host_id)
+            {
                 let Some(class) = op.get("k").and_then(Json::as_str).and_then(ClassKind::from_file_name)
                 else {
                     continue;
@@ -413,7 +529,7 @@ impl Joined {
                 Self::fields(tree, id, op, &mut links);
                 let parent = op.get("p").and_then(|p| self.local_of(p));
                 let _ = tree.set_parent(id, parent);
-            } else if let Some(id) = op.get("u").and_then(|u| self.local_of(u)) {
+            } else if let Some(id) = op.get("u").or_else(|| op.get("c")).and_then(|u| self.local_of(u)) {
                 if let Some(name) = op.get("n").and_then(Json::as_str) {
                     let _ = tree.set_name(id, name);
                 }
@@ -462,8 +578,35 @@ impl Joined {
         }
         // Links last: they may point at instances made later in the batch.
         for (id, property, target) in links {
-            let target = target.and_then(|t| self.local(t));
-            let _ = tree.set(id, property, PropertyValue::Ref(target));
+            match target.map(|t| (t, self.local(t))) {
+                Some((t, None)) if self.me.is_none() => self.waiting.push((id, property, t)),
+                Some((_, local)) => {
+                    let _ = tree.set(id, property, PropertyValue::Ref(local));
+                }
+                None => {
+                    let _ = tree.set(id, property, PropertyValue::Ref(None));
+                }
+            }
+        }
+        self.link_waiting(tree);
+    }
+
+    fn link_waiting(&mut self, tree: &mut InstanceTree) {
+        if self.waiting.is_empty() {
+            return;
+        }
+        let done = self.me.is_some();
+        let waiting = std::mem::take(&mut self.waiting);
+        for (id, property, target) in waiting {
+            match self.local(target) {
+                Some(local) => {
+                    let _ = tree.set(id, property, PropertyValue::Ref(Some(local)));
+                }
+                None if !done && tree.exists(id) => self.waiting.push((id, property, target)),
+                None => {
+                    let _ = tree.set(id, property, PropertyValue::Ref(None));
+                }
+            }
         }
     }
 
@@ -628,7 +771,8 @@ impl PlaySession {
         session.link = Link::Host(Box::new(Hosting {
             listener,
             peers: Vec::new(),
-            replicator: Default::default(),
+            replicator: None,
+            priming: None,
             teleports: Vec::new(),
             banned: Vec::new(),
         }));
@@ -664,6 +808,10 @@ impl PlaySession {
             own_model: None,
             teleports: 0,
             glide: HashMap::new(),
+            inbox: VecDeque::new(),
+            waiting: Vec::new(),
+            total: 0,
+            got: 0,
         }));
         session.info("🔗 Joining the game (its address stays hidden here)".to_owned());
         Ok(session)
@@ -729,6 +877,15 @@ impl PlaySession {
         matches!(&self.link, Link::Client(joined) if joined.conn.closed)
     }
 
+    pub fn joining(&self) -> Option<f32> {
+        let Link::Client(joined) = &self.link else { return None };
+        if joined.conn.closed || joined.me.is_some() {
+            return None;
+        }
+        let part = if joined.total == 0 { 0.0 } else { joined.got as f32 / joined.total as f32 };
+        Some(part.clamp(0.0, 1.0))
+    }
+
     /// Whether this computer has joined someone else's game.
     pub fn is_joined(&self) -> bool {
         matches!(self.link, Link::Client(_))
@@ -763,7 +920,14 @@ impl PlaySession {
         host.teleports.extend(self.find_teleports());
         while let Ok((stream, _)) = host.listener.accept() {
             if let Ok(conn) = Conn::new(stream) {
-                host.peers.push(Peer { conn, player: None, fresh: true, asked: String::new() });
+                host.peers.push(Peer {
+                    conn,
+                    player: None,
+                    fresh: true,
+                    asked: String::new(),
+                    queue: VecDeque::new(),
+                    world: None,
+                });
             }
         }
         let tree = self.runtime.tree().clone();
@@ -894,28 +1058,45 @@ impl PlaySession {
         let messages = self.runtime.take_net_messages();
         if host.peers.iter().all(|p| p.player.is_none()) {
             // No one to send to: forget what was sent, so the first to join gets everything.
-            host.replicator = Replicator::default();
+            host.replicator = None;
+            host.priming = None;
             host.teleports.clear();
             for peer in &mut host.peers {
-                peer.conn.flush();
+                peer.pump();
             }
             self.link = Link::Host(host);
             return;
         }
         let mut teleports = std::mem::take(&mut host.teleports);
         teleports.extend(self.find_teleports());
-        let delta = host.replicator.delta(&tree.borrow());
-        let everything = host
-            .peers
-            .iter()
-            .any(|p| p.fresh && p.player.is_some())
-            .then(|| Replicator::everything(&tree.borrow()));
+        let fresh = host.peers.iter().any(|p| p.fresh && p.player.is_some());
+        let mut primed = None;
+        if fresh && host.replicator.is_none() && host.priming.is_none() {
+            let (tx, rx) = channel();
+            host.priming = Some(rx);
+            primed = Some(tx);
+        }
+        if host.replicator.is_none() && host.priming.is_none() && !fresh {
+            host.replicator = Some(Replicator::default());
+        }
+        if let Some(priming) = &host.priming {
+            match priming.try_recv() {
+                Ok(replicator) => {
+                    host.replicator = Some(replicator);
+                    host.priming = None;
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => host.priming = None,
+            }
+        }
+        let delta = host.replicator.as_mut().map(|r| r.delta(&tree.borrow())).unwrap_or_default();
+        let delta = (!delta.is_empty()).then(|| json!({ "t": "rep", "ops": delta }));
         for peer in &mut host.peers {
             let Some(player) = peer.player else { continue };
             for (who, seq, pos, yaw) in &teleports {
                 if *who == player {
-                    peer.conn.send(
-                        &json!({ "t": "teleport", "seq": seq, "pos": [pos.x, pos.y, pos.z], "yaw": yaw }),
+                    peer.send(
+                        json!({ "t": "teleport", "seq": seq, "pos": [pos.x, pos.y, pos.z], "yaw": yaw }),
                     );
                 }
             }
@@ -925,27 +1106,33 @@ impl PlaySession {
                     .iter()
                     .filter_map(|c| Some((c.file_name().to_owned(), bits(t.service(*c)?))))
                     .collect();
-                peer.conn.send(&json!({ "t": "welcome", "services": services }));
-                peer.conn.send(&json!({ "t": "rep", "ops": everything.clone().unwrap_or_default() }));
-                peer.conn.send(&json!({ "t": "you", "player": bits(player) }));
+                let total: usize = SHARED
+                    .iter()
+                    .filter_map(|c| t.service(*c))
+                    .map(|s| t.descendants(s).map_or(0, |d| d.len()))
+                    .sum();
+                peer.send(json!({ "t": "welcome", "services": services, "total": total }));
+                drop(t);
+                peer.send_world(tree.borrow().clone(), primed.take());
+                peer.send(json!({ "t": "you", "player": bits(player) }));
                 peer.fresh = false;
-            } else if !delta.is_empty() {
-                peer.conn.send(&json!({ "t": "rep", "ops": delta }));
+            } else if let Some(delta) = &delta {
+                peer.send(delta.clone());
             }
             for message in &messages {
                 match message {
                     NetMessage::ClientEvent { remote, player: to, args }
                         if to.is_none_or(|p| p == player) =>
                     {
-                        peer.conn.send(&json!({ "t": "event", "r": bits(*remote), "a": args }));
+                        peer.send(json!({ "t": "event", "r": bits(*remote), "a": args }));
                     }
                     NetMessage::InvokeResult { call, player: to, ok, values } if *to == player => {
-                        peer.conn.send(&json!({ "t": "result", "call": call, "ok": ok, "a": values }));
+                        peer.send(json!({ "t": "result", "call": call, "ok": ok, "a": values }));
                     }
                     _ => {}
                 }
             }
-            peer.conn.flush();
+            peer.pump();
         }
         self.link = Link::Host(host);
     }
@@ -957,9 +1144,16 @@ impl PlaySession {
     pub(crate) fn client_step(&mut self, dt: f32, input: CharacterInput) {
         let Link::Client(mut joined) = std::mem::take(&mut self.link) else { return };
         let tree = self.runtime.tree().clone();
-        for message in joined.conn.receive() {
+        let incoming = joined.conn.receive();
+        joined.inbox.extend(incoming);
+        let began = std::time::Instant::now();
+        while began.elapsed() < APPLY_BUDGET
+            && let Some(mut message) = joined.inbox.pop_front()
+        {
             match message.get("t").and_then(Json::as_str).unwrap_or("") {
                 "welcome" => {
+                    joined.total = message.get("total").and_then(Json::as_u64).unwrap_or(0) as usize;
+                    joined.got = 0;
                     let t = tree.borrow();
                     let services =
                         message.get("services").and_then(Json::as_object).cloned().unwrap_or_default();
@@ -976,10 +1170,19 @@ impl PlaySession {
                     }
                 }
                 "rep" => {
-                    let ops = message.get("ops").and_then(Json::as_array).cloned().unwrap_or_default();
+                    let ops = match message.get_mut("ops").map(Json::take) {
+                        Some(Json::Array(ops)) => ops,
+                        _ => Vec::new(),
+                    };
+                    if joined.me.is_none() {
+                        joined.got += ops.len();
+                    }
                     joined.apply(&mut tree.borrow_mut(), &ops);
                 }
-                "you" => joined.me = message.get("player").and_then(Json::as_u64),
+                "you" => {
+                    joined.me = message.get("player").and_then(Json::as_u64);
+                    joined.link_waiting(&mut tree.borrow_mut());
+                }
                 "kicked" => {
                     let why =
                         message.get("why").and_then(Json::as_str).unwrap_or("You were removed from the game");
@@ -1026,7 +1229,7 @@ impl PlaySession {
                 _ => {}
             }
         }
-        if joined.conn.closed && !joined.reported {
+        if joined.conn.closed && joined.inbox.is_empty() && !joined.reported {
             joined.reported = true;
             self.warn("Lost the connection to the game");
         }
