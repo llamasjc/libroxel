@@ -91,10 +91,10 @@ fn sync_screen_effects(
     mut commands: Commands,
     cameras: Query<(Entity, Option<&Bloom>, Option<&ColorGrading>), With<CameraRig>>,
     mut shown: Local<Option<BloomLook>>,
-    quality: Res<crate::view::GraphicsQuality>,
+    quality: Option<Res<crate::view::GraphicsQuality>>,
 ) {
     let tree = engine.tree.borrow();
-    let wanted = bloom_look(&tree).filter(|_| quality.bloom());
+    let wanted = bloom_look(&tree).filter(|_| quality.as_ref().is_none_or(|q| q.bloom()));
     let grade = grading(&tree);
     for (entity, bloom, current) in &cameras {
         if wanted != *shown || (wanted.is_some() != bloom.is_some()) {

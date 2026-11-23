@@ -265,7 +265,7 @@ fn update_particles(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
     mut transforms: Query<(&mut Transform, &mut MeshMaterial3d<StandardMaterial>)>,
-    quality: Res<crate::view::GraphicsQuality>,
+    quality: Option<Res<crate::view::GraphicsQuality>>,
 ) {
     let Some(meshes) = meshes else { return };
     let dt = time.delta_secs().min(0.1);
@@ -293,7 +293,7 @@ fn update_particles(
             // How many to send out this frame.
             let mut count = burst as usize;
             if enabled {
-                emitter.carry += s.rate.max(0.0) * quality.particles() * dt;
+                emitter.carry += s.rate.max(0.0) * quality.as_ref().map_or(1.0, |q| q.particles()) * dt;
                 let whole = emitter.carry.floor();
                 emitter.carry -= whole;
                 count += whole as usize;
