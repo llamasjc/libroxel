@@ -907,3 +907,33 @@ fn characters_have_r6_joints_that_scripts_can_turn() {
     assert!(a.y - b.y > 0.5, "arm up at the shoulder: arm {a:?} torso {b:?}");
     assert!(a.x - b.x > 1.0, "arm on the right: arm {a:?} torso {b:?}");
 }
+
+#[test]
+fn each_key_uses_the_nearest_prompt_for_that_key() {
+    let mut tree = world();
+    let near = part(&mut tree, ClassKind::Part, "Near", Vec3::new(3.0, 1.0, 0.0), Vec3::new(1.0, 1.0, 1.0));
+    let far = part(&mut tree, ClassKind::Part, "Far", Vec3::new(-6.0, 1.0, 0.0), Vec3::new(1.0, 1.0, 1.0));
+    for (on, name) in [(near, "E"), (far, "H")] {
+        let p = tree.create(ClassKind::ProximityPrompt, name).unwrap();
+        tree.set_parent(p, Some(on)).unwrap();
+    }
+    script(
+        &mut tree,
+        "Keys",
+        r#"
+        workspace.Far.H.KeyboardKeyCode = Enum.KeyCode.H
+        game:GetService("ProximityPromptService").PromptTriggered:Connect(function(p) print("used " .. p.Name) end)
+        "#,
+    );
+    let mut session = start_on(tree, true).unwrap();
+    for _ in 0..30 {
+        session.step(DT, CharacterInput::default());
+    }
+    assert_eq!(session.active_prompts().len(), 2);
+    session.input_began(libroxel_script::UserInput::Key(libroxel_instance::KeyCode::H), false);
+    session.input_ended(libroxel_script::UserInput::Key(libroxel_instance::KeyCode::H), false);
+    session.step(DT, CharacterInput::default());
+    let log: Vec<String> = session.take_log().into_iter().map(|l| l.text).collect();
+    assert!(log.iter().any(|l| l == "used H"), "{log:?}");
+    assert!(!log.iter().any(|l| l == "used E"), "{log:?}");
+}

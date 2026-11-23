@@ -409,7 +409,7 @@ pub fn editor_ui(
     // The space left over is the 3D view.
     let mut gizmo_hot = false;
     let mut gui_hit: gui::GuiHit = None;
-    let mut prompt_hit: Option<(InstanceId, egui::Rect)> = None;
+    let mut prompt_hits: Vec<(InstanceId, egui::Rect)> = Vec::new();
     let mut hotbar_hit: Vec<(usize, egui::Rect)> = Vec::new();
     let gui_root = if playing {
         engine.session.as_ref().and_then(|s| s.player_gui())
@@ -503,28 +503,30 @@ pub fn editor_ui(
             if let Some(session) = engine.session.as_ref() {
                 hotbar_hit = gui::hotbar(ui, &tree_rc.borrow(), &session.hotbar());
             }
-            if let (Some(active), Ok((cam, gt, _, _))) =
-                (engine.session.as_ref().and_then(|s| s.active_prompt()), cameras.single())
-            {
+            if let (Some(session), Ok((cam, gt, _, _))) = (engine.session.as_ref(), cameras.single()) {
                 let tree = tree_rc.borrow();
-                // Just above the part, so the character doesn't hide it.
-                let at = tree
-                    .get_vec3(active.part, Property::Position)
-                    .zip(tree.get_vec3(active.part, Property::Size))
-                    .map(|(p, s)| Vec3::new(p.x, p.y + s.y / 2.0 + 1.5, p.z));
-                if let Some(at) = at
-                    && let Ok(screen) = cam.world_to_viewport(gt, at)
-                {
-                    let key = names::enum_item_name(EnumValue::KeyCode(active.key));
-                    let rect = gui::draw_prompt(
-                        ui,
-                        &tree,
-                        active.prompt,
-                        key,
-                        active.progress,
-                        egui::pos2(screen.x, screen.y),
-                    );
-                    prompt_hit = Some((active.prompt, rect));
+                for active in session.active_prompts() {
+                    // Just above the part, so the character doesn't hide it.
+                    let at = tree
+                        .get_vec3(active.part, Property::Position)
+                        .zip(tree.get_vec3(active.part, Property::Size))
+                        .map(|(p, s)| Vec3::new(p.x, p.y + s.y / 2.0 + 1.5, p.z));
+                    if let Some(at) = at
+                        && let Ok(screen) = cam.world_to_viewport(gt, at)
+                    {
+                        let key = names::enum_item_name(EnumValue::KeyCode(active.key));
+                        let above = prompt_hits.iter().filter(|(p, _)| tree.parent(*p).ok().flatten() == Some(active.part));
+                        let lift: f32 = above.map(|(_, r)| r.height() + 6.0).sum();
+                        let rect = gui::draw_prompt(
+                            ui,
+                            &tree,
+                            active.prompt,
+                            key,
+                            active.progress,
+                            egui::pos2(screen.x, screen.y - lift),
+                        );
+                        prompt_hits.push((active.prompt, rect));
+                    }
                 }
             }
             if playing && ui.input(|i| i.modifiers.shift && i.key_pressed(Key::F1)) {
@@ -665,7 +667,7 @@ pub fn editor_ui(
     if playing && over_view {
         let on_ui = boxes.input.is_some()
             || on_hotbar.is_some()
-            || prompt_hit.is_some_and(|(_, r)| pointer.is_some_and(|p| r.contains(p)));
+            || prompt_hits.iter().any(|(_, r)| pointer.is_some_and(|p| r.contains(p)));
         ctx.input(|i| {
             for (button, input) in [
                 (egui::PointerButton::Primary, libroxel_script::UserInput::MouseButton1),
@@ -724,7 +726,7 @@ pub fn editor_ui(
 
     // Click to select (the terrain tool uses clicks for itself).
     let clicked = ctx.input(|i| i.pointer.primary_clicked()) && editor.tool != Tool::Terrain;
-    let on_prompt = prompt_hit.filter(|(_, r)| pointer.is_some_and(|p| r.contains(p)));
+    let on_prompt = prompt_hits.iter().copied().find(|(_, r)| pointer.is_some_and(|p| r.contains(p)));
     if clicked
         && over_view
         && !gizmo_hot

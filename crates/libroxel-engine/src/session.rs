@@ -889,8 +889,7 @@ impl PlaySession {
             self.toggle_tool(slot);
         }
         if let (UserInput::Key(key), false, Some(index)) = (input, processed, self.local())
-            && let Some(active) = self.active_prompt()
-            && active.key == key
+            && let Some(active) = self.prompts_for(index).into_iter().find(|p| p.key == key)
         {
             self.avatars[index].hold =
                 Some(PromptHold { prompt: active.prompt, key, held: 0.0, triggered: false });
@@ -916,7 +915,7 @@ impl PlaySession {
     /// Uses a prompt straight away, as when the player clicks it.
     pub fn trigger_prompt(&mut self, prompt: InstanceId) {
         let Some(index) = self.local() else { return };
-        if self.active_prompt_for(index).is_none_or(|a| a.prompt != prompt) {
+        if !self.in_reach(index, prompt) {
             return;
         }
         self.prompt_fired(index, prompt, false);
@@ -924,11 +923,10 @@ impl PlaySession {
     }
 
     /// A player used (or, when `ended`, let go of) a prompt. On a player's
-    /// computer this goes to the server, which fires the events.
+    /// computer its own scripts hear it and the server is told.
     fn prompt_fired(&mut self, index: usize, prompt: InstanceId, ended: bool) {
         if self.runtime.net_role() == NetRole::Client {
             self.send_to_server(crate::net::ClientSays::Prompt { prompt, ended });
-            return;
         }
         let player = self.avatars[index].player;
         let errors = if ended {
@@ -941,25 +939,35 @@ impl PlaySession {
 
     /// The server's check that `player` (on another computer) may use `prompt`.
     pub(crate) fn remote_prompt(&mut self, index: usize, prompt: InstanceId, ended: bool) {
-        if ended || self.active_prompt_for(index).is_some_and(|a| a.prompt == prompt) {
+        if ended || self.in_reach(index, prompt) {
             self.prompt_fired(index, prompt, ended);
         }
     }
 
     /// The nearest enabled prompt in reach of the character, if any.
     pub fn active_prompt(&self) -> Option<ActivePrompt> {
-        self.active_prompt_for(self.local()?)
+        self.prompts_for(self.local()?).into_iter().next()
     }
 
-    fn active_prompt_for(&self, index: usize) -> Option<ActivePrompt> {
+    /// The prompts shown to the player: the nearest in reach for each key,
+    /// nearest first.
+    pub fn active_prompts(&self) -> Vec<ActivePrompt> {
+        self.local().map(|i| self.prompts_for(i)).unwrap_or_default()
+    }
+
+    fn in_reach(&self, index: usize, prompt: InstanceId) -> bool {
+        self.prompts_for(index).iter().any(|a| a.prompt == prompt)
+    }
+
+    fn prompts_for(&self, index: usize) -> Vec<ActivePrompt> {
         let avatar = &self.avatars[index];
-        let character = avatar.character?;
+        let Some(character) = avatar.character else { return Vec::new() };
         let tree = self.runtime.tree().borrow();
         if character.is_dead(&tree) {
-            return None;
+            return Vec::new();
         }
-        let from = tree.get_vec3(character.root, Property::Position)?;
-        let mut best: Option<(f32, ActivePrompt)> = None;
+        let Some(from) = tree.get_vec3(character.root, Property::Position) else { return Vec::new() };
+        let mut best: Vec<(f32, ActivePrompt)> = Vec::new();
         for prompt in tree.descendants_of_class(tree.workspace(), ClassKind::ProximityPrompt) {
             if tree.get_bool(prompt, Property::Enabled) == Some(false) {
                 continue;
@@ -968,28 +976,33 @@ impl PlaySession {
             let Some(at) = tree.get_vec3(part, Property::Position) else { continue };
             let distance = (at - from).length();
             let reach = tree.get_number(prompt, Property::MaxActivationDistance).unwrap_or(10.0) as f32;
-            if distance > reach || best.is_some_and(|(d, _)| d <= distance) {
+            if distance > reach {
                 continue;
             }
             let key = match tree.get_enum(prompt, Property::KeyboardKeyCode) {
                 Some(EnumValue::KeyCode(k)) => k,
                 _ => KeyCode::E,
             };
+            if best.iter().any(|(d, a)| a.key == key && *d <= distance) {
+                continue;
+            }
             let duration = tree.get_number(prompt, Property::HoldDuration).unwrap_or(0.0) as f32;
             let progress = match avatar.hold {
                 Some(h) if h.prompt == prompt && duration > 0.0 => (h.held / duration).min(1.0),
                 Some(h) if h.prompt == prompt => 1.0,
                 _ => 0.0,
             };
-            best = Some((distance, ActivePrompt { prompt, part, key, progress }));
+            best.retain(|(_, a)| a.key != key);
+            best.push((distance, ActivePrompt { prompt, part, key, progress }));
         }
-        best.map(|(_, a)| a)
+        best.sort_by(|a, b| a.0.total_cmp(&b.0));
+        best.into_iter().map(|(_, a)| a).collect()
     }
 
     /// Moves a held prompt on by `dt`, triggering it once the hold is long enough.
     pub(crate) fn advance_hold(&mut self, index: usize, dt: f32) {
         let Some(mut hold) = self.avatars[index].hold else { return };
-        if self.active_prompt_for(index).is_none_or(|a| a.prompt != hold.prompt) {
+        if !self.in_reach(index, hold.prompt) {
             // Walked away or the prompt was turned off.
             self.release_hold(index);
             return;
