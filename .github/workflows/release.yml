@@ -300,6 +300,8 @@ jobs:
     name: Build (Android)
     runs-on: ubuntu-latest
     continue-on-error: true
+    env:
+      PLAY: ${{ github.ref_type == 'tag' && secrets.PLAY_SERVICE_ACCOUNT != '' && secrets.ANDROID_KEYSTORE != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -355,6 +357,13 @@ jobs:
           mkdir dist
           cp "$out/apk/release/app-release.apk" "dist/libroxel-$VERSION-android.apk"
           cp "$out/bundle/release/app-release.aab" "dist/libroxel-$VERSION-android.aab"
+      - uses: r0adkll/upload-google-play@v1
+        if: env.PLAY == 'true'
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT }}
+          packageName: com.libroxel.app
+          releaseFiles: dist/*.aab
+          track: internal
       - uses: actions/upload-artifact@v4
         with:
           name: dist-android
@@ -366,6 +375,9 @@ jobs:
     name: Build (iOS)
     runs-on: macos-latest
     continue-on-error: true
+    env:
+      SIGN: ${{ secrets.IOS_CERTIFICATE != '' && secrets.IOS_PROFILE != '' }}
+      UPLOAD: ${{ github.ref_type == 'tag' && secrets.IOS_CERTIFICATE != '' && secrets.IOS_PROFILE != '' && secrets.APP_STORE_CONNECT_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -376,6 +388,22 @@ jobs:
           key: dist-ios
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
+      - name: Import certificate
+        if: env.SIGN == 'true'
+        env:
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROFILE: ${{ secrets.IOS_PROFILE }}
+        run: |
+          echo "$IOS_CERTIFICATE" | base64 --decode > cert.p12
+          security create-keychain -p ci ios.keychain
+          security default-keychain -s ios.keychain
+          security list-keychains -d user -s ios.keychain login.keychain
+          security unlock-keychain -p ci ios.keychain
+          security import cert.p12 -k ios.keychain -P "$IOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci ios.keychain
+          rm cert.p12
+          echo "$IOS_PROFILE" | base64 --decode > "$RUNNER_TEMP/app.mobileprovision"
       - name: Build
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
@@ -389,15 +417,47 @@ jobs:
           mkdir -p "$app"
           cp target/aarch64-apple-ios/dist/libroxel "$app/"
           short=$(echo "$VERSION" | grep -oE '^[0-9]+(\.[0-9]+){0,2}' || true)
-          sed -e "s/@SHORT_VERSION@/${short:-0.0.1}/" -e "s/@BUILD@/$GITHUB_RUN_NUMBER/" packaging/ios/Info.plist > "$app/Info.plist"
-          plutil -convert binary1 "$app/Info.plist"
+          plist="$RUNNER_TEMP/Info.plist"
+          sed -e "s/@SHORT_VERSION@/${short:-0.0.1}/" -e "s/@BUILD@/$GITHUB_RUN_NUMBER/" packaging/ios/Info.plist > "$plist"
+          xcrun actool packaging/ios/Assets.xcassets --compile "$app" --platform iphoneos \
+            --minimum-deployment-target 15.0 --target-device iphone --target-device ipad \
+            --app-icon AppIcon --output-partial-info-plist "$RUNNER_TEMP/icons.plist"
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleIcons" -c "Delete :CFBundleIcons~ipad" "$plist"
+          /usr/libexec/PlistBuddy -c "Merge $RUNNER_TEMP/icons.plist" "$plist"
+          sdk=$(xcrun --sdk iphoneos --show-sdk-version)
+          sdkbuild=$(xcrun --sdk iphoneos --show-sdk-build-version)
+          xcode=$(xcodebuild -version | awk 'NR==1 {split($2, v, "."); printf "%d%d%d0", v[1], v[2], v[3]}' | cut -c1-4)
+          xcodebuild=$(xcodebuild -version | awk 'NR==2 {print $3}')
+          for kv in "DTPlatformName:iphoneos" "DTPlatformVersion:$sdk" "DTPlatformBuild:$sdkbuild" "DTSDKName:iphoneos$sdk" \
+            "DTSDKBuild:$sdkbuild" "DTXcode:$xcode" "DTXcodeBuild:$xcodebuild" "DTCompiler:com.apple.compilers.llvm.clang.1_0" \
+            "BuildMachineOSBuild:$(sw_vers -buildVersion)"; do
+            /usr/libexec/PlistBuddy -c "Add :${kv%%:*} string ${kv#*:}" "$plist"
+          done
+          plutil -convert binary1 -o "$app/Info.plist" "$plist"
           printf 'APPL????' > "$app/PkgInfo"
-          icon=packaging/icons/libroxel-512.png
-          sips -z 120 120 "$icon" --out "$app/AppIcon60x60@2x.png"
-          sips -z 180 180 "$icon" --out "$app/AppIcon60x60@3x.png"
-          sips -z 152 152 "$icon" --out "$app/AppIcon76x76@2x~ipad.png"
           mkdir dist
-          zip -qry "dist/libroxel-$VERSION-ios-unsigned.ipa" Payload
+          if [[ "$SIGN" == "true" ]]; then
+            profile="$RUNNER_TEMP/app.mobileprovision"
+            security cms -D -i "$profile" > "$RUNNER_TEMP/profile.plist"
+            /usr/libexec/PlistBuddy -x -c "Print :Entitlements" "$RUNNER_TEMP/profile.plist" > "$RUNNER_TEMP/app.entitlements"
+            cp "$profile" "$app/embedded.mobileprovision"
+            codesign --force --timestamp=none --sign "Apple Distribution" \
+              --entitlements "$RUNNER_TEMP/app.entitlements" "$app"
+            zip -qry "dist/libroxel-$VERSION-ios.ipa" Payload
+          else
+            zip -qry "dist/libroxel-$VERSION-ios-unsigned.ipa" Payload
+          fi
+      - name: Upload to TestFlight
+        if: env.UPLOAD == 'true'
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          KEY: ${{ secrets.APP_STORE_CONNECT_KEY }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s\n' "$KEY" > ~/.appstoreconnect/private_keys/AuthKey_$KEY_ID.p8
+          xcrun altool --upload-app -t ios -f dist/*-ios.ipa --apiKey "$KEY_ID" --apiIssuer "$ISSUER_ID"
+          rm ~/.appstoreconnect/private_keys/AuthKey_$KEY_ID.p8
       - uses: actions/upload-artifact@v4
         with:
           name: dist-ios
