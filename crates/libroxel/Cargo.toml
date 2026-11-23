@@ -36,8 +36,15 @@ ed25519-dalek = "3"
 data-encoding = "2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-bevy_egui = { version = "0.43", default-features = false, features = ["manage_clipboard"] }
+# `accesskit` hands the menus and panels to screen readers (Narrator on
+# Windows, VoiceOver on macOS, Orca on Linux). Not on phones and tablets yet:
+# it hasn't been tried there.
+bevy_egui = { version = "0.43", default-features = false, features = ["manage_clipboard", "accesskit"] }
 rfd = { version = "0.18", default-features = false, features = ["xdg-portal", "pollster"] }
+
+# Linux screen readers listen over D-Bus (AT-SPI).
+[target.'cfg(all(target_os = "linux", not(target_os = "android")))'.dependencies]
+bevy = { workspace = true, features = ["accesskit_unix"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 bevy = { workspace = true, features = ["android-game-activity"] }

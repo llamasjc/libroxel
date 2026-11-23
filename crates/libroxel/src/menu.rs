@@ -271,6 +271,14 @@ fn card(
     selected: bool,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(196.0, 176.0), egui::Sense::click());
+    let spoken_name = if note.is_empty() { title.to_owned() } else { format!("{title}. {note}") };
+    theme::name_for_screen_readers(
+        ui,
+        &response,
+        egui::WidgetType::SelectableLabel,
+        &spoken_name,
+        Some(selected),
+    );
     let painter = ui.painter_at(rect.expand(20.0));
     let hovered = response.hovered();
     let lift = if hovered { -3.0 } else { 0.0 };
@@ -707,6 +715,13 @@ fn player_chip_width(ui: &egui::Ui, name: &str) -> f32 {
 fn player_chip(ui: &mut egui::Ui, name: &str, signed_in: bool) -> egui::Response {
     let size = egui::vec2(player_chip_width(ui, name), 36.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    theme::name_for_screen_readers(
+        ui,
+        &response,
+        egui::WidgetType::Button,
+        &format!("Playing as {name}"),
+        None,
+    );
     let painter = ui.painter();
     let tint = if response.hovered() {
         Color32::from_rgba_unmultiplied(235, 247, 255, 200)
@@ -753,6 +768,13 @@ fn swatches(ui: &mut egui::Ui, color: &mut Color3, label: &str) {
         for [r, g, b] in choices.iter().copied() {
             let (rect, response) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
             let chosen = rgb(*color) == [r, g, b];
+            theme::name_for_screen_readers(
+                ui,
+                &response,
+                egui::WidgetType::RadioButton,
+                &format!("{label} colour {}", crate::theme::colour_name([r, g, b])),
+                Some(chosen),
+            );
             let face = if chosen { rect.translate(egui::vec2(0.0, -2.0)) } else { rect };
             ui.painter().rect_filled(
                 rect.translate(egui::vec2(0.0, 2.0)),

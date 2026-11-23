@@ -332,6 +332,10 @@ The first build compiles Bevy and takes a while. After that it is quick.
     a menu with a big **Play** button against an Easy, Medium or Hard
     computer player, or **Find a game** and **Play** buttons to sit down
     with people in the server. Wins are saved with the game's data.
+- **Screen readers:** on Windows, macOS and Linux, the home screen, menus
+  and editor panels are read out by Narrator, VoiceOver or Orca, and Tab
+  moves between buttons. The 3D world itself isn't described yet, and
+  phones and tablets don't support screen readers yet.
 - **Undo/redo** with Ctrl+Z and Ctrl+Y. **Save** with Ctrl+S. Games are
   saved as `.lrx` files in `~/Projects/libroxel-games/` by default.
 - **Unsaved work is kept:** while a game has changes that aren't saved, a
