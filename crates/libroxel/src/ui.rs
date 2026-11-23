@@ -78,6 +78,7 @@ enum Action {
     ClearData,
     /// While playing: hold or put away the tool in a hotbar slot.
     ToggleTool(usize),
+    ResetCharacter,
     /// A model with a body, a head and a humanoid that scripts can walk around.
     InsertNpc,
     InsertKart,
@@ -1149,6 +1150,20 @@ fn game_menu(
                     ui.add_space(14.0);
                     if theme::block_button(ui, theme::Kind::Primary, icon::PLAY, "Resume", 40.0).clicked() {
                         editor.paused = false;
+                    }
+                    if session.is_some_and(PlaySession::can_reset) {
+                        ui.add_space(8.0);
+                        let reset = theme::block_button(
+                            ui,
+                            theme::Kind::Plain,
+                            icon::ARROW_CLOCKWISE,
+                            "Reset character",
+                            40.0,
+                        );
+                        if reset.clicked() || ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::R)) {
+                            editor.paused = false;
+                            actions.push(Action::ResetCharacter);
+                        }
                     }
                     ui.add_space(8.0);
                     if theme::block_button(ui, theme::Kind::Danger, icon::X, "Leave game", 40.0).clicked() {
@@ -3754,6 +3769,11 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
         Action::ToggleTool(slot) => {
             if let Some(session) = engine.session.as_mut() {
                 session.toggle_tool(slot);
+            }
+        }
+        Action::ResetCharacter => {
+            if let Some(session) = engine.session.as_mut() {
+                session.reset_character();
             }
         }
         Action::TriggerPrompt(id) => {

@@ -1222,8 +1222,9 @@ impl Physics {
         lap();
         let near = self.broadphase(&bodies, dt, gravity);
         let mut broadphase = lap();
-        for _ in 0..substeps {
-            self.integrate(&mut bodies, &near, h, gravity);
+        for step in 1..=substeps {
+            let slowing = if step == substeps { dt } else { 0.0 };
+            self.integrate(&mut bodies, &near, h, slowing, gravity);
         }
 
         // Then everything loose, shoved by where the characters went.
@@ -1461,7 +1462,7 @@ impl Physics {
         near
     }
 
-    fn integrate(&mut self, bodies: &mut [Body], near: &[Vec<usize>], h: f32, gravity: f32) {
+    fn integrate(&mut self, bodies: &mut [Body], near: &[Vec<usize>], h: f32, slowing: f32, gravity: f32) {
         for i in 0..bodies.len() {
             if bodies[i].anchored || bodies[i].held || bodies[i].sim {
                 continue;
@@ -1583,8 +1584,9 @@ impl Physics {
 
             if grounded {
                 self.grounded.insert(id);
-                // Ground friction for loose parts.
-                let damp = (1.0 - 8.0 * h).max(0.0);
+                // Ground friction for loose parts, once a frame so walking
+                // is as fast at a low frame rate.
+                let damp = (1.0 - 8.0 * slowing).max(0.0);
                 v.x *= damp;
                 v.z *= damp;
             }

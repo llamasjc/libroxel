@@ -377,6 +377,28 @@ impl PlaySession {
         let _ = tree.destroy(player);
     }
 
+    /// Kills the local player's character, as Roblox's Reset Character does.
+    pub fn reset_character(&mut self) {
+        if self.runtime.net_role() == NetRole::Client {
+            self.send_to_server(crate::net::ClientSays::Reset);
+            return;
+        }
+        if let Some(index) = self.local() {
+            self.reset_character_for(index);
+        }
+    }
+
+    pub(crate) fn reset_character_for(&mut self, index: usize) {
+        let Some(c) = self.avatars[index].character else { return };
+        let _ =
+            self.runtime.tree().borrow_mut().set(c.humanoid, Property::Health, PropertyValue::Number(0.0));
+    }
+
+    /// Whether scripts left Reset Character on (`SetCore("ResetButtonCallback", false)` turns it off).
+    pub fn can_reset(&self) -> bool {
+        self.character().is_some() && self.runtime.reset_allowed()
+    }
+
     /// Which avatar is `player`'s.
     pub(crate) fn avatar_of(&self, player: InstanceId) -> Option<usize> {
         self.avatars.iter().position(|a| a.player == player)
