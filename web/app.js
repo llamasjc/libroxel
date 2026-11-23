@@ -186,7 +186,7 @@ async function api(path, { method = 'GET', body, query } = {}) {
 
 const SESSION_KEY = 'libroxel.session';
 let session = loadSession();
-let lastSigned = { friends: 0, account: 0, rate: 0, message: 0 };
+let lastSigned = { friends: 0, account: 0, rate: 0, message: 0, group: 0 };
 
 function loadSession() {
   for (const store of [sessionStorage, localStorage]) {
@@ -754,7 +754,8 @@ function parseRoute() {
     case 'user': return { name: 'user', id: parts[1] };
     case 'creator': return { name: 'creator', id: parts[1] };
     case 'messages': return { name: 'messages', id: parts[1] };
-    case 'games': case 'charts': case 'profile': case 'search': case 'friends': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': return { name: parts[0] };
+    case 'games': case 'charts': case 'profile': case 'search': case 'friends': case 'groups': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': return { name: parts[0] };
+    case 'group': return { name: 'group', id: parts[1] };
     default: return { name: 'home' };
   }
 }
@@ -765,6 +766,7 @@ function tabs() {
   document.getElementById('tabs').replaceChildren(
     tab('games', ICON.games, 'Games', '/games'),
     tab('charts', ICON.chart, 'Charts', '/charts'),
+    tab('groups', ICON.shield, 'Groups', '/groups'),
     tab('avatar', ICON.shirt, 'Avatar', '/avatar'),
     tab('creator', ICON.hammer, 'Create', '/creator'),
     tab('profile', ICON.profile, 'Profile', '/profile'),
@@ -873,7 +875,7 @@ window.addEventListener('unhandledrejection', (e) => crashed(e.reason));
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, games: gamesPage, charts: chartsPage, profile, creator: creatorPage, search: searchPage, friends: friendsPage, messages: messagesPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
+  const views = { home, game, games: gamesPage, charts: chartsPage, profile, creator: creatorPage, search: searchPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
   // An account that signed in with an easy password sees nothing else until it sets a new one.
   loadFamily();
   const needsBirthday = session && familyInfo && !familyInfo.loading && !familyInfo.error && !familyInfo.has_birthday;
@@ -906,7 +908,8 @@ const DESCRIPTIONS = {
 
 function titleFor(r) {
   if (r.name === 'game') return entries().find((e) => e.key === r.key)?.title || 'Game';
-  return { home: 'Home', creator: 'Create', games: 'Games', charts: 'Charts', profile: 'Profile', search: 'Search', friends: 'Friends', messages: 'Messages', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy' }[r.name] || 'Libroxel';
+  if (r.name === 'group') return groupPages.get(r.id)?.group?.name || 'Group';
+  return { home: 'Home', creator: 'Create', games: 'Games', charts: 'Charts', profile: 'Profile', search: 'Search', friends: 'Friends', groups: 'Groups', group: 'Group', messages: 'Messages', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy' }[r.name] || 'Libroxel';
 }
 
 function whereabouts(friend) {
@@ -1054,7 +1057,10 @@ function game() {
     if (best) joinServer(best);
     else launch(appLink('play', entry.key), `Starting ${entry.title}.`);
   });
-  const by = entry.byId ? el('a', { href: `/user/${entry.byId}` }, `By ${entry.by}`) : el('div', { style: 'color:var(--link)' }, `By ${entry.by}`);
+  const group = entry.game?.group;
+  const by = group
+    ? el('a', { href: `/group/${group.group_id}` }, `By ${group.name} `, badge(group))
+    : entry.byId ? el('a', { href: `/user/${entry.byId}` }, `By ${entry.by}`) : el('div', { style: 'color:var(--link)' }, `By ${entry.by}`);
   const out = [
     back,
     el('div', { class: 'hero' },
@@ -1547,7 +1553,7 @@ function user() {
     el('div', { class: 'hello' },
       portrait(p.look, p.name, 84),
       el('div', {},
-        el('h1', {}, p.name, ' ', p.admin && el('span', { class: 'tag admin' }, 'Admin'), ' ', p.verified && el('span', { class: 'tag verified' }, 'Verified')),
+        el('h1', {}, p.name, ' ', p.badge && badge(p.badge), ' ', p.admin && el('span', { class: 'tag admin' }, 'Admin'), ' ', p.verified && el('span', { class: 'tag verified' }, 'Verified')),
         el('div', { class: 'soft' }, `#${p.number ?? 0} · `, days < 1 ? 'Joined today' : `Joined ${ago(p.joined_secs_ago)}`),
         action && el('div', { style: 'margin-top:8px' }, action))),
     p.about && el('div', { class: 'about' }, p.about),
@@ -1558,6 +1564,8 @@ function user() {
       })))
       : el('p', { class: 'soft' }, isMe ? 'Games you publish from the app show up here.' : 'No published games yet.'),
     favoritesOf(p),
+    (p.groups || []).length > 0 && el('h2', { class: 'section' }, `Groups (${p.groups.length})`),
+    (p.groups || []).length > 0 && el('div', { class: 'group-list' }, p.groups.map((g) => el('a', { class: 'chip', href: `/group/${g.group_id}` }, badge(g), ' ', g.name))),
   ];
 }
 
@@ -1575,6 +1583,166 @@ function favoritesOf(p) {
   const shown = keys.map((k) => entries().find((e) => e.key === k)).filter(Boolean);
   if (!shown.length) return null;
   return [el('h2', { class: 'section' }, `Favorites (${shown.length})`), el('div', { class: 'games' }, shown.map(gameCard))];
+}
+
+// --- Groups -----------------------------------------------------------------
+
+const badge = (g) => el('span', { class: 'tag group', title: g.name }, g.tag);
+const groupPages = new Map();
+let groupList = { text: '', results: null };
+
+async function changeGroup(action, groupId, fields, done) {
+  const time = Math.max(Date.now(), lastSigned.group + 1);
+  lastSigned.group = time;
+  const c = { player_id: session.playerId, action, group_id: groupId, name: '', tag: '', about: '', other_id: '', role: null, text: '', time, ...fields };
+  c.signature = signText(secretKey(), `libroxel group\n${c.player_id}\n${c.action}\n${c.group_id}\n${c.name}\n${c.tag}\n${c.about}\n${c.other_id}\n${c.role || ''}\n${c.text}\n${c.time}`);
+  let answer = null;
+  try {
+    answer = await api('/groups', { method: 'POST', body: c });
+    if (done) flash = { text: done };
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  groupPages.delete(groupId);
+  groupList.results = null;
+  if (session) data.me = await api(`/accounts/${session.playerId}`).catch(() => data.me);
+  render();
+  return answer;
+}
+
+function groupRow(g) {
+  return el('div', { class: 'person' },
+    el('div', { class: 'what' },
+      el('a', { href: `/group/${g.group_id}` }, el('b', {}, g.name), ' ', badge(g)),
+      el('small', { class: 'soft' }, `${count(g.members)} ${g.members === 1 ? 'member' : 'members'} · owned by ${g.owner}`)));
+}
+
+function groupsPage() {
+  if (!groupList.results) {
+    const text = groupList.text;
+    groupList.results = [];
+    api('/groups', { query: { q: text } })
+      .then((r) => { if (groupList.text === text) groupList.results = r; })
+      .catch((e) => { flash = { text: e.message, kind: 'error' }; })
+      .finally(() => route.name === 'groups' && render());
+  }
+  const box = el('input', { type: 'search', placeholder: 'A group name or tag', value: groupList.text });
+  const find = () => { groupList = { text: box.value.trim(), results: null }; render(); };
+  box.addEventListener('keydown', (e) => e.key === 'Enter' && find());
+  const left = [
+    el('div', { class: 'search' }, box, el('button', { class: 'chip', onclick: find }, icon(ICON.search), 'Find')),
+    groupList.results.length ? groupList.results.map(groupRow) : el('p', { class: 'soft' }, groupList.text ? `No groups called “${groupList.text}”.` : 'No groups yet.'),
+  ];
+  const right = [el('h2', { class: 'subhead' }, 'Make a group')];
+  if (!session) right.push(el('p', { class: 'soft' }, el('a', { href: '/sign-in' }, 'Sign in'), ' to make or join a group.'));
+  else {
+    const name = el('input', { placeholder: 'Name', maxlength: 30 });
+    const tag = el('input', { placeholder: 'Tag', maxlength: 5, style: 'text-transform:uppercase' });
+    const about = el('textarea', { placeholder: 'About', maxlength: 1000, rows: 3 });
+    const make = async () => {
+      const made = await changeGroup('create', '', { name: name.value.trim(), tag: tag.value.trim().toUpperCase(), about: about.value.trim() }, `Made ${name.value.trim()}.`);
+      if (made?.group_id) goTo(`/group/${made.group_id}`);
+    };
+    right.push(el('div', { class: 'form' }, name, tag, about, el('div', { class: 'form-actions' }, el('button', { class: 'btn go', onclick: make }, icon(ICON.check), 'Make'))));
+  }
+  return [el('h1', { class: 'title' }, 'Groups'), el('div', { class: 'columns' }, el('div', {}, left), el('div', {}, right))];
+}
+
+const ROLE_NAMES = { owner: 'Owner', admin: 'Admin', member: 'Member' };
+
+function groupPage() {
+  const id = route.id;
+  const back = el('a', { class: 'back', href: '/groups' }, icon(ICON.left), 'Groups');
+  const known = groupPages.get(id);
+  if (!known) {
+    api(`/groups/${encodeURIComponent(id)}`)
+      .then((g) => groupPages.set(id, g))
+      .catch(() => groupPages.set(id, { missing: true }))
+      .finally(() => route.name === 'group' && route.id === id && render());
+    return [back, el('p', { class: 'soft' }, 'Loading…')];
+  }
+  if (known.missing) return [back, el('div', { class: 'empty' }, "That group isn't here (any more).")];
+  const { group, members, posts, games } = known;
+  const me = session && members.find((m) => m.player_id === session.playerId);
+  const role = me?.role;
+  const admin = role === 'owner' || role === 'admin';
+  const shown = data.me?.badge?.group_id === id;
+  const actions = [];
+  if (session && !me) actions.push(el('button', { class: 'btn go small', onclick: () => changeGroup('join', id, {}, `You joined ${group.name}.`) }, icon(ICON.userPlus), 'Join'));
+  if (me) {
+    actions.push(el('button', { class: 'chip', onclick: () => changeGroup('show', shown ? '' : id, {}, shown ? 'Your badge is hidden.' : `Your badge is ${group.tag} now.`) }, shown ? 'Hide badge' : 'Show badge'));
+    actions.push(el('button', {
+      class: 'chip', onclick: (e) => {
+        const b = e.currentTarget;
+        if (b.dataset.sure) changeGroup('leave', id, {}, `You left ${group.name}.`);
+        else { b.dataset.sure = '1'; b.textContent = 'Leave?'; }
+      },
+    }, 'Leave'));
+  }
+  const out = [
+    back,
+    el('div', { class: 'hello' },
+      el('div', {},
+        el('h1', {}, group.name, ' ', badge(group)),
+        el('div', { class: 'soft' }, `${count(group.members)} ${group.members === 1 ? 'member' : 'members'} · owned by `, el('a', { href: `/user/${group.owner_id}` }, group.owner)),
+        actions.length > 0 && el('div', { class: 'buttons', style: 'margin-top:8px' }, actions))),
+    group.about && el('div', { class: 'about' }, group.about),
+  ];
+  if (role === 'owner') {
+    const name = el('input', { value: group.name, maxlength: 30 });
+    const tag = el('input', { value: group.tag, maxlength: 5 });
+    const about = el('textarea', { rows: 3, maxlength: 1000 }, group.about);
+    out.push(el('details', {}, el('summary', {}, 'Edit'), el('div', { class: 'form' }, name, tag, about,
+      el('div', { class: 'form-actions' }, el('button', { class: 'btn go small', onclick: () => changeGroup('edit', id, { name: name.value.trim(), tag: tag.value.trim().toUpperCase(), about: about.value.trim() }, 'Saved.') }, icon(ICON.check), 'Save')))));
+  }
+
+  const wall = [el('h2', { class: 'subhead' }, 'Wall')];
+  if (me) {
+    const box = el('textarea', { placeholder: 'Say something', maxlength: 300, rows: 2 });
+    wall.push(el('div', { class: 'form' }, box, el('div', { class: 'form-actions' }, el('button', { class: 'btn go small', onclick: () => box.value.trim() && changeGroup('post', id, { text: box.value.trim() }) }, 'Post'))));
+  }
+  if (!posts.length) wall.push(el('p', { class: 'soft' }, 'Nothing here yet.'));
+  for (const post of posts) {
+    const mine = session?.playerId === post.player_id;
+    wall.push(el('div', { class: 'post' },
+      el('div', {}, el('a', { href: `/user/${post.player_id}` }, el('b', {}, post.name)), el('span', { class: 'soft' }, ` · ${ago(post.secs_ago)}`),
+        (mine || admin) && el('button', { class: 'link', title: 'Remove', onclick: () => changeGroup('unpost', id, { other_id: String(post.post_id) }) }, icon(ICON.x))),
+      el('div', {}, post.text)));
+  }
+
+  const side = [el('h2', { class: 'subhead' }, `Members (${members.length})`)];
+  for (const m of members) {
+    const controls = [];
+    if (role === 'owner' && m.role !== 'owner') {
+      const pick = el('select', {}, ['member', 'admin', 'owner'].map((r) => el('option', { value: r, selected: r === m.role }, ROLE_NAMES[r])));
+      pick.addEventListener('change', () => changeGroup('role', id, { other_id: m.player_id, role: pick.value }, `${m.name} is ${ROLE_NAMES[pick.value].toLowerCase()} now.`));
+      controls.push(pick);
+    }
+    const rank = { owner: 2, admin: 1, member: 0 };
+    if (admin && rank[m.role] < rank[role]) controls.push(el('button', { class: 'chip iconbtn', title: `Remove ${m.name}`, onclick: () => changeGroup('kick', id, { other_id: m.player_id }, `Removed ${m.name}.`) }, icon(ICON.userMinus)));
+    side.push(el('div', { class: 'person' },
+      portrait(null, m.name, 36),
+      el('div', { class: 'what' }, el('a', { href: `/user/${m.number ?? m.player_id}` }, el('b', {}, m.name)),
+        el('small', { class: 'soft' }, m.role === 'owner' ? [icon(ICON.crown), ' Owner'] : m.role === 'admin' ? [icon(ICON.shield), ' Admin'] : 'Member')),
+      el('div', { class: 'buttons' }, controls)));
+  }
+
+  const gameList = [el('h2', { class: 'section' }, `Games (${games.length})`)];
+  gameList.push(games.length
+    ? el('div', { class: 'games' }, games.map((g) => gameCard(entries().find((e) => e.key === g.game_id) || { key: g.game_id, title: g.title, by: group.name, servers: [], playing: 0, symbol: ICON.globe })))
+    : el('p', { class: 'soft' }, 'No games yet.'));
+  if (admin) {
+    const theirs = (data.me?.games || []).filter((g) => !games.some((x) => x.game_id === g.game_id));
+    if (theirs.length) {
+      const pick = el('select', {}, theirs.map((g) => el('option', { value: g.game_id }, g.title)));
+      gameList.push(el('div', { class: 'search' }, pick, el('button', { class: 'chip', onclick: () => changeGroup('add_game', id, { other_id: pick.value }, 'Added.') }, 'Add game')));
+    }
+    if (games.length) {
+      const pick = el('select', {}, games.map((g) => el('option', { value: g.game_id }, g.title)));
+      gameList.push(el('div', { class: 'search' }, pick, el('button', { class: 'chip', onclick: () => changeGroup('remove_game', id, { other_id: pick.value }, 'Removed.') }, 'Remove game')));
+    }
+  }
+  return [...out, ...gameList, el('div', { class: 'columns' }, el('div', {}, wall), el('div', {}, side))];
 }
 
 // --- Avatar -----------------------------------------------------------------

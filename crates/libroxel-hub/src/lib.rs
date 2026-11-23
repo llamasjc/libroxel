@@ -67,6 +67,11 @@ pub use family::{
 mod filter;
 mod fleet;
 pub use fleet::{FleetOptions, PlayAnswer, PlayRequest, play_message};
+mod groups;
+pub use groups::{
+    GroupAction, GroupBadge, GroupChange, GroupChanged, GroupInfo, GroupMember, GroupPage, GroupPost,
+    GroupRole, group_message, valid_group_name, valid_group_tag,
+};
 mod limits;
 mod messages;
 pub use cli::{HUB_HELP, cli};
@@ -477,6 +482,10 @@ pub struct Profile {
     /// Whether they have a verified badge (whoever runs the Hub gives them out).
     #[serde(default)]
     pub verified: bool,
+    #[serde(default)]
+    pub groups: Vec<GroupBadge>,
+    #[serde(default)]
+    pub badge: Option<GroupBadge>,
 }
 
 /// A player found by name.
@@ -547,6 +556,8 @@ pub struct GameInfo {
     pub dislikes: u32,
     #[serde(default)]
     pub favorites: u32,
+    #[serde(default)]
+    pub group: Option<GroupBadge>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -701,6 +712,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     number_accounts(&db).map_err(|e| format!("could not number the Hub's accounts: {e}"))?;
     social::create_tables(&db)?;
     messages::create_tables(&db)?;
+    groups::create_tables(&db)?;
     password::create_tables(&db)?;
     owner::create_tables(&db)?;
     security::create_tables(&db)?;
@@ -793,6 +805,8 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/reports", post(report))
         .route("/charts", get(charts::get_charts))
         .route("/for-you/{id}", get(charts::for_you))
+        .route("/groups", get(groups::list_groups).post(groups::change_group))
+        .route("/groups/{id}", get(groups::group_page))
         .route("/friends", post(social::change_friend))
         .route("/friends/{id}", get(social::list_friends))
         .route("/presence", post(social::update_presence))
@@ -857,9 +871,11 @@ const GAME_COLUMNS: &str = concat!(
     "CAST(strftime('%s', 'now') AS INTEGER) - 45),
     (SELECT COUNT(*) FROM game_votes v WHERE v.game_id = g.game_id AND v.vote = 1),
     (SELECT COUNT(*) FROM game_votes v WHERE v.game_id = g.game_id AND v.vote = -1),
-    (SELECT COUNT(*) FROM game_favorites f WHERE f.game_id = g.game_id)"
+    (SELECT COUNT(*) FROM game_favorites f WHERE f.game_id = g.game_id),
+    gr.group_id, gr.name, gr.tag"
 );
-const GAMES: &str = "games g LEFT JOIN accounts a ON a.player_id = g.author_id";
+const GAMES: &str = "games g LEFT JOIN accounts a ON a.player_id = g.author_id
+    LEFT JOIN group_games gg ON gg.game_id = g.game_id LEFT JOIN groups gr ON gr.group_id = gg.group_id";
 
 /// SQL that holds for a `kind` of thing whose id is `column` when enough
 /// players reported it and whoever runs the Hub hasn't cleared it.
@@ -886,6 +902,10 @@ fn game_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<GameInfo> {
         likes: r.get::<_, i64>(11)? as u32,
         dislikes: r.get::<_, i64>(12)? as u32,
         favorites: r.get::<_, i64>(13)? as u32,
+        group: match r.get::<_, Option<String>>(14)? {
+            Some(group_id) => Some(GroupBadge { group_id, name: r.get(15)?, tag: r.get(16)? }),
+            None => None,
+        },
     })
 }
 
@@ -1260,8 +1280,8 @@ async fn report(
         return Err(too_many("reports"));
     }
     let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
-    if !["game", "item", "comment", "message"].contains(&report.kind.as_str()) {
-        return bad("only games, items, comments and messages can be reported");
+    if !["game", "item", "comment", "message", "group"].contains(&report.kind.as_str()) {
+        return bad("only games, items, comments, messages and groups can be reported");
     }
     if report.reason.trim().is_empty() || report.reason.chars().count() > 300 {
         return bad("a report needs a short reason");
@@ -1279,6 +1299,7 @@ async fn report(
         "game" => "games WHERE game_id = ?1",
         "item" => "items WHERE item_id = ?1",
         "comment" => "game_comments WHERE comment_id = ?1",
+        "group" => "groups WHERE group_id = ?1",
         _ => "messages WHERE message_id = ?1 AND to_id = ?2",
     };
     let exists: Option<i64> = db
@@ -1311,6 +1332,7 @@ pub fn reports(db: &Connection) -> Vec<Reported> {
                  CASE r.kind WHEN 'game' THEN (SELECT title FROM games WHERE game_id = r.target)
                              WHEN 'item' THEN (SELECT name FROM items WHERE item_id = r.target)
                              WHEN 'comment' THEN (SELECT text FROM game_comments WHERE comment_id = r.target)
+                             WHEN 'group' THEN (SELECT name FROM groups WHERE group_id = r.target)
                              ELSE (SELECT a.name || ': ' || m.text FROM messages m
                                    LEFT JOIN accounts a ON a.player_id = m.from_id WHERE m.message_id = r.target) END
              FROM reports r GROUP BY r.kind, r.target ORDER BY COUNT(*) DESC",
@@ -1349,9 +1371,12 @@ pub fn take_down(db: &Connection, kind: &str, target: &str) -> Result<(), String
         "item" => "DELETE FROM items WHERE item_id = ?1",
         "comment" => "DELETE FROM game_comments WHERE comment_id = ?1",
         "message" => "DELETE FROM messages WHERE message_id = ?1",
+        "group" => "",
         _ => return Err(format!("there are no {kind}s on a Hub")),
     };
-    let gone = db.execute(sql, params![target]).map_err(|e| e.to_string())?;
+    let gone =
+        if sql.is_empty() { groups::delete_group(db, target) } else { db.execute(sql, params![target]) }
+            .map_err(|e| e.to_string())?;
     if gone == 0 {
         return Err(format!("there is no {kind} {target}"));
     }
@@ -1416,6 +1441,7 @@ async fn profile(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<J
     let verified = db
         .query_row(&format!("SELECT {}", security::verified_sql("?1")), params![player_id], |r| r.get(0))
         .unwrap_or(false);
+    let (groups, badge) = groups::badges(&db, &player_id);
     Ok(Json(Profile {
         player_id,
         number: number as u64,
@@ -1426,6 +1452,8 @@ async fn profile(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<J
         admin,
         verified,
         games,
+        groups,
+        badge,
     }))
 }
 
@@ -2250,6 +2278,40 @@ impl HubClient {
             .call()
             .and_then(|mut r| r.body_mut().read_json())
             .map_err(|e| format!("could not reach the Hub: {e}"))
+    }
+
+    pub fn groups(&self, search: &str) -> Result<Vec<GroupInfo>, String> {
+        self.agent
+            .get(format!("{}/groups", self.base))
+            .query("q", search)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not reach the Hub: {e}"))
+    }
+
+    pub fn group(&self, group_id: &str) -> Result<GroupPage, String> {
+        self.agent
+            .get(format!("{}/groups/{group_id}", self.base))
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not get that group: {e}"))
+    }
+
+    pub fn change_group(&self, change: &GroupChange) -> Result<GroupChanged, String> {
+        self.agent
+            .post(format!("{}/groups", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(change)
+            .map_err(|e| format!("could not reach the Hub: {e}"))
+            .and_then(|mut r| {
+                if r.status().is_success() {
+                    r.body_mut().read_json().map_err(|e| e.to_string())
+                } else {
+                    Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+                }
+            })
     }
 
     /// Sends, accepts, declines or ends a friendship.

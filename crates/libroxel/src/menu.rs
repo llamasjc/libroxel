@@ -66,6 +66,7 @@ pub enum Tab {
     Games,
     Search,
     Friends,
+    Groups,
     Create,
     Avatar,
     Messages,
@@ -92,6 +93,7 @@ pub struct Menu {
     picker: crate::file_picker::Picker,
     /// What the Home and Friends tabs remember.
     pub home: crate::hub_home::HomeState,
+    pub groups: crate::groups::Groups,
 }
 
 impl Default for Menu {
@@ -108,6 +110,7 @@ impl Default for Menu {
             look: None,
             picker: crate::file_picker::Picker::default(),
             home: crate::hub_home::HomeState::default(),
+            groups: crate::groups::Groups::default(),
         }
     }
 }
@@ -391,6 +394,16 @@ impl Menu {
                     Tab::Friends => {
                         crate::hub_home::friends_tab(&mut self.home, ui, platform, &name, &mut self.tab)
                     }
+                    Tab::Groups => {
+                        crate::groups::groups_tab(
+                            &mut self.groups,
+                            &mut self.home,
+                            ui,
+                            platform,
+                            &mut self.tab,
+                        );
+                        None
+                    }
                     Tab::Create => self.create_tab(ui),
                     Tab::Messages => {
                         crate::messages::messages_tab(ui, platform);
@@ -664,9 +677,10 @@ impl Menu {
 }
 
 /// The tabs along the top bar, after the mark (which is Home).
-const TOP_TABS: [(Tab, &str, &str); 5] = [
+const TOP_TABS: [(Tab, &str, &str); 6] = [
     (Tab::Games, theme::icon::GAME_CONTROLLER, "Games"),
     (Tab::Charts, theme::icon::CHART_BAR, "Charts"),
+    (Tab::Groups, theme::icon::SHIELD, "Groups"),
     (Tab::Avatar, theme::icon::T_SHIRT, "Avatar"),
     (Tab::Create, theme::icon::HAMMER, "Create"),
     (Tab::Profile, theme::icon::USER_CIRCLE, "Profile"),
