@@ -55,7 +55,7 @@ impl FamilyUi {
             match result {
                 Ok(family) => {
                     if family.consent && self.family.as_ref().is_some_and(|f| !f.consent) {
-                        self.status = Some(Ok("Approved. Chat is on with the strict filter.".into()));
+                        self.status = Some(Ok("Approved.".into()));
                     }
                     self.family = Some(family);
                 }
@@ -99,13 +99,14 @@ impl FamilyUi {
             .and_then(|b| libroxel_hub::parse_date(&b))
             .is_some_and(|b| libroxel_hub::age_on(b, today()) < i64::from(libroxel_hub::CONSENT_AGE))
     }
+
     pub fn ready(&self) -> Option<(String, Option<String>)> {
         let born = self.born()?;
         let email = self.parent_email.trim().to_owned();
-        if self.under_13() {
-            libroxel_hub::valid_email(&email).then_some((born, Some(email)))
-        } else {
+        if !self.under_13() || email.is_empty() {
             Some((born, None))
+        } else {
+            libroxel_hub::valid_email(&email).then_some((born, Some(email)))
         }
     }
 
@@ -138,7 +139,7 @@ impl FamilyUi {
             ui.add(
                 egui::TextEdit::singleline(&mut self.parent_email)
                     .char_limit(254)
-                    .hint_text("parent@example.com"),
+                    .hint_text("parent@example.com (optional)"),
             );
             ui.end_row();
         }
@@ -148,6 +149,7 @@ impl FamilyUi {
         let Some((born, parent_email)) = self.ready() else { return };
         self.run(move || set_birthday(&client, born, parent_email));
     }
+
     pub fn birthday_page(&mut self, ui: &mut egui::Ui, client: HubClient) {
         crate::theme::heading(ui, "When's your birthday?");
         ui.add_space(8.0);
@@ -205,11 +207,8 @@ impl FamilyUi {
     }
 
     fn consent_ui(&mut self, ui: &mut egui::Ui, client: HubClient, family: &Family) {
-        let to = family.parent_email.as_deref().unwrap_or("a parent");
-        ui.colored_label(
-            crate::theme::AMBER,
-            format!("Chat is off until a parent approves. We mailed a code to {to}."),
-        );
+        let to = family.parent_email.as_deref().unwrap_or("parent@example.com");
+        ui.colored_label(crate::theme::AMBER, "Friend requests are off until a parent approves.");
         egui::Grid::new("consent").num_columns(2).show(ui, |ui| {
             ui.label("Code from the mail");
             ui.add(egui::TextEdit::singleline(&mut self.code).char_limit(6).desired_width(70.0));

@@ -23,6 +23,7 @@ pub enum Chat {
     #[default]
     Standard,
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Messages {
@@ -31,6 +32,7 @@ pub enum Messages {
     Friends,
     Off,
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FamilySettings {
     pub chat: Chat,
@@ -57,10 +59,11 @@ impl FamilySettings {
         Self { chat: Chat::Strict, messages: Messages::Friends, ..Self::standard() }
     }
 
-    fn off() -> Self {
-        Self { chat: Chat::Off, messages: Messages::Off, ..Self::child() }
+    fn unapproved() -> Self {
+        Self { friend_requests: false, ..Self::child() }
     }
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Birthday {
     pub player_id: String,
@@ -84,6 +87,7 @@ pub fn birthday_message(b: &Birthday) -> Vec<u8> {
     )
     .into_bytes()
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ParentEmail {
     pub player_id: String,
@@ -95,6 +99,7 @@ pub struct ParentEmail {
 pub fn parent_email_message(player_id: &str, parent_email: &str, time: i64) -> Vec<u8> {
     format!("libroxel parent email\n{player_id}\n{}\n{time}", tidy(parent_email)).into_bytes()
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Consent {
     pub player_id: String,
@@ -107,6 +112,7 @@ pub struct Consent {
 pub fn consent_message(c: &Consent) -> Vec<u8> {
     format!("libroxel consent\n{}\n{}\n{}\n{}", c.player_id, c.code.trim(), c.pin, c.time).into_bytes()
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FamilyChange {
     pub player_id: String,
@@ -129,6 +135,7 @@ pub fn family_message(c: &FamilyChange) -> Vec<u8> {
     )
     .into_bytes()
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Family {
     pub has_birthday: bool,
@@ -140,6 +147,7 @@ pub struct Family {
     pub played_mins: u32,
     pub sends_mail: bool,
 }
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct ChatRule {
     pub chat: Chat,
@@ -180,6 +188,7 @@ fn internal(e: rusqlite::Error) -> Failure {
 fn bad(why: &str) -> Failure {
     (StatusCode::BAD_REQUEST, why.to_owned())
 }
+
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
@@ -201,6 +210,7 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
+
 pub fn parse_date(text: &str) -> Option<(i64, i64, i64)> {
     let mut parts = text.trim().split('-');
     let y: i64 = parts.next()?.parse().ok()?;
@@ -211,6 +221,7 @@ pub fn parse_date(text: &str) -> Option<(i64, i64, i64)> {
     }
     (civil_from_days(days_from_civil(y, m, d)) == (y, m, d)).then_some((y, m, d))
 }
+
 pub fn age_on(born: (i64, i64, i64), today: i64) -> i64 {
     let (y, m, d) = civil_from_days(today);
     let mut age = y - born.0;
@@ -271,7 +282,7 @@ fn row(db: &Connection, player_id: &str) -> Result<Option<Row>, Failure> {
                 pin: r.get(7)?,
                 tries: r.get(8)?,
                 locked_until: r.get(9)?,
-                settings: serde_json::from_str(&settings).unwrap_or_else(|_| FamilySettings::off()),
+                settings: serde_json::from_str(&settings).unwrap_or_else(|_| FamilySettings::unapproved()),
             })
         },
     )
@@ -283,12 +294,16 @@ impl Row {
     fn under_13(&self) -> bool {
         parse_date(&self.born).is_none_or(|b| age_on(b, today(self.utc_offset)) < i64::from(CONSENT_AGE))
     }
+
     fn applied(&self) -> FamilySettings {
         if !self.under_13() {
             return self.settings;
         }
         if !self.consent {
-            return FamilySettings { playtime_mins: self.settings.playtime_mins, ..FamilySettings::off() };
+            return FamilySettings {
+                playtime_mins: self.settings.playtime_mins,
+                ..FamilySettings::unapproved()
+            };
         }
         let mut s = self.settings;
         if s.chat == Chat::Standard {
@@ -297,12 +312,14 @@ impl Row {
         s
     }
 }
+
 pub fn settings_of(db: &Connection, player_id: &str) -> FamilySettings {
     match row(db, player_id).ok().flatten() {
         Some(row) => row.applied(),
         None => FamilySettings { chat: Chat::Strict, ..FamilySettings::standard() },
     }
 }
+
 pub fn chat_level(db: &Connection, player_id: &str) -> Chat {
     settings_of(db, player_id).chat
 }
@@ -318,6 +335,7 @@ fn are_friends(db: &Connection, a: &str, b: &str) -> bool {
     .flatten()
     .is_some()
 }
+
 pub fn may_message(db: &Connection, from_id: &str, to_id: &str) -> bool {
     let (from, to) = (settings_of(db, from_id), settings_of(db, to_id));
     if from.chat == Chat::Off || to.chat == Chat::Off {
@@ -330,9 +348,11 @@ pub fn may_message(db: &Connection, from_id: &str, to_id: &str) -> bool {
     };
     allows(to, from_id, to_id) && allows(from, to_id, from_id)
 }
+
 pub fn may_friend(db: &Connection, player_id: &str) -> bool {
     settings_of(db, player_id).friend_requests
 }
+
 pub fn may_spend(db: &Connection, player_id: &str, spent: u32, amount: u32) -> bool {
     settings_of(db, player_id).spend_limit.is_none_or(|most| spent.saturating_add(amount) <= most)
 }
@@ -378,18 +398,41 @@ pub(crate) fn count_play(db: &Connection, player_id: &str) {
         params![player_id, day, secs],
     );
 }
+
 pub fn playtime_up(db: &Connection, player_id: &str) -> Option<String> {
     let most = settings_of(db, player_id).playtime_mins?;
     let played = played_secs(db, player_id, today(offset_of(db, player_id)));
     (played >= i64::from(most) * 60).then(|| format!("you've played your {most} minutes for today"))
 }
+
 pub fn strict_filter(text: &str) -> String {
+    const SPOKEN: &[&str] =
+        &["zero", "oh", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
     let words: Vec<&str> = text.split_inclusive(char::is_whitespace).collect();
+    let spoken: Vec<bool> = words
+        .iter()
+        .map(|w| {
+            SPOKEN.contains(
+                &w.trim().trim_matches(|c: char| !c.is_alphanumeric()).to_ascii_lowercase().as_str(),
+            )
+        })
+        .collect();
+    let in_run = |i: usize| {
+        let (mut a, mut b) = (i, i);
+        while a > 0 && spoken[a - 1] {
+            a -= 1;
+        }
+        while b + 1 < spoken.len() && spoken[b + 1] {
+            b += 1;
+        }
+        spoken[i] && b - a >= 2
+    };
     let mut out = String::with_capacity(text.len());
-    for word in words {
+    for (i, word) in words.into_iter().enumerate() {
         let core = word.trim_end();
         let lower = core.to_ascii_lowercase();
-        let linky = lower.contains("://")
+        let linky = in_run(i)
+            || lower.contains("://")
             || lower.starts_with("www.")
             || (core.contains('@') && core.len() > 1)
             || [".com", ".net", ".org", ".gg", ".io", ".co", ".me", ".tv", ".ly"].iter().any(|end| {
@@ -439,22 +482,24 @@ fn account_name(db: &Connection, player_id: &str) -> Result<Option<String>, Fail
         .optional()
         .map_err(internal)
 }
+
 type Letter = (String, String, String);
 
 async fn post(mail: Arc<Mail>, letter: Option<Letter>) -> Result<(), Failure> {
     let Some((to, code, name)) = letter else { return Ok(()) };
     let subject = format!("{code} is the code to approve {name} on Libroxel");
     let body = format!(
-        "Hello!\n\n{name} made a Libroxel account and is under 13, so chat stays off until a parent approves.\n\n\
+        "Hello!\n\n{name} made a Libroxel account and is under 13. They can chat with a strict filter, but friend requests stay off until a parent approves.\n\n\
          To approve, open Libroxel on their device, go to Avatar > Parent settings, and type this code with a \
          4-digit PIN of your own:\n\n{code}\n\nThe PIN lets you change chat, messages, friend requests, spending \
-         and playtime later. The code works for 7 days.\n\nIf you don't approve, do nothing: chat stays off.\n"
+         and playtime later. The code works for 7 days.\n\nIf you don't approve, do nothing.\n"
     );
     tokio::task::spawn_blocking(move || mail.send_letter(&to, &code, &subject, &body))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("could not send the mail: {e}")))
 }
+
 fn new_parent_code(
     db: &Connection,
     mail: &Mail,
@@ -498,9 +543,6 @@ pub(crate) async fn set_birthday(
     }
     let under_13 = age < i64::from(CONSENT_AGE);
     let parent = b.parent_email.as_deref().map(tidy).filter(|e| !e.is_empty());
-    if under_13 && mail.sends() && parent.is_none() {
-        return Err(bad("under 13 needs a parent's email"));
-    }
     if parent.as_deref().is_some_and(|e| !valid_email(e)) {
         return Err(bad("that parent email doesn't look right"));
     }
@@ -571,6 +613,7 @@ pub(crate) async fn ask_parent(
     post(mail, letter).await?;
     Ok(StatusCode::NO_CONTENT)
 }
+
 fn check_try(db: &Connection, player_id: &str, row: &Row, right: bool) -> Result<(), Failure> {
     let now = now();
     if row.locked_until.is_some_and(|until| until > now) {
@@ -728,5 +771,7 @@ mod tests {
         assert_eq!(strict_filter("go to discord.gg/abc"), "go to ##############");
         assert_eq!(strict_filter("I scored 12 points"), "I scored 12 points");
         assert_eq!(strict_filter("hi @ana"), "hi ####");
+        assert_eq!(strict_filter("five five five two"), "#### #### #### ###");
+        assert_eq!(strict_filter("I have one or two"), "I have one or two");
     }
 }
