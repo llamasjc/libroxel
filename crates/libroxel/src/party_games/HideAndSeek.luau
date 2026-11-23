@@ -101,6 +101,25 @@ local function playRound()
 	Arena.tell("Seeker is out")
 
 	local roamTo = {} -- where each seeking bot is heading, by model
+	local roamSince = {} -- when it set off there
+	local unsearched = {} -- the hiding spots each seeking bot hasn't looked in yet
+	-- The nearest spot this seeker hasn't searched; once it has looked
+	-- everywhere it starts again, so it never keeps checking the same few.
+	local function nextSpot(c)
+		local left = unsearched[c.model]
+		if not left or #left == 0 then
+			left = table.clone(hidingSpots)
+			unsearched[c.model] = left
+		end
+		local best, bestDistance = 1, math.huge
+		for i, spot in left do
+			local d = (spot - c.root.Position).Magnitude
+			if d < bestDistance then
+				best, bestDistance = i, d
+			end
+		end
+		return table.remove(left, best)
+	end
 	local nextThink = 0
 	local function left()
 		local count = 0
@@ -145,9 +164,11 @@ local function playRound()
 							Arena.walk(c, target.root.Position)
 						else
 							local goal = roamTo[c.model]
-							if not goal or (c.root.Position - goal).Magnitude < 4 or math.random() < 0.03 then
-								goal = hidingSpots[math.random(#hidingSpots)]
+							-- Searched it, or stuck on the way for long enough: on to the next.
+							if not goal or (c.root.Position - goal).Magnitude < 4 or time() - roamSince[c.model] > 15 then
+								goal = nextSpot(c)
 								roamTo[c.model] = goal
+								roamSince[c.model] = time()
 							end
 							Arena.go(c, goal)
 						end
