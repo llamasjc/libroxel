@@ -484,6 +484,7 @@ pub(crate) async fn change_group(
         }
         GroupAction::Post => {
             need(GroupRole::Member)?;
+            crate::moderate::not_muted(&db, me)?;
             let text = c.text.trim();
             if text.is_empty() {
                 return Err(bad("write something first"));

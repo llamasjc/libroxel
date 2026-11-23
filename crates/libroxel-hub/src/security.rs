@@ -226,6 +226,10 @@ pub struct Security {
     pub sends_mail: bool,
     /// The latest sign-ins on other computers, newest first.
     pub sign_ins: Vec<SignInRecord>,
+    #[serde(default)]
+    pub warnings: Vec<crate::Warning>,
+    #[serde(default)]
+    pub muted_secs: Option<i64>,
 }
 
 /// Remembers a sign-in on another computer.
@@ -286,6 +290,8 @@ pub(crate) async fn security(
         email: email.map(|e| e.0),
         sends_mail: mail.sends(),
         sign_ins,
+        warnings: crate::moderate::unseen_warnings(&db, &id),
+        muted_secs: crate::moderate::muted_for(&db, &id),
     }))
 }
 

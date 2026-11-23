@@ -153,12 +153,16 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
             Ok(())
         }
         ["clear", kind, id] => {
-            crate::clear_reports(&crate::open_db(Some(&data))?, kind, id)?;
+            let db = crate::open_db(Some(&data))?;
+            crate::clear_reports(&db, kind, id)?;
+            crate::moderate::log(&db, "", crate::ModAction::Dismiss, kind, id, "", "", "", None, 0);
             println!("{kind} {id} is listed again.");
             Ok(())
         }
         ["remove", kind, id] => {
-            crate::take_down(&crate::open_db(Some(&data))?, kind, id)?;
+            let db = crate::open_db(Some(&data))?;
+            crate::take_down(&db, kind, id)?;
+            crate::moderate::log(&db, "", crate::ModAction::Remove, kind, id, "", "", "", None, 0);
             println!("{kind} {id} is gone.");
             Ok(())
         }
@@ -205,7 +209,9 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
         }
         ["ban", who, reason @ ..] => {
             let reason = if reason.is_empty() { "no reason given".to_owned() } else { reason.join(" ") };
-            crate::ban(&crate::open_db(Some(&data))?, who, &reason)?;
+            let db = crate::open_db(Some(&data))?;
+            let id = crate::ban(&db, who, &reason)?;
+            crate::moderate::log(&db, "", crate::ModAction::Ban, "", "", &id, &reason, "", None, 0);
             println!("{who} is banned.");
             Ok(())
         }
@@ -225,7 +231,10 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
             Ok(())
         }
         ["unban", who] => {
-            crate::unban(&crate::open_db(Some(&data))?, who)?;
+            let db = crate::open_db(Some(&data))?;
+            let id = crate::owner::resolve(&db, who)?;
+            crate::unban(&db, who)?;
+            crate::moderate::log(&db, "", crate::ModAction::Unban, "", "", &id, "", "", None, 0);
             println!("{who} can use Libroxel again.");
             Ok(())
         }
