@@ -123,6 +123,7 @@ pub struct Platform {
     /// Friends, online status, pings and the game being played.
     pub social: crate::social::Social,
     family: family::FamilyUi,
+    pub chats: crate::messages::Chats,
 }
 
 impl Default for Platform {
@@ -198,6 +199,7 @@ impl Default for Platform {
             item_status: None,
             social: crate::social::Social::default(),
             family: family::FamilyUi::default(),
+            chats: crate::messages::Chats::default(),
         }
     }
 }

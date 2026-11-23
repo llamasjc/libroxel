@@ -23,10 +23,10 @@ pub const HUB_HELP: &str = "\
                                to --data)
       --starters <program>     the libroxel app to list the official games from
                                (default: the --game-servers one)
-  reports                      list reported games, hats and comments
+  reports                      list reported games, hats, comments and messages
   clear <kind> <id>            say a reported one is fine: list it again
-  remove <kind> <id>           take one down for good (kind: game, item or
-                               comment)
+  remove <kind> <id>           take one down for good (kind: game, item,
+                               comment or message)
   accounts [search]            list accounts
   owners                       list the Hub's owners (its admins)
   owner add|remove <name or player id>
@@ -119,6 +119,7 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
         mail: crate::Mail::from_env()?,
         fleet,
         starters: flags.get("--starters").map(PathBuf::from),
+        moderation: crate::Moderation::from_env(),
         ..Default::default()
     };
     let words: Vec<&str> = flags.rest.iter().map(String::as_str).collect();

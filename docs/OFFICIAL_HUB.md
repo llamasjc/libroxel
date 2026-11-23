@@ -95,6 +95,14 @@ provider; [Resend](https://resend.com) is free for 3,000 mails a month:
    is set up, the Hub keeps the emails people give but sends no codes, and
    doesn't insist on one.
 
+### Messages
+
+Friends can message each other. Bad words are masked on the Hub. To also
+check every message with OpenAI's free moderation API, add
+`LIBROXEL_MODERATION_KEY=sk-...` to `/etc/libroxel/mail.conf` and restart
+the Hub. Reported messages show in `libroxel-hub reports`;
+`libroxel-hub remove message <id>` deletes one.
+
 ### Game servers
 
 The Hub runs the games players join, on its own computer. Pressing **Play**

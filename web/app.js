@@ -32,6 +32,7 @@ const ICON = {
   download: '', signOut: '', signal: '', shield: '', crown: '',
   seal: '', x: '', lock: '', user: '', hammer: '',
   like: '', dislike: '', star: '', trash: '', flag: '',
+  chat: '', send: ''
 };
 
 // The app's colours, for drawing.
@@ -184,7 +185,7 @@ async function api(path, { method = 'GET', body, query } = {}) {
 
 const SESSION_KEY = 'libroxel.session';
 let session = loadSession();
-let lastSigned = { friends: 0, account: 0, rate: 0 };
+let lastSigned = { friends: 0, account: 0, rate: 0, message: 0 };
 
 function loadSession() {
   for (const store of [sessionStorage, localStorage]) {
@@ -742,6 +743,7 @@ function parseRoute() {
     case 'game': return { name: 'game', key: parts.slice(1).join('/') };
     case 'user': return { name: 'user', id: parts[1] };
     case 'creator': return { name: 'creator', id: parts[1] };
+    case 'messages': return { name: 'messages', id: parts[1] };
     case 'games': case 'search': case 'friends': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': return { name: parts[0] };
     default: return { name: 'home' };
   }
@@ -763,8 +765,12 @@ function tabs() {
   // Search sits at the right, by who you play as, as in the app.
   const search = el('a', { class: `tab iconbtn${route.name === 'search' ? ' active' : ''}`, href: '/search', title: 'Search for players and games' }, icon(ICON.search));
   if (session) {
+    const unread = chats.list?.reduce((n, c) => n + c.unread, 0) || 0;
+    const messages = el('a', { class: `tab iconbtn${route.name === 'messages' ? ' active' : ''}`, href: '/messages', title: 'Messages' },
+      icon(ICON.chat), unread > 0 && el('span', { class: 'badge' }, unread > 99 ? '99+' : unread));
     who.replaceChildren(
       search,
+      messages,
       el('span', { class: 'caps' }, 'Playing as'),
       el('a', { class: 'name', href: `/user/${data.me?.number ?? session.playerId}` }, session.name || 'You'),
       el('button', { class: 'chip iconbtn', title: 'Sign out', onclick: signOut }, icon(ICON.signOut)),
@@ -782,6 +788,8 @@ function signOut() {
   saveSession(null);
   data.friends = null;
   data.me = null;
+  chats.list = null;
+  chats.talk = [];
   flash = { text: 'Signed out. This browser no longer has your key.' };
   goTo('/');
 }
@@ -853,7 +861,7 @@ window.addEventListener('unhandledrejection', (e) => crashed(e.reason));
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, games: gamesPage, creator: creatorPage, search: searchPage, friends: friendsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
+  const views = { home, game, games: gamesPage, creator: creatorPage, search: searchPage, friends: friendsPage, messages: messagesPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
   // An account that signed in with an easy password sees nothing else until it sets a new one.
   loadFamily();
   const needsBirthday = session && familyInfo && !familyInfo.loading && !familyInfo.error && !familyInfo.has_birthday;
@@ -885,7 +893,7 @@ const DESCRIPTIONS = {
 
 function titleFor(r) {
   if (r.name === 'game') return entries().find((e) => e.key === r.key)?.title || 'Game';
-  return { home: 'Home', creator: 'Create', games: 'Games', search: 'Search', friends: 'Friends', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy' }[r.name] || 'Libroxel';
+  return { home: 'Home', creator: 'Create', games: 'Games', search: 'Search', friends: 'Friends', messages: 'Messages', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy' }[r.name] || 'Libroxel';
 }
 
 function whereabouts(friend) {
@@ -1314,6 +1322,135 @@ function friendsPage() {
   return [el('h1', { class: 'title' }, 'Friends'), el('div', { class: 'columns' }, el('div', {}, left), el('div', {}, right))];
 }
 
+// --- Messages ---------------------------------------------------------------
+
+const MAX_MESSAGE = 500;
+const chats = { list: null, with: null, talk: [], draft: '', busy: false, error: null, reporting: null, at: 0 };
+
+function readSigned() {
+  const time = Date.now();
+  return { time, signature: signText(secretKey(), `libroxel messages\n${session.playerId}\n${time}`) };
+}
+
+async function loadChats() {
+  if (!session) return;
+  chats.at = Date.now();
+  try {
+    chats.list = await api(`/messages/${session.playerId}`, { query: readSigned() });
+    if (chats.with) chats.talk = await api(`/messages/${session.playerId}/${chats.with}`, { query: readSigned() });
+    chats.error = null;
+  } catch (e) {
+    chats.error = e.message;
+  }
+}
+
+function redrawChats() {
+  if (route.name !== 'messages') {
+    tabs();
+    return;
+  }
+  const box = document.getElementById('chat-box');
+  const typing = box && document.activeElement === box;
+  render();
+  const again = document.getElementById('chat-box');
+  if (typing && again) {
+    again.focus();
+    again.setSelectionRange(again.value.length, again.value.length);
+  }
+}
+
+async function sendChat() {
+  const text = chats.draft.trim();
+  if (!text || chats.busy || !chats.with) return;
+  const to = chats.with;
+  const time = Math.max(Date.now(), lastSigned.message + 1);
+  lastSigned.message = time;
+  const signature = signText(secretKey(), `libroxel message\n${session.playerId}\n${to}\n${text}\n${time}`);
+  chats.busy = true;
+  try {
+    await api('/messages', { method: 'POST', body: { from_id: session.playerId, to_id: to, text, time, signature } });
+    chats.draft = '';
+    chats.error = null;
+  } catch (e) {
+    chats.error = e.message;
+  }
+  chats.busy = false;
+  const error = chats.error;
+  await loadChats();
+  chats.error = chats.error || error;
+  redrawChats();
+}
+
+async function reportChat(message) {
+  const time = Date.now();
+  const reason = 'message';
+  const signature = signText(secretKey(), `libroxel report\n${session.playerId}\nmessage\n${message.message_id}\n${reason}\n${time}`);
+  try {
+    await api('/reports', { method: 'POST', body: { reporter_id: session.playerId, kind: 'message', target: message.message_id, reason, time, signature } });
+    flash = { text: 'Reported.' };
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  chats.reporting = null;
+  redrawChats();
+}
+
+function messagesPage() {
+  if (!session) return needSignIn('Sign in to message your friends.');
+  if (chats.with !== (route.id || null)) {
+    chats.with = route.id || null;
+    chats.talk = [];
+    chats.draft = '';
+    chats.reporting = null;
+    chats.error = null;
+    loadChats().then(redrawChats);
+  }
+  const list = chats.list || [];
+  const talked = new Set(list.map((c) => c.with.player_id));
+  const left = [];
+  for (const c of list) {
+    const mine = c.last.from_id === session.playerId;
+    left.push(el('a', { class: `person chat${c.with.player_id === chats.with ? ' on' : ''}`, href: `/messages/${c.with.player_id}` },
+      portrait(c.look, c.with.name, 40),
+      el('div', { class: 'what' },
+        el('b', {}, c.with.name),
+        el('small', { class: 'soft' }, mine ? `You: ${c.last.text}` : c.last.text)),
+      c.unread > 0 && el('span', { class: 'badge' }, c.unread)));
+  }
+  for (const f of friends().filter((x) => !talked.has(x.player_id))) {
+    left.push(el('a', { class: `person chat${f.player_id === chats.with ? ' on' : ''}`, href: `/messages/${f.player_id}` },
+      portrait(f.look, f.name, 40),
+      el('div', { class: 'what' }, el('b', {}, f.name), el('small', { class: 'soft' }, whereabouts(f)[0]))));
+  }
+  if (!left.length) left.push(el('div', { class: 'empty' }, chats.list ? 'Add friends to message them.' : 'Loading…'));
+
+  const right = [];
+  const other = chats.with && (list.find((c) => c.with.player_id === chats.with)?.with || friends().find((f) => f.player_id === chats.with));
+  if (!chats.with) right.push(el('div', { class: 'empty' }, 'Pick a friend.'));
+  else {
+    right.push(el('h2', { class: 'subhead' }, other?.name || ''));
+    const log = el('div', { class: 'chat-log', id: 'chat-log' });
+    if (!chats.talk.length) log.append(el('p', { class: 'soft' }, 'No messages yet.'));
+    for (const m of chats.talk) {
+      const mine = m.from_id === session.playerId;
+      const flag = !mine && (chats.reporting === m.message_id
+        ? el('span', {}, el('button', { class: 'link', onclick: () => reportChat(m) }, 'Report'), ' ', el('button', { class: 'link', onclick: () => { chats.reporting = null; redrawChats(); } }, 'Cancel'))
+        : el('button', { class: 'link flag', title: 'Report', onclick: () => { chats.reporting = m.message_id; redrawChats(); } }, icon(ICON.flag)));
+      log.append(el('div', { class: `bubble${mine ? ' mine' : ''}` },
+        el('div', { class: 'text' }, m.text),
+        el('small', { class: 'soft' }, ago(nowSecs() - m.sent), ' ', flag)));
+    }
+    right.push(log);
+    const box = el('input', { type: 'text', id: 'chat-box', maxlength: MAX_MESSAGE, placeholder: 'Message', value: chats.draft, autocomplete: 'off' });
+    box.addEventListener('input', () => { chats.draft = box.value; });
+    box.addEventListener('keydown', (e) => e.key === 'Enter' && sendChat());
+    right.push(el('div', { class: 'search' }, box, el('button', { class: 'btn go small', disabled: chats.busy, onclick: sendChat }, icon(ICON.send), 'Send')));
+    if (chats.error) right.push(status(chats.error, 'error'));
+    requestAnimationFrame(() => document.getElementById('chat-log')?.scrollTo(0, 1e9));
+  }
+  return [el('h1', { class: 'title' }, 'Messages'), el('div', { class: 'columns chats' }, el('div', {}, left), el('div', {}, right))];
+}
+
 // --- A player's page --------------------------------------------------------
 
 const profiles = new Map();
@@ -1335,7 +1472,7 @@ function user() {
   const f = data.friends;
   let action = null;
   if (session && !isMe && f) {
-    if (f.friends.some((x) => x.player_id === p.player_id)) action = el('span', { class: 'soft' }, icon(ICON.check), ' Friends');
+    if (f.friends.some((x) => x.player_id === p.player_id)) action = el('span', { class: 'soft' }, icon(ICON.check), ' Friends ', el('a', { class: 'chip', href: `/messages/${p.player_id}` }, icon(ICON.chat), 'Message'));
     else if (f.outgoing.some((x) => x.player_id === p.player_id)) action = el('span', { style: 'color:var(--link)' }, 'Request sent');
     else action = el('button', { class: 'btn go small', onclick: () => changeFriend(p.player_id, 'add', `Friend request sent to ${p.name}.`).then(() => profiles.delete(id)) }, icon(ICON.userPlus), 'Add friend');
   }
@@ -2179,6 +2316,10 @@ function sayOnline() {
 
 render();
 refresh().then(render);
+loadChats().then(redrawChats);
+setInterval(() => {
+  if (session && !document.hidden && (route.name === 'messages' || Date.now() - chats.at > 15000)) loadChats().then(redrawChats);
+}, 4000);
 sayOnline();
 setInterval(sayOnline, 15000);
 document.addEventListener('visibilitychange', sayOnline);

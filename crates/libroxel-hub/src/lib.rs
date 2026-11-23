@@ -66,7 +66,11 @@ mod filter;
 mod fleet;
 pub use fleet::{FleetOptions, PlayAnswer, PlayRequest, play_message};
 mod limits;
+mod messages;
 pub use cli::{HUB_HELP, cli};
+pub use messages::{
+    Conversation, MAX_MESSAGE, Message, Moderation, NewMessage, message_message, read_messages_message,
+};
 mod owner;
 mod password;
 mod ratings;
@@ -137,6 +141,8 @@ pub struct HubOptions {
     pub fleet: Option<FleetOptions>,
     /// The libroxel app to ask for the official games, if not the fleet's.
     pub starters: Option<PathBuf>,
+    /// A moderation service to check messages with ([`Moderation::from_env`]).
+    pub moderation: Option<Moderation>,
 }
 
 /// How often hosts should announce themselves.
@@ -566,6 +572,13 @@ struct Hub {
     limits: Arc<Limits>,
     mail: Arc<Mail>,
     fleet: Option<Arc<fleet::Fleet>>,
+    moderation: Option<Arc<Moderation>>,
+}
+
+impl FromRef<Hub> for Option<Arc<Moderation>> {
+    fn from_ref(hub: &Hub) -> Option<Arc<Moderation>> {
+        hub.moderation.clone()
+    }
 }
 
 impl FromRef<Hub> for Option<Arc<fleet::Fleet>> {
@@ -685,6 +698,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     let _ = db.execute("ALTER TABLE accounts ADD COLUMN number INTEGER", []);
     number_accounts(&db).map_err(|e| format!("could not number the Hub's accounts: {e}"))?;
     social::create_tables(&db)?;
+    messages::create_tables(&db)?;
     password::create_tables(&db)?;
     owner::create_tables(&db)?;
     security::create_tables(&db)?;
@@ -711,7 +725,13 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
     let limits =
         Arc::new(Limits { trust_proxy: options.behind_proxy, off: options.no_limits, ..Limits::default() });
     let fleet = options.fleet.map(|o| Arc::new(fleet::Fleet::new(o)));
-    let hub = Hub { db: Arc::new(Mutex::new(db)), limits, mail: Arc::new(options.mail), fleet };
+    let hub = Hub {
+        db: Arc::new(Mutex::new(db)),
+        limits,
+        mail: Arc::new(options.mail),
+        fleet,
+        moderation: options.moderation.map(Arc::new),
+    };
     // Look after the Hub's own game servers every few seconds.
     if let (Some(fleet), Ok(runtime)) = (hub.fleet.clone(), tokio::runtime::Handle::try_current()) {
         let db = hub.db.clone();
@@ -773,6 +793,9 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/presence", post(social::update_presence))
         .route("/presence/web", post(social::update_web_presence))
         .route("/creator/{id}", get(analytics::creator))
+        .route("/messages", post(messages::send_message))
+        .route("/messages/{id}", get(messages::conversations))
+        .route("/messages/{id}/{other}", get(messages::conversation))
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
         .layer(axum::middleware::from_fn_with_state(hub.limits.clone(), limits::every_request))
         // Any web page may call the Hub, as the app does: everything that
@@ -1232,8 +1255,8 @@ async fn report(
         return Err(too_many("reports"));
     }
     let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
-    if !["game", "item", "comment"].contains(&report.kind.as_str()) {
-        return bad("only games, items and comments can be reported");
+    if !["game", "item", "comment", "message"].contains(&report.kind.as_str()) {
+        return bad("only games, items, comments and messages can be reported");
     }
     if report.reason.trim().is_empty() || report.reason.chars().count() > 300 {
         return bad("a report needs a short reason");
@@ -1248,12 +1271,17 @@ async fn report(
         return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
     }
     let table = match report.kind.as_str() {
-        "game" => "games WHERE game_id",
-        "item" => "items WHERE item_id",
-        _ => "game_comments WHERE comment_id",
+        "game" => "games WHERE game_id = ?1",
+        "item" => "items WHERE item_id = ?1",
+        "comment" => "game_comments WHERE comment_id = ?1",
+        _ => "messages WHERE message_id = ?1 AND to_id = ?2",
     };
     let exists: Option<i64> = db
-        .query_row(&format!("SELECT 1 FROM {table} = ?1"), params![report.target], |r| r.get(0))
+        .query_row(
+            &format!("SELECT 1 FROM {table} AND ?2 IS NOT NULL"),
+            params![report.target, report.reporter_id],
+            |r| r.get(0),
+        )
         .optional()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if exists.is_none() {
@@ -1276,8 +1304,10 @@ pub fn reports(db: &Connection) -> Vec<Reported> {
             "SELECT r.kind, r.target, GROUP_CONCAT(r.reason, '\n'), COUNT(*),
                  EXISTS (SELECT 1 FROM cleared c WHERE c.kind = r.kind AND c.target = r.target),
                  CASE r.kind WHEN 'game' THEN (SELECT title FROM games WHERE game_id = r.target)
+                             WHEN 'item' THEN (SELECT name FROM items WHERE item_id = r.target)
                              WHEN 'comment' THEN (SELECT text FROM game_comments WHERE comment_id = r.target)
-                             ELSE (SELECT name FROM items WHERE item_id = r.target) END
+                             ELSE (SELECT a.name || ': ' || m.text FROM messages m
+                                   LEFT JOIN accounts a ON a.player_id = m.from_id WHERE m.message_id = r.target) END
              FROM reports r GROUP BY r.kind, r.target ORDER BY COUNT(*) DESC",
         )
         .expect("the reports query is valid");
@@ -1313,6 +1343,7 @@ pub fn take_down(db: &Connection, kind: &str, target: &str) -> Result<(), String
         "game" => "DELETE FROM games WHERE game_id = ?1",
         "item" => "DELETE FROM items WHERE item_id = ?1",
         "comment" => "DELETE FROM game_comments WHERE comment_id = ?1",
+        "message" => "DELETE FROM messages WHERE message_id = ?1",
         _ => return Err(format!("there are no {kind}s on a Hub")),
     };
     let gone = db.execute(sql, params![target]).map_err(|e| e.to_string())?;
@@ -2253,6 +2284,59 @@ impl HubClient {
             .send_json(update)
             .map(|_| ())
             .map_err(|e| format!("the Hub did not take your status: {e}"))
+    }
+
+    /// Sends a message to a friend.
+    pub fn send_message(&self, message: &NewMessage) -> Result<Message, String> {
+        self.agent
+            .post(format!("{}/messages", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(message)
+            .map_err(|e| format!("could not reach the Hub: {e}"))
+            .and_then(|mut r| {
+                if r.status().is_success() {
+                    r.body_mut().read_json().map_err(|e| e.to_string())
+                } else {
+                    Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+                }
+            })
+    }
+
+    /// Everyone a player has messages with, newest first, with
+    /// [`read_messages_message`] for `time` signed by that player.
+    pub fn conversations(
+        &self,
+        player_id: &str,
+        time: i64,
+        signature: &str,
+    ) -> Result<Vec<Conversation>, String> {
+        self.agent
+            .get(format!("{}/messages/{player_id}", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not get your messages from the Hub: {e}"))
+    }
+
+    /// The latest messages between a player and `other`, oldest first; the
+    /// ones from `other` count as read.
+    pub fn conversation(
+        &self,
+        player_id: &str,
+        other: &str,
+        time: i64,
+        signature: &str,
+    ) -> Result<Vec<Message>, String> {
+        self.agent
+            .get(format!("{}/messages/{player_id}/{other}", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not get your messages from the Hub: {e}"))
     }
 
     pub fn web_presence(&self, update: &WebPresence) -> Result<(), String> {

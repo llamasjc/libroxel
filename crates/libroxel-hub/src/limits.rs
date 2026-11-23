@@ -33,6 +33,8 @@ pub(crate) enum Limit {
     /// Emails given (each sends a code), per IP.
     Email,
     Asset,
+    /// Messages sent, per IP and per sender.
+    Message,
 }
 
 impl Limit {
@@ -51,6 +53,7 @@ impl Limit {
             Limit::Comment => (20, 10 * MINUTE),
             Limit::Email => (10, 60 * MINUTE),
             Limit::Asset => (2000, 60 * MINUTE),
+            Limit::Message => (30, MINUTE),
         }
     }
 }
