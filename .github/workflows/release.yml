@@ -296,10 +296,113 @@ jobs:
           path: hub/*
           if-no-files-found: error
 
+  android:
+    name: Build (Android)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: dist-android
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+      - name: Build
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            export VERSION="${GITHUB_REF_NAME#v}" LIBROXEL_VERSION="${GITHUB_REF_NAME#v}"
+          else
+            export VERSION="dev-${GITHUB_SHA::7}"
+          fi
+          export VERSION_CODE="$GITHUB_RUN_NUMBER"
+          ndk="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          export CC_aarch64_linux_android="$ndk/bin/aarch64-linux-android26-clang"
+          export CXX_aarch64_linux_android="$ndk/bin/aarch64-linux-android26-clang++"
+          export AR_aarch64_linux_android="$ndk/bin/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
+          cargo rustc --locked --profile dist -p libroxel --lib --crate-type cdylib --target aarch64-linux-android \
+            -- -C link-arg=-Wl,-z,max-page-size=16384
+          libs=packaging/android/app/src/main/jniLibs/arm64-v8a
+          mkdir -p "$libs"
+          cp target/aarch64-linux-android/dist/liblibroxel.so "$libs/"
+          cp "$ndk/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$libs/"
+          if [[ -n "$ANDROID_KEYSTORE_BASE64" ]]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+            export ANDROID_KEYSTORE="$RUNNER_TEMP/release.jks"
+          fi
+          gradle -p packaging/android --no-daemon assembleRelease bundleRelease
+          out=packaging/android/app/build/outputs
+          mkdir dist
+          cp "$out/apk/release/app-release.apk" "dist/libroxel-$VERSION-android.apk"
+          cp "$out/bundle/release/app-release.aab" "dist/libroxel-$VERSION-android.aab"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-android
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  ios:
+    name: Build (iOS)
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: dist-ios
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"; export LIBROXEL_VERSION="$VERSION"
+          else
+            VERSION="dev-${GITHUB_SHA::7}"
+          fi
+          export IPHONEOS_DEPLOYMENT_TARGET=15.0
+          cargo build --locked --profile dist -p libroxel --bin libroxel --target aarch64-apple-ios
+          app=Payload/Libroxel.app
+          mkdir -p "$app"
+          cp target/aarch64-apple-ios/dist/libroxel "$app/"
+          short=$(echo "$VERSION" | grep -oE '^[0-9]+(\.[0-9]+){0,2}' || true)
+          sed -e "s/@SHORT_VERSION@/${short:-0.0.1}/" -e "s/@BUILD@/$GITHUB_RUN_NUMBER/" packaging/ios/Info.plist > "$app/Info.plist"
+          plutil -convert binary1 "$app/Info.plist"
+          printf 'APPL????' > "$app/PkgInfo"
+          icon=packaging/icons/libroxel-512.png
+          sips -z 120 120 "$icon" --out "$app/AppIcon60x60@2x.png"
+          sips -z 180 180 "$icon" --out "$app/AppIcon60x60@3x.png"
+          sips -z 152 152 "$icon" --out "$app/AppIcon76x76@2x~ipad.png"
+          mkdir dist
+          zip -qry "dist/libroxel-$VERSION-ios-unsigned.ipa" Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-ios
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
   publish:
     name: Publish
     if: github.ref_type == 'tag'
-    needs: [build, mac, hub]
+    needs: [build, mac, hub, android, ios]
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -159,7 +159,7 @@ impl ScriptRuntime {
                 "_G",
             ]),
         );
-        lua.enable_jit(true);
+        lua.enable_jit(!cfg!(target_os = "ios"));
         bindings::install(&lua, tree.clone())?;
         // Freeze the standard library and our globals; each script gets its
         // own global environment on top.

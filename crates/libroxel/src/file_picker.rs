@@ -6,6 +6,8 @@
 //! (`kdialog`) is tried first, then GNOME's (`zenity`), then the desktop
 //! portal; on Windows and macOS the system's own window is used.
 
+#![cfg_attr(any(target_os = "android", target_os = "ios"), allow(dead_code))]
+
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
@@ -58,6 +60,12 @@ impl Picker {
     }
 }
 
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn pick(_folder: &Path) -> Picked {
+    Picked::Unavailable
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn pick(folder: &Path) -> Picked {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     if let Some(picked) = pick_with_command(folder) {
