@@ -342,9 +342,13 @@ jobs:
           mkdir -p "$libs"
           cp target/aarch64-linux-android/dist/liblibroxel.so "$libs/"
           cp "$ndk/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$libs/"
+          export ANDROID_KEYSTORE="$RUNNER_TEMP/release.jks"
           if [[ -n "$ANDROID_KEYSTORE_BASE64" ]]; then
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
-            export ANDROID_KEYSTORE="$RUNNER_TEMP/release.jks"
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE"
+          else
+            export ANDROID_KEYSTORE_PASSWORD=android ANDROID_KEY_ALIAS=libroxel ANDROID_KEY_PASSWORD=android
+            keytool -genkeypair -keystore "$ANDROID_KEYSTORE" -storepass android -keypass android \
+              -alias libroxel -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Libroxel"
           fi
           gradle -p packaging/android --no-daemon assembleRelease bundleRelease
           out=packaging/android/app/build/outputs
