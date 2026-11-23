@@ -26,6 +26,7 @@ mod history;
 mod hub_assets;
 mod hub_home;
 mod images;
+mod loading;
 mod menu;
 mod mesh_import;
 mod messages;
@@ -154,6 +155,7 @@ pub struct Editor {
     /// Playing a game started from the main menu: only the game shows, and
     /// leaving it goes back to the menu.
     pub player_mode: bool,
+    pub loading: loading::Loading,
     /// Esc pressed while playing: the game menu is open.
     pub paused: bool,
     /// Fingers on a touch screen, for the on-screen controls.
@@ -238,6 +240,7 @@ impl Default for Editor {
             platform: browse::Platform::default(),
             menu: menu::Menu::default(),
             player_mode: false,
+            loading: Default::default(),
             paused: false,
             touch: Default::default(),
             ribbon: ui::RibbonTab::Home,

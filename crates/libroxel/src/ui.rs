@@ -307,6 +307,12 @@ pub fn editor_ui(
         None => {}
     }
 
+    if engine.session.is_none()
+        && let Some(snapshot) = editor.edit_snapshot.take()
+    {
+        *engine.tree.borrow_mut() = snapshot;
+        editor.tunnel = None;
+    }
     // A game played from the main menu ended: back to the menu.
     if editor.player_mode && engine.session.is_none() {
         editor.player_mode = false;
@@ -578,6 +584,14 @@ pub fn editor_ui(
 
     if editor.player_mode {
         game_menu(&ctx, editor, engine.session.as_ref(), central, &mut actions, quality.as_deref_mut());
+    }
+    match engine.session.as_ref() {
+        Some(session) if editor.loading.active() => {
+            let filling = libroxel_engine::view::VIEW_FILLING.load(std::sync::atomic::Ordering::Relaxed);
+            editor.loading.show(&ctx, central, now, session.joining(), filling);
+        }
+        Some(_) => {}
+        None => editor.loading.stop(),
     }
 
     // Touch screens get on-screen controls while playing.
@@ -3234,6 +3248,9 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                         }
                     } else if !what.is_empty() {
                         log(engine, LogLevel::Info, what);
+                    }
+                    if editor.player_mode || session.is_joined() {
+                        editor.loading.start(now);
                     }
                     engine.session = Some(session);
                     engine.log.extend(lines);

@@ -243,8 +243,24 @@ fn step_session(
     // Clamp long frames (a window drag, a breakpoint) so physics stays sane.
     let dt = time.delta_secs().min(0.1);
     let began = std::time::Instant::now();
-    session.step(dt, input.0);
+    let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| session.step(dt, input.0)));
     took.0 = began.elapsed().as_secs_f32();
+    if let Err(why) = stepped {
+        let why = why
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| why.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        let mut log = session.take_log();
+        log.push(crate::session::LogEntry {
+            level: crate::session::LogLevel::Error,
+            time: 0.0,
+            text: format!("The game stopped after an error: {why}"),
+        });
+        engine.log.extend(log);
+        engine.session = None;
+        return;
+    }
     engine.log.extend(session.take_log());
     engine.emits.extend(session.take_emits());
 }
@@ -468,6 +484,7 @@ fn sync_parts(
     }
     sync.moved_epoch = tree.moved_epoch();
     sync.moved_read = tree.moved_len();
+    VIEW_FILLING.store(sync.pending, std::sync::atomic::Ordering::Relaxed);
     let PartEntities(spawned, seen) = &mut *entities;
 
     for id in work {
@@ -604,6 +621,8 @@ impl PartMeshes {
 /// (a loading screen): then the view isn't drawn at all, and the frames it
 /// saves go to the game.
 pub static VIEW_COVERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub static VIEW_FILLING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Whether the 3D view isn't being drawn: a loading screen covers it, or
 /// the game turned 3D rendering off.
