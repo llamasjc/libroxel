@@ -10,6 +10,9 @@ authors.workspace = true
 publish = false
 default-run = "libroxel"
 
+[lib]
+path = "src/lib.rs"
+
 # One app for everything: the home screen, the editor and `libroxel server`.
 [[bin]]
 name = "libroxel"
@@ -23,7 +26,7 @@ libroxel-net.workspace = true
 libroxel-rbx.workspace = true
 libroxel-hub = { path = "../libroxel-hub", version = "0.0.1" }
 bevy.workspace = true
-bevy_egui = { version = "0.43", default-features = false, features = ["render", "default_fonts", "manage_clipboard"] }
+bevy_egui = { version = "0.43", default-features = false, features = ["render", "default_fonts"] }
 transform-gizmo-egui = "0.11"
 egui-phosphor = { version = "0.14", default-features = false, features = ["bold"] }
 serde_json.workspace = true
@@ -31,7 +34,13 @@ ureq = "3"
 sha2 = "0.10"
 ed25519-dalek = "3"
 data-encoding = "2"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+bevy_egui = { version = "0.43", default-features = false, features = ["manage_clipboard"] }
 rfd = { version = "0.18", default-features = false, features = ["xdg-portal", "pollster"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+bevy = { workspace = true, features = ["android-game-activity"] }
 
 [lints]
 workspace = true

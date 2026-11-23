@@ -1,3 +1,6 @@
 target/
 **/*.rs.bk
 .DS_Store
+packaging/android/.gradle/
+packaging/android/app/build/
+packaging/android/app/src/main/jniLibs/

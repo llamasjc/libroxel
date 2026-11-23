@@ -19,6 +19,8 @@
 //! and when `LIBROXEL_NO_COMMAND` is set. A file at the link's place that
 //! isn't a link to a Libroxel app is left alone.
 
+#![cfg_attr(any(target_os = "android", target_os = "ios"), allow(dead_code))]
+
 use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
