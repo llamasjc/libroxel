@@ -296,6 +296,7 @@ pub fn editor_ui(
         }
     }
     editor.platform.social_tick(engine.session.is_some());
+    editor.platform.chats_tick(editor.menu.open && editor.menu.tab == crate::menu::Tab::Messages);
     if !playing {
         edit_together(engine, editor);
     }

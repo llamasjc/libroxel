@@ -68,6 +68,7 @@ pub enum Tab {
     Friends,
     Create,
     Avatar,
+    Messages,
 }
 
 /// What the home screen remembers.
@@ -388,6 +389,10 @@ impl Menu {
                         crate::hub_home::friends_tab(&mut self.home, ui, platform, &name, &mut self.tab)
                     }
                     Tab::Create => self.create_tab(ui),
+                    Tab::Messages => {
+                        crate::messages::messages_tab(ui, platform);
+                        None
+                    }
                     Tab::Avatar => {
                         egui::ScrollArea::vertical()
                             .id_salt("avatar")
@@ -427,7 +432,7 @@ impl Menu {
         ui.add_space(10.0);
         ui.spacing_mut().item_spacing.x = 2.0;
         let chip = player_chip_width(ui, &self.name);
-        let right = chip + 52.0 + 24.0 + if crate::update::ready().is_some() { 110.0 } else { 0.0 };
+        let right = chip + 104.0 + 24.0 + if crate::update::ready().is_some() { 110.0 } else { 0.0 };
         let wide: f32 =
             TOP_TABS.iter().map(|(_, glyph, label)| theme::tab_width(ui, glyph, label)).sum::<f32>()
                 + 2.0 * TOP_TABS.len() as f32;
@@ -462,6 +467,14 @@ impl Menu {
             ui.spacing_mut().item_spacing.x = 8.0;
             if player_chip(ui, &self.name, platform.account.is_some()).clicked() {
                 self.go(Tab::Avatar);
+            }
+            if platform.account.is_some() {
+                let unread = platform.chats.unread();
+                let label = if unread > 0 { unread.min(99).to_string() } else { String::new() };
+                let messages = theme::tab(ui, theme::icon::CHAT_CIRCLE, &label, self.tab == Tab::Messages);
+                if messages.on_hover_text("Messages").clicked() {
+                    self.go(Tab::Messages);
+                }
             }
             let search = theme::tab(ui, theme::icon::MAGNIFYING_GLASS, "", self.tab == Tab::Search);
             if search.on_hover_text("Search for players and games").clicked() {

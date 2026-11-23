@@ -32,6 +32,7 @@ mod hub_home;
 mod images;
 mod menu;
 mod mesh_import;
+mod messages;
 mod open;
 mod party_games;
 mod report;
