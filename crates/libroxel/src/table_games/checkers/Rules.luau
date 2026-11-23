@@ -33,6 +33,22 @@ local function ownerOf(piece)
 end
 Rules.ownerOf = ownerOf
 
+-- The square's number in draughts notation: 1 to 32 over the dark
+-- squares, seat 1's back row first.
+function Rules.field(sq)
+	return rowOf(sq) * 4 + (7 - colOf(sq)) // 2 + 1
+end
+
+-- A move written the usual way: 11-15, or 22x15 (and 22x15x24 for more).
+function Rules.notation(path)
+	local jump = math.abs(rowOf(path[1]) - rowOf(path[2])) == 2
+	local parts = {}
+	for _, sq in path do
+		table.insert(parts, tostring(Rules.field(sq)))
+	end
+	return table.concat(parts, if jump then "x" else "-")
+end
+
 local function isKing(piece)
 	return piece > 2
 end
@@ -50,7 +66,7 @@ function Rules.new()
 			end
 		end
 	end
-	return { board = board, turn = 1, quiet = 0, last = {}, ply = 0 }
+	return { board = board, turn = 1, quiet = 0, last = {}, ply = 0, history = {} }
 end
 
 -- Forward for seat 1 is up (+1 row); for seat 2 down.
@@ -208,6 +224,7 @@ function Rules.play(state, seat, path)
 			apply(state, m)
 			state.last = m
 			state.ply += 1
+			table.insert(state.history, Rules.notation(m))
 			return true
 		end
 	end
@@ -242,6 +259,7 @@ function Rules.view(state)
 		moves = moves,
 		mustJump = mustJump,
 		ply = state.ply,
+		history = table.clone(state.history),
 	}
 end
 

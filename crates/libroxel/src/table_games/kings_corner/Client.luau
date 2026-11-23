@@ -1,7 +1,8 @@
--- The Kings in the Corner screen: a green card table with the draw pile in the
--- middle, four side piles round it and the corners for the Kings. Your
--- hand is along the bottom. Click a card, then the pile to put it on. To
--- move a whole side pile, click it, then the pile it goes on.
+-- The Kings in the Corner screen, after GNOME AisleRiot: its baize, slots
+-- and "Anglo" cards, with the draw pile in the middle, four side piles
+-- round it and the corners for the Kings. Your hand is along the bottom.
+-- Click a card, then the pile to put it on. To move a whole side pile,
+-- click it, then the pile it goes on.
 
 local storage = game:GetService("ReplicatedStorage")
 
@@ -10,22 +11,54 @@ local Screen = require(folder:WaitForChild("Screen"))
 local Rules = require(folder:WaitForChild("Rules"))
 local make, round, label = Screen.make, Screen.round, Screen.label
 
-local FELT = Color3.fromRGB(28, 110, 62)
-local RED_INK = Color3.fromRGB(200, 30, 35)
-local BLACK_INK = Color3.fromRGB(25, 25, 30)
+local SLOT = Color3.fromRGB(87, 129, 50)
+local SLOT_EDGE = Color3.fromRGB(48, 88, 13)
+local ON_BAIZE = Color3.fromRGB(214, 232, 200)
+local PICK = Color3.fromRGB(53, 132, 228)
+local INK = Color3.fromRGB(46, 52, 54)
 local SEAT_COLOURS = {
-	Color3.fromRGB(45, 110, 200),
-	Color3.fromRGB(205, 60, 55),
-	Color3.fromRGB(240, 170, 40),
-	Color3.fromRGB(130, 80, 190),
+	Color3.fromRGB(53, 132, 228),
+	Color3.fromRGB(224, 27, 36),
+	Color3.fromRGB(246, 211, 45),
+	Color3.fromRGB(145, 65, 172),
 }
+local SUIT_LETTERS = { "s", "h", "d", "c" }
+local RANK_LETTERS = { "a", "2", "3", "4", "5", "6", "7", "8", "9", "10", "j", "q", "k" }
 
 local ui = Screen.new(script.Parent, folder, {
 	title = "Kings in the Corner",
 	levels = Rules.LEVELS,
 	level = 2,
 	players = { 2, 4 },
-	background = Color3.fromRGB(20, 80, 45),
+	look = {
+		background = Color3.fromRGB(0, 79, 15),
+		backgroundImage = "libroxel://baize",
+		page = Color3.fromRGB(246, 245, 244),
+		ink = INK,
+		soft = Color3.fromRGB(120, 124, 126),
+		line = Color3.fromRGB(205, 199, 194),
+		plain = Color3.fromRGB(222, 221, 218),
+		plainInk = INK,
+		accent = PICK,
+		go = Color3.fromRGB(46, 194, 126),
+		danger = Color3.fromRGB(224, 27, 36),
+		seat = Color3.fromRGB(255, 255, 255),
+		turn = Color3.fromRGB(255, 255, 255),
+		turnEdge = PICK,
+		yourTurn = Color3.fromRGB(220, 244, 230),
+		resultPage = Color3.fromRGB(255, 255, 255),
+		resultEdge = Color3.fromRGB(46, 194, 126),
+		waiting = Color3.fromRGB(229, 165, 10),
+		toast = Color3.fromRGB(36, 31, 49),
+		radius = 6,
+	},
+	sounds = {
+		move = "libroxel://aisleriot/click",
+		bad = "libroxel://aisleriot/slide",
+		win = "libroxel://aisleriot/victory",
+		lose = "libroxel://aisleriot/splat",
+		draw = "libroxel://aisleriot/splat",
+	},
 	colourOf = function(seat)
 		return SEAT_COLOURS[seat]
 	end,
@@ -47,49 +80,38 @@ local tableFrame = make("Frame", {
 	AnchorPoint = Vector2.new(0.5, 0.5),
 	Position = UDim2.fromScale(0.5, 0.5),
 	Size = UDim2.fromScale(1, 1),
-	BackgroundColor3 = FELT,
+	BackgroundTransparency = 1,
 }, ui.area)
 make("UIAspectRatioConstraint", { AspectRatio = 1.25 }, tableFrame)
-round(tableFrame, 24)
-make("UIStroke", { Color = Color3.fromRGB(90, 55, 25), Thickness = 10 }, tableFrame)
 
-local CARD_W, CARD_H = 0.095, 0.17
+local CARD_W, CARD_H = 0.088, 0.17
 local PEEK = 0.04 -- how far the top card sits below the bottom one
 
--- A face-up card, or the back of one.
+-- A card: its face, or its back.
 local function newCard(parent, name)
-	local c = make("TextButton", {
+	local c = make("ImageButton", {
 		Name = name,
-		Text = "",
+		Image = "libroxel://card-back",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Size = UDim2.fromScale(CARD_W, CARD_H),
-		BackgroundColor3 = Screen.WHITE,
+		BackgroundTransparency = 1,
 		AutoButtonColor = false,
 		ZIndex = 3,
 	}, parent)
-	round(c, 6)
-	-- Buttons outline their text with a stroke, so the card's edge is on a frame over it.
 	local rim = make("Frame", { Name = "Rim", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = 4 }, c)
 	round(rim, 6)
-	local stroke = make("UIStroke", { Name = "Edge", Color = Color3.fromRGB(0, 0, 0), Thickness = 1, Transparency = 0.6 }, rim)
-	label(c, { Name = "Corner", Position = UDim2.new(0, 5, 0, 2), Size = UDim2.new(1, -10, 0.3, 0), TextSize = 18, ZIndex = 4 })
-	label(c, { Name = "Suit", Position = UDim2.fromScale(0, 0.28), Size = UDim2.fromScale(1, 0.6), TextSize = 40, TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 4 })
-	local back = make("Frame", { Name = "Back", Position = UDim2.fromScale(0.08, 0.06), Size = UDim2.fromScale(0.84, 0.88), BackgroundColor3 = Color3.fromRGB(160, 40, 45), Visible = false, ZIndex = 4 }, c)
-	round(back, 4)
-	make("UIStroke", { Color = Color3.fromRGB(240, 220, 200), Thickness = 2 }, back)
-	return c, stroke
+	make("UIStroke", { Name = "Edge", Color = PICK, Thickness = 3, Enabled = false }, rim)
+	return c
 end
 
-local function setFace(c, card, textSize)
-	local red = Rules.isRed(card)
-	c.Corner.Text = Rules.RANKS[Rules.rankOf(card)] .. Rules.SUITS[Rules.suitOf(card)]
-	c.Corner.TextColor3 = if red then RED_INK else BLACK_INK
-	c.Corner.TextSize = math.max(10, math.floor(textSize * 0.17))
-	c.Suit.Text = if Rules.rankOf(card) >= 11 then Rules.RANKS[Rules.rankOf(card)] .. Rules.SUITS[Rules.suitOf(card)] else Rules.SUITS[Rules.suitOf(card)]
-	c.Suit.TextColor3 = c.Corner.TextColor3
-	c.Suit.TextSize = math.max(14, math.floor(textSize * (if Rules.rankOf(card) >= 11 then 0.28 else 0.42)))
-	c.Back.Visible = false
-	c.BackgroundColor3 = Screen.WHITE
+local function setFace(c, card)
+	c.Image = "libroxel://card-" .. RANK_LETTERS[Rules.rankOf(card)] .. SUIT_LETTERS[Rules.suitOf(card)]
+	c.ImageColor3 = Color3.fromRGB(255, 255, 255)
+end
+
+local function mark(c, on, colour)
+	c.Rim.Edge.Enabled = on
+	c.Rim.Edge.Color = colour or PICK
 end
 
 -- Where each pile sits: the sides round the middle, the corners diagonal.
@@ -111,25 +133,24 @@ for i, spot in SPOTS do
 		Name = "Pile" .. i,
 		Text = "",
 		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(spot[1], spot[2] + PEEK / 2),
-		Size = UDim2.fromScale(CARD_W + 0.012, CARD_H + PEEK + 0.012),
-		BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-		BackgroundTransparency = 0.88,
+		Position = UDim2.fromScale(spot[1], spot[2]),
+		Size = UDim2.fromScale(CARD_W, CARD_H),
+		BackgroundColor3 = SLOT,
 		AutoButtonColor = false,
 		ZIndex = 2,
 	}, tableFrame)
-	round(slot, 8)
+	round(slot, 6)
 	local rim = make("Frame", { Name = "Rim", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = 2 }, slot)
-	round(rim, 8)
-	local glow = make("UIStroke", { Color = Color3.fromRGB(255, 230, 90), Thickness = 5, Enabled = false }, rim)
+	round(rim, 6)
+	make("UIStroke", { Color = SLOT_EDGE, Thickness = 1.5 }, rim)
+	local glow = make("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Thickness = 3, Enabled = false }, rim)
 	local hint = label(slot, {
 		Name = "Hint",
 		Size = UDim2.fromScale(1, 1),
-		TextSize = 14,
-		TextColor3 = Color3.fromRGB(200, 235, 210),
-		TextWrapped = true,
+		TextSize = 26,
+		TextColor3 = SLOT_EDGE,
 		TextXAlignment = Enum.TextXAlignment.Center,
-		Text = if Rules.isCorner(i) then "King\ncorner" else "Empty",
+		Text = if Rules.isCorner(i) then "K" else "",
 		ZIndex = 2,
 	})
 	local bottom = newCard(tableFrame, "Bottom" .. i)
@@ -148,23 +169,22 @@ for i, spot in SPOTS do
 		Position = UDim2.fromScale(spot[1], spot[2] + PEEK + CARD_H / 2 + 0.005),
 		Size = UDim2.fromScale(CARD_W, 0.03),
 		TextSize = 13,
-		TextColor3 = Color3.fromRGB(215, 240, 220),
+		TextColor3 = ON_BAIZE,
 		TextXAlignment = Enum.TextXAlignment.Center,
 	})
-	piles[i] = { slot = slot, glow = glow, hint = hint, bottom = bottom, top = top, count = count }
+	piles[i] = { spot = spot, slot = slot, glow = glow, hint = hint, bottom = bottom, top = top, count = count }
 end
 
 -- The draw pile in the middle.
 local stock = newCard(tableFrame, "Stock")
-stock.Position = UDim2.fromScale(0.5, 0.34 + PEEK / 2)
-stock.Back.Visible = true
+stock.Position = UDim2.fromScale(0.5, 0.34)
 local stockCount = label(tableFrame, {
 	Name = "StockCount",
 	AnchorPoint = Vector2.new(0.5, 0),
-	Position = UDim2.fromScale(0.5, 0.34 + PEEK / 2 + CARD_H / 2 + 0.005),
+	Position = UDim2.fromScale(0.5, 0.34 + CARD_H / 2 + 0.005),
 	Size = UDim2.fromScale(0.2, 0.03),
 	TextSize = 13,
-	TextColor3 = Color3.fromRGB(215, 240, 220),
+	TextColor3 = ON_BAIZE,
 	TextXAlignment = Enum.TextXAlignment.Center,
 })
 
@@ -178,7 +198,7 @@ local handFrame = make("Frame", {
 local handCards = {}
 
 -- The End turn button and what just happened, in the side panel.
-local endButton = Screen.button(ui.extra, "End turn", Screen.GREEN, {
+local endButton = ui.button(ui.extra, "End turn", "go", {
 	Name = "EndTurn",
 	Position = UDim2.new(0, 0, 0, 0),
 	Size = UDim2.new(1, 0, 0, 52),
@@ -189,7 +209,7 @@ local logLine = label(ui.extra, {
 	Position = UDim2.new(0, 2, 0, 60),
 	Size = UDim2.new(1, -4, 0, 44),
 	TextSize = 14,
-	TextColor3 = Screen.SOFT,
+	TextColor3 = ui.look.soft,
 	TextWrapped = true,
 	TextYAlignment = Enum.TextYAlignment.Top,
 })
@@ -218,7 +238,6 @@ local function draw()
 		return
 	end
 	local g = v.game
-	local textSize = tableFrame.AbsoluteSize.Y * CARD_H
 	local targets = targetsFor(v)
 	for i, p in piles do
 		local cards = g.piles[i]
@@ -226,19 +245,18 @@ local function draw()
 		p.top.Visible = #cards >= 1
 		p.hint.Visible = #cards == 0
 		if #cards >= 1 then
-			setFace(p.top, cards[#cards], textSize)
+			setFace(p.top, cards[#cards])
+			p.top.Position = UDim2.fromScale(p.spot[1], p.spot[2] + (if #cards >= 2 then PEEK else 0))
 		end
 		if #cards >= 2 then
-			setFace(p.bottom, cards[1], textSize)
+			setFace(p.bottom, cards[1])
 		end
-		p.count.Text = if #cards >= 2 then #cards .. " cards" else ""
-		p.glow.Enabled = targets[i] == true
-		p.top.Rim.Edge.Color = if selected and selected.kind == "pile" and selected.from == i then Color3.fromRGB(255, 200, 40) else Color3.fromRGB(0, 0, 0)
-		p.top.Rim.Edge.Thickness = if selected and selected.kind == "pile" and selected.from == i then 4 else 1
-		p.top.Rim.Edge.Transparency = if selected and selected.kind == "pile" and selected.from == i then 0 else 0.6
+		p.count.Text = if #cards >= 2 then tostring(#cards) else ""
+		p.glow.Enabled = targets[i] == true and #cards == 0
+		mark(p.top, (selected and selected.kind == "pile" and selected.from == i) or (targets[i] == true and #cards > 0), if targets[i] then Color3.fromRGB(255, 255, 255) else PICK)
 	end
 	stock.Visible = g.stock > 0
-	stockCount.Text = if g.stock > 0 then tostring(g.stock) else "Empty"
+	stockCount.Text = if g.stock > 0 then tostring(g.stock) else ""
 
 	-- The hand, fanned out to fit.
 	local hand = g.hand
@@ -284,19 +302,13 @@ local function draw()
 		local card = hand[i]
 		c.Visible = card ~= nil
 		if card then
-			setFace(c, card, textSize)
+			setFace(c, card)
 			local lifted = selected and selected.kind == "card" and selected.card == card
 			c.Position = UDim2.fromScale(0.5 - width / 2 + CARD_W / 0.96 / 2 + (i - 1) * step, if lifted then 0.42 else 0.56)
 			c.ZIndex = 10 + i
-			for _, child in c:GetChildren() do
-				if child:IsA("GuiObject") then
-					child.ZIndex = 10 + i
-				end
-			end
-			c.Rim.Edge.Color = if lifted then Color3.fromRGB(255, 200, 40) elseif card == g.drew then Color3.fromRGB(60, 140, 255) else Color3.fromRGB(0, 0, 0)
-			c.Rim.Edge.Thickness = if lifted or card == g.drew then 3 else 1
-			c.Rim.Edge.Transparency = if lifted or card == g.drew then 0 else 0.6
-			c.BackgroundColor3 = if ui.myTurn() and not playable[card] then Color3.fromRGB(225, 225, 225) else Screen.WHITE
+			c.Rim.ZIndex = 10 + i
+			mark(c, lifted or card == g.drew, if lifted then PICK else Color3.fromRGB(246, 211, 45))
+			c.ImageColor3 = if ui.myTurn() and not playable[card] then Color3.fromRGB(205, 205, 205) else Color3.fromRGB(255, 255, 255)
 		end
 	end
 
@@ -315,6 +327,8 @@ local function draw()
 	end
 end
 
+local lastPlayed = nil
+
 ui.onTable = function(v, fresh)
 	if fresh or not ui.myTurn() then
 		selected = nil
@@ -327,10 +341,12 @@ ui.onTable = function(v, fresh)
 		selected = nil
 	end
 	ui.subText = if v.game.stock > 0 then v.game.stock .. " in deck" else "deck empty"
+	local played = v.game.counts and table.concat(v.game.counts, ",") .. ":" .. v.game.stock .. ":" .. #v.game.hand
 	draw()
-	if not fresh then
-		ui.sounds.move:Play()
+	if not fresh and played ~= lastPlayed then
+		ui.play("move")
 	end
+	lastPlayed = played
 end
 
 ui.onLeft = function()
@@ -348,8 +364,10 @@ local function clickPile(i)
 			ui.send({ kind = "card", card = selected.card, pile = i })
 			selected = nil
 		elseif Rules.isCorner(i) and #g.piles[i] == 0 then
+			ui.play("bad")
 			ui.toast("Only a King can start a corner")
 		else
+			ui.play("bad")
 			ui.toast("One lower, other colour")
 		end
 		draw()
@@ -362,6 +380,7 @@ local function clickPile(i)
 			ui.send({ kind = "pile", from = selected.from, to = i })
 			selected = nil
 		else
+			ui.play("bad")
 			ui.toast("Doesn't fit")
 		end
 		draw()

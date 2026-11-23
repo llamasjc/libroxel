@@ -5,7 +5,11 @@
 //! `images` folder beside it and the games folder's `images` folder); a full
 //! path is used as it is. Names starting with `libroxel://` are pictures
 //! built into Libroxel: `coin`, `smile`, `star`, `arrow`, `checker`, and
-//! chess pieces named `chess-` then `w` or `b` then `k`, `q`, `r`, `b`, `n` or `p`.
+//! chess pieces named `chess-` then `w` or `b` then `k`, `q`, `r`, `b`, `n` or `p`,
+//! cards named `card-` then `a`, `2` to `10`, `j`, `q` or `k` then `c`, `d`,
+//! `h` or `s` (and `card-back`, `baize`), Connect 4 tiles `c4-red`, `c4-green`,
+//! `c4-hole` and `c4-top`, and draughts pieces `draughts-white`,
+//! `draughts-black`, `draughts-white-king` and `draughts-black-king`.
 //!
 //! Games brought in from Roblox Studio name their files by asset number
 //! (`rbxassetid://123`, or a web address ending `?id=123`). Those are
@@ -42,6 +46,68 @@ pub const PICTURES: &[(&str, &[u8])] = &[
     ("chess-bb", include_bytes!("../assets/chess-bb.png")),
     ("chess-bn", include_bytes!("../assets/chess-bn.png")),
     ("chess-bp", include_bytes!("../assets/chess-bp.png")),
+    ("baize", include_bytes!("../assets/cards/baize.jpg")),
+    ("card-10c", include_bytes!("../assets/cards/card-10c.png")),
+    ("card-10d", include_bytes!("../assets/cards/card-10d.png")),
+    ("card-10h", include_bytes!("../assets/cards/card-10h.png")),
+    ("card-10s", include_bytes!("../assets/cards/card-10s.png")),
+    ("card-2c", include_bytes!("../assets/cards/card-2c.png")),
+    ("card-2d", include_bytes!("../assets/cards/card-2d.png")),
+    ("card-2h", include_bytes!("../assets/cards/card-2h.png")),
+    ("card-2s", include_bytes!("../assets/cards/card-2s.png")),
+    ("card-3c", include_bytes!("../assets/cards/card-3c.png")),
+    ("card-3d", include_bytes!("../assets/cards/card-3d.png")),
+    ("card-3h", include_bytes!("../assets/cards/card-3h.png")),
+    ("card-3s", include_bytes!("../assets/cards/card-3s.png")),
+    ("card-4c", include_bytes!("../assets/cards/card-4c.png")),
+    ("card-4d", include_bytes!("../assets/cards/card-4d.png")),
+    ("card-4h", include_bytes!("../assets/cards/card-4h.png")),
+    ("card-4s", include_bytes!("../assets/cards/card-4s.png")),
+    ("card-5c", include_bytes!("../assets/cards/card-5c.png")),
+    ("card-5d", include_bytes!("../assets/cards/card-5d.png")),
+    ("card-5h", include_bytes!("../assets/cards/card-5h.png")),
+    ("card-5s", include_bytes!("../assets/cards/card-5s.png")),
+    ("card-6c", include_bytes!("../assets/cards/card-6c.png")),
+    ("card-6d", include_bytes!("../assets/cards/card-6d.png")),
+    ("card-6h", include_bytes!("../assets/cards/card-6h.png")),
+    ("card-6s", include_bytes!("../assets/cards/card-6s.png")),
+    ("card-7c", include_bytes!("../assets/cards/card-7c.png")),
+    ("card-7d", include_bytes!("../assets/cards/card-7d.png")),
+    ("card-7h", include_bytes!("../assets/cards/card-7h.png")),
+    ("card-7s", include_bytes!("../assets/cards/card-7s.png")),
+    ("card-8c", include_bytes!("../assets/cards/card-8c.png")),
+    ("card-8d", include_bytes!("../assets/cards/card-8d.png")),
+    ("card-8h", include_bytes!("../assets/cards/card-8h.png")),
+    ("card-8s", include_bytes!("../assets/cards/card-8s.png")),
+    ("card-9c", include_bytes!("../assets/cards/card-9c.png")),
+    ("card-9d", include_bytes!("../assets/cards/card-9d.png")),
+    ("card-9h", include_bytes!("../assets/cards/card-9h.png")),
+    ("card-9s", include_bytes!("../assets/cards/card-9s.png")),
+    ("card-ac", include_bytes!("../assets/cards/card-ac.png")),
+    ("card-ad", include_bytes!("../assets/cards/card-ad.png")),
+    ("card-ah", include_bytes!("../assets/cards/card-ah.png")),
+    ("card-as", include_bytes!("../assets/cards/card-as.png")),
+    ("card-back", include_bytes!("../assets/cards/card-back.png")),
+    ("card-jc", include_bytes!("../assets/cards/card-jc.png")),
+    ("card-jd", include_bytes!("../assets/cards/card-jd.png")),
+    ("card-jh", include_bytes!("../assets/cards/card-jh.png")),
+    ("card-js", include_bytes!("../assets/cards/card-js.png")),
+    ("card-kc", include_bytes!("../assets/cards/card-kc.png")),
+    ("card-kd", include_bytes!("../assets/cards/card-kd.png")),
+    ("card-kh", include_bytes!("../assets/cards/card-kh.png")),
+    ("card-ks", include_bytes!("../assets/cards/card-ks.png")),
+    ("card-qc", include_bytes!("../assets/cards/card-qc.png")),
+    ("card-qd", include_bytes!("../assets/cards/card-qd.png")),
+    ("card-qh", include_bytes!("../assets/cards/card-qh.png")),
+    ("card-qs", include_bytes!("../assets/cards/card-qs.png")),
+    ("c4-green", include_bytes!("../assets/connect4/c4-green.png")),
+    ("c4-hole", include_bytes!("../assets/connect4/c4-hole.png")),
+    ("c4-red", include_bytes!("../assets/connect4/c4-red.png")),
+    ("c4-top", include_bytes!("../assets/connect4/c4-top.png")),
+    ("draughts-black-king", include_bytes!("../assets/draughts/draughts-black-king.png")),
+    ("draughts-black", include_bytes!("../assets/draughts/draughts-black.png")),
+    ("draughts-white-king", include_bytes!("../assets/draughts/draughts-white-king.png")),
+    ("draughts-white", include_bytes!("../assets/draughts/draughts-white.png")),
 ];
 
 static FOLDERS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
@@ -257,10 +323,16 @@ mod tests {
         for (name, _) in PICTURES {
             let bytes = bytes_for(&format!("{BUILT_IN}{name}")).expect("built in");
             let (size, pixels) = decode_png(&bytes).expect("decodes");
-            // Pictures are square: 64 pixels, or 128 for the chess pieces.
-            let side = if name.starts_with("chess-") { 128 } else { 64 };
-            assert_eq!(size, [side, side], "{name}");
-            assert_eq!(pixels.len(), side * side * 4);
+            let want = match *name {
+                n if n.starts_with("card-") => [162, 252],
+                "baize" => [512, 512],
+                n if n.starts_with("chess-") || n.starts_with("c4-") || n.starts_with("draughts-") => {
+                    [128, 128]
+                }
+                _ => [64, 64],
+            };
+            assert_eq!(size, want, "{name}");
+            assert_eq!(pixels.len(), size[0] * size[1] * 4);
         }
         // The coin's corners are see-through and its middle is gold.
         let (_, pixels) = decode_png(PICTURES[0].1).unwrap();

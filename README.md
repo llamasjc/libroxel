@@ -868,3 +868,10 @@ included with the program:
 - The chess pieces are Colin M.L. Burnett's "cburnett" set, as used by
   [Lichess](https://github.com/lichess-org/lila), under the GNU GPL v2 or
   later (see `crates/libroxel-engine/assets/CHESS-PIECES.md`).
+- The chess and checkers sounds are Lichess's and Lidraughts's sound sets by
+  Enigmahack, and the draughts pieces are Lidraughts's "wide_crown" set, under
+  the GNU AGPL v3 or later (see `SOUNDS.md` and `DRAUGHTS.md` in
+  `crates/libroxel-engine/assets/`).
+- The Connect 4 tiles and sounds are from GNOME Four-in-a-row, and the cards,
+  table cloth and card sounds from GNOME AisleRiot, under the GNU GPL v3 or
+  later (see `CONNECT4.md`, `CARDS.md` and `SOUNDS.md` there).

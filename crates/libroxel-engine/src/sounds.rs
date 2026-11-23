@@ -3,7 +3,8 @@
 //! A sound name is a WAV or OGG file, looked for in the same folders as
 //! pictures (see [`crate::pictures::set_folders`]). Names starting with
 //! `libroxel://` are sounds made by Libroxel itself: `coin`, `jump`, `boom`,
-//! `click`, `splash`, `chime` and `hum` (which loops smoothly).
+//! `click`, `splash`, `chime` and `hum` (which loops smoothly), and the
+//! files in [`FILES`] (`lichess/sfx/move`, `aisleriot/click` and so on).
 //!
 //! A sound inside a part sounds quieter the further the camera is from it:
 //! full volume within 10 studs, then falling off until it can't be heard at
@@ -24,6 +25,71 @@ use crate::view::{EngineState, to_bevy};
 /// Built-in sounds, by name after [`BUILT_IN`].
 pub const SOUNDS: &[&str] = &["coin", "jump", "boom", "click", "splash", "chime", "hum"];
 
+/// Sound files built in, by name after [`BUILT_IN`]. See `assets/SOUNDS.md`.
+pub const FILES: &[(&str, &[u8])] = &[
+    ("aisleriot/click", include_bytes!("../assets/sounds/aisleriot/click.ogg")),
+    ("aisleriot/slide", include_bytes!("../assets/sounds/aisleriot/slide.ogg")),
+    ("aisleriot/splat", include_bytes!("../assets/sounds/aisleriot/splat.ogg")),
+    ("aisleriot/victory", include_bytes!("../assets/sounds/aisleriot/victory.ogg")),
+    ("four-in-a-row/bad", include_bytes!("../assets/sounds/four-in-a-row/bad.ogg")),
+    ("four-in-a-row/bonus", include_bytes!("../assets/sounds/four-in-a-row/bonus.ogg")),
+    ("four-in-a-row/reverse", include_bytes!("../assets/sounds/four-in-a-row/reverse.ogg")),
+    ("four-in-a-row/slide", include_bytes!("../assets/sounds/four-in-a-row/slide.ogg")),
+    ("lichess/futuristic/capture", include_bytes!("../assets/sounds/lichess/futuristic/capture.ogg")),
+    ("lichess/futuristic/challenge", include_bytes!("../assets/sounds/lichess/futuristic/challenge.ogg")),
+    ("lichess/futuristic/check", include_bytes!("../assets/sounds/lichess/futuristic/check.ogg")),
+    ("lichess/futuristic/confirm", include_bytes!("../assets/sounds/lichess/futuristic/confirm.ogg")),
+    ("lichess/futuristic/defeat", include_bytes!("../assets/sounds/lichess/futuristic/defeat.ogg")),
+    ("lichess/futuristic/draw", include_bytes!("../assets/sounds/lichess/futuristic/draw.ogg")),
+    ("lichess/futuristic/lowtime", include_bytes!("../assets/sounds/lichess/futuristic/lowtime.ogg")),
+    ("lichess/futuristic/message", include_bytes!("../assets/sounds/lichess/futuristic/message.ogg")),
+    ("lichess/futuristic/move", include_bytes!("../assets/sounds/lichess/futuristic/move.ogg")),
+    ("lichess/futuristic/notify", include_bytes!("../assets/sounds/lichess/futuristic/notify.ogg")),
+    ("lichess/futuristic/victory", include_bytes!("../assets/sounds/lichess/futuristic/victory.ogg")),
+    ("lichess/nes/capture", include_bytes!("../assets/sounds/lichess/nes/capture.ogg")),
+    ("lichess/nes/challenge", include_bytes!("../assets/sounds/lichess/nes/challenge.ogg")),
+    ("lichess/nes/check", include_bytes!("../assets/sounds/lichess/nes/check.ogg")),
+    ("lichess/nes/confirm", include_bytes!("../assets/sounds/lichess/nes/confirm.ogg")),
+    ("lichess/nes/defeat", include_bytes!("../assets/sounds/lichess/nes/defeat.ogg")),
+    ("lichess/nes/draw", include_bytes!("../assets/sounds/lichess/nes/draw.ogg")),
+    ("lichess/nes/lowtime", include_bytes!("../assets/sounds/lichess/nes/lowtime.ogg")),
+    ("lichess/nes/message", include_bytes!("../assets/sounds/lichess/nes/message.ogg")),
+    ("lichess/nes/move", include_bytes!("../assets/sounds/lichess/nes/move.ogg")),
+    ("lichess/nes/notify", include_bytes!("../assets/sounds/lichess/nes/notify.ogg")),
+    ("lichess/nes/victory", include_bytes!("../assets/sounds/lichess/nes/victory.ogg")),
+    ("lichess/piano/capture", include_bytes!("../assets/sounds/lichess/piano/capture.ogg")),
+    ("lichess/piano/challenge", include_bytes!("../assets/sounds/lichess/piano/challenge.ogg")),
+    ("lichess/piano/check", include_bytes!("../assets/sounds/lichess/piano/check.ogg")),
+    ("lichess/piano/confirm", include_bytes!("../assets/sounds/lichess/piano/confirm.ogg")),
+    ("lichess/piano/defeat", include_bytes!("../assets/sounds/lichess/piano/defeat.ogg")),
+    ("lichess/piano/draw", include_bytes!("../assets/sounds/lichess/piano/draw.ogg")),
+    ("lichess/piano/lowtime", include_bytes!("../assets/sounds/lichess/piano/lowtime.ogg")),
+    ("lichess/piano/message", include_bytes!("../assets/sounds/lichess/piano/message.ogg")),
+    ("lichess/piano/move", include_bytes!("../assets/sounds/lichess/piano/move.ogg")),
+    ("lichess/piano/notify", include_bytes!("../assets/sounds/lichess/piano/notify.ogg")),
+    ("lichess/piano/victory", include_bytes!("../assets/sounds/lichess/piano/victory.ogg")),
+    ("lichess/sfx/capture", include_bytes!("../assets/sounds/lichess/sfx/capture.ogg")),
+    ("lichess/sfx/challenge", include_bytes!("../assets/sounds/lichess/sfx/challenge.ogg")),
+    ("lichess/sfx/check", include_bytes!("../assets/sounds/lichess/sfx/check.ogg")),
+    ("lichess/sfx/confirm", include_bytes!("../assets/sounds/lichess/sfx/confirm.ogg")),
+    ("lichess/sfx/defeat", include_bytes!("../assets/sounds/lichess/sfx/defeat.ogg")),
+    ("lichess/sfx/draw", include_bytes!("../assets/sounds/lichess/sfx/draw.ogg")),
+    ("lichess/sfx/lowtime", include_bytes!("../assets/sounds/lichess/sfx/lowtime.ogg")),
+    ("lichess/sfx/message", include_bytes!("../assets/sounds/lichess/sfx/message.ogg")),
+    ("lichess/sfx/move", include_bytes!("../assets/sounds/lichess/sfx/move.ogg")),
+    ("lichess/sfx/notify", include_bytes!("../assets/sounds/lichess/sfx/notify.ogg")),
+    ("lichess/sfx/victory", include_bytes!("../assets/sounds/lichess/sfx/victory.ogg")),
+    ("lidraughts/capture", include_bytes!("../assets/sounds/lidraughts/capture.ogg")),
+    ("lidraughts/challenge", include_bytes!("../assets/sounds/lidraughts/challenge.ogg")),
+    ("lidraughts/confirm", include_bytes!("../assets/sounds/lidraughts/confirm.ogg")),
+    ("lidraughts/defeat", include_bytes!("../assets/sounds/lidraughts/defeat.ogg")),
+    ("lidraughts/draw", include_bytes!("../assets/sounds/lidraughts/draw.ogg")),
+    ("lidraughts/message", include_bytes!("../assets/sounds/lidraughts/message.ogg")),
+    ("lidraughts/move", include_bytes!("../assets/sounds/lidraughts/move.ogg")),
+    ("lidraughts/notify", include_bytes!("../assets/sounds/lidraughts/notify.ogg")),
+    ("lidraughts/victory", include_bytes!("../assets/sounds/lidraughts/victory.ogg")),
+];
+
 /// Samples per second of the built-in sounds.
 const RATE: u32 = 22_050;
 
@@ -37,6 +103,9 @@ pub const HEARING_DISTANCE: f32 = 200.0;
 pub fn bytes_for(name: &str) -> Option<Vec<u8>> {
     let name = name.trim();
     if let Some(built_in) = name.strip_prefix(BUILT_IN) {
+        if let Some((_, bytes)) = FILES.iter().find(|(n, _)| *n == built_in) {
+            return Some(bytes.to_vec());
+        }
         return synth(built_in).map(|samples| wav(&samples));
     }
     crate::pictures::bytes_for_kind(name, &["ogg", "wav", "mp3"])
@@ -355,6 +424,17 @@ mod tests {
         // The hum loops: its ends meet.
         let hum = synth("hum").unwrap();
         assert!((hum[0] - hum[hum.len() - 1]).abs() < 0.1);
+    }
+
+    #[test]
+    fn sound_files_are_ogg() {
+        for (name, bytes) in FILES {
+            assert_eq!(&bytes[0..4], b"OggS", "{name}");
+            assert_eq!(bytes_for(&format!("{BUILT_IN}{name}")).as_deref(), Some(*bytes));
+        }
+        for set in ["sfx", "piano", "nes", "futuristic"] {
+            assert!(bytes_for(&format!("{BUILT_IN}lichess/{set}/move")).is_some());
+        }
     }
 
     #[test]
