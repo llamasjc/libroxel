@@ -137,7 +137,9 @@ pub fn open(path: &Path) -> Result<(InstanceTree, Report), ImportError> {
     let bytes = std::fs::read(path).map_err(ImportError::Read)?;
     let dom = read_dom(&bytes)?;
     let mut tree = InstanceTree::new();
-    let report = import_place(&mut tree, &dom);
+    let mut importer = Importer::new(&dom);
+    importer.assets = path.parent().map(|p| p.join("assets"));
+    let report = importer.place(&mut tree);
     tree.drain_changes();
     Ok((tree, report))
 }
@@ -145,38 +147,46 @@ pub fn open(path: &Path) -> Result<(InstanceTree, Report), ImportError> {
 /// Puts a place's services' contents into `tree`'s services (or, for a
 /// model file, its instances into the workspace).
 pub fn import_place(tree: &mut InstanceTree, dom: &WeakDom) -> Report {
-    let mut importer = Importer::new(dom);
-    let root = dom.root();
-    let is_place = root.children().iter().filter_map(|r| dom.get_by_ref(*r)).any(|i| i.class == "Workspace");
-    if is_place {
-        for &child in root.children() {
-            let Some(inst) = dom.get_by_ref(child) else { continue };
-            let class = names::service_alias(inst.class.as_str());
-            match names::class_from_name(class).and_then(|c| tree.service(c)) {
-                Some(service) => {
-                    importer.properties(tree, inst, service);
-                    importer.children(tree, inst, service);
+    Importer::new(dom).place(tree)
+}
+
+impl Importer<'_> {
+    fn place(mut self, tree: &mut InstanceTree) -> Report {
+        let importer = &mut self;
+        let dom = importer.dom;
+        let root = dom.root();
+        let is_place =
+            root.children().iter().filter_map(|r| dom.get_by_ref(*r)).any(|i| i.class == "Workspace");
+        if is_place {
+            for &child in root.children() {
+                let Some(inst) = dom.get_by_ref(child) else { continue };
+                let class = names::service_alias(inst.class.as_str());
+                match names::class_from_name(class).and_then(|c| tree.service(c)) {
+                    Some(service) => {
+                        importer.properties(tree, inst, service);
+                        importer.children(tree, inst, service);
+                    }
+                    // Something that isn't a service, left at the top: it goes in the workspace.
+                    None if !importer.is_service(inst.class.as_str()) => {
+                        let ws = tree.workspace();
+                        importer.instance(tree, inst, ws);
+                    }
+                    // Studio's own bookkeeping.
+                    None if inst.class == "Instance" => {}
+                    // A service Libroxel doesn't have: only worth a mention if it held anything.
+                    None if !inst.children().is_empty() => {
+                        importer.report.skipped_services.push(inst.class.to_string())
+                    }
+                    None => {}
                 }
-                // Something that isn't a service, left at the top: it goes in the workspace.
-                None if !importer.is_service(inst.class.as_str()) => {
-                    let ws = tree.workspace();
-                    importer.instance(tree, inst, ws);
-                }
-                // Studio's own bookkeeping.
-                None if inst.class == "Instance" => {}
-                // A service Libroxel doesn't have: only worth a mention if it held anything.
-                None if !inst.children().is_empty() => {
-                    importer.report.skipped_services.push(inst.class.to_string())
-                }
-                None => {}
             }
+        } else {
+            let ws = tree.workspace();
+            importer.children(tree, root, ws);
         }
-    } else {
-        let ws = tree.workspace();
-        importer.children(tree, root, ws);
+        importer.finish(tree);
+        self.report
     }
-    importer.finish(tree);
-    importer.report
 }
 
 /// Puts a model file's instances under `parent`, returning them and the report.
@@ -195,6 +205,8 @@ struct Importer<'a> {
     made: HashMap<Ref, InstanceId>,
     /// Links to set once everything is made.
     links: Vec<(InstanceId, Property, Ref)>,
+    /// Where files for asset numbers are kept, beside the opened file.
+    assets: Option<std::path::PathBuf>,
 }
 
 impl<'a> Importer<'a> {
@@ -205,6 +217,7 @@ impl<'a> Importer<'a> {
             report: Report::default(),
             made: HashMap::new(),
             links: Vec::new(),
+            assets: None,
         }
     }
 
@@ -280,16 +293,31 @@ impl<'a> Importer<'a> {
     fn shape_from_file(&mut self, tree: &mut InstanceTree, inst: &Instance, id: InstanceId) {
         let made = match inst.class.as_str() {
             "UnionOperation" | "NegateOperation" | "PartOperation" => {
-                let data = |name: &str| inst.properties.get(&name.into()).and_then(bytes_of);
-                let shape = data("MeshData")
+                let own =
+                    |name: &str| inst.properties.get(&name.into()).and_then(bytes_of).map(<[u8]>::to_vec);
+                let (mut mesh, mut physics) = (own("MeshData"), own("PhysicsData"));
+                let online =
+                    match inst.properties.get(&"AssetId".into()).or(inst.properties.get(&"Content".into())) {
+                        Some(Variant::ContentId(c)) => Some(c.as_str().to_owned()),
+                        Some(Variant::Content(c)) => c.as_uri().map(str::to_owned),
+                        _ => None,
+                    }
+                    .filter(|u| !u.trim().is_empty());
+                if mesh.as_ref().is_none_or(|m| m.is_empty())
+                    && let Some(id) = online.as_deref().and_then(asset_number)
+                    && let Some((m, p)) = self.union_asset(&id)
+                {
+                    (mesh, physics) = (Some(m), p.or(physics));
+                }
+                let shape = mesh
+                    .as_deref()
                     .and_then(meshes::union_graphics)
-                    .or_else(|| data("PhysicsData").and_then(meshes::union_physics));
+                    .or_else(|| physics.as_deref().and_then(meshes::union_physics));
                 match shape {
                     Some(shape) => {
                         let text = shape.to_obj();
                         let name = meshes::file_name("union", &text);
-                        // What it bumps into: the union's own collision pieces.
-                        if let Some(collision) = data("PhysicsData").and_then(meshes::union_collision) {
+                        if let Some(collision) = physics.as_deref().and_then(meshes::union_collision) {
                             let file = format!("{}.collision.obj", name.trim_end_matches(".obj"));
                             if !self.report.files.iter().any(|(n, _)| *n == file) {
                                 self.report.files.push((file, collision.into_bytes()));
@@ -298,7 +326,14 @@ impl<'a> Importer<'a> {
                         Some((name, text))
                     }
                     None => {
-                        self.report.skip(inst.class.as_str(), "MeshData");
+                        match online {
+                            Some(url) => {
+                                if tree.set(id, Property::MeshId, PropertyValue::String(url)).is_ok() {
+                                    self.report.properties += 1;
+                                }
+                            }
+                            None => self.report.skip(inst.class.as_str(), "MeshData"),
+                        }
                         None
                     }
                 }
@@ -328,6 +363,24 @@ impl<'a> Importer<'a> {
         if !self.report.files.iter().any(|(n, _)| *n == name) {
             self.report.files.push((name, text.into_bytes()));
         }
+    }
+
+    /// A union's shape saved from its asset number, as a file in `assets`
+    /// beside the opened file: its `MeshData` and `PhysicsData`.
+    fn union_asset(&self, id: &str) -> Option<(Vec<u8>, Option<Vec<u8>>)> {
+        let dir = self.assets.as_ref()?;
+        let bytes =
+            ["", ".rbxm", ".rbxmx"].iter().find_map(|e| std::fs::read(dir.join(format!("{id}{e}"))).ok())?;
+        if bytes.starts_with(b"CSG") {
+            return Some((bytes, None));
+        }
+        let dom = read_dom(&bytes).ok()?;
+        dom.descendants().find_map(|i| {
+            let get = |n: &str| {
+                i.properties.get(&n.into()).and_then(bytes_of).filter(|b| !b.is_empty()).map(<[u8]>::to_vec)
+            };
+            Some((get("MeshData")?, get("PhysicsData")))
+        })
     }
 
     /// An old-style mesh inside a part: changes the part's shape, or gives
@@ -787,6 +840,17 @@ fn renamed(name: &str) -> &str {
 }
 
 /// The bytes of a binary property, however the file stored them.
+/// The number in `rbxassetid://123` or `https://www.roblox.com/asset/?id=123`.
+fn asset_number(url: &str) -> Option<String> {
+    let lower = url.trim().to_ascii_lowercase();
+    let rest = match lower.strip_prefix("rbxassetid://") {
+        Some(rest) => rest,
+        None => &lower[lower.find("id=")? + 3..],
+    };
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    (!digits.is_empty()).then_some(digits)
+}
+
 fn bytes_of(value: &Variant) -> Option<&[u8]> {
     match value {
         Variant::BinaryString(b) => Some(b.as_ref()),

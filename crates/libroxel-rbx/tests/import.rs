@@ -312,3 +312,47 @@ fn expanded_terrain_is_named_as_left_out() {
     assert_eq!(report.terrain_cells, 0);
     assert!(report.summary().iter().any(|l| l.contains("expanded terrain")), "{:?}", report.summary());
 }
+
+#[test]
+fn published_unions_take_their_shape_from_a_saved_asset() {
+    let source = libroxel_rbx::read_dom(&std::fs::read(file("unions-xml.rbxmx")).unwrap()).unwrap();
+    let union = source
+        .descendants()
+        .find(|i| i.class == "UnionOperation" && i.properties.contains_key(&"MeshData".into()))
+        .unwrap();
+    let mut asset = InstanceBuilder::new("PartOperationAsset");
+    for name in ["MeshData", "PhysicsData"] {
+        if let Some(v) = union.properties.get(&name.into()) {
+            asset = asset.with_property(name, v.clone());
+        }
+    }
+    let dir = std::env::temp_dir().join(format!("unions-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    let save = |dom: &WeakDom, path: PathBuf| {
+        let mut out = Vec::new();
+        rbx_binary::to_writer(&mut out, dom, dom.root().children()).unwrap();
+        std::fs::write(path, out).unwrap();
+    };
+    save(&WeakDom::new(InstanceBuilder::new("DataModel").with_child(asset)), dir.join("assets/123.rbxm"));
+    let place = |id: &str| {
+        WeakDom::new(
+            InstanceBuilder::new("DataModel").with_child(
+                InstanceBuilder::new("Workspace").with_child(
+                    InstanceBuilder::new("UnionOperation")
+                        .with_name("Online")
+                        .with_property("AssetId", Variant::ContentId(format!("rbxassetid://{id}").into())),
+                ),
+            ),
+        )
+    };
+    save(&place("123"), dir.join("a.rbxl"));
+    save(&place("456"), dir.join("b.rbxl"));
+
+    let (tree, report) = libroxel_rbx::open(&dir.join("a.rbxl")).unwrap();
+    let name = tree.get_string(find(&tree, "Online"), Property::MeshId).unwrap();
+    assert!(name.starts_with("union-"), "{name}");
+    assert!(report.files.iter().any(|(n, _)| *n == name));
+    let (tree, _) = libroxel_rbx::open(&dir.join("b.rbxl")).unwrap();
+    assert_eq!(tree.get_string(find(&tree, "Online"), Property::MeshId).unwrap(), "rbxassetid://456");
+    let _ = std::fs::remove_dir_all(dir);
+}

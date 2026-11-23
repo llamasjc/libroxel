@@ -152,10 +152,58 @@ pub fn parse_roblox_mesh(bytes: &[u8]) -> Option<Model> {
     fit(soup)
 }
 
+/// Reads a union's shape as Roblox serves it for a union's asset.
+pub fn parse_union(bytes: &[u8]) -> Option<Model> {
+    use rbx_mesh::union_graphics::UnionGraphics;
+    let corner = |pos: [f32; 3], tex: [f32; 2], norm: [f32; 3]| -> Corner {
+        (Vec3::from_array(pos), Some(Vec2::from_array(tex)), Some(Vec3::from_array(norm)))
+    };
+    let mut soup = Vec::new();
+    match rbx_mesh::read_union_graphics_versioned(std::io::Cursor::new(bytes)).ok()? {
+        UnionGraphics::CSGK(_) => return None,
+        UnionGraphics::V2(m) => {
+            let v = &m.mesh.vertices;
+            for f in &m.mesh.faces {
+                let ids = [f[0].0, f[1].0, f[2].0].map(|i| i as usize);
+                if ids.iter().all(|&i| i < v.len()) {
+                    soup.extend(ids.map(|i| corner(v[i].pos, v[i].tex, v[i].norm)));
+                }
+            }
+        }
+        UnionGraphics::V4(m) => {
+            let v = &m.mesh.vertices;
+            for f in &m.mesh.faces {
+                let ids = [f[0].0, f[1].0, f[2].0].map(|i| i as usize);
+                if ids.iter().all(|&i| i < v.len()) {
+                    soup.extend(ids.map(|i| corner(v[i].pos, v[i].tex, v[i].norm)));
+                }
+            }
+        }
+        UnionGraphics::V5(m) => {
+            let n = m.positions.len();
+            for f in m.faces.indices.as_chunks::<3>().0 {
+                let ids = f.map(|i| i as usize);
+                if ids.iter().all(|&i| i < n) {
+                    soup.extend(ids.map(|i| {
+                        (
+                            Vec3::from_array(m.positions[i]),
+                            m.tex.get(i).map(|t| Vec2::from_array(*t)),
+                            m.normals.get(i).map(|n| Vec3::from_array(n.0)),
+                        )
+                    }));
+                }
+            }
+        }
+    }
+    fit(soup)
+}
+
 /// Reads a model from a file's bytes, whichever kind it is.
 pub fn parse(bytes: &[u8]) -> Option<Model> {
     if bytes.starts_with(b"version ") {
         parse_roblox_mesh(bytes)
+    } else if bytes.starts_with(b"CSG") {
+        parse_union(bytes)
     } else {
         parse_obj(&String::from_utf8_lossy(bytes))
     }
