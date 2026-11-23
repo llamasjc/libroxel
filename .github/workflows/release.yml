@@ -309,6 +309,7 @@ jobs:
         with:
           key: dist-android
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -370,6 +371,7 @@ jobs:
         with:
           key: dist-ios
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
       - name: Build
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
