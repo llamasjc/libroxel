@@ -265,6 +265,8 @@ pub fn editor_ui(
     // Everything in the Output also goes to a log file.
     editor.log_file.write_new(&engine.log);
     crate::report::crash_screen(&ctx, &mut editor.crash);
+    recovery_screen(&ctx, engine, editor);
+    keep_unsaved_copy(engine, editor, now);
     // Model files dropped on the window come in as parts.
     for file in ctx.input(|i| i.raw.dropped_files.clone()) {
         let path = file.path();
@@ -2867,6 +2869,74 @@ fn replace_world(engine: &mut EngineState, editor: &mut Editor, tree: InstanceTr
     editor.file = file;
     editor.imported_from = None;
     editor.dirty = false;
+}
+
+/// Every so often, a copy of unsaved work goes beside the app's settings,
+/// so a crash doesn't lose it (see `autosave`).
+fn keep_unsaved_copy(engine: &mut EngineState, editor: &mut Editor, now: f64) {
+    // Someone else's shared game is theirs to save.
+    let guest = editor.coedit.as_ref().is_some_and(|c| c.is_guest());
+    let held = editor.recovered.is_some() || editor.crash.is_some();
+    let dir = crate::autosave::dir();
+    let failed = {
+        let tree = engine.tree.borrow();
+        let source = editor.edit_snapshot.as_ref().unwrap_or(&tree);
+        let file = editor.file.clone();
+        editor.autosave.tick(&dir, now, editor.dirty && !guest, held, |dir| {
+            crate::autosave::write(dir, source, file.as_deref())
+        })
+    };
+    if let Some(error) = failed {
+        log(engine, LogLevel::Warn, error);
+    }
+}
+
+/// Offers back the unsaved work a crash or a closed window left behind.
+fn recovery_screen(ctx: &egui::Context, engine: &mut EngineState, editor: &mut Editor) {
+    let Some(found) = editor.recovered.as_ref() else { return };
+    // The crash screen comes first.
+    if editor.crash.is_some() {
+        return;
+    }
+    let mut open = false;
+    let mut discard = false;
+    egui::Modal::new(egui::Id::new("recovered")).show(ctx, |ui| {
+        ui.set_max_width(460.0);
+        ui.heading("Unsaved work");
+        ui.add_space(6.0);
+        ui.label(format!(
+            "Libroxel closed before {} was saved. A copy from {} was kept.",
+            found.name(),
+            found.age(crate::autosave::now())
+        ));
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            open = ui.button("Open the copy").clicked();
+            discard = ui.button("Throw it away").clicked();
+        });
+    });
+    if open {
+        let found = editor.recovered.take().expect("shown above");
+        match place::load(&found.text) {
+            Ok((tree, _)) => {
+                replace_world(engine, editor, tree, found.file.clone());
+                // It still needs saving, and the copy stays until it is.
+                editor.dirty = true;
+                editor.autosave.adopt();
+                log(
+                    engine,
+                    LogLevel::Info,
+                    format!("Opened the copy of {}; save it to keep it", found.name()),
+                );
+            }
+            Err(e) => {
+                log(engine, LogLevel::Error, format!("Could not open the copy of {}: {e}", found.name()))
+            }
+        }
+    } else if discard {
+        editor.recovered = None;
+        crate::autosave::clear(&crate::autosave::dir());
+    }
 }
 
 fn save_to(engine: &mut EngineState, editor: &mut Editor, path: PathBuf) {

@@ -334,6 +334,10 @@ The first build compiles Bevy and takes a while. After that it is quick.
     with people in the server. Wins are saved with the game's data.
 - **Undo/redo** with Ctrl+Z and Ctrl+Y. **Save** with Ctrl+S. Games are
   saved as `.lrx` files in `~/Projects/libroxel-games/` by default.
+- **Unsaved work is kept:** while a game has changes that aren't saved, a
+  copy is written every minute (to `recovery/` in Libroxel's settings
+  folder, `~/.config/libroxel/` on Linux and macOS). If the app crashes or
+  closes first, the next start offers to open the copy. Saving deletes it.
 
 ## Bringing in games from Roblox Studio
 

@@ -15,6 +15,7 @@
 //! ```
 
 mod accounts;
+mod autosave;
 mod browse;
 mod command;
 mod debugging;
@@ -195,6 +196,10 @@ pub struct Editor {
     /// Show an error or warning that repeats once, with how many times.
     pub group_repeats: bool,
     pub crash: Option<String>,
+    /// Keeps a copy of unsaved work in case the app closes before it's saved.
+    pub autosave: autosave::Autosave,
+    /// Unsaved work from last time, while the player is asked about it.
+    pub recovered: Option<autosave::Recovered>,
 }
 
 /// A game carried over the internet with a join code.
@@ -265,6 +270,8 @@ impl Default for Editor {
             show_errors: true,
             group_repeats: true,
             crash: None,
+            autosave: autosave::Autosave::default(),
+            recovered: None,
         }
     }
 }
@@ -344,8 +351,12 @@ pub fn run() {
         // Typing `libroxel` in a terminal opens this copy too.
         command::install();
     }
-    let mut editor =
-        Editor { platform: browse::Platform::start(), crash: report::take_crash(), ..Editor::default() };
+    let mut editor = Editor {
+        platform: browse::Platform::start(),
+        crash: report::take_crash(),
+        recovered: autosave::read(&autosave::dir()),
+        ..Editor::default()
+    };
     editor.touch.seen = MOBILE;
     stats::start(editor.crash.as_deref());
     let mut notes = Vec::new();
