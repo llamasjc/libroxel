@@ -398,6 +398,8 @@ pub(crate) struct Host {
     /// When the last frame's waiting threads were resumed, to size the share
     /// of the next frame by how long frames really take.
     last_step: Cell<Option<Instant>>,
+    /// Every waiting thread runs each step, however long it takes.
+    pub(crate) steady: Cell<bool>,
     /// The tree's destroy count when destroyed scripts were last looked for.
     destroys_seen: Cell<Option<u64>>,
     /// Where the workspace's parts are, for raycasts and part queries.
@@ -2193,6 +2195,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         script_cost: RefCell::new(std::collections::HashMap::new()),
         heavy_debt: Cell::new(Duration::ZERO),
         last_step: Cell::new(None),
+        steady: Cell::new(false),
         destroys_seen: Cell::new(None),
         part_index: RefCell::new(libroxel_instance::geometry::PartIndex::new()),
         tweens: RefCell::new(Vec::new()),
@@ -2792,7 +2795,7 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
         let heavy = expected > HEAVY_RESUME;
         let over = ran_heavy && budget_start.elapsed() + expected > share;
         let late = now - w.resume_at > MAX_LATE;
-        if heavy && !w.parallel && !late && (over || !debt.is_zero()) {
+        if heavy && !w.parallel && !late && !host(lua).steady.get() && (over || !debt.is_zero()) {
             host(lua).waiting.borrow_mut().push(w);
             continue;
         }

@@ -482,6 +482,12 @@ impl ScriptRuntime {
         bindings::host(&self.lua).net.borrow_mut().role = role;
     }
 
+    /// Runs every waiting thread each step, however long it takes, so a
+    /// game plays out the same on a slow computer (for tests).
+    pub fn set_steady(&self, on: bool) {
+        bindings::host(&self.lua).steady.set(on);
+    }
+
     pub fn net_role(&self) -> NetRole {
         net::role(&self.lua)
     }
