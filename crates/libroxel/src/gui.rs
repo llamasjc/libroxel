@@ -3,7 +3,7 @@
 //! While playing, these are the player's own copies; while editing, the
 //! starter GUIs are shown as a preview so they can be laid out and selected.
 
-use bevy_egui::egui::{self, Align2, Color32, FontId, Pos2, Rect, Stroke, StrokeKind};
+use bevy_egui::egui::{self, Align2, Color32, Pos2, Rect, Stroke, StrokeKind};
 use libroxel_instance::{
     ClassKind, Color3, InstanceId, InstanceTree, Property, PropertyValue, UDim, UDim2, Vec2, Vec3,
 };
@@ -287,7 +287,7 @@ fn measure_text(text: &str, size: f32, width: f32, rich: Option<f32>) -> (f32, f
                 Some(k) => crate::rich_text::job(text, size, Color32::WHITE, width, k),
                 None => egui::text::LayoutJob::simple(
                     text.to_owned(),
-                    FontId::proportional(size),
+                    crate::rich_text::font(size),
                     Color32::WHITE,
                     width,
                 ),
@@ -451,7 +451,7 @@ fn draw_text(
         let mut job = if rich {
             crate::rich_text::job(&text, size, colour, width, scale)
         } else {
-            egui::text::LayoutJob::simple(text.clone(), FontId::proportional(size), colour, width)
+            egui::text::LayoutJob::simple(text.clone(), crate::rich_text::font(size), colour, width)
         };
         job.halign = halign;
         painter.layout_job(job)
@@ -465,10 +465,10 @@ fn draw_text(
         None => (1.0, 100.0),
     };
     let galley = if scaled {
-        // The biggest size that fits, found by halving the gap a few times.
-        let (mut lo, mut hi) = (least, most);
-        for _ in 0..8 {
-            let mid = (lo + hi) / 2.0;
+        // The biggest whole size that fits, found by halving the gap.
+        let (mut lo, mut hi) = (least.round().max(1.0), most.round().max(1.0) + 1.0);
+        while hi - lo > 1.0 {
+            let mid = ((lo + hi) / 2.0).floor();
             let g = lay(mid);
             if g.size().x <= rect.width() + 0.5 && g.size().y <= rect.height() + 0.5 {
                 lo = mid;

@@ -21,6 +21,13 @@ struct Style {
     mark: Option<Color32>,
 }
 
+/// A font at `size` points, rounded to whole points: every size used keeps
+/// its own letters in the font texture, and once that fills up all text is
+/// drawn again from scratch, which blanks the screen for a frame.
+pub fn font(size: f32) -> FontId {
+    FontId::proportional(size.round().max(1.0))
+}
+
 /// Text laid out with its tags read: `text` at `size` in `colour`, wrapped
 /// at `width`; `scale` is how many screen points a GUI pixel is (for sizes
 /// the tags give).
@@ -222,7 +229,7 @@ fn push(job: &mut LayoutJob, text: &str, style: Style) {
         return;
     }
     let mut format = TextFormat {
-        font_id: FontId::proportional(style.size),
+        font_id: font(style.size),
         color: style.colour,
         italics: style.italics,
         ..Default::default()
@@ -238,7 +245,7 @@ fn push(job: &mut LayoutJob, text: &str, style: Style) {
     }
     if style.bold {
         // No bold face among the fonts: a slightly bigger, solid run reads as bold.
-        format.font_id = FontId::proportional(style.size * 1.04);
+        format.font_id = font(style.size * 1.04);
     }
     if style.small_caps {
         // Lower-case letters as smaller capitals.
@@ -266,7 +273,7 @@ fn small_caps_run(job: &mut LayoutJob, run: &str, lower: bool, format: &TextForm
     }
     let mut format = format.clone();
     if lower {
-        format.font_id = FontId::proportional(size * 0.8);
+        format.font_id = font(size * 0.8);
     }
     job.append(&run.to_uppercase(), 0.0, format);
 }
