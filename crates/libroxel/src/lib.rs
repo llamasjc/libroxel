@@ -387,6 +387,10 @@ pub fn run() {
         ..default()
     }))
     .add_plugins(EguiPlugin::default())
+    .configure_sets(
+        PostUpdate,
+        bevy_egui::EguiPostUpdateSet::PostProcessOutput.before(bevy::asset::AssetEventSystems),
+    )
     .insert_non_send({
         let mut engine = EngineState::new(tree);
         engine.log.extend(notes.into_iter().map(|text| libroxel_engine::LogEntry {
