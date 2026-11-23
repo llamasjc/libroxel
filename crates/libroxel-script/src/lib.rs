@@ -159,6 +159,7 @@ impl ScriptRuntime {
                 "_G",
             ]),
         );
+        #[cfg(not(target_arch = "arm"))]
         lua.enable_jit(!cfg!(target_os = "ios"));
         bindings::install(&lua, tree.clone())?;
         // Freeze the standard library and our globals; each script gets its

@@ -17,5 +17,11 @@ rbx_reflection = "7.0"
 rbx_reflection_database = "3.0"
 rbx_types = "3.1"
 
+# Luau's JIT only makes code for 64-bit processors. On 32-bit ARM it would do
+# nothing, and its code needs `__clear_cache`, which 32-bit Android doesn't
+# have, so the app can't even load there.
+[target.'cfg(not(target_arch = "arm"))'.dependencies]
+mlua = { workspace = true, features = ["luau-jit"] }
+
 [lints]
 workspace = true
