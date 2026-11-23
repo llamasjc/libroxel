@@ -571,6 +571,7 @@ impl Plugin for RenderPlugin {
             .add_systems(Update, crate::terrain_view::sync_terrain.after(EngineSet::Sync))
             .add_systems(Update, update_lighting.after(EngineSet::Sync))
             .init_resource::<GraphicsQuality>()
+            .init_resource::<SelfFade>()
             .add_systems(Update, auto_quality.after(EngineSet::Sync))
             .add_plugins((crate::effects::EffectsPlugin, crate::sounds::SoundPlugin));
         crate::view_effects::build(app);
@@ -1880,19 +1881,29 @@ fn place_follow(
     transform: &mut Transform,
     tree: &InstanceTree,
     followed: &Followed,
+    (locked, closest, farthest): (bool, f32, f32),
     dt: f32,
 ) {
     use crate::camera;
+    let zoom = |zoom: f32| {
+        if locked {
+            camera::MIN_DISTANCE
+        } else {
+            zoom.clamp(closest.max(camera::MIN_DISTANCE), farthest.max(closest).min(camera::MAX_DISTANCE))
+        }
+    };
     if rig.following != Some(followed.root) {
         if rig.following.is_none() {
             // Just started playing: start behind, at the usual distance.
-            (rig.zoom, rig.distance) = (camera::START_DISTANCE, camera::START_DISTANCE);
-            rig.pitch = camera::START_PITCH;
+            rig.zoom = zoom(camera::START_DISTANCE);
+            rig.distance = rig.zoom;
+            rig.pitch = if rig.zoom <= camera::FIRST_PERSON { 0.0 } else { camera::START_PITCH };
         }
         rig.yaw = camera::behind(followed.yaw);
         rig.following = Some(followed.root);
         rig.shown = rig.distance;
     }
+    rig.zoom = zoom(rig.zoom);
     // Driving: the camera keeps swinging round behind the vehicle, so
     // forward on the keys is always forward on the screen.
     if let Some(yaw) = followed.driving {
@@ -1952,6 +1963,7 @@ fn follow_camera(
             == Some(EnumValue::CameraType(libroxel_instance::CameraType::Scriptable));
         (scripted, tree.get_number(cam, Property::FieldOfView).unwrap_or(70.0) as f32)
     });
+    let limits = session.map_or((false, 0.0, f32::MAX), |s| s.runtime().camera_settings());
     for (mut rig, mut transform, mut projection) in &mut rigs {
         let wanted_fov = if engine.is_playing() { fov.to_radians() } else { 70f32.to_radians() };
         if let Projection::Perspective(p) = &mut *projection
@@ -1970,7 +1982,7 @@ fn follow_camera(
         }
         let Some(cam) = camera else {
             if let Some(f) = &followed {
-                place_follow(&mut rig, &mut transform, &engine.tree.borrow(), f, dt);
+                place_follow(&mut rig, &mut transform, &engine.tree.borrow(), f, limits, dt);
             }
             continue;
         };
@@ -1983,7 +1995,7 @@ fn follow_camera(
             continue;
         }
         if let Some(f) = &followed {
-            place_follow(&mut rig, &mut transform, &tree, f, dt);
+            place_follow(&mut rig, &mut transform, &tree, f, limits, dt);
         }
         // Tell scripts where the camera is.
         let (y, x, z) = transform.rotation.to_euler(EulerRot::YXZ);
@@ -2006,6 +2018,13 @@ fn follow_camera(
     }
 }
 
+/// How faded the player's own character is.
+#[derive(Resource, Default, PartialEq)]
+struct SelfFade {
+    model: Option<InstanceId>,
+    fade: f32,
+}
+
 /// Fades the player's own body as the camera comes in close, and hides it
 /// in first person. Held tools stay.
 fn hide_self_in_first_person(
@@ -2015,6 +2034,7 @@ fn hide_self_in_first_person(
     mut faded: Local<std::collections::HashMap<Entity, (f32, f32)>>,
     mut parts: Query<&mut PartAppearance, With<PartLink>>,
     mut clusters: ResMut<crate::clusters::Clusters>,
+    mut own: ResMut<SelfFade>,
 ) {
     let shown = rigs
         .iter()
@@ -2022,6 +2042,8 @@ fn hide_self_in_first_person(
         .map(|rig| rig.shown)
         .reduce(f32::min);
     let fade = shown.map_or(0.0, crate::camera::self_fade);
+    let model = engine.session.as_ref().and_then(|s| s.character()).map(|c| c.model);
+    own.set_if_neq(SelfFade { model, fade });
     let wanted: Vec<Entity> = match engine.session.as_ref().and_then(|s| s.character()) {
         Some(c) if fade > 0.0 => {
             let tree = engine.tree.borrow();
@@ -2070,15 +2092,31 @@ fn hide_self_in_first_person(
 }
 
 /// In first person the mouse pointer is hidden and held in the middle of
-/// the window, so moving the mouse only looks round.
+/// the window, so moving the mouse only looks round. Turning the camera
+/// with the right button held keeps it where it was.
 fn lock_cursor(
     engine: NonSend<EngineState>,
     capture: Res<InputCapture>,
+    mouse: Res<ButtonInput<MouseButton>>,
     rigs: Query<&CameraRig>,
     mut windows: Query<(&mut Window, &mut bevy::window::CursorOptions), With<bevy::window::PrimaryWindow>>,
+    mut held_at: Local<Option<Vec2>>,
 ) {
-    let lock = engine.is_playing() && !capture.keyboard && rigs.iter().any(first_person);
+    let playing = engine.is_playing() && !capture.keyboard;
+    let first = playing && rigs.iter().any(first_person);
+    let turning = playing
+        && !first
+        && mouse.pressed(MouseButton::Right)
+        && (held_at.is_some() || !capture.pointer)
+        && rigs.iter().any(|r| r.mode == CameraMode::Follow);
     for (mut window, mut cursor) in &mut windows {
+        if turning && held_at.is_none() {
+            *held_at = window.cursor_position();
+        }
+        if !turning && let Some(at) = held_at.take() {
+            window.set_cursor_position(Some(at));
+        }
+        let lock = first || turning;
         let mode =
             if lock { bevy::window::CursorGrabMode::Locked } else { bevy::window::CursorGrabMode::None };
         if cursor.grab_mode != mode {
@@ -2086,9 +2124,9 @@ fn lock_cursor(
             cursor.visible = !lock;
         }
         if lock && window.focused {
-            let middle = Vec2::new(window.width(), window.height()) / 2.0;
-            if window.cursor_position().is_some_and(|at| at.distance(middle) > 1.0) {
-                window.set_cursor_position(Some(middle));
+            let keep = held_at.unwrap_or(Vec2::new(window.width(), window.height()) / 2.0);
+            if window.cursor_position().is_some_and(|at| at.distance(keep) > 1.0) {
+                window.set_cursor_position(Some(keep));
             }
         }
     }
@@ -2334,6 +2372,7 @@ struct DecalPictures {
 }
 
 /// Draws every decal and texture on the side of its part.
+#[allow(clippy::too_many_arguments)]
 fn sync_decals(
     engine: NonSend<EngineState>,
     mut commands: Commands,
@@ -2342,10 +2381,25 @@ fn sync_decals(
     mut images: ResMut<Assets<Image>>,
     mut pictures: Local<DecalPictures>,
     mut drawn: Query<(Entity, &mut DecalLink, &mut Transform, &MeshMaterial3d<StandardMaterial>)>,
+    own: Res<SelfFade>,
 ) {
     use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
     let Some(meshes) = meshes else { return };
     let tree = engine.tree.borrow();
+    let faded = |part: InstanceId| {
+        let Some(model) = own.model else { return false };
+        let mut at = tree.parent(part).ok().flatten();
+        while let Some(a) = at {
+            if a == model {
+                return true;
+            }
+            if tree.class(a) == Ok(ClassKind::Tool) {
+                return false;
+            }
+            at = tree.parent(a).ok().flatten();
+        }
+        false
+    };
     let mut wanted: HashMap<InstanceId, (Transform, DecalLook)> = HashMap::new();
     for class in [ClassKind::Decal, ClassKind::Texture] {
         for id in tree.descendants_of_class(tree.workspace(), class) {
@@ -2369,10 +2423,14 @@ fn sync_decals(
                 let per = |p| (tree.get_number(id, p).unwrap_or(2.0) as f32).max(0.01);
                 extent / Vec2::new(per(Property::StudsPerTileU), per(Property::StudsPerTileV))
             });
+            let mut transparency = tree.get_number(id, Property::Transparency).unwrap_or(0.0) as f32;
+            if own.fade > 0.0 && faded(part) {
+                transparency = 1.0 - (1.0 - transparency) * (1.0 - own.fade);
+            }
             let look = DecalLook {
                 picture: tree.get_string(id, Property::Texture).unwrap_or_default().trim().to_owned(),
                 tint: tree.get_color(id, Property::DecalColor).unwrap_or(libroxel_instance::Color3::WHITE),
-                transparency: tree.get_number(id, Property::Transparency).unwrap_or(0.0) as f32,
+                transparency,
                 tiles,
             };
             if look.picture.is_empty() || look.transparency >= 0.999 {

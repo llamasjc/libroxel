@@ -196,7 +196,11 @@ pub(crate) enum ClientSays {
     /// Pressed (or let go of) the mouse button over the world.
     Activate(bool),
     /// Used (or let go of) a proximity prompt.
-    Prompt { prompt: InstanceId, ended: bool },
+    Prompt {
+        prompt: InstanceId,
+        ended: bool,
+    },
+    Reset,
 }
 
 // ---------------------------------------------------------------------------
@@ -736,6 +740,7 @@ impl PlaySession {
         let message = match says {
             ClientSays::Tool(slot) => json!({ "t": "tool", "slot": slot }),
             ClientSays::Activate(down) => json!({ "t": "activate", "down": down }),
+            ClientSays::Reset => json!({ "t": "reset" }),
             ClientSays::Click(part) => match host_id(part) {
                 Some(p) => json!({ "t": "click", "p": p }),
                 None => return,
@@ -853,6 +858,7 @@ impl PlaySession {
                             self.toggle_tool_for(index, slot as usize);
                         }
                     }
+                    "reset" => self.reset_character_for(index),
                     "activate" => {
                         let down = message.get("down").and_then(Json::as_bool).unwrap_or(false);
                         let tool = self.avatars[index].character.and_then(|c| {

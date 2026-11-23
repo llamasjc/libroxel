@@ -937,3 +937,52 @@ fn each_key_uses_the_nearest_prompt_for_that_key() {
     assert!(log.iter().any(|l| l == "used H"), "{log:?}");
     assert!(!log.iter().any(|l| l == "used E"), "{log:?}");
 }
+
+#[test]
+fn reset_kills_the_character_and_it_respawns() {
+    let mut session = start_on(world(), true).unwrap();
+    let first = session.character().unwrap();
+    let tree = session.runtime().tree().clone();
+    session.step(DT, CharacterInput::default());
+    assert!(session.can_reset());
+    session.reset_character();
+    session.step(DT, CharacterInput::default());
+    assert_eq!(tree.borrow().get_number(first.humanoid, Property::Health), Some(0.0));
+    for _ in 0..((RESPAWN_DELAY + 1.0) / DT) as usize {
+        session.step(DT, CharacterInput::default());
+    }
+    assert_ne!(session.character().unwrap().model, first.model);
+}
+
+#[test]
+fn reset_can_be_turned_off() {
+    let mut tree = world();
+    script(&mut tree, "NoReset", r#"game:GetService("StarterGui"):SetCore("ResetButtonCallback", false)"#);
+    let mut session = start_on(tree, true).unwrap();
+    session.step(DT, CharacterInput::default());
+    assert!(!session.can_reset());
+}
+
+#[test]
+fn walking_is_as_fast_at_a_low_frame_rate() {
+    for dt in [1.0 / 60.0, 1.0 / 30.0, 1.0 / 15.0] {
+        let mut session = start_on(world(), true).unwrap();
+        let character = session.character().unwrap();
+        let tree = session.runtime().tree().clone();
+        for _ in 0..30 {
+            session.step(DT, CharacterInput::default());
+        }
+        let forward = CharacterInput { move_dir: Vec3::new(1.0, 0.0, 0.0), ..Default::default() };
+        for _ in 0..10 {
+            session.step(dt, forward);
+        }
+        let start = tree.borrow().get_vec3(character.root, Property::Position).unwrap();
+        let frames = (1.0 / dt).round() as usize;
+        for _ in 0..frames {
+            session.step(dt, forward);
+        }
+        let end = tree.borrow().get_vec3(character.root, Property::Position).unwrap();
+        let speed = (end.x - start.x) / (frames as f32 * dt);
+        assert!((speed - 16.0).abs() < 0.2, "{speed} at {dt}");
+    }
+}

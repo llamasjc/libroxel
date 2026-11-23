@@ -385,6 +385,31 @@ impl ScriptRuntime {
             .unwrap_or(true)
     }
 
+    /// The local player's camera: whether it is held in first person
+    /// (`CameraMode.LockFirstPerson`), and how close and far it may zoom.
+    pub fn camera_settings(&self) -> (bool, f32, f32) {
+        self.lua
+            .load(
+                "local p = game:GetService('Players').LocalPlayer \
+                 local s = game:GetService('StarterPlayer') \
+                 local function lock(o) return o ~= nil and string.find(tostring(o.CameraMode), 'LockFirstPerson') ~= nil end \
+                 local low, high = s.CameraMinZoomDistance, s.CameraMaxZoomDistance \
+                 if p then low, high = math.max(low, p.CameraMinZoomDistance), math.min(high, p.CameraMaxZoomDistance) end \
+                 return lock(p) or lock(s), low, high",
+            )
+            .set_name("=camera")
+            .call::<(bool, f32, f32)>(())
+            .unwrap_or((false, 0.5, 400.0))
+    }
+
+    pub fn reset_allowed(&self) -> bool {
+        self.lua
+            .load("return game:GetService('StarterGui'):GetCore('ResetButtonCallback') ~= false")
+            .set_name("=reset")
+            .call::<bool>(())
+            .unwrap_or(true)
+    }
+
     pub fn set_viewport(&self, width: f32, height: f32) {
         world::set_viewport(&self.lua, libroxel_instance::Vec2::new(width, height))
     }
