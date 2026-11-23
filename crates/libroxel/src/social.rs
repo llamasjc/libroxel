@@ -23,6 +23,8 @@ const PRESENCE_EVERY: Duration = Duration::from_secs(15);
 /// How long a ping stays good before a list pings again.
 const PING_EVERY: Duration = Duration::from_secs(20);
 
+const PICKS_EVERY: Duration = Duration::from_secs(30);
+
 /// A game by title, with its id when it has one: a published game's id, or
 /// `starter:<name>` for a starter game.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +96,11 @@ pub struct Social {
     pinged: HashMap<String, Instant>,
     /// The last signed time, so every one is newer.
     clock: i64,
+    pub charts: libroxel_hub::Charts,
+    pub for_you: Option<libroxel_hub::ForYou>,
+    picks_slot: Slot<(libroxel_hub::Charts, Option<libroxel_hub::ForYou>)>,
+    picks_busy: bool,
+    picks_at: Option<Instant>,
 }
 
 impl Social {
@@ -181,6 +188,13 @@ impl Platform {
             }
             social.friends_at = None;
         }
+        if let Some(result) = social.picks_slot.lock().unwrap().take() {
+            social.picks_busy = false;
+            if let Ok((charts, for_you)) = result {
+                social.charts = charts;
+                social.for_you = for_you;
+            }
+        }
         if social.was_playing && !playing {
             social.joined = None;
             social.next_game = None;
@@ -192,7 +206,32 @@ impl Platform {
         {
             self.refresh_friends();
         }
+        if !playing
+            && !self.social.picks_busy
+            && self.social.picks_at.is_none_or(|at| at.elapsed() > PICKS_EVERY)
+        {
+            self.refresh_picks();
+        }
         self.send_presence(playing);
+    }
+
+    pub fn refresh_picks(&mut self) {
+        let time = self.social.stamp();
+        self.social.picks_busy = true;
+        self.social.picks_at = Some(Instant::now());
+        let client = self.client();
+        let signed_in = self.account.is_some();
+        let out = self.social.picks_slot.clone();
+        std::thread::spawn(move || {
+            let result = client.charts().map(|charts| {
+                let for_you = signed_in.then(|| crate::identity().ok()).flatten().and_then(|me| {
+                    let id = me.player_id();
+                    client.for_you(&id, time, &me.sign(&libroxel_hub::for_you_message(&id, time))).ok()
+                });
+                (charts, for_you)
+            });
+            *out.lock().unwrap() = Some(result);
+        });
     }
 
     /// Fetches the friends list again now.

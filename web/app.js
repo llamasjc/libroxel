@@ -32,7 +32,8 @@ const ICON = {
   download: '', signOut: '', signal: '', shield: '', crown: '',
   seal: '', x: '', lock: '', user: '', hammer: '',
   like: '', dislike: '', star: '', trash: '', flag: '',
-  chat: '', send: ''
+  chat: '', send: '',
+  chart: '', profile: '',
 };
 
 // The app's colours, for drawing.
@@ -367,7 +368,7 @@ async function setPassword(secret, playerId, password) {
 // What the Hub lists, kept fresh while the page is open
 // ---------------------------------------------------------------------------
 
-const data = { official: [], games: [], servers: [], friends: null, me: null, loaded: false, error: null };
+const data = { official: [], games: [], servers: [], charts: { charts: [], stats: [] }, forYou: null, friends: null, me: null, loaded: false, error: null };
 
 async function refresh() {
   const list = (path) => api(path).catch((e) => {
@@ -381,6 +382,7 @@ async function refresh() {
       data.games = games;
       data.servers = servers;
       data.error = null;
+      data.charts = await api('/charts').catch(() => data.charts);
       break;
     } catch (e) {
       if (tries > 1) await new Promise((done) => setTimeout(done, 3000));
@@ -396,6 +398,13 @@ async function refresh() {
       data.friends = data.friends || { friends: [], incoming: [], outgoing: [] };
     }
     try {
+      const time = Date.now();
+      const signature = signText(secretKey(), `libroxel for you\n${session.playerId}\n${time}`);
+      data.forYou = await api(`/for-you/${session.playerId}`, { query: { time, signature } });
+    } catch {
+      data.forYou = data.forYou || null;
+    }
+    try {
       data.me = await api(`/accounts/${session.playerId}`);
       if (data.me.name !== session.name) saveSession({ ...session, name: data.me.name }, isRemembered());
     } catch (e) {
@@ -403,6 +412,7 @@ async function refresh() {
     }
   } else {
     data.friends = null;
+    data.forYou = null;
     data.me = null;
   }
   data.loaded = true;
@@ -744,7 +754,7 @@ function parseRoute() {
     case 'user': return { name: 'user', id: parts[1] };
     case 'creator': return { name: 'creator', id: parts[1] };
     case 'messages': return { name: 'messages', id: parts[1] };
-    case 'games': case 'search': case 'friends': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': return { name: parts[0] };
+    case 'games': case 'charts': case 'profile': case 'search': case 'friends': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': return { name: parts[0] };
     default: return { name: 'home' };
   }
 }
@@ -754,9 +764,10 @@ function tabs() {
     el('a', { class: `tab${route.name === name ? ' active' : ''}`, href }, icon(glyph), label);
   document.getElementById('tabs').replaceChildren(
     tab('games', ICON.games, 'Games', '/games'),
-    tab('friends', ICON.users, 'Friends', '/friends'),
+    tab('charts', ICON.chart, 'Charts', '/charts'),
     tab('avatar', ICON.shirt, 'Avatar', '/avatar'),
     tab('creator', ICON.hammer, 'Create', '/creator'),
+    tab('profile', ICON.profile, 'Profile', '/profile'),
     tab('download', ICON.download, 'Download', '/download'),
   );
   // The mark is Home, as in the app.
@@ -772,7 +783,7 @@ function tabs() {
       search,
       messages,
       el('span', { class: 'caps' }, 'Playing as'),
-      el('a', { class: 'name', href: `/user/${data.me?.number ?? session.playerId}` }, session.name || 'You'),
+      el('a', { class: 'name', href: '/profile' }, session.name || 'You'),
       el('button', { class: 'chip iconbtn', title: 'Sign out', onclick: signOut }, icon(ICON.signOut)),
     );
   } else {
@@ -787,6 +798,7 @@ function tabs() {
 function signOut() {
   saveSession(null);
   data.friends = null;
+  data.forYou = null;
   data.me = null;
   chats.list = null;
   chats.talk = [];
@@ -861,7 +873,7 @@ window.addEventListener('unhandledrejection', (e) => crashed(e.reason));
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, games: gamesPage, creator: creatorPage, search: searchPage, friends: friendsPage, messages: messagesPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
+  const views = { home, game, games: gamesPage, charts: chartsPage, profile, creator: creatorPage, search: searchPage, friends: friendsPage, messages: messagesPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
   // An account that signed in with an easy password sees nothing else until it sets a new one.
   loadFamily();
   const needsBirthday = session && familyInfo && !familyInfo.loading && !familyInfo.error && !familyInfo.has_birthday;
@@ -871,7 +883,7 @@ function render() {
     nodes.push(status(flash.text, flash.kind || ''));
     flash = null;
   }
-  if (data.error && ['home', 'game', 'games', 'friends'].includes(route.name)) nodes.push(status(data.error, 'error'));
+  if (data.error && ['home', 'game', 'games', 'charts', 'friends'].includes(route.name)) nodes.push(status(data.error, 'error'));
   loadSecurity();
   const nudge = emailNudge();
   if (nudge) nodes.push(nudge);
@@ -886,6 +898,7 @@ const DESCRIPTIONS = {
   home: 'Play games people make, with your friends. Press Play and Libroxel opens straight into the game.',
   download: 'Download Libroxel for Windows, macOS and Linux. Free and open source.',
   privacy: 'What Libroxel keeps about you, why, and how to have it removed.',
+  charts: 'The games people play most on Libroxel, trending, top rated and new.',
   search: 'Find players and games on Libroxel.',
   'sign-in': 'Sign in to Libroxel.',
   create: 'Make a Libroxel account.',
@@ -893,7 +906,7 @@ const DESCRIPTIONS = {
 
 function titleFor(r) {
   if (r.name === 'game') return entries().find((e) => e.key === r.key)?.title || 'Game';
-  return { home: 'Home', creator: 'Create', games: 'Games', search: 'Search', friends: 'Friends', messages: 'Messages', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy' }[r.name] || 'Libroxel';
+  return { home: 'Home', creator: 'Create', games: 'Games', charts: 'Charts', profile: 'Profile', search: 'Search', friends: 'Friends', messages: 'Messages', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy' }[r.name] || 'Libroxel';
 }
 
 function whereabouts(friend) {
@@ -939,8 +952,58 @@ function home() {
         el('div', { class: 'soft' }, 'Find a game, press Play, and Libroxel opens straight into it. ',
           el('a', { href: '/sign-in' }, 'Sign in'), ' to see your friends.'))));
   }
+  out.push(...picksRows());
   out.push(gamesList());
   return out;
+}
+
+function byKey(key) {
+  return entries().find((e) => e.key === key);
+}
+
+function gameRow(title, list, link) {
+  if (!list.length) return [];
+  return [el('h2', { class: 'section' }, title, link && el('a', { href: link }, 'See all ', icon(ICON.right))), el('div', { class: 'games row' }, list.map(gameCard))];
+}
+
+function picksRows() {
+  const out = [];
+  const mine = data.forYou;
+  if (mine) out.push(...gameRow('Continue', mine.continue.map((p) => byKey(p.game_id)).filter(Boolean).slice(0, 12)));
+  const picks = mine?.recommended?.length ? mine.recommended.map(byKey).filter(Boolean) : chartGames('popular');
+  out.push(...gameRow('Recommended', picks.slice(0, 12), '/charts'));
+  return out;
+}
+
+function chartGames(id) {
+  const chart = data.charts.charts.find((c) => c.id === id);
+  return (chart?.game_ids || []).map(byKey).filter(Boolean);
+}
+
+function liked(stats) {
+  return stats && stats.likes + stats.dislikes ? `${Math.round((100 * stats.likes) / (stats.likes + stats.dislikes))}%` : null;
+}
+
+function chartsPage() {
+  const charts = data.charts.charts;
+  const picked = new URLSearchParams(location.search).get('c');
+  const current = charts.find((c) => c.id === picked) || charts[0];
+  const out = [el('h1', { class: 'title' }, 'Charts')];
+  if (!data.loaded) return [...out, el('p', { class: 'soft' }, 'Loading…')];
+  if (!current) return [...out, el('div', { class: 'empty' }, 'No games yet.')];
+  out.push(el('div', { class: 'hats' }, charts.map((c) => el('a', { class: `chip${c === current ? ' on' : ''}`, href: `/charts?c=${encodeURIComponent(c.id)}` }, c.title))));
+  out.push(el('div', { class: 'games' }, current.game_ids.map(byKey).filter(Boolean).map((g, i) => {
+    const card = gameCard(g);
+    card.querySelector('.pic').append(el('span', { class: 'rank' }, String(i + 1)));
+    const rating = liked(statsFor(g.key));
+    if (rating) card.append(el('div', { class: 'meta idle' }, `${rating} liked`));
+    return card;
+  })));
+  return out;
+}
+
+function statsFor(key) {
+  return data.charts.stats.find((s) => s.game_id === key);
 }
 
 function gamesList() {
@@ -983,6 +1046,8 @@ function game() {
   const hostable = entry.source !== 'live';
   const stats = [[count(entry.playing), 'Playing'], [String(entry.servers.length), 'Servers']];
   if (entry.game) stats.push([count(entry.game.plays), 'Visits'], [`v${entry.game.version}`, 'Version']);
+  const rating = liked(statsFor(entry.key));
+  if (rating) stats.push([rating, 'Liked']);
   const hint = best ? `Joins ${best.name}` : hostable ? 'No servers yet: starts one that friends can join' : 'Nobody is hosting it right now';
   const play = el('button', { class: 'btn go big', disabled: !best && !hostable }, icon(ICON.play), 'Play');
   play.addEventListener('click', () => {
@@ -1523,12 +1588,16 @@ function loadCatalog() {
   api('/catalog').then((items) => { catalog.items = items; render(); }).catch(() => {});
 }
 
-function avatar() {
-  if (!session) return needSignIn('Sign in to change how you look in every game you play.');
-  if (!data.me) return [el('h1', { class: 'title' }, 'Your avatar'), el('p', { class: 'soft' }, data.loaded ? 'Your account could not be loaded.' : 'Loading…')];
+function startDraft() {
   if (!draft || draft.for !== session.playerId) {
     draft = { for: session.playerId, look: readLook(data.me.look, data.me.name, lookFor(0n)), about: data.me.about || '', message: null };
   }
+}
+
+function avatar() {
+  if (!session) return needSignIn('Sign in to change how you look in every game you play.');
+  if (!data.me) return [el('h1', { class: 'title' }, 'Your avatar'), el('p', { class: 'soft' }, data.loaded ? 'Your account could not be loaded.' : 'Loading…')];
+  startDraft();
   loadCatalog();
   const look = draft.look;
   const changed = () => { draft.message = null; render(); };
@@ -1541,8 +1610,6 @@ function avatar() {
     })), pick);
   };
   const row = (label, key, choices) => [el('div', { class: 'caps' }, label), swatches(key, choices)];
-  const about = el('textarea', { rows: 3, maxlength: 2000 }, draft.about);
-  about.addEventListener('input', () => { draft.about = about.value; });
   const save = el('button', { class: 'btn go', onclick: () => saveAccount(save) }, icon(ICON.check), 'Save');
   const hats = catalog.items.map((item) => [item, readItem(item.data)]).filter(([, hat]) => hat);
   const same = (hat) => look.item && JSON.stringify(look.item.json) === JSON.stringify(hat.json);
@@ -1569,11 +1636,30 @@ function avatar() {
         el('small', {}, `by ${item.creator} · worn ${item.wears}`),
         el('button', { class: 'chip', disabled: same(hat), onclick: () => { look.item = hat; api(`/catalog/${encodeURIComponent(item.item_id)}/wear`, { method: 'POST' }).catch(() => {}); changed(); } }, same(hat) ? 'Wearing' : 'Wear'))))
       : el('p', { class: 'soft' }, 'Nothing in the catalog yet.'),
+    el('div', { class: 'form-actions' }, save),
+    draft.message && status(draft.message.text, draft.message.kind),
+  ];
+}
+
+function profile() {
+  if (!session) return needSignIn('Sign in to see your profile.');
+  if (!data.me) return [el('h1', { class: 'title' }, 'Profile'), el('p', { class: 'soft' }, data.loaded ? 'Your account could not be loaded.' : 'Loading…')];
+  startDraft();
+  const about = el('textarea', { rows: 3, maxlength: 2000 }, draft.about);
+  about.addEventListener('input', () => { draft.about = about.value; });
+  const save = el('button', { class: 'btn go', onclick: () => saveAccount(save) }, icon(ICON.check), 'Save');
+  return [
+    el('div', { class: 'hello' },
+      portrait(data.me.look, data.me.name, 84),
+      el('div', {},
+        el('h1', {}, data.me.name),
+        el('div', { class: 'soft' }, `#${data.me.number ?? 0} · `, el('a', { href: `/user/${data.me.number ?? session.playerId}` }, 'Public page'), ' · ', el('a', { href: '/friends' }, 'Friends')))),
     el('label', { class: 'field' }, el('span', {}, 'About you'), about),
     el('div', { class: 'form-actions' }, save),
     draft.message && status(draft.message.text, draft.message.kind),
     security(),
     parentPanel(),
+    el('div', { class: 'form-actions', style: 'margin-top:18px' }, el('button', { class: 'chip', onclick: signOut }, icon(ICON.signOut), 'Sign out')),
   ];
 }
 
@@ -1617,9 +1703,9 @@ function validEmail(email) {
 
 /** A note at the top of every page while your account has no proved email. */
 function emailNudge() {
-  if (!session || !securityInfo || securityInfo.loading || securityInfo.error || route.name === 'avatar') return null;
-  if (!securityInfo.email) return el('div', { class: 'status wait' }, 'Your account has no email yet. ', el('a', { href: '/avatar' }, 'Add one'), ' so you can prove the account is yours.');
-  if (!securityInfo.email_verified && securityInfo.sends_mail) return el('div', { class: 'status wait' }, `Prove your email: type the code we mailed to ${securityInfo.email} `, el('a', { href: '/avatar' }, 'on your account page'), '.');
+  if (!session || !securityInfo || securityInfo.loading || securityInfo.error || route.name === 'profile') return null;
+  if (!securityInfo.email) return el('div', { class: 'status wait' }, 'Your account has no email yet. ', el('a', { href: '/profile' }, 'Add one'), ' so you can prove the account is yours.');
+  if (!securityInfo.email_verified && securityInfo.sends_mail) return el('div', { class: 'status wait' }, `Prove your email: type the code we mailed to ${securityInfo.email} `, el('a', { href: '/profile' }, 'on your profile'), '.');
   return null;
 }
 
@@ -1685,7 +1771,7 @@ function security() {
     el('p', { class: 'soft' }, `You are ${session.name}. `,
       securityInfo.has_password ? 'You have a password, so you can sign in anywhere. ' : 'Set a password to sign in on other computers. ',
       el('a', { href: '/password' }, securityInfo.has_password ? 'Change your password' : 'Set a password'), '.',
-      ' ', securityInfo.two_step ? 'Two-step sign-in is on.' : 'Turn on two-step sign-in in the app, on its Avatar tab, for a code on top of your password.'),
+      ' ', securityInfo.two_step ? 'Two-step sign-in is on.' : 'Turn on two-step sign-in in the app, on its Profile tab, for a code on top of your password.'),
     securityInfo.sign_ins?.length
       ? el('div', {}, el('div', { class: 'caps' }, 'Latest sign-ins'), el('ul', { class: 'signins' }, securityInfo.sign_ins.slice(0, 6).map((s) => el('li', {}, `${ago(s.secs_ago)} from ${s.from}`))))
       : null,
@@ -1979,7 +2065,7 @@ function passwordPage() {
   const form = el('form', { class: 'narrow' },
     el('label', { class: 'field' }, el('span', {}, `New password (at least ${MIN_PASSWORD} characters, not a common one, without your name in it)`), password),
     el('label', { class: 'field' }, el('span', {}, 'New password again'), again),
-    el('div', { class: 'form-actions' }, go, !forced && el('a', { href: '/avatar' }, 'Cancel')),
+    el('div', { class: 'form-actions' }, go, !forced && el('a', { href: '/profile' }, 'Cancel')),
     message);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1995,7 +2081,7 @@ function passwordPage() {
       saveSession(rest, isRemembered());
       securityInfo = null;
       flash = { text: 'Password set. Use it to sign in here and in the app.' };
-      goTo(forced ? '/' : '/avatar');
+      goTo(forced ? '/' : '/profile');
     } catch (err) {
       say(err.message, 'error');
       go.disabled = false;
@@ -2085,7 +2171,7 @@ function signInPage() {
       const n = name.value.trim();
       const existing = await accountNamed(n).catch(() => null);
       if (existing) {
-        return fail(`${existing.name} has no password yet, so it can only be used on the computer it was made on. Open Libroxel there and set a password on the Avatar tab, then sign in here.`);
+        return fail(`${existing.name} has no password yet, so it can only be used on the computer it was made on. Open Libroxel there and set a password on the Profile tab, then sign in here.`);
       }
       carry = { name: n, password: password.value };
       goTo('/create');
@@ -2283,7 +2369,7 @@ function privacy() {
     h('How long we keep it'),
     p('We keep your information while your account exists. Nightly backups are kept for 14 days. Servers drop off the list a few minutes after they stop.'),
     h('Your choices'),
-    p('You can change your name, avatar, about, email and password at any time on the Avatar page or in the app. To get a copy of your information, or to have your account and everything in it deleted, email ', mail, ' from the address on your account, or tell us your name and player number. We answer within 30 days.'),
+    p('You can change your name, avatar, about, email and password at any time on the Avatar and Profile pages or in the app. To get a copy of your information, or to have your account and everything in it deleted, email ', mail, ' from the address on your account, or tell us your name and player number. We answer within 30 days.'),
     h('Children'),
     p('Libroxel is not meant for children under 13. If you believe a child under 13 has an account, email ', mail.cloneNode(true), ' and we will delete it.'),
     h('Changes'),
@@ -2325,7 +2411,7 @@ setInterval(sayOnline, 15000);
 document.addEventListener('visibilitychange', sayOnline);
 setInterval(() => {
   // Keep lists fresh while someone looks, but don't redraw under their typing.
-  if (document.hidden || ['sign-in', 'create', 'avatar', 'creator'].includes(route.name)) return;
+  if (document.hidden || ['sign-in', 'create', 'avatar', 'creator', 'profile'].includes(route.name)) return;
   if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
   refresh().then(render);
 }, 20000);
