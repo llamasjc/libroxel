@@ -346,3 +346,51 @@ fn a_joined_player_in_a_seat_faces_the_seat_way() {
     let yaw = guest.runtime().tree().borrow().get_vec3(c.root, Property::Orientation).unwrap().y;
     assert!(yaw.abs() < 1.0, "turned in the seat: {yaw}");
 }
+
+#[test]
+fn eyes_stay_on_the_head_of_someone_turning() {
+    use libroxel_instance::Rotation;
+    let tree = Rc::new(RefCell::new(game()));
+    let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |h, g| {
+        h.character().is_some() && g.character().is_some()
+    });
+    let name = {
+        let t = host.runtime().tree().borrow();
+        t.name(host.character().unwrap().model).unwrap().to_owned()
+    };
+    let other = |g: &PlaySession| {
+        let t = g.runtime().tree().borrow();
+        t.find_first_child(t.workspace(), &name).ok().flatten()
+    };
+    let rigged = |g: &PlaySession| {
+        other(g).is_some_and(|m| {
+            let t = g.runtime().tree().borrow();
+            ["Head", "LeftEye", "RightEye"].iter().all(|n| t.find_first_child(m, n).ok().flatten().is_some())
+        })
+    };
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| rigged(g));
+    let model = other(&guest).unwrap();
+    let mut worst = 0.0f32;
+    for i in 0..240 {
+        let a = i as f32 * 0.15;
+        let walk = CharacterInput { move_dir: Vec3::new(a.cos(), 0.0, a.sin()), ..Default::default() };
+        host.step(DT, walk);
+        guest.step(DT, CharacterInput::default());
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        let t = guest.runtime().tree().borrow();
+        let part = |n: &str| t.find_first_child(model, n).ok().flatten().unwrap();
+        let head = part("Head");
+        let at = t.get_vec3(head, Property::Position).unwrap();
+        let turn = Rotation::from_orientation(t.get_vec3(head, Property::Orientation).unwrap()).transpose();
+        for (name, x) in [("LeftEye", -0.35), ("RightEye", 0.35)] {
+            let eye = turn.apply(t.get_vec3(part(name), Property::Position).unwrap() - at);
+            worst = worst.max((eye - Vec3::new(x, 0.1, -0.71)).length());
+        }
+    }
+    assert!(worst < 0.01, "an eye came off the head by {worst}");
+}

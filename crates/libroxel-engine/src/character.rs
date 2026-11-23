@@ -933,13 +933,24 @@ pub fn pose_rig(tree: &mut InstanceTree, root: InstanceId, head: InstanceId, lim
         joint_place(tree, t, joints::RIGHT_HIP, limbs.right_leg, torso_cf, right_leg);
     }
     if let Some(head_cf) = head_cf.or_else(|| part_cframe(tree, head)) {
-        let flip = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
-        place_at(tree, limbs.left_eye, head_cf * CFrame::new(flip(EYE_AT) - HEAD_AT, Rotation::IDENTITY));
-        place_at(tree, limbs.right_eye, head_cf * CFrame::new(EYE_AT - HEAD_AT, Rotation::IDENTITY));
+        place_eyes(tree, head_cf, limbs);
     }
     if let Ok(Some(model)) = tree.parent(root) {
         dress(tree, model, head, limbs);
     }
+}
+
+fn place_eyes(tree: &mut InstanceTree, head_cf: CFrame, limbs: &Limbs) {
+    let flip = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
+    place_at(tree, limbs.left_eye, head_cf * CFrame::new(flip(EYE_AT) - HEAD_AT, Rotation::IDENTITY));
+    place_at(tree, limbs.right_eye, head_cf * CFrame::new(EYE_AT - HEAD_AT, Rotation::IDENTITY));
+}
+
+pub fn stick_to_head(tree: &mut InstanceTree, model: InstanceId) {
+    let Some((head, limbs)) = find_rig(tree, model) else { return };
+    let Some(head_cf) = part_cframe(tree, head) else { return };
+    place_eyes(tree, head_cf, &limbs);
+    dress(tree, model, head, &limbs);
 }
 
 /// Radians of stride per stud walked.
