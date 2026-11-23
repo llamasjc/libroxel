@@ -36,6 +36,7 @@ mod rich_text;
 mod server;
 mod social;
 mod starter_games;
+mod stats;
 mod templates;
 mod terrain_tools;
 mod theme;
@@ -338,6 +339,7 @@ pub fn run() {
     let mut editor =
         Editor { platform: browse::Platform::start(), crash: report::take_crash(), ..Editor::default() };
     editor.touch.seen = MOBILE;
+    stats::start(editor.crash.as_deref());
     let mut notes = Vec::new();
     let tree = match args.first().cloned() {
         Some(link) if url_handler::is_link(&link) => {

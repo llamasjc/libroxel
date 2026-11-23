@@ -253,6 +253,7 @@ label.field span { display: block; margin-bottom: 4px; }
 .report-card .reasons { margin: 0; padding-left: 18px; font-size: 13px; }
 .report-card .buttons { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .report-card input { flex: 1; min-width: 140px; }
+.report-card pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .tag.kind { background-color: var(--muted); }
 .form { display: flex; flex-direction: column; gap: 8px; }
 .fill { width: 120px; flex: none; font-size: 13px; }

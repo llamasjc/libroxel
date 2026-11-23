@@ -86,9 +86,6 @@ fn encode(text: &str) -> String {
     out
 }
 
-const SECRET_WORDS: [&str; 8] =
-    ["password", "passwd", "token", "secret", "authorization", "bearer", "api_key", "apikey"];
-
 pub fn scrub(text: &str) -> String {
     let mut text = text.to_owned();
     for var in ["HOME", "USERPROFILE"] {
@@ -98,65 +95,7 @@ pub fn scrub(text: &str) -> String {
             text = text.replace(&home, "~");
         }
     }
-    text.lines().map(scrub_line).collect::<Vec<_>>().join("\n")
-}
-
-fn scrub_line(line: &str) -> String {
-    let lower = line.to_ascii_lowercase();
-    for word in SECRET_WORDS {
-        if let Some(at) = lower.find(word) {
-            let after = at + word.len();
-            if let Some(sep) = line[after..].find([':', '=']) {
-                let cut = after + sep + 1;
-                return format!("{} [hidden]", scrub_words(&line[..cut]));
-            }
-        }
-    }
-    scrub_words(line)
-}
-
-fn scrub_words(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut word = String::new();
-    for c in line.chars() {
-        if c.is_whitespace() || matches!(c, '"' | '\'' | '(' | ')' | '<' | '>' | '[' | ']' | ',' | ';' | '`')
-        {
-            out.push_str(&hide(&word));
-            word.clear();
-            out.push(c);
-        } else {
-            word.push(c);
-        }
-    }
-    out.push_str(&hide(&word));
-    out
-}
-
-fn hide(word: &str) -> String {
-    let core = word.trim_end_matches(['.', ':', '!', '?']);
-    let tail = &word[core.len()..];
-    if is_email(core) {
-        return format!("[email]{tail}");
-    }
-    if is_secret(core) {
-        return format!("[hidden]{tail}");
-    }
-    word.to_owned()
-}
-
-fn is_email(word: &str) -> bool {
-    let Some((name, domain)) = word.rsplit_once('@') else { return false };
-    !name.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
-}
-
-fn is_secret(word: &str) -> bool {
-    let hex = word.len() >= 32 && word.chars().all(|c| c.is_ascii_hexdigit());
-    let token = word.len() >= 24
-        && word.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '+' | '/' | '='))
-        && word.chars().any(|c| c.is_ascii_digit())
-        && word.chars().any(|c| c.is_ascii_uppercase())
-        && word.chars().any(|c| c.is_ascii_lowercase());
-    hex || token
+    libroxel_hub::scrub::scrub(&text)
 }
 
 fn open_url(url: &str) {

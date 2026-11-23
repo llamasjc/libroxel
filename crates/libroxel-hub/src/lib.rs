@@ -91,8 +91,10 @@ pub use recovery::{
     RECOVERY_CODES, RecoveryAsk, RecoveryCodes, ResetAsk, ResetFinish, SIGNED_OUT, Session, SessionInfo,
     SessionStart, SignOutEverywhere, recovery_message, session_message, sign_out_message,
 };
+pub mod scrub;
 mod security;
 mod social;
+mod stats;
 use limits::{Caller, Limit, Limits, too_many};
 pub use owner::{AccountRow, accounts, add_owner, ban, ban_until, owners, remove_owner, rename, unban};
 pub use password::{
@@ -111,6 +113,7 @@ pub use social::{
     Friend, FriendAction, FriendChange, FriendState, Friends, PresenceUpdate, WebPresence, friend_message,
     friends_list_message, presence_message, web_presence_message,
 };
+pub use stats::{Crash, CrashGroup, PING_EVERY_SECS, Ping, Share, Usage, UsageDay, admin_message};
 
 /// The port a Hub listens on unless told otherwise.
 pub const DEFAULT_PORT: u16 = 7430;
@@ -731,6 +734,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     fleet::create_tables(&db)?;
     assets::create_tables(&db)?;
     analytics::create_tables(&db)?;
+    stats::create_tables(&db)?;
     ratings::create_tables(&db)?;
     charts::create_tables(&db)?;
     moderate::create_tables(&db)?;
@@ -832,6 +836,9 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/presence", post(social::update_presence))
         .route("/presence/web", post(social::update_web_presence))
         .route("/creator/{id}", get(analytics::creator))
+        .route("/stats/ping", post(stats::ping))
+        .route("/stats/crash", post(stats::crash))
+        .route("/admin/{id}", get(stats::admin))
         .route("/messages", post(messages::send_message))
         .route("/messages/{id}", get(messages::conversations))
         .route("/messages/{id}/{other}", get(messages::conversation))
@@ -2510,6 +2517,33 @@ impl HubClient {
             .get(format!("{}/for-you/{player_id}", self.base))
             .query("time", time.to_string())
             .query("signature", signature)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not reach the Hub: {e}"))
+    }
+
+    pub fn ping(&self, ping: &Ping) -> Result<(), String> {
+        self.agent
+            .post(format!("{}/stats/ping", self.base))
+            .send_json(ping)
+            .map(|_| ())
+            .map_err(|e| format!("could not reach the Hub: {e}"))
+    }
+
+    pub fn send_crash(&self, crash: &Crash) -> Result<(), String> {
+        self.agent
+            .post(format!("{}/stats/crash", self.base))
+            .send_json(crash)
+            .map(|_| ())
+            .map_err(|e| format!("could not reach the Hub: {e}"))
+    }
+
+    pub fn usage(&self, player_id: &str, time: i64, signature: &str, days: i64) -> Result<Usage, String> {
+        self.agent
+            .get(format!("{}/admin/{player_id}", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .query("days", days.to_string())
             .call()
             .and_then(|mut r| r.body_mut().read_json())
             .map_err(|e| format!("could not reach the Hub: {e}"))
