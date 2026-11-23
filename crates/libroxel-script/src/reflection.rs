@@ -169,7 +169,7 @@ pub(crate) fn enums(lua: &Lua) -> mlua::Result<Table> {
         for (k, v) in items {
             list.raw_push(lua.create_sequence_from([
                 Value::String(lua.create_string(k)?),
-                Value::Integer(i64::from(v)),
+                Value::Integer(v as mlua::Integer),
             ])?)?;
         }
         out.raw_set(*name, list)?;
@@ -186,8 +186,8 @@ fn call(lua: &Lua, library: &str, function: &str, args: impl mlua::IntoLuaMulti)
 fn to_lua(lua: &Lua, value: &Variant, enum_name: Option<&str>) -> mlua::Result<Value> {
     Ok(match value {
         Variant::Bool(b) => Value::Boolean(*b),
-        Variant::Int32(n) => Value::Integer(i64::from(*n)),
-        Variant::Int64(n) => Value::Integer(*n),
+        Variant::Int32(n) => Value::Integer(*n as mlua::Integer),
+        Variant::Int64(n) => Value::Integer(*n as mlua::Integer),
         Variant::Float32(n) => Value::Number(f64::from(*n)),
         Variant::Float64(n) => Value::Number(*n),
         Variant::String(s) => Value::String(lua.create_string(s)?),
