@@ -821,7 +821,7 @@ function parseRoute() {
     case 'user': return { name: 'user', id: parts[1] };
     case 'creator': return { name: 'creator', id: parts[1] };
     case 'messages': return { name: 'messages', id: parts[1] };
-    case 'games': case 'charts': case 'profile': case 'search': case 'friends': case 'groups': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': case 'moderation': return { name: parts[0] };
+    case 'games': case 'charts': case 'profile': case 'search': case 'friends': case 'groups': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': case 'moderation': case 'stats': return { name: parts[0] };
     case 'group': return { name: 'group', id: parts[1] };
     default: return { name: 'home' };
   }
@@ -851,6 +851,7 @@ function tabs() {
     who.replaceChildren(
       search,
       data.me?.admin && el('a', { class: `tab iconbtn${route.name === 'moderation' ? ' active' : ''}`, href: '/moderation', title: 'Moderation' }, icon(ICON.flag)),
+      data.me?.admin && el('a', { class: `tab iconbtn${route.name === 'stats' ? ' active' : ''}`, href: '/stats', title: 'Stats' }, icon(ICON.signal)),
       messages,
       el('span', { class: 'caps' }, 'Playing as'),
       el('a', { class: 'name', href: '/profile' }, session.name || 'You'),
@@ -943,7 +944,7 @@ window.addEventListener('unhandledrejection', (e) => crashed(e.reason));
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, games: gamesPage, charts: chartsPage, profile, creator: creatorPage, search: searchPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
+  const views = { home, game, games: gamesPage, charts: chartsPage, profile, creator: creatorPage, search: searchPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, stats: statsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
   // An account that signed in with an easy password sees nothing else until it sets a new one.
   loadFamily();
   const needsBirthday = session && familyInfo && !familyInfo.loading && !familyInfo.error && !familyInfo.has_birthday;
@@ -978,7 +979,7 @@ const DESCRIPTIONS = {
 function titleFor(r) {
   if (r.name === 'game') return entries().find((e) => e.key === r.key)?.title || 'Game';
   if (r.name === 'group') return groupPages.get(r.id)?.group?.name || 'Group';
-  return { home: 'Home', creator: 'Create', games: 'Games', charts: 'Charts', profile: 'Profile', search: 'Search', friends: 'Friends', groups: 'Groups', group: 'Group', messages: 'Messages', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy', moderation: 'Moderation' }[r.name] || 'Libroxel';
+  return { home: 'Home', creator: 'Create', games: 'Games', charts: 'Charts', profile: 'Profile', search: 'Search', friends: 'Friends', groups: 'Groups', group: 'Group', messages: 'Messages', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy', moderation: 'Moderation', stats: 'Stats' }[r.name] || 'Libroxel';
 }
 
 function whereabouts(friend) {
@@ -1827,6 +1828,55 @@ async function reportPost(post) {
     flash = { text: e.message, kind: 'error' };
   }
   render();
+}
+
+// --- Stats -------------------------------------------------------------------
+
+const usage = { days: 30, result: null, error: null, loading: false, for: null };
+
+function loadUsage() {
+  const key = `${session.playerId}/${usage.days}`;
+  if (usage.loading || usage.for === key) return;
+  usage.loading = true;
+  const time = Date.now();
+  const signature = signText(secretKey(), `libroxel admin\n${session.playerId}\n${time}`);
+  api(`/admin/${session.playerId}`, { query: { time, signature, days: usage.days } })
+    .then((r) => { usage.result = r; usage.error = null; })
+    .catch((e) => { usage.error = e.message; })
+    .finally(() => { usage.loading = false; usage.for = key; if (route.name === 'stats') render(); });
+}
+
+function statsPage() {
+  if (!session) return needSignIn('Sign in to see the stats.');
+  loadUsage();
+  const out = [el('h1', { class: 'title' }, 'Stats'),
+    el('div', { class: 'hats' }, [7, 30, 90].map((d) =>
+      el('button', { class: `chip${usage.days === d ? ' on' : ''}`, onclick: () => { usage.days = d; usage.for = null; render(); } }, `${d} days`)))];
+  if (usage.error) return [...out, status(usage.error, 'error')];
+  const u = usage.result;
+  if (!u) return [...out, el('p', { class: 'soft' }, 'Loading…')];
+  const today = u.days[u.days.length - 1] || {};
+  const tiles = [[count(today.users || 0), 'Today'], [count(u.online), 'Online now'], [count(u.users), 'Users'], [count(u.sessions), 'Sessions'], [count(u.crashes), 'Crashes']];
+  out.push(el('div', { class: 'tiles' }, tiles.map(([v, l]) => el('div', {}, el('b', {}, v), el('span', { class: 'caps' }, l)))));
+  const daily = (key, label, f = (v) => v) => chart(u.days.map((d) => ({ v: f(d[key]), short: dayName(d.day), long: dayName(d.day) })), { bars: true, label });
+  out.push(el('h2', { class: 'section' }, 'Daily users'), daily('users', 'Users each day'));
+  out.push(el('h2', { class: 'section' }, 'New users'), daily('new_users', 'New users each day'));
+  out.push(el('h2', { class: 'section' }, 'Sessions'), daily('sessions', 'Sessions each day'));
+  out.push(el('h2', { class: 'section' }, 'Session length (min)'), daily('average_session_secs', 'Average session minutes each day', (s) => Math.round(s / 60)));
+  out.push(el('h2', { class: 'section' }, 'Crashes'), daily('crashes', 'Crashes each day'));
+  const shares = (title, list) => el('div', {}, el('h2', { class: 'section' }, title),
+    list.length ? el('table', { class: 'numbers' }, el('tbody', {}, list.map((x) => el('tr', {}, el('td', {}, x.name || '?'), el('td', {}, count(x.users)), el('td', {}, percent(u.users ? x.users / u.users : null))))))
+      : el('p', { class: 'soft' }, 'None'));
+  out.push(el('div', { class: 'columns' }, shares('Versions', u.versions), shares('Platforms', u.platforms)));
+  out.push(el('h2', { class: 'section' }, 'Top crashes'));
+  if (!u.top_crashes.length) out.push(el('div', { class: 'empty' }, 'No crashes.'));
+  for (const c of u.top_crashes) {
+    out.push(el('div', { class: 'report-card' },
+      el('div', {}, el('b', {}, c.title), el('span', { class: 'soft' }, ` · ${count(c.count)} ${c.count === 1 ? 'time' : 'times'} · ${count(c.users)} ${c.users === 1 ? 'user' : 'users'} · ${clock(c.last)}`)),
+      el('div', { class: 'soft' }, [...c.versions, ...c.platforms].join(' · ')),
+      el('details', {}, el('summary', {}, 'Details'), el('pre', {}, c.text))));
+  }
+  return out;
 }
 
 // --- Moderation -------------------------------------------------------------
@@ -2901,7 +2951,7 @@ function privacy() {
   const mail = el('a', { href: `mailto:${CONTACT}` }, CONTACT);
   return el('div', { class: 'privacy' },
     el('h1', { class: 'title' }, 'Privacy policy'),
-    p(el('span', { class: 'soft' }, 'Last updated 22 November 2026')),
+    p(el('span', { class: 'soft' }, 'Last updated 23 November 2026')),
     p('This policy covers the Libroxel app, this website and the Libroxel Hub (hub.libroxel.com), which keeps accounts, friends, games and server lists.'),
     h('What we keep'),
     list(
@@ -2914,6 +2964,7 @@ function privacy() {
       'The time and IP address of your last 20 sign-ins, which your account page shows you so you can spot sign-ins that were not you.',
       'Games and hats you publish, servers you host (their name, game, join code and player count) and anything you report.',
       'When and how long you play each published game, for 90 days, under a code that can\'t be tied to your account. Its creator sees only totals.'),
+    p('Unless you turn off Share in the app, the app also sends the Hub: how often it is used, under a random code made for this install and not tied to your account, with its version and system, kept for 90 days; and, when it crashes, what went wrong, with emails, passwords, keys and your user folder taken out, kept for 90 days. Only whoever runs the Hub sees these, as totals.'),
     p('Your name, number, avatar, about and published games are public: anyone can see them in the app and on this website.'),
     h('What we don\'t do'),
     list(

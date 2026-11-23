@@ -4245,6 +4245,13 @@ fn view_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool) {
         {
             editor.touch.seen = !editor.touch.seen;
         }
+        let sharing = crate::stats::enabled();
+        if theme::ribbon_button(ui, icon::CHART_LINE_UP, "Share", sharing)
+            .on_hover_text("Send crash reports and usage stats to the Hub")
+            .clicked()
+        {
+            crate::stats::set_enabled(!sharing);
+        }
     });
     theme::ribbon_group(ui, "Help", |ui| {
         let keys = theme::ribbon_button(ui, icon::KEYBOARD, "Shortcuts", false);
