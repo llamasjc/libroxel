@@ -1657,15 +1657,21 @@ function favoritesOf(p) {
 
 // --- Groups -----------------------------------------------------------------
 
-const badge = (g) => el('span', { class: 'tag group', title: g.name }, g.tag);
+const GROUP_COLORS = { red: [214, 48, 49], orange: [230, 126, 34], yellow: [212, 172, 13], green: [39, 174, 96], teal: [22, 160, 133], blue: [41, 128, 185], navy: [36, 59, 120], purple: [120, 80, 200], pink: [214, 72, 150], brown: [133, 87, 50], grey: [110, 118, 125], black: [30, 30, 35] };
+const MAX_TAG = 5;
+const JOIN_NAMES = { open: 'Anyone can join', request: 'Ask to join', invite: 'Invite only' };
+const badge = (g) => el('span', { class: 'tag group', title: g.name, style: `background-color:${rgb(GROUP_COLORS[g.color] || GROUP_COLORS.purple)}` }, g.tag);
+const pickFrom = (options, chosen) => el('select', {}, Object.entries(options).map(([value, label]) => el('option', { value, selected: value === chosen }, label)));
+const colorPick = (chosen) => pickFrom(Object.fromEntries(Object.keys(GROUP_COLORS).map((c) => [c, c[0].toUpperCase() + c.slice(1)])), chosen || 'purple');
+let groupInvites = null;
 const groupPages = new Map();
 let groupList = { text: '', results: null };
 
 async function changeGroup(action, groupId, fields, done) {
   const time = Math.max(Date.now(), lastSigned.group + 1);
   lastSigned.group = time;
-  const c = { player_id: session.playerId, action, group_id: groupId, name: '', tag: '', about: '', other_id: '', role: null, text: '', time, ...fields };
-  c.signature = signText(secretKey(), `libroxel group\n${c.player_id}\n${c.action}\n${c.group_id}\n${c.name}\n${c.tag}\n${c.about}\n${c.other_id}\n${c.role || ''}\n${c.text}\n${c.time}`);
+  const c = { player_id: session.playerId, action, group_id: groupId, name: '', tag: '', about: '', other_id: '', role: null, text: '', join: null, color: '', time, ...fields };
+  c.signature = signText(secretKey(), `libroxel group\n${c.player_id}\n${c.action}\n${c.group_id}\n${c.name}\n${c.tag}\n${c.about}\n${c.other_id}\n${c.role || ''}\n${c.text}\n${c.join || ''}\n${c.color}\n${c.time}`);
   let answer = null;
   try {
     answer = await api('/groups', { method: 'POST', body: c });
@@ -1675,6 +1681,7 @@ async function changeGroup(action, groupId, fields, done) {
   }
   groupPages.delete(groupId);
   groupList.results = null;
+  groupInvites = null;
   if (session) data.me = await api(`/accounts/${session.playerId}`).catch(() => data.me);
   render();
   return answer;
@@ -1684,7 +1691,7 @@ function groupRow(g) {
   return el('div', { class: 'person' },
     el('div', { class: 'what' },
       el('a', { href: `/group/${g.group_id}` }, el('b', {}, g.name), ' ', badge(g)),
-      el('small', { class: 'soft' }, `${count(g.members)} ${g.members === 1 ? 'member' : 'members'} · owned by ${g.owner}`)));
+      el('small', { class: 'soft' }, `${count(g.members)} ${g.members === 1 ? 'member' : 'members'} · owned by ${g.owner} · ${JOIN_NAMES[g.join] || JOIN_NAMES.open}`)));
 }
 
 function groupsPage() {
@@ -1703,17 +1710,39 @@ function groupsPage() {
     el('div', { class: 'search' }, box, el('button', { class: 'chip', onclick: find }, icon(ICON.search), 'Find')),
     groupList.results.length ? groupList.results.map(groupRow) : el('p', { class: 'soft' }, groupList.text ? `No groups called “${groupList.text}”.` : 'No groups yet.'),
   ];
-  const right = [el('h2', { class: 'subhead' }, 'Make a group')];
+  const right = [];
+  if (session && groupInvites === null) {
+    groupInvites = [];
+    const time = Math.max(Date.now(), lastSigned.group + 1);
+    lastSigned.group = time;
+    const signature = signText(secretKey(), `libroxel group invites\n${session.playerId}\n${time}`);
+    api(`/groups/invites/${session.playerId}`, { query: { time, signature } })
+      .then((r) => { groupInvites = r; if (route.name === 'groups' && r.length) render(); })
+      .catch(() => {});
+  }
+  if (session && groupInvites?.length) {
+    right.push(el('h2', { class: 'subhead sun' }, `Invites (${groupInvites.length})`));
+    for (const g of groupInvites) {
+      right.push(el('div', { class: 'person' },
+        el('div', { class: 'what' }, el('a', { href: `/group/${g.group_id}` }, el('b', {}, g.name), ' ', badge(g))),
+        el('div', { class: 'buttons' },
+          el('button', { class: 'btn go small', onclick: () => changeGroup('join', g.group_id, {}, `You joined ${g.name}.`) }, icon(ICON.check), 'Join'),
+          el('button', { class: 'chip', onclick: () => changeGroup('leave', g.group_id, {}, 'Declined.') }, 'Decline'))));
+    }
+  }
+  right.push(el('h2', { class: 'subhead' }, 'Make a group'));
   if (!session) right.push(el('p', { class: 'soft' }, el('a', { href: '/sign-in' }, 'Sign in'), ' to make or join a group.'));
   else {
     const name = el('input', { placeholder: 'Name', maxlength: 30 });
-    const tag = el('input', { placeholder: 'Tag', maxlength: 5, style: 'text-transform:uppercase' });
+    const tag = el('input', { placeholder: `Tag (2 to ${MAX_TAG})`, maxlength: MAX_TAG, style: 'text-transform:uppercase' });
+    const color = colorPick('purple');
+    const join = pickFrom(JOIN_NAMES, 'open');
     const about = el('textarea', { placeholder: 'About', maxlength: 1000, rows: 3 });
     const make = async () => {
-      const made = await changeGroup('create', '', { name: name.value.trim(), tag: tag.value.trim().toUpperCase(), about: about.value.trim() }, `Made ${name.value.trim()}.`);
+      const made = await changeGroup('create', '', { name: name.value.trim(), tag: tag.value.trim().toUpperCase(), color: color.value, join: join.value, about: about.value.trim() }, `Made ${name.value.trim()}.`);
       if (made?.group_id) goTo(`/group/${made.group_id}`);
     };
-    right.push(el('div', { class: 'form' }, name, tag, about, el('div', { class: 'form-actions' }, el('button', { class: 'btn go', onclick: make }, icon(ICON.check), 'Make'))));
+    right.push(el('div', { class: 'form' }, name, el('div', { class: 'search' }, tag, color), join, about, el('div', { class: 'form-actions' }, el('button', { class: 'btn go', onclick: make }, icon(ICON.check), 'Make'))));
   }
   return [el('h1', { class: 'title' }, 'Groups'), el('div', { class: 'columns' }, el('div', {}, left), el('div', {}, right))];
 }
@@ -1725,20 +1754,40 @@ function groupPage() {
   const back = el('a', { class: 'back', href: '/groups' }, icon(ICON.left), 'Groups');
   const known = groupPages.get(id);
   if (!known) {
-    api(`/groups/${encodeURIComponent(id)}`)
+    let query;
+    if (session) {
+      const time = Math.max(Date.now(), lastSigned.group + 1);
+      lastSigned.group = time;
+      query = { viewer: session.playerId, time, signature: signText(secretKey(), `libroxel group view\n${session.playerId}\n${id}\n${time}`) };
+    }
+    api(`/groups/${encodeURIComponent(id)}`, { query })
       .then((g) => groupPages.set(id, g))
       .catch(() => groupPages.set(id, { missing: true }))
       .finally(() => route.name === 'group' && route.id === id && render());
     return [back, el('p', { class: 'soft' }, 'Loading…')];
   }
   if (known.missing) return [back, el('div', { class: 'empty' }, "That group isn't here (any more).")];
-  const { group, members, posts, games } = known;
+  const { group, members, posts, games, requests = [], invites = [] } = known;
   const me = session && members.find((m) => m.player_id === session.playerId);
   const role = me?.role;
   const admin = role === 'owner' || role === 'admin';
   const shown = data.me?.badge?.group_id === id;
   const actions = [];
-  if (session && !me) actions.push(el('button', { class: 'btn go small', onclick: () => changeGroup('join', id, {}, `You joined ${group.name}.`) }, icon(ICON.userPlus), 'Join'));
+  if (session && !me) {
+    if (known.invited) {
+      actions.push(el('button', { class: 'btn go small', onclick: () => changeGroup('join', id, {}, `You joined ${group.name}.`) }, icon(ICON.check), 'Accept invite'));
+      actions.push(el('button', { class: 'chip', onclick: () => changeGroup('leave', id, {}, 'Declined.') }, 'Decline'));
+    } else if (known.requested) {
+      actions.push(el('span', { class: 'soft' }, 'Request sent'), el('button', { class: 'chip', onclick: () => changeGroup('leave', id, {}, 'Request taken back.') }, 'Cancel'));
+    } else if (group.join === 'request') {
+      actions.push(el('button', { class: 'btn go small', onclick: () => changeGroup('join', id, {}, `Asked to join ${group.name}.`) }, icon(ICON.userPlus), 'Ask to join'));
+    } else if (group.join === 'invite') {
+      actions.push(el('span', { class: 'soft' }, 'Invite only'));
+    } else {
+      actions.push(el('button', { class: 'btn go small', onclick: () => changeGroup('join', id, {}, `You joined ${group.name}.`) }, icon(ICON.userPlus), 'Join'));
+    }
+  }
+  if (session && !me) actions.push(el('button', { class: 'link', title: 'Report', onclick: () => reportGroup(group) }, icon(ICON.flag)));
   if (me) {
     actions.push(el('button', { class: 'chip', onclick: () => changeGroup('show', shown ? '' : id, {}, shown ? 'Your badge is hidden.' : `Your badge is ${group.tag} now.`) }, shown ? 'Hide badge' : 'Show badge'));
     actions.push(el('button', {
@@ -1754,16 +1803,40 @@ function groupPage() {
     el('div', { class: 'hello' },
       el('div', {},
         el('h1', {}, group.name, ' ', badge(group)),
-        el('div', { class: 'soft' }, `${count(group.members)} ${group.members === 1 ? 'member' : 'members'} · owned by `, el('a', { href: `/user/${group.owner_id}` }, group.owner)),
+        el('div', { class: 'soft' }, `${count(group.members)} ${group.members === 1 ? 'member' : 'members'} · owned by `, el('a', { href: `/user/${group.owner_id}` }, group.owner), ` · ${JOIN_NAMES[group.join] || JOIN_NAMES.open}`),
         actions.length > 0 && el('div', { class: 'buttons', style: 'margin-top:8px' }, actions))),
     group.about && el('div', { class: 'about' }, group.about),
   ];
   if (role === 'owner') {
     const name = el('input', { value: group.name, maxlength: 30 });
-    const tag = el('input', { value: group.tag, maxlength: 5 });
+    const tag = el('input', { value: group.tag, maxlength: MAX_TAG });
+    const color = colorPick(group.color);
+    const join = pickFrom(JOIN_NAMES, group.join || 'open');
     const about = el('textarea', { rows: 3, maxlength: 1000 }, group.about);
-    out.push(el('details', {}, el('summary', {}, 'Edit'), el('div', { class: 'form' }, name, tag, about,
-      el('div', { class: 'form-actions' }, el('button', { class: 'btn go small', onclick: () => changeGroup('edit', id, { name: name.value.trim(), tag: tag.value.trim().toUpperCase(), about: about.value.trim() }, 'Saved.') }, icon(ICON.check), 'Save')))));
+    out.push(el('details', {}, el('summary', {}, 'Edit'), el('div', { class: 'form' }, name, el('div', { class: 'search' }, tag, color), join, about,
+      el('div', { class: 'form-actions' }, el('button', { class: 'btn go small', onclick: () => changeGroup('edit', id, { name: name.value.trim(), tag: tag.value.trim().toUpperCase(), color: color.value, join: join.value, about: about.value.trim() }, 'Saved.') }, icon(ICON.check), 'Save')))));
+  }
+  if (admin) {
+    const who = el('input', { placeholder: 'Their name' });
+    const invite = async () => {
+      const found = await api(`/accounts/${encodeURIComponent(who.value.trim())}`).catch(() => null);
+      if (!found) { flash = { text: `Nobody is called ${who.value.trim()}.`, kind: 'error' }; render(); return; }
+      changeGroup('invite', id, { other_id: found.player_id }, `Invited ${found.name}.`);
+    };
+    who.addEventListener('keydown', (e) => e.key === 'Enter' && invite());
+    out.push(el('div', { class: 'search' }, who, el('button', { class: 'chip', onclick: invite }, icon(ICON.userPlus), 'Invite')));
+    for (const p of requests) {
+      out.push(el('div', { class: 'person' },
+        el('div', { class: 'what' }, el('a', { href: `/user/${p.number ?? p.player_id}` }, el('b', {}, p.name)), el('small', { class: 'soft' }, 'Wants to join')),
+        el('div', { class: 'buttons' },
+          el('button', { class: 'btn go small', onclick: () => changeGroup('accept', id, { other_id: p.player_id }, `${p.name} joined.`) }, icon(ICON.check), 'Accept'),
+          el('button', { class: 'chip', onclick: () => changeGroup('decline', id, { other_id: p.player_id }, 'Declined.') }, 'Decline'))));
+    }
+    for (const p of invites) {
+      out.push(el('div', { class: 'person' },
+        el('div', { class: 'what' }, el('b', {}, p.name), el('small', { class: 'soft' }, 'Invited')),
+        el('div', { class: 'buttons' }, el('button', { class: 'chip', onclick: () => changeGroup('decline', id, { other_id: p.player_id }, 'Invite taken back.') }, 'Cancel'))));
+    }
   }
 
   const wall = [el('h2', { class: 'subhead' }, 'Wall')];
@@ -1814,6 +1887,19 @@ function groupPage() {
     }
   }
   return [...out, ...gameList, el('div', { class: 'columns' }, el('div', {}, wall), el('div', {}, side))];
+}
+
+async function reportGroup(group) {
+  const time = nowSecs();
+  const reason = 'Not OK';
+  const signature = signText(secretKey(), `libroxel report\n${session.playerId}\ngroup\n${group.group_id}\n${reason}\n${time}`);
+  try {
+    await api('/reports', { method: 'POST', body: { reporter_id: session.playerId, kind: 'group', target: group.group_id, reason, time, signature } });
+    flash = { text: 'Reported. Thanks.' };
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  render();
 }
 
 async function reportPost(post) {
