@@ -15,6 +15,10 @@
 #ifndef Version
   #define Version "0.0.0"
 #endif
+#ifndef Arch
+  ; x64compatible for the x86-64 build, arm64 for the ARM one.
+  #define Arch "x64compatible"
+#endif
 #ifndef Source
   #define Source "..\..\target\x86_64-pc-windows-msvc\dist"
 #endif
@@ -50,8 +54,8 @@ AppSupportURL=https://libroxel.com
 VersionInfoVersion={#NumericVersion}
 VersionInfoProductName=Libroxel
 CloseApplications=yes
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed={#Arch}
+ArchitecturesInstallIn64BitMode={#Arch}
 UninstallDisplayIcon={app}\libroxel.ico
 UninstallDisplayName=Libroxel
 

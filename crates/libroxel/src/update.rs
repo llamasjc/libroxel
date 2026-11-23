@@ -28,11 +28,18 @@ enum Kind {
 }
 
 impl Kind {
+    /// The name of this kind of copy in a release's `latest.json`. ARM
+    /// Windows and Linux copies have their own, so they never update to an
+    /// x86-64 build (the Mac app and the Android app hold both).
     fn key(self) -> &'static str {
+        let arm = cfg!(target_arch = "aarch64");
         match self {
+            Kind::Windows if arm => "windows-aarch64",
             Kind::Windows => "windows",
             Kind::Mac => "macos",
+            Kind::AppImage if arm => "appimage-aarch64",
             Kind::AppImage => "appimage",
+            Kind::Deb if arm => "deb-aarch64",
             Kind::Deb => "deb",
             Kind::Android => "android",
         }
@@ -344,5 +351,22 @@ mod tests {
         let sig = b"MR3kmvTWMVPjI1erMhmu0TVppH5B08sOcVocj3DqAK39JwFcVkHps6GsOfSwstktc+8G+H8MqLvG/0TTK3DxBQ==";
         assert!(verify(br#"{"version":"0.0.0"}"#, sig).is_ok());
         assert!(verify(br#"{"version":"9.0.0"}"#, sig).is_err());
+    }
+
+    /// Every kind of copy looks for a name the release workflow writes into
+    /// `latest.json`, so none of them stops getting updates.
+    #[test]
+    fn every_kind_has_a_file_in_the_release_manifest() {
+        let workflow = include_str!("../../../.github/workflows/release.yml");
+        let start = workflow.find("> latest.json").expect("the workflow writes latest.json");
+        let manifest = &workflow[..start];
+        let manifest = &manifest[manifest.rfind("jq -n").expect("built with jq")..];
+        for kind in [Kind::Windows, Kind::Mac, Kind::AppImage, Kind::Deb, Kind::Android] {
+            let key = kind.key();
+            assert!(
+                manifest.contains(&format!("{key}: $")) || manifest.contains(&format!("\"{key}\": $")),
+                "latest.json has no {key:?} entry"
+            );
+        }
     }
 }
