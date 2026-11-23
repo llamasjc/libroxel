@@ -159,7 +159,7 @@ fn a_motor_spins_a_fan_blade_about_its_middle() {
         run(tree, 0.75)
     };
     let a = angle(&t2, h);
-    assert!(a < -120.0 || a > 170.0, "{a}");
+    assert!(!(-120.0..=170.0).contains(&a), "{a}");
 }
 
 #[test]

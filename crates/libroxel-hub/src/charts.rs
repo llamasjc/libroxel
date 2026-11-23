@@ -265,7 +265,7 @@ fn games(db: &Connection) -> Result<Vec<Game>, rusqlite::Error> {
     Ok(list)
 }
 
-fn ranked<'a>(list: &'a [Game], keep: impl Fn(&Game) -> bool, score: impl Fn(&Game) -> f64) -> Vec<&'a Game> {
+fn ranked(list: &[Game], keep: impl Fn(&Game) -> bool, score: impl Fn(&Game) -> f64) -> Vec<&Game> {
     let mut picked: Vec<(&Game, f64)> = list.iter().filter(|g| keep(g)).map(|g| (g, score(g))).collect();
     picked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| b.0.hot().total_cmp(&a.0.hot())));
     picked.into_iter().take(CHART_SIZE).map(|(g, _)| g).collect()

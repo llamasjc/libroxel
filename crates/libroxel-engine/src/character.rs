@@ -1308,7 +1308,7 @@ mod tests {
     fn turning_goes_the_short_way_and_takes_a_moment() {
         // From facing 170 degrees to -170: twenty degrees, through 180, not 340 back.
         let one = turn_toward(170.0, -170.0, 1.0 / 60.0);
-        assert!(one > 170.0 || one < -170.0, "{one}");
+        assert!(!(-170.0..=170.0).contains(&one), "{one}");
         // A half turn is mostly done in a fifth of a second, and done in half a second.
         let mut yaw = 0.0;
         for _ in 0..12 {
