@@ -1945,12 +1945,12 @@ async function familyCall(work, done, after) {
 
 function birthdayFields() {
   const born = el('input', { type: 'date', max: new Date().toISOString().slice(0, 10) });
-  const parent = el('input', { type: 'email', maxlength: 254, placeholder: 'parent@example.com' });
+  const parent = el('input', { type: 'email', maxlength: 254, placeholder: 'parent@example.com (optional)' });
   const parentField = el('label', { class: 'field', style: 'display:none' }, el('span', {}, "Parent's email"), parent);
   born.addEventListener('input', () => { parentField.style.display = born.value && ageOn(born.value) < 13 ? '' : 'none'; });
   const check = () => {
     if (!born.value) return 'Pick your birthday.';
-    if (ageOn(born.value) < 13 && !validEmail(parent.value)) return "Type a parent's email.";
+    if (ageOn(born.value) < 13 && parent.value.trim() && !validEmail(parent.value)) return "That parent email doesn't look right.";
     return null;
   };
   const value = () => [born.value, ageOn(born.value) < 13 ? parent.value.trim() : null];
@@ -1983,12 +1983,12 @@ function parentPanel() {
     const pin = pinBox("Parent's new PIN");
     const email = el('input', { type: 'email', maxlength: 254, placeholder: f.parent_email || 'parent@example.com' });
     add(panel, [
-      el('p', { style: 'color:var(--amber)' }, `Chat is off until a parent approves. We mailed a code to ${f.parent_email || 'a parent'}.`),
+      el('p', { style: 'color:var(--amber)' }, 'Friend requests are off until a parent approves.'),
       el('div', { class: 'search' }, code, pin, el('button', { class: 'btn go small', onclick: () => familyCall(() => {
         const time = Date.now();
         const signature = signText(secretKey(), `libroxel consent\n${id}\n${code.value.trim()}\n${pin.value}\n${time}`);
         return api('/accounts/family/consent', { method: 'POST', body: { player_id: id, code: code.value.trim(), pin: pin.value, time, signature } });
-      }, 'Approved. Chat is on with the strict filter.') }, 'Approve')),
+      }, 'Approved.') }, 'Approve')),
       el('div', { class: 'search' }, email, el('button', { class: 'chip', onclick: () => familyCall(async () => {
         const to = (email.value.trim() || f.parent_email || '').toLowerCase();
         const time = Date.now();

@@ -75,7 +75,7 @@ fn change(
 }
 
 #[test]
-fn under_13_chat_waits_for_a_parent_and_the_pin_guards_settings() {
+fn under_13_chats_strictly_and_a_parent_unlocks_the_rest() {
     let outbox = Arc::new(Mutex::new(Vec::new()));
     let options = libroxel_hub::HubOptions { mail: Mail::Outbox(outbox.clone()), ..Default::default() };
     let running = libroxel_hub::start_with("127.0.0.1:0".parse().unwrap(), None, options).unwrap();
@@ -87,12 +87,12 @@ fn under_13_chat_waits_for_a_parent_and_the_pin_guards_settings() {
     assert!(!read(&hub, &kid).has_birthday);
     assert_eq!(hub.chat_rule(&player_id_of(&kid)).unwrap().chat, Chat::Strict);
 
-    assert!(birthday(&hub, &kid, &years_ago(9), None).unwrap_err().contains("parent"));
     assert!(birthday(&hub, &kid, "2999-01-01", Some("mum@example.com")).is_err());
     let family = birthday(&hub, &kid, &years_ago(9), Some("Mum@Example.com")).unwrap();
     assert!(family.under_13 && !family.consent);
-    assert_eq!(family.settings.chat, Chat::Off);
-    assert_eq!(family.settings.messages, Messages::Off);
+    assert_eq!(family.settings.chat, Chat::Strict);
+    assert_eq!(family.settings.messages, Messages::Friends);
+    assert!(!family.settings.friend_requests);
     assert!(birthday(&hub, &kid, &years_ago(20), None).unwrap_err().contains("already"));
     let (to, code) = outbox.lock().unwrap().pop().unwrap();
     assert_eq!(to, "mum@example.com");
