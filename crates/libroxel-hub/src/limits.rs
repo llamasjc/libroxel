@@ -29,6 +29,7 @@ pub(crate) enum Limit {
     Share,
     /// Reports, per IP.
     Report,
+    Comment,
     /// Emails given (each sends a code), per IP.
     Email,
     Asset,
@@ -47,6 +48,7 @@ impl Limit {
             Limit::WrongPassword => (10, 15 * MINUTE),
             Limit::Share => (30, 60 * MINUTE),
             Limit::Report => (30, 60 * MINUTE),
+            Limit::Comment => (20, 10 * MINUTE),
             Limit::Email => (10, 60 * MINUTE),
             Limit::Asset => (2000, 60 * MINUTE),
         }

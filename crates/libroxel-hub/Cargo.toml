@@ -30,6 +30,7 @@ tower-http = { version = "0.6", features = ["cors", "compression-gzip", "decompr
 flate2 = "1"
 # Email codes, sent by SMTP (any mail provider: Resend, Brevo, Postmark, your own).
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "hostname", "rustls-tls"] }
+rustrict = "0.7"
 
 [lints]
 workspace = true

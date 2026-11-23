@@ -62,12 +62,14 @@ pub use family::{
     ParentEmail, age_on, birthday_message, chat_level, consent_message, family_message, family_read_message,
     may_message, may_spend, parent_email_message, parse_date, playtime_up, strict_filter,
 };
+mod filter;
 mod fleet;
 pub use fleet::{FleetOptions, PlayAnswer, PlayRequest, play_message};
 mod limits;
 pub use cli::{HUB_HELP, cli};
 mod owner;
 mod password;
+mod ratings;
 mod security;
 mod social;
 use limits::{Caller, Limit, Limits, too_many};
@@ -75,6 +77,10 @@ pub use owner::{AccountRow, accounts, add_owner, ban, owners, remove_owner, rena
 pub use password::{
     MIN_PASSWORD, PASSWORD_MEMORY_KIB, PASSWORD_PASSES, PasswordSet, SignIn, SignInSalt, SignedIn,
     password_message, password_problem, seal_password, seal_password_with, sign_in_message, weak_password,
+};
+pub use ratings::{
+    Comment, MAX_COMMENT, NewComment, Rate, Ratings, RemoveComment, Vote, comment_message, rate_message,
+    remove_comment_message,
 };
 pub use security::{
     NEEDS_CODE, Security, SignInRecord, TwoStepSet, WORK_BITS, account_work, new_two_step_secret,
@@ -410,7 +416,7 @@ pub struct Item {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Report {
     pub reporter_id: String,
-    /// "game" or "item".
+    /// "game", "item" or "comment".
     pub kind: String,
     /// The game's or item's id.
     pub target: String,
@@ -527,6 +533,12 @@ pub struct GameInfo {
     /// How many servers run it right now.
     #[serde(default)]
     pub servers: u32,
+    #[serde(default)]
+    pub likes: u32,
+    #[serde(default)]
+    pub dislikes: u32,
+    #[serde(default)]
+    pub favorites: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -681,6 +693,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     fleet::create_tables(&db)?;
     assets::create_tables(&db)?;
     analytics::create_tables(&db)?;
+    ratings::create_tables(&db)?;
     Ok(db)
 }
 
@@ -722,6 +735,10 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/play", post(play))
         .route("/games", get(list_games).post(publish).layer(big))
         .route("/games/{id}", get(game_info).delete(unpublish))
+        .route("/games/{id}/ratings", get(ratings::get_ratings).post(ratings::rate))
+        .route("/games/{id}/comments", get(ratings::list_comments).post(ratings::add_comment))
+        .route("/comments/{id}", delete(ratings::remove_comment))
+        .route("/accounts/{id}/favorites", get(ratings::favorites))
         .route("/games/{id}/place", get(download).layer(tower_http::compression::CompressionLayer::new()))
         .route("/assets/missing", post(assets::missing_assets))
         .route(
@@ -809,7 +826,10 @@ const GAME_COLUMNS: &str = concat!(
     (SELECT COALESCE(SUM(s.players), 0) FROM servers s WHERE s.game_id = g.game_id AND s.last_seen >= ",
     "CAST(strftime('%s', 'now') AS INTEGER) - 45),
     (SELECT COUNT(*) FROM servers s WHERE s.game_id = g.game_id AND s.last_seen >= ",
-    "CAST(strftime('%s', 'now') AS INTEGER) - 45)"
+    "CAST(strftime('%s', 'now') AS INTEGER) - 45),
+    (SELECT COUNT(*) FROM game_votes v WHERE v.game_id = g.game_id AND v.vote = 1),
+    (SELECT COUNT(*) FROM game_votes v WHERE v.game_id = g.game_id AND v.vote = -1),
+    (SELECT COUNT(*) FROM game_favorites f WHERE f.game_id = g.game_id)"
 );
 const GAMES: &str = "games g LEFT JOIN accounts a ON a.player_id = g.author_id";
 
@@ -835,6 +855,9 @@ fn game_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<GameInfo> {
         author_id: r.get(8)?,
         playing: r.get::<_, i64>(9)? as u32,
         servers: r.get::<_, i64>(10)? as u32,
+        likes: r.get::<_, i64>(11)? as u32,
+        dislikes: r.get::<_, i64>(12)? as u32,
+        favorites: r.get::<_, i64>(13)? as u32,
     })
 }
 
@@ -1209,8 +1232,8 @@ async fn report(
         return Err(too_many("reports"));
     }
     let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
-    if report.kind != "game" && report.kind != "item" {
-        return bad("only games and items can be reported");
+    if !["game", "item", "comment"].contains(&report.kind.as_str()) {
+        return bad("only games, items and comments can be reported");
     }
     if report.reason.trim().is_empty() || report.reason.chars().count() > 300 {
         return bad("a report needs a short reason");
@@ -1224,7 +1247,11 @@ async fn report(
     if crate::owner::is_banned(&db, &report.reporter_id) {
         return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
     }
-    let table = if report.kind == "game" { "games WHERE game_id" } else { "items WHERE item_id" };
+    let table = match report.kind.as_str() {
+        "game" => "games WHERE game_id",
+        "item" => "items WHERE item_id",
+        _ => "game_comments WHERE comment_id",
+    };
     let exists: Option<i64> = db
         .query_row(&format!("SELECT 1 FROM {table} = ?1"), params![report.target], |r| r.get(0))
         .optional()
@@ -1249,6 +1276,7 @@ pub fn reports(db: &Connection) -> Vec<Reported> {
             "SELECT r.kind, r.target, GROUP_CONCAT(r.reason, '\n'), COUNT(*),
                  EXISTS (SELECT 1 FROM cleared c WHERE c.kind = r.kind AND c.target = r.target),
                  CASE r.kind WHEN 'game' THEN (SELECT title FROM games WHERE game_id = r.target)
+                             WHEN 'comment' THEN (SELECT text FROM game_comments WHERE comment_id = r.target)
                              ELSE (SELECT name FROM items WHERE item_id = r.target) END
              FROM reports r GROUP BY r.kind, r.target ORDER BY COUNT(*) DESC",
         )
@@ -1284,6 +1312,7 @@ pub fn take_down(db: &Connection, kind: &str, target: &str) -> Result<(), String
     let sql = match kind {
         "game" => "DELETE FROM games WHERE game_id = ?1",
         "item" => "DELETE FROM items WHERE item_id = ?1",
+        "comment" => "DELETE FROM game_comments WHERE comment_id = ?1",
         _ => return Err(format!("there are no {kind}s on a Hub")),
     };
     let gone = db.execute(sql, params![target]).map_err(|e| e.to_string())?;
@@ -2103,6 +2132,78 @@ impl HubClient {
             .send_json(report)
             .map(|_| ())
             .map_err(|e| format!("the Hub did not take the report: {e}"))
+    }
+
+    fn answer<T: serde::de::DeserializeOwned>(
+        &self,
+        request: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+    ) -> Result<T, String> {
+        let mut r = request.map_err(|e| format!("could not reach the Hub: {e}"))?;
+        if r.status().is_success() {
+            r.body_mut().read_json().map_err(|e| e.to_string())
+        } else {
+            Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+        }
+    }
+
+    /// A game's likes and favorites, with what `player_id` gave it.
+    pub fn ratings(&self, game_id: &str, player_id: Option<&str>) -> Result<Ratings, String> {
+        let mut request = self.agent.get(format!("{}/games/{}/ratings", self.base, assets::encode(game_id)));
+        if let Some(id) = player_id {
+            request = request.query("player_id", id);
+        }
+        request
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not reach the Hub: {e}"))
+    }
+
+    pub fn rate(&self, game_id: &str, rate: &Rate) -> Result<Ratings, String> {
+        let request = self
+            .agent
+            .post(format!("{}/games/{}/ratings", self.base, assets::encode(game_id)))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(rate);
+        self.answer(request)
+    }
+
+    pub fn comments(&self, game_id: &str) -> Result<Vec<Comment>, String> {
+        self.agent
+            .get(format!("{}/games/{}/comments", self.base, assets::encode(game_id)))
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not reach the Hub: {e}"))
+    }
+
+    pub fn comment(&self, game_id: &str, comment: &NewComment) -> Result<Comment, String> {
+        let request = self
+            .agent
+            .post(format!("{}/games/{}/comments", self.base, assets::encode(game_id)))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(comment);
+        self.answer(request)
+    }
+
+    pub fn remove_comment(&self, comment_id: i64, remove: &RemoveComment) -> Result<(), String> {
+        self.agent
+            .delete(format!("{}/comments/{comment_id}", self.base))
+            .force_send_body()
+            .send_json(remove)
+            .map(|_| ())
+            .map_err(|e| format!("the Hub did not take the comment down: {e}"))
+    }
+
+    /// The games a player favorited, newest first.
+    pub fn favorites(&self, player_id: &str) -> Result<Vec<String>, String> {
+        self.agent
+            .get(format!("{}/accounts/{player_id}/favorites", self.base))
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not reach the Hub: {e}"))
     }
 
     /// Players whose names match `search`.

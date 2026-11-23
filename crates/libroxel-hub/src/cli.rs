@@ -23,9 +23,10 @@ pub const HUB_HELP: &str = "\
                                to --data)
       --starters <program>     the libroxel app to list the official games from
                                (default: the --game-servers one)
-  reports                      list reported games and hats (and which are hidden)
-  clear <game|item> <id>       say a reported one is fine: list it again
-  remove <game|item> <id>      take one down for good
+  reports                      list reported games, hats and comments
+  clear <kind> <id>            say a reported one is fine: list it again
+  remove <kind> <id>           take one down for good (kind: game, item or
+                               comment)
   accounts [search]            list accounts
   owners                       list the Hub's owners (its admins)
   owner add|remove <name or player id>
@@ -227,7 +228,7 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
             Ok(())
         }
         _ => {
-            Err("usage: libroxel-hub [reports | clear <game|item> <id> | remove <game|item> <id> | accounts \
+            Err("usage: libroxel-hub [reports | clear <game|item|comment> <id> | remove <game|item|comment> <id> | accounts \
                   [search] | owners | owner add|remove <who> | ban <who> [reason] | unban <who> | rename <who> <name> | verify|unverify <who>]"
                 .into())
         }
