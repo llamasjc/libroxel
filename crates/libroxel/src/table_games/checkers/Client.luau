@@ -1,6 +1,7 @@
--- The checkers screen: a wooden board. Click one of your pieces (the ones
--- that can move are outlined), then the square to move it to. For a
--- double jump, click each landing square in turn.
+-- The checkers screen, after Lidraughts: its light page, maple board,
+-- "wide crown" pieces, square numbers and move list. Click one of your
+-- pieces, then the square to move it to. For a double jump, click each
+-- landing square in turn.
 
 local storage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -10,26 +11,50 @@ local Screen = require(folder:WaitForChild("Screen"))
 local Rules = require(folder:WaitForChild("Rules"))
 local make, round, label = Screen.make, Screen.round, Screen.label
 
-local LIGHT = Color3.fromRGB(240, 217, 181)
-local DARK = Color3.fromRGB(150, 98, 60)
-local LAST = Color3.fromRGB(190, 150, 70)
-local PICKED = Color3.fromRGB(110, 170, 90)
-local PIECE = {
-	[1] = Color3.fromRGB(40, 40, 45),
-	[2] = Color3.fromRGB(205, 45, 45),
-}
-local EDGE = {
-	[1] = Color3.fromRGB(95, 95, 105),
-	[2] = Color3.fromRGB(245, 120, 110),
+local LIGHT = Color3.fromRGB(224, 189, 147)
+local DARK = Color3.fromRGB(180, 111, 59)
+local LAST = Color3.fromRGB(170, 147, 35)
+local PICKED = Color3.fromRGB(110, 98, 45)
+local DOT = Color3.fromRGB(20, 85, 30)
+local NUMBER = Color3.fromRGB(236, 214, 186)
+local INK = Color3.fromRGB(77, 77, 77)
+local SOFT = Color3.fromRGB(120, 120, 120)
+local STRIPE = Color3.fromRGB(247, 246, 245)
+
+local PIECES = {
+	[1] = "libroxel://draughts-black",
+	[2] = "libroxel://draughts-white",
+	[3] = "libroxel://draughts-black-king",
+	[4] = "libroxel://draughts-white-king",
 }
 
 local ui = Screen.new(script.Parent, folder, {
 	title = "Checkers",
 	levels = Rules.LEVELS,
 	level = 2,
-	background = Color3.fromRGB(70, 110, 75),
-	colourOf = function(seat)
-		return PIECE[seat]
+	look = {
+		background = Color3.fromRGB(237, 235, 233),
+		page = Color3.fromRGB(255, 255, 255),
+		ink = INK,
+		soft = SOFT,
+		line = Color3.fromRGB(217, 217, 217),
+		plain = Color3.fromRGB(240, 238, 236),
+		plainInk = INK,
+		accent = Color3.fromRGB(54, 146, 231),
+		go = Color3.fromRGB(98, 153, 36),
+		danger = Color3.fromRGB(220, 50, 47),
+		seat = STRIPE,
+		turn = Color3.fromRGB(232, 242, 252),
+		turnEdge = Color3.fromRGB(54, 146, 231),
+		yourTurn = Color3.fromRGB(229, 240, 216),
+		resultPage = Color3.fromRGB(255, 255, 255),
+		resultEdge = Color3.fromRGB(98, 153, 36),
+		waiting = Color3.fromRGB(199, 134, 42),
+		toast = Color3.fromRGB(51, 51, 51),
+		radius = 3,
+	},
+	pictureOf = function(seat)
+		return PIECES[seat]
 	end,
 	seatNote = function(v, seat)
 		local men, kings = 0, 0
@@ -42,8 +67,17 @@ local ui = Screen.new(script.Parent, folder, {
 				end
 			end
 		end
-		return (if seat == 1 then "Black" else "Red") .. " · " .. men + kings .. " pieces" .. (if kings > 0 then ", " .. kings .. " kings" else "")
+		return (if seat == 1 then "Black" else "White") .. " · " .. men + kings .. (if kings > 0 then " (" .. kings .. " kings)" else "")
 	end,
+	sounds = {
+		move = "libroxel://lidraughts/move",
+		capture = "libroxel://lidraughts/capture",
+		start = "libroxel://lidraughts/notify",
+		win = "libroxel://lidraughts/victory",
+		lose = "libroxel://lidraughts/defeat",
+		draw = "libroxel://lidraughts/draw",
+		challenge = "libroxel://lidraughts/challenge",
+	},
 	rules = {
 		"Black goes first. Pieces move one square diagonally forward.",
 		"Jump an enemy piece to take it. Jumps are forced. Keep jumping if you can.",
@@ -57,11 +91,10 @@ local board = make("Frame", {
 	AnchorPoint = Vector2.new(0.5, 0.5),
 	Position = UDim2.fromScale(0.5, 0.5),
 	Size = UDim2.fromScale(1, 1),
-	BackgroundColor3 = Color3.fromRGB(90, 55, 30),
+	BackgroundColor3 = DARK,
+	BorderSizePixel = 0,
 }, ui.area)
 make("UIAspectRatioConstraint", { AspectRatio = 1 }, board)
-round(board, 6)
-make("UIStroke", { Color = Color3.fromRGB(60, 35, 18), Thickness = 8 }, board)
 
 local flipped = false
 local squares = {}
@@ -76,49 +109,94 @@ for sq = 1, 64 do
 		AutoButtonColor = false,
 		BorderSizePixel = 0,
 	}, board)
-	local piece = make("Frame", {
+	local number = nil
+	if dark then
+		number = label(s, {
+			Name = "Field",
+			Position = UDim2.fromScale(0.05, 0.02),
+			Size = UDim2.fromScale(0.4, 0.22),
+			TextSize = 11,
+			TextColor3 = NUMBER,
+			Text = tostring(Rules.field(sq)),
+			ZIndex = 2,
+		})
+	end
+	local piece = make("ImageLabel", {
 		Name = "Piece",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromScale(0.78, 0.78),
-		BackgroundColor3 = PIECE[1],
+		Size = UDim2.fromScale(0.9, 0.9),
+		BackgroundTransparency = 1,
 		Visible = false,
 		ZIndex = 3,
 	}, s)
-	round(piece, 1000)
-	local edge = make("UIStroke", { Color = EDGE[1], Thickness = 3 }, piece)
-	local inner = make("Frame", {
-		Name = "Inner",
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromScale(0.62, 0.62),
-		BackgroundTransparency = 1,
-		ZIndex = 4,
-	}, piece)
-	round(inner, 1000)
-	local innerEdge = make("UIStroke", { Color = EDGE[1], Thickness = 2 }, inner)
-	local crown = label(piece, {
-		Name = "Crown",
-		Size = UDim2.fromScale(1, 1),
-		Text = "♛",
-		TextSize = 30,
-		TextColor3 = Screen.GOLD,
-		TextXAlignment = Enum.TextXAlignment.Center,
-		Visible = false,
-		ZIndex = 5,
-	})
 	local dot = make("Frame", {
 		Name = "Dot",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromScale(0.3, 0.3),
-		BackgroundColor3 = Color3.fromRGB(120, 220, 120),
-		BackgroundTransparency = 0.15,
+		Size = UDim2.fromScale(0.28, 0.28),
+		BackgroundColor3 = DOT,
+		BackgroundTransparency = 0.5,
 		Visible = false,
 		ZIndex = 6,
 	}, s)
 	round(dot, 1000)
-	squares[sq] = { button = s, piece = piece, edge = edge, innerEdge = innerEdge, crown = crown, dot = dot, dark = dark }
+	squares[sq] = { button = s, piece = piece, dot = dot, dark = dark, number = number }
+end
+
+-- The move list, numbered in pairs the way Lidraughts shows it.
+local extra = ui.extra
+extra.Size = UDim2.new(1, -24, 1, -(150 + 2 * 54 + 116))
+local movesBox = make("ScrollingFrame", {
+	Name = "Moves",
+	Size = UDim2.fromScale(1, 1),
+	BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+	BorderSizePixel = 0,
+	ScrollBarThickness = 5,
+	CanvasSize = UDim2.new(0, 0, 0, 0),
+}, extra)
+make("UIStroke", { Color = Color3.fromRGB(217, 217, 217), Thickness = 1 }, movesBox)
+
+local shownMoves = -1
+local function drawMoves(history)
+	if #history == shownMoves then
+		return
+	end
+	shownMoves = #history
+	for _, child in movesBox:GetChildren() do
+		if child:IsA("Frame") then
+			child:Destroy()
+		end
+	end
+	local rows = math.ceil(#history / 2)
+	for r = 1, rows do
+		local line = make("Frame", {
+			Position = UDim2.new(0, 0, 0, (r - 1) * 26),
+			Size = UDim2.new(1, -6, 0, 26),
+			BackgroundTransparency = 1,
+		}, movesBox)
+		local index = make("Frame", { Size = UDim2.new(0, 38, 1, 0), BackgroundColor3 = STRIPE, BorderSizePixel = 0 }, line)
+		label(index, { Size = UDim2.fromScale(1, 1), Text = tostring(r), TextSize = 13, TextColor3 = SOFT, TextXAlignment = Enum.TextXAlignment.Center })
+		for k = 1, 2 do
+			local text = history[r * 2 - 2 + k]
+			if text then
+				local latest = r * 2 - 2 + k == #history
+				local cell = label(line, {
+					Position = UDim2.new(0.5 * (k - 1), if k == 1 then 46 else 23, 0, 0),
+					Size = UDim2.new(0.5, -23, 1, 0),
+					Text = text,
+					TextSize = 15,
+					TextColor3 = INK,
+					BackgroundColor3 = Color3.fromRGB(207, 225, 241),
+					BackgroundTransparency = if latest then 0 else 1,
+				})
+				make("UIPadding", { PaddingLeft = UDim.new(0, 6) }, cell)
+			end
+		end
+	end
+	local height = rows * 26
+	movesBox.CanvasSize = UDim2.new(0, 0, 0, height)
+	movesBox.CanvasPosition = Vector2.new(0, math.max(0, height - movesBox.AbsoluteSize.Y))
 end
 
 local function place(sq)
@@ -162,12 +240,10 @@ local function draw()
 			last[sq] = true
 		end
 	end
-	local movable, targets = {}, {}
-	if v and ui.myTurn() then
+	local targets = {}
+	if v and ui.myTurn() and #path > 0 then
 		for _, m in matching() do
-			if #path == 0 then
-				movable[m[1]] = true
-			elseif m[#path + 1] then
+			if m[#path + 1] then
 				targets[m[#path + 1]] = true
 			end
 		end
@@ -179,10 +255,13 @@ local function draw()
 		if last[sq] then
 			colour = LAST
 		end
-		if path[1] == sq or table.find(path, sq) then
+		if table.find(path, sq) then
 			colour = PICKED
 		end
 		s.button.BackgroundColor3 = colour
+		if s.number then
+			s.number.TextSize = math.max(9, math.floor(size / 8 * 0.14))
+		end
 		local piece = cells[sq]
 		-- While jumping, the piece is shown where it has got to.
 		if #path > 1 then
@@ -194,24 +273,12 @@ local function draw()
 		end
 		s.piece.Visible = piece ~= 0
 		if piece ~= 0 then
-			local owner = Rules.ownerOf(piece)
-			s.piece.BackgroundColor3 = PIECE[owner]
-			s.edge.Color = EDGE[owner]
-			s.innerEdge.Color = EDGE[owner]
-			s.crown.Visible = Rules.isKing(piece)
-			s.crown.TextSize = math.max(14, math.floor(size / 8 * 0.5))
-		end
-		-- Pieces that can move get a gold rim.
-		if movable[sq] or (path[1] == sq and #path == 1) then
-			s.edge.Color = Screen.GOLD
-			s.edge.Thickness = 5
-		elseif piece ~= 0 then
-			s.edge.Thickness = 3
+			s.piece.Image = PIECES[piece]
 		end
 		s.dot.Visible = targets[sq] == true
 	end
 	if v and v.status == "playing" then
-		ui.subText = if v.game.mustJump and ui.myTurn() then "you must jump" else nil
+		ui.subText = if v.game.mustJump and ui.myTurn() then "must jump" else nil
 	end
 end
 
@@ -223,13 +290,13 @@ local function slide(from, to)
 	local ghost = s.piece:Clone()
 	ghost.Parent = board
 	ghost.Position = place(from) + UDim2.fromScale(1 / 16, 1 / 16)
-	ghost.Size = UDim2.fromScale(0.78 / 8, 0.78 / 8)
+	ghost.Size = UDim2.fromScale(0.9 / 8, 0.9 / 8)
 	ghost.ZIndex = 8
 	s.piece.Visible = false
-	TweenService:Create(ghost, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+	TweenService:Create(ghost, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 		Position = place(to) + UDim2.fromScale(1 / 16, 1 / 16),
 	}):Play()
-	task.delay(0.2, function()
+	task.delay(0.18, function()
 		ghost:Destroy()
 		draw()
 	end)
@@ -240,13 +307,15 @@ ui.onTable = function(v, fresh)
 	shown = table.clone(v.game.board)
 	if fresh then
 		flipped = v.you == 2
+		shownMoves = -1
 	end
 	path = {}
 	draw()
+	drawMoves(v.game.history or {})
 	local last = v.game.last
 	if not fresh and before and #last >= 2 and before[last[#last]] == 0 then
 		slide(last[1], last[#last])
-		ui.sounds.move:Play()
+		ui.play(if math.abs(Rules.rowOf(last[1]) - Rules.rowOf(last[2])) == 2 then "capture" else "move")
 	end
 end
 

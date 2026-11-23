@@ -588,10 +588,48 @@ local toastBox = make("TextLabel", {
 }, screen)
 round(toastBox, 6)
 
+local heard = { offer = -1, chat = nil, lowTime = false, challenges = 0 }
+
+-- Lichess's sound sets.
+local SOUND_SETS = { "sfx", "piano", "nes", "futuristic" }
+local SOUND_NAMES = { "move", "capture", "check", "notify", "victory", "defeat", "draw", "lowtime", "confirm", "challenge", "message" }
+local soundSet = 1
 local sounds = {}
-for name, id in { move = "libroxel://click", capture = "libroxel://coin", over = "libroxel://chime" } do
-	sounds[name] = make("Sound", { Name = name, SoundId = id, Volume = 0.5 }, screen)
+for _, name in SOUND_NAMES do
+	sounds[name] = make("Sound", { Name = name, Volume = 0.6 }, screen)
 end
+local function useSoundSet(i)
+	soundSet = i
+	for name, sound in sounds do
+		sound.SoundId = if SOUND_SETS[i] then "libroxel://lichess/" .. SOUND_SETS[i] .. "/" .. name else ""
+	end
+end
+useSoundSet(1)
+local function play(name)
+	if SOUND_SETS[soundSet] then
+		sounds[name]:Play()
+	end
+end
+
+local soundButton = make("TextButton", {
+	Name = "Sound",
+	AnchorPoint = Vector2.new(1, 0),
+	Position = UDim2.new(1, -16, 0, 16),
+	Size = UDim2.fromOffset(96, 26),
+	BackgroundColor3 = CARD,
+	TextColor3 = MUTED,
+	TextSize = 13,
+	Text = "♪ sfx",
+	AutoButtonColor = true,
+}, panel)
+round(soundButton, 4)
+soundButton.MouseButton1Click:Connect(function()
+	useSoundSet(soundSet % (#SOUND_SETS + 1) + 1)
+	soundButton.Text = if SOUND_SETS[soundSet] then "♪ " .. SOUND_SETS[soundSet] else "♪ off"
+	if SOUND_SETS[soundSet] then
+		sounds.move:Play()
+	end
+end)
 
 ------------------------------------------------------------------------
 -- What the screen shows.
@@ -748,6 +786,10 @@ local function updateClocks()
 		local running = view.running == side
 		if running then
 			left = math.max(0, left - elapsed)
+		end
+		if running and view.timed and not heard.lowTime and side == mySide() and left < 20000 and view.status == "playing" then
+			heard.lowTime = true
+			play("lowtime")
 		end
 		card.Clock.Text = clockText(math.floor(left))
 		card.Clock.BackgroundColor3 = if running then (if left < 20000 then RED else Color3.fromRGB(240, 240, 240)) else CARD
@@ -1118,14 +1160,36 @@ local function onGame(newView)
 	if moved and view.ply > shownPly and #view.last >= 4 then
 		slide(Rules.parseSquare(string.sub(view.last, 1, 2)), Rules.parseSquare(string.sub(view.last, 3, 4)))
 		local san = view.sans[#view.sans] or ""
-		if string.find(san, "x", 1, true) then
-			sounds.capture:Play()
-		else
-			sounds.move:Play()
+		play(if string.find(san, "x", 1, true) then "capture" else "move")
+		if string.find(san, "[+#]") then
+			play("check")
 		end
 	end
+	if fresh and view.status == "playing" and view.ply == 0 then
+		play("notify")
+	end
 	if view.status ~= "playing" and not wasOver and (moved or not fresh) and shownPly >= 0 then
-		sounds.over:Play()
+		local mine = if view.you == "white" then "1-0" elseif view.you == "black" then "0-1" else nil
+		if view.result == "1/2-1/2" or view.result == "*" or not mine then
+			play("draw")
+		elseif view.result == mine then
+			play("victory")
+		else
+			play("defeat")
+		end
+	end
+	local side = mySide()
+	if not fresh and view.status == "playing" and side and view.drawOffer >= 0 and view.drawOffer ~= side and view.drawOffer ~= heard.offer then
+		play("confirm")
+	end
+	heard.offer = view.drawOffer
+	local said = view.chat[#view.chat]
+	if not fresh and said and said ~= heard.chat and string.sub(said, 1, #me.Name + 1) ~= me.Name .. ":" then
+		play("message")
+	end
+	heard.chat = said
+	if fresh then
+		heard.lowTime = false
 	end
 	shownPly = view.ply
 	shownId = view.id
@@ -1315,6 +1379,10 @@ backButton.MouseButton1Click:Connect(toLobby)
 State.OnClientEvent:Connect(function(kind, data)
 	if kind == "lobby" then
 		lobby = data
+		if #data.incoming > heard.challenges then
+			play("challenge")
+		end
+		heard.challenges = #data.incoming
 		if not view then
 			showPage()
 		else
