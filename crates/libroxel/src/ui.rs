@@ -477,7 +477,7 @@ pub fn editor_ui(
                         boxes.input = Some(hit);
                     }
                 }
-                if let Some(hit) = gui::billboards(ui, &tree_rc.borrow(), (cam, gt), selected, &mut boxes) {
+                if let Some(hit) = gui::billboards(ui, &tree_rc.borrow(), (cam, gt), gui_root, selected, &mut boxes) {
                     gui_hit = Some(hit);
                 }
             }
@@ -3783,6 +3783,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
         }
         Action::Mouse(input, down, processed) => {
             if let Some(session) = engine.session.as_mut() {
+                session.gui_input(input, down);
                 if down {
                     session.input_began(input, processed);
                 } else {

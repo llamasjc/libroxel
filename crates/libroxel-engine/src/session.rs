@@ -831,6 +831,25 @@ impl PlaySession {
         }
     }
 
+    /// A mouse button went down (or up) over the GUI: fires `InputBegan` (or
+    /// `InputEnded`) on the hovered objects, topmost first, until one that
+    /// takes input (a button, a text box or an Active object).
+    pub fn gui_input(&mut self, input: UserInput, began: bool) {
+        let chain = self.hovered.clone();
+        for id in chain.into_iter().rev() {
+            let sinks = {
+                let tree = self.runtime.tree().borrow();
+                tree.class(id).is_ok_and(|c| c.is_button() || c == ClassKind::TextBox)
+                    || matches!(tree.get_extra(id, "Active"), Ok(Some(PropertyValue::Bool(true))))
+            };
+            let errors = self.runtime.gui_input(id, input, began);
+            self.collect(errors);
+            if sinks {
+                break;
+            }
+        }
+    }
+
     /// The player clicked a part. Fires its click detector if it has one and
     /// the character is close enough. Returns whether the part was clickable.
     pub fn click_part(&mut self, part: InstanceId) -> bool {

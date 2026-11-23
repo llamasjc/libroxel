@@ -450,6 +450,8 @@ pub mod user_input {
     pub const INPUT_OBJECT_TYPE_NAME: &str = "InputObject";
     pub const KEY_CODE: &str = "KeyCode";
     pub const USER_INPUT_TYPE: &str = "UserInputType";
+    pub const POSITION: &str = "Position";
+    pub const DELTA: &str = "Delta";
     /// Whether the player has a touch screen they've used.
     pub const TOUCH_ENABLED: &str = "TouchEnabled";
     /// Whether a game controller is plugged in.

@@ -3,6 +3,7 @@
 use libroxel_engine::session::{RESPAWN_DELAY, start_on};
 use libroxel_engine::{CharacterInput, LogLevel};
 use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property, PropertyValue, Vec3};
+use libroxel_script::UserInput;
 
 const DT: f32 = 1.0 / 60.0;
 
@@ -748,6 +749,57 @@ fn the_pointer_entering_and_leaving_gui_objects_fires_events() {
     session.gui_hover(None);
     let printed: Vec<_> = session.take_log().into_iter().map(|l| l.text).collect();
     assert_eq!(printed, ["enter Panel", "enter Play", "leave Play", "leave Panel"]);
+}
+
+#[test]
+fn pressing_on_a_gui_object_fires_its_input_events() {
+    let mut tree = world();
+    let starter = tree.service(ClassKind::StarterGui).unwrap();
+    let screen = tree.create(ClassKind::ScreenGui, "Menu").unwrap();
+    tree.set_parent(screen, Some(starter)).unwrap();
+    let panel = tree.create(ClassKind::Frame, "Panel").unwrap();
+    tree.set_parent(panel, Some(screen)).unwrap();
+    let button = tree.create(ClassKind::TextButton, "Craft").unwrap();
+    tree.set_parent(button, Some(panel)).unwrap();
+    let label = tree.create(ClassKind::TextLabel, "Hint").unwrap();
+    tree.set_parent(label, Some(button)).unwrap();
+    let local = tree.create(ClassKind::LocalScript, "Hold").unwrap();
+    tree.set_parent(local, Some(screen)).unwrap();
+    let source = r#"
+        local panel = script.Parent.Panel
+        for _, g in { panel, panel.Craft, panel.Craft.Hint } do
+            g.InputBegan:Connect(function(input)
+                print("began " .. g.Name .. " " .. input.UserInputType.Name .. " " .. typeof(input.Position))
+            end)
+            g.InputEnded:Connect(function(input) print("ended " .. g.Name .. " " .. input.UserInputType.Name) end)
+        end
+    "#;
+    tree.set(local, Property::Source, PropertyValue::String(source.into())).unwrap();
+    let mut session = start_on(tree, true).unwrap();
+    session.step(DT, CharacterInput::default());
+    let gui = session.player_gui().unwrap();
+    let label = {
+        let t = session.runtime().tree().clone();
+        let t = t.borrow();
+        let menu = t.find_first_child(gui, "Menu").unwrap().unwrap();
+        let panel = t.find_first_child(menu, "Panel").unwrap().unwrap();
+        let craft = t.find_first_child(panel, "Craft").unwrap().unwrap();
+        t.find_first_child(craft, "Hint").unwrap().unwrap()
+    };
+    session.gui_hover(Some(label));
+    session.take_log();
+    session.gui_input(UserInput::MouseButton1, true);
+    session.gui_input(UserInput::MouseButton2, false);
+    let printed: Vec<_> = session.take_log().into_iter().map(|l| l.text).collect();
+    assert_eq!(
+        printed,
+        [
+            "began Hint MouseButton1 Vector3",
+            "began Craft MouseButton1 Vector3",
+            "ended Hint MouseButton2",
+            "ended Craft MouseButton2"
+        ]
+    );
 }
 
 #[test]

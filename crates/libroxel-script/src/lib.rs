@@ -286,6 +286,11 @@ impl ScriptRuntime {
         bindings::press_button(&self.lua, button, down)
     }
 
+    /// Fires a GUI object's `InputBegan` (or `InputEnded`) for a mouse button.
+    pub fn gui_input(&self, object: InstanceId, input: UserInput, began: bool) -> Vec<ScriptError> {
+        bindings::gui_input(&self.lua, object, input, began)
+    }
+
     pub fn click_button(&self, button: InstanceId) -> Vec<ScriptError> {
         bindings::click_button(&self.lua, button)
     }

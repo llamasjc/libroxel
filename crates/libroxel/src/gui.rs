@@ -869,6 +869,7 @@ pub fn billboards(
     ui: &egui::Ui,
     tree: &InstanceTree,
     camera: (&bevy::prelude::Camera, &bevy::prelude::GlobalTransform),
+    player_gui: Option<InstanceId>,
     selected: Option<InstanceId>,
     boxes: &mut TextBoxes,
 ) -> GuiHit {
@@ -880,14 +881,25 @@ pub fn billboards(
     let eye = gt.translation();
     let right = gt.right().as_vec3();
     let mut hit = None;
-    for board in tree.descendants_of_class(tree.workspace(), ClassKind::BillboardGui) {
+    let mut boards = tree.descendants_of_class(tree.workspace(), ClassKind::BillboardGui);
+    if let Some(root) = player_gui {
+        boards.extend(tree.descendants_of_class(root, ClassKind::BillboardGui));
+    }
+    for board in boards {
         if tree.get_bool(board, Property::Enabled) == Some(false) {
             continue;
         }
-        let Some(part) = tree.parent(board).ok().flatten() else { continue };
-        let Some(pos) = tree.get_vec3(part, Property::Position) else { continue };
+        let Some(part) = tree.get_ref(board, Property::Adornee).or_else(|| tree.parent(board).ok().flatten())
+        else {
+            continue;
+        };
+        let Some(pos) = anchor_position(tree, part) else { continue };
+        let world_offset = match tree.get_extra(board, "StudsOffsetWorldSpace") {
+            Ok(Some(PropertyValue::Vec3(v))) => v,
+            _ => Vec3::default(),
+        };
         let offset = tree.get_vec3(board, Property::StudsOffset).unwrap_or_default();
-        let at = pos + offset;
+        let at = pos + offset + world_offset;
         let world = BVec3::new(at.x, at.y, at.z);
         let distance = (world - eye).length();
         if distance > tree.get_number(board, Property::MaxDistance).unwrap_or(100.0) as f32 {
@@ -901,11 +913,12 @@ pub fn billboards(
                 p == part || model.is_some_and(|m| tree.is_descendant_of(p, m).unwrap_or(false))
             };
             let toward = at - Vec3::new(eye.x, eye.y, eye.z);
+            let solid = |p: InstanceId| tree.get_number(p, Property::Transparency).unwrap_or(0.0) < 0.01;
             let blocked = libroxel_instance::geometry::raycast(
                 tree,
                 Vec3::new(eye.x, eye.y, eye.z),
                 toward * 0.98,
-                |p| !own(p),
+                |p| !own(p) && solid(p),
             );
             if blocked.is_some() {
                 continue;
@@ -942,6 +955,40 @@ pub fn billboards(
         );
     }
     hit
+}
+
+/// Where a billboard on `anchor` sits: a part's position, or the middle of
+/// a model's parts.
+fn anchor_position(tree: &InstanceTree, anchor: InstanceId) -> Option<Vec3> {
+    if let Some(pos) = tree.get_vec3(anchor, Property::Position) {
+        return Some(pos);
+    }
+    if tree.class(anchor).ok()? != ClassKind::Model {
+        return None;
+    }
+    if let Some(pos) =
+        tree.get_ref(anchor, Property::PrimaryPart).and_then(|p| tree.get_vec3(p, Property::Position))
+    {
+        return Some(pos);
+    }
+    let mut bounds: Option<(Vec3, Vec3)> = None;
+    for part in tree.descendants(anchor).unwrap_or_default() {
+        let (Some(p), Some(size)) =
+            (tree.get_vec3(part, Property::Position), tree.get_vec3(part, Property::Size))
+        else {
+            continue;
+        };
+        let half = size * 0.5;
+        let (lo, hi) = (p - half, p + half);
+        bounds = Some(match bounds {
+            Some((a, b)) => (
+                Vec3::new(a.x.min(lo.x), a.y.min(lo.y), a.z.min(lo.z)),
+                Vec3::new(b.x.max(hi.x), b.y.max(hi.y), b.z.max(hi.z)),
+            ),
+            None => (lo, hi),
+        });
+    }
+    bounds.map(|(lo, hi)| (lo + hi) * 0.5)
 }
 
 /// Where a surface GUI is drawn: the face it covers (a unit square facing
@@ -1165,6 +1212,23 @@ mod tests {
 
     fn set(tree: &mut InstanceTree, id: InstanceId, p: Property, v: PropertyValue) {
         tree.set(id, p, v).unwrap();
+    }
+
+    #[test]
+    fn billboards_sit_on_their_adornee() {
+        let mut tree = InstanceTree::new();
+        let ws = tree.workspace();
+        let model = gui(&mut tree, ClassKind::Model, ws, "Tower");
+        for (name, x) in [("A", 0.0), ("B", 10.0)] {
+            let p = gui(&mut tree, ClassKind::Part, model, name);
+            set(&mut tree, p, Property::Position, PropertyValue::Vec3(Vec3::new(x, 2.0, 0.0)));
+            set(&mut tree, p, Property::Size, PropertyValue::Vec3(Vec3::new(2.0, 4.0, 2.0)));
+        }
+        let at = anchor_position(&tree, model).unwrap();
+        assert_eq!((at.x, at.y, at.z), (5.0, 2.0, 0.0));
+        let a = tree.find_first_child(model, "A").unwrap().unwrap();
+        set(&mut tree, model, Property::PrimaryPart, PropertyValue::Ref(Some(a)));
+        assert_eq!(anchor_position(&tree, model).unwrap().x, 0.0);
     }
 
     #[test]
