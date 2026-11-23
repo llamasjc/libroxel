@@ -41,6 +41,7 @@ rfd = { version = "0.18", default-features = false, features = ["xdg-portal", "p
 
 [target.'cfg(target_os = "android")'.dependencies]
 bevy = { workspace = true, features = ["android-game-activity"] }
+jni = "0.21"
 
 [lints]
 workspace = true

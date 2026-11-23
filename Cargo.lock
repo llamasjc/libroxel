@@ -5149,6 +5149,7 @@ dependencies = [
  "data-encoding",
  "ed25519-dalek",
  "egui-phosphor",
+ "jni 0.21.1",
  "libroxel-engine",
  "libroxel-hub",
  "libroxel-instance",

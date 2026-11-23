@@ -327,8 +327,8 @@ pub fn run() {
     }
     if !MOBILE {
         update::on_start(&args);
-        update::start();
     }
+    update::start();
     hub_assets::start(&libroxel_hub::hub_address());
     if !MOBILE {
         // Play buttons on the website open this copy of the app.
@@ -478,10 +478,11 @@ fn update_title(editor: NonSend<Editor>, engine: NonSend<EngineState>, mut windo
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Untitled".into());
     let title = format!(
-        "{}{}{} - Libroxel",
+        "{}{}{} - Libroxel {}",
         name,
         if editor.dirty { " *" } else { "" },
-        if engine.is_playing() { " (playing)" } else { "" }
+        if engine.is_playing() { " (playing)" } else { "" },
+        update::VERSION
     );
     for mut window in &mut windows {
         if window.title != title {
