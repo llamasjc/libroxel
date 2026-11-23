@@ -2704,6 +2704,11 @@ fn stop_destroyed_scripts(lua: &Lua) {
 /// are left for the next one.
 const RESUME_BUDGET: Duration = Duration::from_millis(4);
 
+/// Heavy work held back this long (seconds) past when it was due runs
+/// anyway: game logic waiting on it (a drop onto a belt, the ground near
+/// the player) mustn't lag behind by seconds.
+const MAX_LATE: f64 = 0.1;
+
 /// A resume this long marks its thread as heavy background work.
 const HEAVY_RESUME: Duration = Duration::from_micros(400);
 
@@ -2786,7 +2791,8 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
         };
         let heavy = expected > HEAVY_RESUME;
         let over = ran_heavy && budget_start.elapsed() + expected > share;
-        if heavy && !w.parallel && (over || !debt.is_zero()) {
+        let late = now - w.resume_at > MAX_LATE;
+        if heavy && !w.parallel && !late && (over || !debt.is_zero()) {
             host(lua).waiting.borrow_mut().push(w);
             continue;
         }
