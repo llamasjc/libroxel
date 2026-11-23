@@ -557,6 +557,7 @@ mod tests {
     /// Starts `tree` and has the HUD's messages printed, so tests can read them.
     fn start(tree: InstanceTree) -> PlaySession {
         let session = start_on(tree, true).unwrap();
+        session.runtime().set_steady(true);
         session
             .runtime()
             .run(
