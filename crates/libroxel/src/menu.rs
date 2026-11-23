@@ -371,6 +371,10 @@ impl Menu {
                     platform.new_password_ui(ui, &why);
                     return;
                 }
+                if platform.needs_birthday() {
+                    platform.birthday_page(ui);
+                    return;
+                }
                 pick = match self.tab {
                     Tab::Home => {
                         crate::hub_home::home_tab(&mut self.home, ui, platform, &name, &mut self.tab)

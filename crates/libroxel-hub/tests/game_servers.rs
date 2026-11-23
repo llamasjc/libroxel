@@ -91,9 +91,13 @@ fn play_fills_the_hubs_servers_and_starts_more() {
     let running = start_with("127.0.0.1:0".parse().unwrap(), None, options).unwrap();
     let hub = HubClient::new(&running.url());
     let play = |ticket: &str| {
-        hub.play(&PlayRequest { game_id: "starter:Sample obby".into(), ticket: ticket.into() })
-            .unwrap()
-            .unwrap()
+        hub.play(&PlayRequest {
+            game_id: "starter:Sample obby".into(),
+            ticket: ticket.into(),
+            ..Default::default()
+        })
+        .unwrap()
+        .unwrap()
     };
 
     // Nobody playing yet: a server starts, and the player waits for it.
@@ -130,13 +134,25 @@ fn play_fills_the_hubs_servers_and_starts_more() {
 
     // Both full, and no room for a third server: the Hub says it's busy.
     assert_eq!(play("ticketdddd").code.as_deref(), Some("lrx1second"));
-    let busy = hub.play(&PlayRequest { game_id: "starter:Sample obby".into(), ticket: "ticketeeee".into() });
+    let busy = hub.play(&PlayRequest {
+        game_id: "starter:Sample obby".into(),
+        ticket: "ticketeeee".into(),
+        ..Default::default()
+    });
     assert!(busy.unwrap_err().contains("busy"));
 
     // Games the Hub doesn't know, and nonsense tickets, are turned away.
-    let unknown = hub.play(&PlayRequest { game_id: "no-such-game".into(), ticket: "ticketffff".into() });
+    let unknown = hub.play(&PlayRequest {
+        game_id: "no-such-game".into(),
+        ticket: "ticketffff".into(),
+        ..Default::default()
+    });
     assert!(unknown.is_err());
-    let bad = hub.play(&PlayRequest { game_id: "starter:Sample obby".into(), ticket: "x".into() });
+    let bad = hub.play(&PlayRequest {
+        game_id: "starter:Sample obby".into(),
+        ticket: "x".into(),
+        ..Default::default()
+    });
     assert!(bad.is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -145,7 +161,11 @@ fn play_fills_the_hubs_servers_and_starts_more() {
 fn a_hub_without_game_servers_says_so() {
     let running = libroxel_hub::start("127.0.0.1:0".parse().unwrap(), None).unwrap();
     let hub = HubClient::new(&running.url());
-    let answer = hub.play(&PlayRequest { game_id: "starter:Sample obby".into(), ticket: new_secret() });
+    let answer = hub.play(&PlayRequest {
+        game_id: "starter:Sample obby".into(),
+        ticket: new_secret(),
+        ..Default::default()
+    });
     assert_eq!(answer, Ok(None));
 }
 
@@ -157,7 +177,11 @@ fn a_server_that_fails_to_start_is_not_retried_at_once() {
     let running = start_with("127.0.0.1:0".parse().unwrap(), None, options).unwrap();
     let hub = HubClient::new(&running.url());
     for ticket in ["ticketaaaa", "ticketbbbb"] {
-        let answer = hub.play(&PlayRequest { game_id: "starter:Sample obby".into(), ticket: ticket.into() });
+        let answer = hub.play(&PlayRequest {
+            game_id: "starter:Sample obby".into(),
+            ticket: ticket.into(),
+            ..Default::default()
+        });
         assert!(answer.unwrap_err().contains("couldn't start"));
     }
     let _ = std::fs::remove_dir_all(&dir);

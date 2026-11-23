@@ -56,8 +56,14 @@ pub use assets::{
 };
 mod cli;
 mod email;
+mod family;
+pub use family::{
+    Birthday, CONSENT_AGE, Chat, ChatRule, Consent, Family, FamilyChange, FamilySettings, Messages,
+    ParentEmail, age_on, birthday_message, chat_level, consent_message, family_message, family_read_message,
+    may_message, may_spend, parent_email_message, parse_date, playtime_up, strict_filter,
+};
 mod fleet;
-pub use fleet::{FleetOptions, PlayAnswer, PlayRequest};
+pub use fleet::{FleetOptions, PlayAnswer, PlayRequest, play_message};
 mod limits;
 pub use cli::{HUB_HELP, cli};
 mod owner;
@@ -671,6 +677,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     owner::create_tables(&db)?;
     security::create_tables(&db)?;
     email::create_tables(&db)?;
+    family::create_tables(&db)?;
     fleet::create_tables(&db)?;
     assets::create_tables(&db)?;
     analytics::create_tables(&db)?;
@@ -734,6 +741,12 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/accounts/email", post(email::set_email))
         .route("/accounts/email/verify", post(email::verify_email))
         .route("/accounts/{id}/security", get(security::security))
+        .route("/accounts/birthday", post(family::set_birthday))
+        .route("/accounts/family", post(family::change))
+        .route("/accounts/family/parent", post(family::ask_parent))
+        .route("/accounts/family/consent", post(family::consent))
+        .route("/accounts/{id}/family", get(family::family))
+        .route("/accounts/{id}/chat", get(family::chat_rule))
         .route("/catalog", get(list_items).post(share_item))
         .route("/catalog/{id}", delete(unlist_item))
         .route("/catalog/{id}/wear", post(wear_item))
@@ -1488,10 +1501,16 @@ async fn play(
     State(fleet): State<Option<Arc<fleet::Fleet>>>,
     Json(request): Json<PlayRequest>,
 ) -> Result<Json<PlayAnswer>, (StatusCode, String)> {
+    let db = db.lock().unwrap();
+    if let (Some(id), Some(signature)) = (&request.player_id, &request.signature)
+        && verify(id, &play_message(id, &request.ticket), signature)
+        && let Some(why) = family::playtime_up(&db, id)
+    {
+        return Err((StatusCode::FORBIDDEN, why));
+    }
     let Some(fleet) = fleet else {
         return Err((StatusCode::NOT_FOUND, "this Hub doesn't run game servers".into()));
     };
-    let db = db.lock().unwrap();
     fleet.play(&db, &request).map(Json).map_err(|e| match e {
         fleet::PlayError::BadRequest(why) => (StatusCode::BAD_REQUEST, why.to_owned()),
         fleet::PlayError::UnknownGame => (StatusCode::NOT_FOUND, "the Hub doesn't know that game".into()),
@@ -1928,6 +1947,68 @@ impl HubClient {
                     Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
                 }
             })
+    }
+
+    fn post_raw<T: Serialize>(&self, path: &str, body: &T) -> Result<String, String> {
+        self.agent
+            .post(format!("{}{path}", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(body)
+            .map_err(|e| format!("could not reach the Hub: {e}"))
+            .and_then(|mut r| {
+                let text = r.body_mut().read_to_string().unwrap_or_default();
+                if r.status().is_success() {
+                    Ok(text)
+                } else if text.is_empty() {
+                    Err(r.status().to_string())
+                } else {
+                    Err(text)
+                }
+            })
+    }
+
+    fn post_signed<T: Serialize, R: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &T,
+    ) -> Result<R, String> {
+        serde_json::from_str(&self.post_raw(path, body)?).map_err(|e| e.to_string())
+    }
+
+    pub fn set_birthday(&self, birthday: &Birthday) -> Result<Family, String> {
+        self.post_signed("/accounts/birthday", birthday)
+    }
+
+    pub fn ask_parent(&self, ask: &ParentEmail) -> Result<(), String> {
+        self.post_raw("/accounts/family/parent", ask).map(|_| ())
+    }
+
+    pub fn consent(&self, consent: &Consent) -> Result<Family, String> {
+        self.post_signed("/accounts/family/consent", consent)
+    }
+
+    pub fn change_family(&self, change: &FamilyChange) -> Result<Family, String> {
+        self.post_signed("/accounts/family", change)
+    }
+
+    pub fn family(&self, player_id: &str, time: i64, signature: &str) -> Result<Family, String> {
+        self.agent
+            .get(format!("{}/accounts/{player_id}/family", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not get parent settings from the Hub: {e}"))
+    }
+
+    pub fn chat_rule(&self, player_id: &str) -> Result<ChatRule, String> {
+        self.agent
+            .get(format!("{}/accounts/{player_id}/chat", self.base))
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not reach the Hub: {e}"))
     }
 
     /// Proves the account's email with the code from the mail.

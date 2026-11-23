@@ -85,13 +85,23 @@ impl Mail {
 
     /// Sends `code` to `to`. Blocks, so call it off the async threads.
     fn send(&self, to: &str, code: &str) -> Result<(), String> {
+        let subject = format!("{code} is your Libroxel code");
+        let body = format!(
+            "Hello!\n\nYour Libroxel code is {code}\n\nType it into Libroxel to prove this email is yours. \
+             It works for 30 minutes.\n\nIf you didn't ask for it, someone typed your email by mistake: \
+             you can ignore this mail.\n"
+        );
+        self.send_letter(to, code, &subject, &body)
+    }
+
+    pub(crate) fn send_letter(&self, to: &str, code: &str, subject: &str, body: &str) -> Result<(), String> {
         match self {
             Mail::Off => Ok(()),
             Mail::Outbox(outbox) => {
                 outbox.lock().unwrap().push((to.to_owned(), code.to_owned()));
                 Ok(())
             }
-            Mail::Smtp(settings) => settings.send(to, code),
+            Mail::Smtp(settings) => settings.send(to, subject, body),
         }
     }
 }
@@ -108,17 +118,13 @@ pub struct SmtpSettings {
 }
 
 impl SmtpSettings {
-    fn send(&self, to: &str, code: &str) -> Result<(), String> {
+    fn send(&self, to: &str, subject: &str, body: &str) -> Result<(), String> {
         use lettre::Transport;
         let message = lettre::Message::builder()
             .from(self.from.parse().map_err(|e| format!("bad sender: {e}"))?)
             .to(to.parse().map_err(|e| format!("bad address: {e}"))?)
-            .subject(format!("{code} is your Libroxel code"))
-            .body(format!(
-                "Hello!\n\nYour Libroxel code is {code}\n\nType it into Libroxel to prove this email is yours. \
-                 It works for 30 minutes.\n\nIf you didn't ask for it, someone typed your email by mistake: \
-                 you can ignore this mail.\n"
-            ))
+            .subject(subject)
+            .body(body.to_owned())
             .map_err(|e| format!("could not write the mail: {e}"))?;
         // A mail server on this computer (such as Postfix) is reached without TLS.
         let local = matches!(self.host.as_str(), "localhost" | "127.0.0.1" | "::1");
@@ -149,7 +155,7 @@ pub fn valid_email(email: &str) -> bool {
 }
 
 /// How emails are kept: trimmed and lower case.
-fn tidy(email: &str) -> String {
+pub(crate) fn tidy(email: &str) -> String {
     email.trim().to_ascii_lowercase()
 }
 
@@ -224,7 +230,7 @@ fn hash(code: &str) -> String {
     data_encoding::HEXLOWER.encode(&sha2::Sha256::digest(format!("libroxel email code\n{code}")))
 }
 
-fn new_code() -> String {
+pub(crate) fn new_code() -> String {
     let mut bytes = [0u8; 4];
     getrandom::fill(&mut bytes).expect("the system has a random number source");
     format!("{:06}", u32::from_le_bytes(bytes) % 1_000_000)
