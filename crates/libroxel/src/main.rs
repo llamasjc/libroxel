@@ -24,6 +24,7 @@ mod browse;
 mod command;
 mod debugging;
 mod file_picker;
+mod game_ratings;
 mod gui;
 mod history;
 mod hub_assets;

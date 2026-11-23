@@ -45,6 +45,7 @@ pub struct HomeState {
     pub launch: Option<crate::url_handler::PendingLaunch>,
     /// The game (its key) Play is finding a server for on the Hub.
     finding_for: Option<String>,
+    ratings: crate::game_ratings::GameRatings,
 }
 
 /// Where a game on the home screen comes from.
@@ -208,7 +209,7 @@ fn whereabouts(friend: &Friend) -> (String, Color32) {
 }
 
 /// "5 min ago", "3 h ago", "2 days ago".
-fn ago(secs: i64) -> String {
+pub(crate) fn ago(secs: i64) -> String {
     match secs {
         ..60 => "just now".into(),
         60..3600 => format!("{} min ago", secs / 60),
@@ -916,6 +917,10 @@ fn game_page(
                     ui.label(format!("Getting {title}…"));
                 });
             }
+            if entry.hostable() {
+                ui.add_space(14.0);
+                state.ratings.bar(ui, platform, &entry.key);
+            }
         });
     });
     if !entry.about.is_empty() {
@@ -992,6 +997,14 @@ fn game_page(
             join = Some(server.code.clone());
         }
         ui.add_space(6.0);
+    }
+    if entry.hostable() {
+        ui.add_space(22.0);
+        let author_id = match &entry.source {
+            Source::Published(game) => game.author_id.clone(),
+            _ => None,
+        };
+        state.ratings.comments(ui, platform, &entry.key, author_id.as_deref());
     }
     if let Some(code) = join {
         pick = Some(Pick::Join { code, name: name.to_owned() });

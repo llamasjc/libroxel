@@ -31,6 +31,7 @@ const ICON = {
   userMinus: '', check: '', search: '', refresh: '', bell: '',
   download: '', signOut: '', signal: '', shield: '', crown: '',
   seal: '', x: '', lock: '', user: '', hammer: '',
+  like: '', dislike: '', star: '', trash: '', flag: '',
 };
 
 // The app's colours, for drawing.
@@ -183,7 +184,7 @@ async function api(path, { method = 'GET', body, query } = {}) {
 
 const SESSION_KEY = 'libroxel.session';
 let session = loadSession();
-let lastSigned = { friends: 0, account: 0 };
+let lastSigned = { friends: 0, account: 0, rate: 0 };
 
 function loadSession() {
   for (const store of [sessionStorage, localStorage]) {
@@ -995,6 +996,7 @@ function game() {
         el('div', { class: 'hint' }, hint))),
   ];
   if (entry.about) out.push(el('div', { class: 'about' }, el('div', { class: 'caps' }, 'About'), entry.about));
+  if (hostable) out.push(ratingBar(entry));
 
   const hide = el('input', { type: 'checkbox', checked: view.hideFull });
   hide.addEventListener('change', () => { view.hideFull = hide.checked; render(); });
@@ -1014,6 +1016,128 @@ function game() {
   if (others.length) {
     if (withFriends.length) out.push(el('div', { class: 'caps group' }, 'Other servers'));
     out.push(others.map((s) => serverRow(s, entry)));
+  }
+  if (hostable) out.push(commentsPanel(entry));
+  return out;
+}
+
+// --- Likes, favorites and comments --------------------------------------------
+
+let rated = { key: null, who: null, ratings: null, comments: null, text: '', busy: false };
+
+function loadRatings(key) {
+  rated = { key, who: session?.playerId, ratings: null, comments: null, text: '', busy: false };
+  const path = `/games/${encodeURIComponent(key)}`;
+  const query = session ? { player_id: session.playerId } : undefined;
+  Promise.all([api(`${path}/ratings`, { query }).catch(() => null), api(`${path}/comments`).catch(() => [])])
+    .then(([ratings, comments]) => {
+      if (rated.key !== key) return;
+      rated.ratings = ratings;
+      rated.comments = comments;
+      if (route.name === 'game') render();
+    });
+}
+
+function signedTime() {
+  const time = Math.max(Date.now(), lastSigned.rate + 1);
+  lastSigned.rate = time;
+  return time;
+}
+
+async function rate(key, vote, favorite) {
+  const time = signedTime();
+  const signature = signText(secretKey(), `libroxel rate\n${session.playerId}\n${key}\n${vote}\n${favorite}\n${time}`);
+  try {
+    rated.ratings = await api(`/games/${encodeURIComponent(key)}/ratings`, { method: 'POST', body: { player_id: session.playerId, vote, favorite, time, signature } });
+    favorites.delete(session.playerId);
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  render();
+}
+
+function ratingBar(entry) {
+  if (rated.key !== entry.key || rated.who !== session?.playerId) loadRatings(entry.key);
+  const r = rated.ratings || { likes: 0, dislikes: 0, favorites: 0, vote: 'none', favorite: false };
+  const total = r.likes + r.dislikes;
+  const can = !!session;
+  const tip = can ? undefined : 'Sign in to rate games';
+  const press = (vote, favorite) => can && rate(entry.key, vote, favorite);
+  return el('div', { class: 'rating' },
+    el('button', { class: `chip${r.vote === 'like' ? ' on' : ''}`, disabled: !can, title: tip, onclick: () => press(r.vote === 'like' ? 'none' : 'like', r.favorite) }, icon(ICON.like), count(r.likes)),
+    el('button', { class: `chip${r.vote === 'dislike' ? ' on' : ''}`, disabled: !can, title: tip, onclick: () => press(r.vote === 'dislike' ? 'none' : 'dislike', r.favorite) }, icon(ICON.dislike), count(r.dislikes)),
+    total > 0 && el('div', { class: 'ratio', title: `${r.likes} of ${total} liked it` }, el('i', { style: `width:${(r.likes / total) * 100}%` })),
+    el('button', { class: `chip${r.favorite ? ' on' : ''}`, disabled: !can, title: tip, onclick: () => press(r.vote, !r.favorite) }, icon(ICON.star), r.favorite ? 'Favorited' : 'Favorite', ` ${count(r.favorites)}`));
+}
+
+async function postComment(key) {
+  const text = rated.text.trim();
+  if (!text) return;
+  const time = signedTime();
+  const signature = signText(secretKey(), `libroxel comment\n${session.playerId}\n${key}\n${rated.text}\n${time}`);
+  rated.busy = true;
+  render();
+  try {
+    const said = await api(`/games/${encodeURIComponent(key)}/comments`, { method: 'POST', body: { player_id: session.playerId, text: rated.text, time, signature } });
+    rated.comments = [said, ...(rated.comments || [])];
+    rated.text = '';
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  rated.busy = false;
+  render();
+}
+
+async function removeComment(c) {
+  const time = signedTime();
+  const signature = signText(secretKey(), `libroxel uncomment\n${session.playerId}\n${c.comment_id}\n${time}`);
+  try {
+    await api(`/comments/${c.comment_id}`, { method: 'DELETE', body: { player_id: session.playerId, time, signature } });
+    rated.comments = rated.comments.filter((x) => x.comment_id !== c.comment_id);
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  render();
+}
+
+async function reportComment(c) {
+  const time = nowSecs();
+  const target = String(c.comment_id);
+  const reason = 'Not OK';
+  const signature = signText(secretKey(), `libroxel report\n${session.playerId}\ncomment\n${target}\n${reason}\n${time}`);
+  try {
+    await api('/reports', { method: 'POST', body: { reporter_id: session.playerId, kind: 'comment', target, reason, time, signature } });
+    flash = { text: 'Reported. Thanks.' };
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  render();
+}
+
+function commentsPanel(entry) {
+  const list = rated.key === entry.key ? rated.comments : null;
+  const out = [el('h2', { class: 'section' }, `Comments${list ? ` (${list.length})` : ''}`)];
+  if (session) {
+    const box = el('textarea', { rows: 2, maxlength: 300, placeholder: 'Say something about this game' });
+    box.value = rated.text;
+    box.addEventListener('input', () => { rated.text = box.value; });
+    box.addEventListener('keydown', (e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), postComment(entry.key)));
+    out.push(el('div', { class: 'comment-box' }, box, el('button', { class: 'btn small', disabled: rated.busy, onclick: () => postComment(entry.key) }, 'Post')));
+  } else {
+    out.push(el('p', { class: 'soft' }, el('a', { href: '/sign-in' }, 'Sign in'), ' to comment.'));
+  }
+  if (!list) return [...out, el('p', { class: 'soft' }, 'Loading…')];
+  if (!list.length) out.push(el('p', { class: 'soft' }, 'No comments yet.'));
+  const mine = (c) => session && (c.player_id === session.playerId || entry.byId === session.playerId);
+  for (const c of list) {
+    out.push(el('div', { class: 'comment' },
+      portrait(null, c.name, 36),
+      el('div', { class: 'what' },
+        el('div', {}, el('a', { href: `/user/${c.number ?? c.player_id}` }, el('b', {}, c.name)), el('span', { class: 'soft' }, ` · ${ago(c.secs_ago)}`)),
+        el('div', { class: 'text' }, c.text)),
+      el('div', { class: 'buttons' },
+        mine(c) && el('button', { class: 'chip', title: 'Delete', onclick: () => removeComment(c) }, icon(ICON.trash)),
+        session && c.player_id !== session.playerId && el('button', { class: 'chip', title: 'Report', onclick: () => reportComment(c) }, icon(ICON.flag)))));
   }
   return out;
 }
@@ -1231,7 +1355,24 @@ function user() {
         key: g.game_id, title: g.title, by: g.author, servers: [], playing: 0, symbol: ICON.globe,
       })))
       : el('p', { class: 'soft' }, isMe ? 'Games you publish from the app show up here.' : 'No published games yet.'),
+    favoritesOf(p),
   ];
+}
+
+const favorites = new Map();
+
+function favoritesOf(p) {
+  const keys = favorites.get(p.player_id);
+  if (!keys) {
+    favorites.set(p.player_id, []);
+    api(`/accounts/${p.player_id}/favorites`)
+      .then((list) => { favorites.set(p.player_id, list); if (route.name === 'user') render(); })
+      .catch(() => {});
+    return null;
+  }
+  const shown = keys.map((k) => entries().find((e) => e.key === k)).filter(Boolean);
+  if (!shown.length) return null;
+  return [el('h2', { class: 'section' }, `Favorites (${shown.length})`), el('div', { class: 'games' }, shown.map(gameCard))];
 }
 
 // --- Avatar -----------------------------------------------------------------

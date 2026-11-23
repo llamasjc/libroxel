@@ -263,6 +263,16 @@ label.field span { display: block; margin-bottom: 4px; }
 .person .what small { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .person .buttons { display: flex; gap: 8px; align-items: center; }
 .subhead { font: 600 19px var(--display); margin: 0 0 12px; color: var(--heading); }
+.rating { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 18px; }
+.rating .ratio { width: 120px; height: 6px; border-radius: 3px; background: rgb(214, 90, 80); overflow: hidden; }
+.rating .ratio i { display: block; height: 100%; background: var(--green); }
+.chip[disabled] { cursor: default; opacity: 0.6; }
+.comment-box { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 14px; max-width: 760px; }
+.comment-box textarea { flex: 1; resize: vertical; }
+.comment { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line); max-width: 760px; }
+.comment .what { flex: 1; min-width: 0; }
+.comment .text { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; }
+.comment .buttons { display: flex; gap: 6px; }
 .subhead.sun { color: var(--amber); }
 .search { display: flex; gap: 10px; margin-bottom: 10px; }
 .search-results { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 10px 24px; align-items: start; margin-top: 8px; }
