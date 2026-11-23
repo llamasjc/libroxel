@@ -17,16 +17,15 @@ android {
         }
     }
 
+    val keystore = System.getenv("ANDROID_KEYSTORE")
+
     signingConfigs {
-        create("release") {
-            val keystore = System.getenv("ANDROID_KEYSTORE")
-            if (keystore != null) {
+        if (keystore != null) {
+            create("release") {
                 storeFile = file(keystore)
                 storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("ANDROID_KEY_ALIAS")
                 keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
-            } else {
-                initWith(getByName("debug"))
             }
         }
     }
@@ -34,7 +33,9 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("release")
+            if (keystore != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
