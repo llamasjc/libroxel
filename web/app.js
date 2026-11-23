@@ -232,7 +232,7 @@ async function stretchFor(name, password) {
 async function signIn(name, keys, code) {
   const time = Date.now();
   const signature = signText(keys.login, `libroxel sign in\n${name.toLowerCase()}\n${time}`);
-  const signedIn = await api('/accounts/sign-in', { method: 'POST', body: { name, time, signature, code: code || null } });
+  const signedIn = await api('/accounts/sign-in', { method: 'POST', body: { name, time, signature, code: code || null, device: deviceName() } });
   const sealed = unhex(signedIn.sealed);
   if (sealed.length < 12) throw new Error('The Hub sent a bad key.');
   let secret;
@@ -242,7 +242,7 @@ async function signIn(name, keys, code) {
     throw new Error('That password does not open this account.');
   }
   if (secret.length !== 32 || playerIdOf(secret) !== signedIn.player_id) throw new Error("The Hub sent someone else's key.");
-  return { playerId: signedIn.player_id, secret: hex(secret) };
+  return { playerId: signedIn.player_id, secret: hex(secret), session: signedIn.session };
 }
 
 /** Why `password` can't be used, if it can't. Call `loadCommonPasswords` first. */
@@ -352,16 +352,82 @@ async function createAccount(name, password, email, onStep, [born, parent]) {
 }
 
 async function setPassword(secret, playerId, password) {
+  const set = await sealPassword(secret, playerId, password, Math.max(nowSecs(), lastSigned.account + 1));
+  await api('/accounts/password', { method: 'POST', body: set });
+}
+
+async function sealPassword(secret, playerId, password, time) {
   const salt = hex(random(16));
   const keys = await stretch(password, salt, PASSWORD_MEMORY_KIB, PASSWORD_PASSES);
   const nonce = random(12);
   const sealed = hex(new Uint8Array([...nonce, ...crypto.seal(keys.seal, nonce, secret, utf8(playerId))]));
   const set = {
     player_id: playerId, salt, memory_kib: PASSWORD_MEMORY_KIB, passes: PASSWORD_PASSES,
-    login_id: playerIdOf(keys.login), sealed, time: Math.max(nowSecs(), lastSigned.account + 1),
+    login_id: playerIdOf(keys.login), sealed, time,
   };
   set.signature = signText(secret, `libroxel password\n${set.player_id}\n${set.salt}\n${set.memory_kib}\n${set.passes}\n${set.login_id}\n${set.sealed}\n${set.time}`);
-  await api('/accounts/password', { method: 'POST', body: set });
+  return set;
+}
+
+function deviceName() {
+  const ua = navigator.userAgent;
+  const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+  const os = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Windows/.test(ua) ? 'Windows' : /Mac OS/.test(ua) ? 'macOS' : /Linux/.test(ua) ? 'Linux' : '';
+  return os ? `${browser} on ${os}` : browser;
+}
+
+function base32(bytes) {
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = 0, value = 0, out = '';
+  for (const b of bytes) {
+    value = (value << 8) | b;
+    bits += 8;
+    while (bits >= 5) {
+      out += letters[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) out += letters[(value << (5 - bits)) & 31];
+  return out;
+}
+
+/** This browser was signed out by a reset or by signing out everywhere. */
+function signedOut() {
+  saveSession(null);
+  securityInfo = null;
+  data.friends = null;
+  data.me = null;
+  flash = { text: 'You were signed out.' };
+  goTo('/sign-in');
+}
+
+/** Resets the password of `name` with the mailed code, moving the account to a new key. */
+async function resetPassword(name, code, twoStep, password) {
+  const secret = random(32);
+  const playerId = playerIdOf(secret);
+  const set = await sealPassword(secret, playerId, password, nowSecs());
+  const done = await api('/accounts/reset/finish', {
+    method: 'POST', body: { name, code: code.trim(), two_step: twoStep || null, password: set, device: deviceName() },
+  });
+  return { playerId: done.player_id, secret: hex(secret), session: done.session };
+}
+
+/** Signs out every other device: the account moves to a new key, sealed with the same password. */
+async function signOutEverywhere(password, code) {
+  const keys = await stretchFor(session.name, password);
+  const secret = random(32);
+  const playerId = playerIdOf(secret);
+  const set = await sealPassword(secret, playerId, password, nowSecs());
+  const time = Date.now();
+  const text = `libroxel sign out everywhere\n${session.playerId}\n${set.signature}\n${time}`;
+  const done = await api('/accounts/sign-out-everywhere', {
+    method: 'POST',
+    body: {
+      player_id: session.playerId, password: set, code: code || null, device: deviceName(), time,
+      signature: signText(secretKey(), text), login_signature: signText(keys.login, text),
+    },
+  });
+  saveSession({ ...session, playerId: done.player_id, secret: hex(secret), session: done.session }, isRemembered());
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +475,7 @@ async function refresh() {
       if (data.me.name !== session.name) saveSession({ ...session, name: data.me.name }, isRemembered());
     } catch (e) {
       if (e.status === 404) data.me = null;
+      if (e.status === 410) signedOut();
     }
   } else {
     data.friends = null;
@@ -1997,12 +2064,123 @@ let securityInfo = null;
 function loadSecurity() {
   if (!session || (securityInfo && securityInfo.for === session.playerId)) return;
   securityInfo = { for: session.playerId, loading: true };
+  (async () => {
+    if (!session.session) {
+      const time = Date.now();
+      const device = deviceName();
+      const signature = signText(secretKey(), `libroxel session\n${session.playerId}\n${device}\n${time}`);
+      const started = await api('/accounts/session', { method: 'POST', body: { player_id: session.playerId, device, time, signature } }).catch(() => null);
+      if (started) saveSession({ ...session, session: started.session }, isRemembered());
+    }
+    const time = Date.now();
+    const signature = signText(secretKey(), `libroxel security\n${session.playerId}\n${time}`);
+    return api(`/accounts/${session.playerId}/security`, { query: { time, signature, session: session.session || '' } });
+  })()
+    .then((s) => { securityInfo = { for: session.playerId, ...s }; render(); })
+    .catch((e) => {
+      if (e.status === 410) return signedOut();
+      securityInfo = { for: session.playerId, error: e.message };
+      render();
+    });
+}
+
+const twoStep = { secret: null, codes: null, message: null, busy: false };
+
+async function changeTwoStep(secret, code) {
+  const time = nowSecs();
+  const signature = signText(secretKey(), `libroxel two-step\n${session.playerId}\n${secret || ''}\n${code}\n${time}`);
+  twoStep.busy = true;
+  render();
+  try {
+    const done = await api('/accounts/two-step', { method: 'POST', body: { player_id: session.playerId, secret, code, time, signature } });
+    twoStep.secret = null;
+    twoStep.codes = done.codes.length ? done.codes : null;
+    twoStep.message = { text: secret ? 'Two-step sign-in is on.' : 'Two-step sign-in is off.' };
+    securityInfo = null;
+  } catch (e) {
+    twoStep.message = { text: e.message, kind: 'error' };
+  }
+  twoStep.busy = false;
+  render();
+}
+
+async function newRecoveryCodes() {
   const time = Date.now();
-  const signature = signText(secretKey(), `libroxel security\n${session.playerId}\n${time}`);
-  api(`/accounts/${session.playerId}/security`, { query: { time, signature } })
-    .then((s) => { securityInfo = { for: session.playerId, ...s }; })
-    .catch((e) => { securityInfo = { for: session.playerId, error: e.message }; })
-    .finally(() => render());
+  const signature = signText(secretKey(), `libroxel recovery codes\n${session.playerId}\n${time}`);
+  try {
+    twoStep.codes = (await api('/accounts/recovery-codes', { method: 'POST', body: { player_id: session.playerId, time, signature } })).codes;
+    securityInfo = null;
+  } catch (e) {
+    twoStep.message = { text: e.message, kind: 'error' };
+  }
+  render();
+}
+
+function twoStepPanel() {
+  const s = securityInfo;
+  const out = [el('div', { class: 'caps', style: 'margin-top:12px' }, 'Two-step sign-in')];
+  const code = () => el('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 12, placeholder: '123456', style: 'max-width:140px' });
+  if (!s.has_password) out.push(el('p', { class: 'soft' }, 'Set a password first.'));
+  else if (s.two_step) {
+    const box = code();
+    out.push(el('p', { style: 'color:var(--green)' }, icon(ICON.check), ' On'));
+    out.push(el('div', { class: 'search' }, box,
+      el('button', { class: 'chip', disabled: twoStep.busy, onclick: () => changeTwoStep(null, box.value.trim()) }, 'Turn off')));
+    out.push(el('p', { class: 'soft' }, `Recovery codes left: ${s.recovery_codes_left} `,
+      el('button', { class: 'link', type: 'button', onclick: newRecoveryCodes }, 'New codes')));
+  } else if (twoStep.secret) {
+    const link = `otpauth://totp/Libroxel:${encodeURIComponent(session.name)}?secret=${twoStep.secret}&issuer=Libroxel&digits=6&period=30`;
+    const box = code();
+    out.push(el('p', {}, el('code', {}, twoStep.secret), ' ',
+      el('button', { class: 'link', type: 'button', onclick: () => navigator.clipboard?.writeText(twoStep.secret) }, 'Copy'), ' ',
+      el('a', { href: link }, 'Open in app')));
+    out.push(el('div', { class: 'search' }, box,
+      el('button', { class: 'btn go small', disabled: twoStep.busy, onclick: () => changeTwoStep(twoStep.secret, box.value.trim()) }, 'Turn on'),
+      el('button', { class: 'chip', onclick: () => { twoStep.secret = null; render(); } }, 'Cancel')));
+  } else {
+    out.push(el('button', { class: 'chip', onclick: () => { twoStep.secret = base32(random(20)); render(); } }, 'Set up'));
+  }
+  if (twoStep.codes) {
+    out.push(el('pre', { class: 'codes' }, twoStep.codes.join('\n')));
+    out.push(el('div', { class: 'search' },
+      el('button', { class: 'chip', onclick: () => navigator.clipboard?.writeText(twoStep.codes.join('\n')) }, 'Copy'),
+      el('button', { class: 'chip', onclick: () => { twoStep.codes = null; render(); } }, 'Done')));
+  }
+  if (twoStep.message) {
+    out.push(status(twoStep.message.text, twoStep.message.kind || ''));
+    twoStep.message = null;
+  }
+  return out;
+}
+
+let devicesMessage = null;
+
+function devicesPanel() {
+  const s = securityInfo;
+  const out = [el('div', { class: 'caps', style: 'margin-top:12px' }, 'Devices'),
+    el('ul', { class: 'signins' }, (s.sessions || []).map((d) => el('li', {}, `${d.device}${d.this ? ' (this one)' : ''}, ${d.from}, ${ago(d.seen_secs_ago)}`)))];
+  if (s.has_password) {
+    const password = el('input', { type: 'password', autocomplete: 'current-password', placeholder: 'Password', style: 'max-width:180px' });
+    const code = s.two_step && el('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 12, placeholder: 'Code', style: 'max-width:110px' });
+    const go = el('button', { class: 'chip' }, icon(ICON.signOut), 'Sign out everywhere');
+    go.onclick = async () => {
+      go.disabled = true;
+      try {
+        await signOutEverywhere(password.value, code?.value.trim());
+        devicesMessage = { text: 'Signed out everywhere else.' };
+        securityInfo = null;
+      } catch (e) {
+        devicesMessage = { text: e.message, kind: 'error' };
+      }
+      render();
+    };
+    out.push(el('div', { class: 'search' }, password, code, go));
+  }
+  if (devicesMessage) {
+    out.push(status(devicesMessage.text, devicesMessage.kind || ''));
+    devicesMessage = null;
+  }
+  return out;
 }
 
 /** Whether `email` looks like an address (the Hub checks properly). */
@@ -2080,11 +2258,10 @@ function security() {
     el('p', { class: 'soft' }, `You are ${session.name}. `,
       securityInfo.has_password ? 'You have a password, so you can sign in anywhere. ' : 'Set a password to sign in on other computers. ',
       el('a', { href: '/password' }, securityInfo.has_password ? 'Change your password' : 'Set a password'), '.',
-      ' ', securityInfo.two_step ? 'Two-step sign-in is on.' : 'Turn on two-step sign-in in the app, on its Profile tab, for a code on top of your password.'),
-    securityInfo.sign_ins?.length
-      ? el('div', {}, el('div', { class: 'caps' }, 'Latest sign-ins'), el('ul', { class: 'signins' }, securityInfo.sign_ins.slice(0, 6).map((s) => el('li', {}, `${ago(s.secs_ago)} from ${s.from}`))))
-      : null,
+    ),
     ...emailPanel(),
+    ...twoStepPanel(),
+    ...devicesPanel(),
   ]);
   return panel;
 }
@@ -2431,7 +2608,7 @@ function signInPage() {
   if (session) return signedInAlready('sign-in');
   const name = el('input', { type: 'text', autocomplete: 'username', maxlength: 20, value: pending?.name || carry?.name || '' });
   const password = el('input', { type: 'password', autocomplete: 'current-password' });
-  const code = el('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 8, placeholder: '123456' });
+  const code = el('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 12, placeholder: '123456' });
   const remember = el('input', { type: 'checkbox', checked: true });
   const message = el('div');
   const go = el('button', { class: 'btn go', type: 'submit' }, icon(ICON.signIn), 'Sign in');
@@ -2491,7 +2668,76 @@ function signInPage() {
     accountTabs('sign-in'),
     el('p', { class: 'note' }, 'Use the name and password from the app. New here? Type the name you want and a password, and you can make the account next. Your password never leaves this computer: it is turned into a key here, the same way the app does it.'),
     form,
+    resetForm(() => name.value.trim()),
   ];
+}
+
+const reset = { open: false, sent: false, needsCode: false };
+
+function resetForm(nameNow) {
+  if (!reset.open) return el('p', {}, el('button', { class: 'link', type: 'button', onclick: () => { reset.open = true; render(); } }, 'Forgot password?'));
+  const name = el('input', { type: 'text', autocomplete: 'username', maxlength: 20, value: reset.name || nameNow() });
+  const code = el('input', { type: 'text', inputmode: 'numeric', maxlength: 6, placeholder: '6-digit code' });
+  const twoStepCode = el('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 12, placeholder: '123456' });
+  const twoStepField = el('label', { class: 'field', style: reset.needsCode ? '' : 'display:none' }, el('span', {}, 'Code from your authenticator app, or a recovery code'), twoStepCode);
+  const password = el('input', { type: 'password', autocomplete: 'new-password' });
+  const again = el('input', { type: 'password', autocomplete: 'new-password' });
+  const message = el('div');
+  const say = (text, kind = 'wait') => message.replaceChildren(status(text, kind));
+  const send = el('button', { class: 'chip', type: 'button' }, reset.sent ? 'Send again' : 'Email me a code');
+  send.onclick = async () => {
+    reset.name = name.value.trim();
+    send.disabled = true;
+    try {
+      await api('/accounts/reset', { method: 'POST', body: { name: reset.name } });
+      reset.sent = true;
+      render();
+    } catch (e) {
+      say(e.message, 'error');
+      send.disabled = false;
+    }
+  };
+  const go = el('button', { class: 'btn go', type: 'submit' }, icon(ICON.lock), 'Reset password');
+  const form = el('form', { class: 'narrow' },
+    el('h3', {}, 'Reset your password'),
+    el('label', { class: 'field' }, el('span', {}, 'Name'), name),
+    el('div', { class: 'form-actions' }, send, el('button', { class: 'link', type: 'button', onclick: () => { reset.open = false; reset.sent = false; render(); } }, 'Cancel')),
+    reset.sent && el('label', { class: 'field' }, el('span', {}, 'Code from the email'), code),
+    reset.sent && twoStepField,
+    reset.sent && el('label', { class: 'field' }, el('span', {}, 'New password'), password),
+    reset.sent && el('label', { class: 'field' }, el('span', {}, 'New password again'), again),
+    reset.sent && el('div', { class: 'form-actions' }, go),
+    message);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    go.disabled = true;
+    try {
+      await loadCommonPasswords();
+      const n = name.value.trim();
+      const problem = passwordProblem(password.value, n) || (password.value !== again.value ? "The passwords don't match." : null);
+      if (problem) throw new Error(problem);
+      say('Locking your account with your new password…');
+      const done = await resetPassword(n, code.value, twoStepCode.value.trim(), password.value);
+      const who = (await accountNamed(n).catch(() => null))?.name || n;
+      saveSession({ ...done, name: who }, true);
+      Object.assign(reset, { open: false, sent: false, needsCode: false, name: null });
+      securityInfo = null;
+      flash = { text: `Password reset. Welcome back, ${who}!` };
+      await refresh();
+      goTo('/');
+    } catch (err) {
+      go.disabled = false;
+      if (err.status === 401) {
+        reset.needsCode = true;
+        twoStepField.style.display = '';
+        message.replaceChildren();
+        twoStepCode.focus();
+        return;
+      }
+      say(err.message, 'error');
+    }
+  });
+  return form;
 }
 
 function createPage() {
