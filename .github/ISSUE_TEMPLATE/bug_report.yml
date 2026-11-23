@@ -1,0 +1,53 @@
+name: Something's broken
+description: A crash, an error, or something that doesn't work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen again
+      placeholder: |
+        1. Open the Kart race starter game
+        2. Press Play
+        3. ...
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Shown at the bottom right of the home screen and in the window title.
+      placeholder: 0.1.5
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Where
+      options:
+        - Windows
+        - macOS
+        - Linux (AppImage)
+        - Linux (.deb)
+        - Linux (built from source)
+        - Android
+        - iOS
+        - The website
+        - The Hub server
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Error or log
+      description: >-
+        The crash screen's text, or the end of the log
+        (`~/.config/libroxel/logs/latest.log` on Linux and macOS,
+        `%APPDATA%\Libroxel\logs\latest.log` on Windows). On Android,
+        `adb logcat` output.
+      render: text

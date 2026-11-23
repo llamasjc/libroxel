@@ -18,8 +18,12 @@ into it, so nothing else needs to sit next to it.
 
 ## Publishing a release
 
-1. Bump `version` under `[workspace.package]` in `Cargo.toml` to match the
-   tag you're about to make (optional), commit, and push to `main`.
+1. In `Cargo.toml`, change the version to the one you're about to tag: under
+   `[workspace.package]` and on each `libroxel-…` line under
+   `[workspace.dependencies]` (search for the old number). Run `cargo check`
+   so `Cargo.lock` follows, add a section to `CHANGELOG.md`, commit, and
+   push to `main`. The released app takes its version from the tag either
+   way; this keeps builds from source and logs saying the right number.
 2. Tag the commit and push the tag:
 
    ```sh
