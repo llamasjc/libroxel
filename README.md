@@ -837,7 +837,9 @@ treat them as boxes. Characters climb steps up to 0.6 studs.
 
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md)
 first, especially the **clean-room rules**, and follow our
-[Code of Conduct](CODE_OF_CONDUCT.md).
+[Code of Conduct](CODE_OF_CONDUCT.md). Security problems go privately, as
+[SECURITY.md](SECURITY.md) explains. What changed in each release is in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

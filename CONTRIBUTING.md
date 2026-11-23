@@ -6,6 +6,8 @@ we work, and the rules that keep the project legally clean.
 ## Ground rules
 
 - Be kind. Everyone here follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+- Found a security problem? Please report it privately, as
+  [SECURITY.md](SECURITY.md) explains, not in an issue.
 - Small pull requests get reviewed fastest. Open an issue first for anything
   large, such as a new subsystem or a change to the scripting API.
 - By contributing, you agree your work is dual-licensed under
