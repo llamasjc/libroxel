@@ -46,6 +46,7 @@ pub struct HomeState {
     /// The game (its key) Play is finding a server for on the Hub.
     finding_for: Option<String>,
     ratings: crate::game_ratings::GameRatings,
+    chart: Option<String>,
 }
 
 /// Where a game on the home screen comes from.
@@ -680,7 +681,7 @@ pub fn home_tab(
             );
             let online = platform.social.friends.friends.iter().filter(|f| f.online).count();
             let note = match (platform.account.is_some(), online) {
-                (false, _) => "Make an account on the Avatar tab to add friends.".to_owned(),
+                (false, _) => "Make an account on the Profile tab to add friends.".to_owned(),
                 (true, 0) => "None of your friends are online right now.".to_owned(),
                 (true, 1) => "1 friend is online.".to_owned(),
                 (true, n) => format!("{n} friends are online."),
@@ -728,7 +729,127 @@ pub fn home_tab(
         });
     });
     ui.add_space(18.0);
+    picks(state, ui, platform, &list, &friends);
     games(state, ui, &list, &friends);
+    getting(ui, platform);
+    pick
+}
+
+fn here<'a>(friends: &'a [Friend], entry: &Entry) -> Vec<&'a Friend> {
+    friends
+        .iter()
+        .filter(|f| {
+            f.game_id.as_deref() == Some(entry.key.as_str())
+                || (f.game_id.is_none()
+                    && f.game.is_some()
+                    && f.game.as_deref() == Some(entry.title.as_str()))
+        })
+        .collect()
+}
+
+fn tile_row(state: &mut HomeState, ui: &mut egui::Ui, salt: &str, games: &[&Entry], friends: &[Friend]) {
+    egui::ScrollArea::horizontal().id_salt(salt).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 18.0;
+            for entry in games {
+                if game_tile(ui, entry, &here(friends, entry)).clicked() {
+                    state.view = View::Game(entry.key.clone());
+                }
+            }
+        });
+    });
+    ui.add_space(18.0);
+}
+
+fn picks(state: &mut HomeState, ui: &mut egui::Ui, platform: &Platform, list: &[Entry], friends: &[Friend]) {
+    let find = |key: &str| list.iter().find(|e| e.key == key);
+    let social = &platform.social;
+    if let Some(mine) = &social.for_you {
+        let played: Vec<&Entry> =
+            mine.continue_playing.iter().filter_map(|p| find(&p.game_id)).take(12).collect();
+        if !played.is_empty() {
+            section(ui, "Continue", None);
+            ui.add_space(6.0);
+            tile_row(state, ui, "continue-row", &played, friends);
+        }
+    }
+    let ids: Vec<&String> = match &social.for_you {
+        Some(mine) if !mine.recommended.is_empty() => mine.recommended.iter().collect(),
+        _ => social
+            .charts
+            .charts
+            .iter()
+            .find(|c| c.id == "popular")
+            .map(|c| c.game_ids.iter().collect())
+            .unwrap_or_default(),
+    };
+    let picked: Vec<&Entry> = ids.into_iter().filter_map(|id| find(id)).take(12).collect();
+    if !picked.is_empty() {
+        section(ui, "Recommended", None);
+        ui.add_space(6.0);
+        tile_row(state, ui, "recommended-row", &picked, friends);
+    }
+}
+
+pub fn charts_tab(
+    state: &mut HomeState,
+    ui: &mut egui::Ui,
+    platform: &mut Platform,
+    name: &str,
+) -> Option<Pick> {
+    let (list, pick) = match start(state, ui, platform, name) {
+        Ok(list) => list,
+        Err(pick) => return pick,
+    };
+    theme::heading(ui, "Charts");
+    ui.add_space(8.0);
+    let charts = platform.social.charts.charts.clone();
+    let Some(current) = charts.iter().find(|c| Some(&c.id) == state.chart.as_ref()).or(charts.first()) else {
+        ui.label(RichText::new("No games yet.").color(SOFT));
+        return pick;
+    };
+    ui.horizontal_wrapped(|ui| {
+        for chart in &charts {
+            if ui.selectable_label(chart.id == current.id, &chart.title).clicked() {
+                state.chart = Some(chart.id.clone());
+            }
+        }
+    });
+    ui.add_space(12.0);
+    let friends = platform.social.friends.friends.clone();
+    let stats = &platform.social.charts.stats;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(18.0, 18.0);
+        let games = current.game_ids.iter().filter_map(|id| list.iter().find(|e| e.key == *id));
+        for (rank, entry) in games.enumerate() {
+            let tile = game_tile(ui, entry, &here(&friends, entry));
+            let at = egui::pos2(tile.rect.max.x - 20.0, tile.rect.min.y + 20.0);
+            let painter = ui.painter();
+            painter.circle_filled(at, 14.0, theme::see_through(10, 40, 80, 190));
+            painter.text(
+                at,
+                egui::Align2::CENTER_CENTER,
+                (rank + 1).to_string(),
+                theme::display_bold(15.0),
+                Color32::WHITE,
+            );
+            if let Some(s) =
+                stats.iter().find(|s| s.game_id == entry.key).filter(|s| s.likes + s.dislikes > 0)
+            {
+                let liked = format!("{}% liked", (100 * s.likes) / (s.likes + s.dislikes));
+                painter.text(
+                    egui::pos2(tile.rect.max.x, tile.rect.max.y - 4.0),
+                    egui::Align2::RIGHT_BOTTOM,
+                    liked,
+                    egui::FontId::proportional(12.0),
+                    SOFT,
+                );
+            }
+            if tile.clicked() {
+                state.view = View::Game(entry.key.clone());
+            }
+        }
+    });
     getting(ui, platform);
     pick
 }
@@ -1054,13 +1175,14 @@ pub fn friends_tab(
             ui.set_min_width(ui.available_width());
             ui.label(RichText::new("Make an account first").font(theme::display(17.0)).color(theme::TEXT));
             ui.label(
-                RichText::new("Friends find you by your name. It takes a second, on the Avatar tab.")
+                RichText::new("Friends find you by your name. It takes a second, on the Profile tab.")
                     .color(SOFT),
             );
             ui.add_space(6.0);
-            if theme::block_button(ui, theme::Kind::Primary, icon::T_SHIRT, "Make an account", 38.0).clicked()
+            if theme::block_button(ui, theme::Kind::Primary, icon::USER_CIRCLE, "Make an account", 38.0)
+                .clicked()
             {
-                *tab = Tab::Avatar;
+                *tab = Tab::Profile;
             }
         });
         return None;

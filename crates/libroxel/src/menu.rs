@@ -69,6 +69,8 @@ pub enum Tab {
     Create,
     Avatar,
     Messages,
+    Charts,
+    Profile,
 }
 
 /// What the home screen remembers.
@@ -381,6 +383,7 @@ impl Menu {
                         crate::hub_home::home_tab(&mut self.home, ui, platform, &name, &mut self.tab)
                     }
                     Tab::Games => crate::hub_home::games_tab(&mut self.home, ui, platform, &name),
+                    Tab::Charts => crate::hub_home::charts_tab(&mut self.home, ui, platform, &name),
                     Tab::Search => {
                         crate::hub_home::search_tab(&mut self.home, ui, platform, &mut self.tab);
                         None
@@ -397,6 +400,13 @@ impl Menu {
                         egui::ScrollArea::vertical()
                             .id_salt("avatar")
                             .show(ui, |ui| self.avatar_tab(ui, platform));
+                        None
+                    }
+                    Tab::Profile => {
+                        let look = self.look().to_json();
+                        theme::heading(ui, "Profile");
+                        ui.add_space(8.0);
+                        platform.account_ui(ui, look);
                         None
                     }
                 };
@@ -417,7 +427,7 @@ impl Menu {
     fn go(&mut self, tab: Tab) {
         self.tab = tab;
         self.error = None;
-        if matches!(tab, Tab::Home | Tab::Games) {
+        if matches!(tab, Tab::Home | Tab::Games | Tab::Charts) {
             self.home.view = crate::hub_home::View::Home;
         }
     }
@@ -466,7 +476,7 @@ impl Menu {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             if player_chip(ui, &self.name, platform.account.is_some()).clicked() {
-                self.go(Tab::Avatar);
+                self.go(Tab::Profile);
             }
             if platform.account.is_some() {
                 let unread = platform.chats.unread();
@@ -561,8 +571,6 @@ impl Menu {
         if let Some(picked) = platform.catalog_ui(ui, look.item.as_deref()) {
             look.item = picked.map(std::sync::Arc::new);
         }
-        ui.add_space(24.0);
-        platform.account_ui(ui, look.to_json());
         if Some(&look) != self.look.as_ref() {
             platform.save_look(look.to_json());
             let json = look.to_json().to_string();
@@ -656,11 +664,12 @@ impl Menu {
 }
 
 /// The tabs along the top bar, after the mark (which is Home).
-const TOP_TABS: [(Tab, &str, &str); 4] = [
+const TOP_TABS: [(Tab, &str, &str); 5] = [
     (Tab::Games, theme::icon::GAME_CONTROLLER, "Games"),
-    (Tab::Friends, theme::icon::USERS, "Friends"),
+    (Tab::Charts, theme::icon::CHART_BAR, "Charts"),
     (Tab::Avatar, theme::icon::T_SHIRT, "Avatar"),
     (Tab::Create, theme::icon::HAMMER, "Create"),
+    (Tab::Profile, theme::icon::USER_CIRCLE, "Profile"),
 ];
 
 const CHIP_CAPS: &str = "Playing as";
@@ -697,9 +706,9 @@ fn player_chip(ui: &mut egui::Ui, name: &str, signed_in: bool) -> egui::Response
         theme::TEXT,
     );
     let hint = if signed_in {
-        "Your account's name. Change it on the Avatar tab."
+        "Your account's name. Change it on the Profile tab."
     } else {
-        "Make an account on the Avatar tab to play as yourself."
+        "Make an account on the Profile tab to play as yourself."
     };
     response.on_hover_text(hint).on_hover_cursor(egui::CursorIcon::PointingHand)
 }

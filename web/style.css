@@ -380,3 +380,5 @@ footer a { color: var(--heading); text-decoration: underline; }
 .numbers th, .numbers td { padding: 8px 12px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .numbers th { font: 600 13px var(--display); color: var(--heading); }
 .numbers th:first-child, .numbers td:first-child { text-align: left; }
+.games.row { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 188px; overflow-x: auto; max-width: none; padding-bottom: 6px; }
+.rank { position: absolute; right: 8px; top: 8px; min-width: 28px; height: 28px; padding: 0 6px; border-radius: 14px; background: rgba(10, 40, 80, 0.75); color: #fff; font: 700 15px/28px var(--body); text-align: center; }

@@ -187,9 +187,9 @@ pub(crate) fn create_tables(db: &Connection) -> Result<(), String> {
     .map_err(|e| format!("could not set up the Hub database: {e}"))
 }
 
-type Failure = (StatusCode, String);
+pub(crate) type Failure = (StatusCode, String);
 
-fn internal(e: rusqlite::Error) -> Failure {
+pub(crate) fn internal(e: rusqlite::Error) -> Failure {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
@@ -343,6 +343,11 @@ pub(crate) async fn update_presence(
     .map_err(internal)?;
     if let Some(game_id) = text(&update.game_id).filter(|_| update.online) {
         let _ = crate::analytics::record(&db, &game_id, &update.player_id, now());
+    }
+    if update.online
+        && let (Some(game_id), Some(title)) = (text(&update.game_id), text(&update.game))
+    {
+        crate::charts::note_play(&db, &update.player_id, &game_id, &title);
     }
     Ok(StatusCode::NO_CONTENT)
 }

@@ -50,10 +50,12 @@ use serde::{Deserialize, Serialize};
 mod analytics;
 pub use analytics::{Creator, DayStats, GameStats, KEEP_DAYS, creator_message, creator_stats, record};
 mod assets;
+mod charts;
 pub use assets::{
     ASSET_PREFIX, MAX_ASSET, OfficialGame, StarterPlace, asset_hash, official, official_from, set_official,
     valid_hash,
 };
+pub use charts::{Chart, ChartStats, Charts, ForYou, Played, for_you_message, guess_genre, wilson};
 mod cli;
 mod email;
 mod family;
@@ -708,6 +710,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     assets::create_tables(&db)?;
     analytics::create_tables(&db)?;
     ratings::create_tables(&db)?;
+    charts::create_tables(&db)?;
     Ok(db)
 }
 
@@ -788,6 +791,8 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/catalog/{id}", delete(unlist_item))
         .route("/catalog/{id}/wear", post(wear_item))
         .route("/reports", post(report))
+        .route("/charts", get(charts::get_charts))
+        .route("/for-you/{id}", get(charts::for_you))
         .route("/friends", post(social::change_friend))
         .route("/friends/{id}", get(social::list_friends))
         .route("/presence", post(social::update_presence))
@@ -2275,6 +2280,24 @@ impl HubClient {
             .call()
             .and_then(|mut r| r.body_mut().read_json())
             .map_err(|e| format!("could not get your friends from the Hub: {e}"))
+    }
+
+    pub fn charts(&self) -> Result<Charts, String> {
+        self.agent
+            .get(format!("{}/charts", self.base))
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not reach the Hub: {e}"))
+    }
+
+    pub fn for_you(&self, player_id: &str, time: i64, signature: &str) -> Result<ForYou, String> {
+        self.agent
+            .get(format!("{}/for-you/{player_id}", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not reach the Hub: {e}"))
     }
 
     /// Says whether this player is online and what they are playing.
