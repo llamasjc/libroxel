@@ -86,6 +86,11 @@ pub use moderate::{
 mod owner;
 mod password;
 mod ratings;
+mod recovery;
+pub use recovery::{
+    RECOVERY_CODES, RecoveryAsk, RecoveryCodes, ResetAsk, ResetFinish, SIGNED_OUT, Session, SessionInfo,
+    SessionStart, SignOutEverywhere, recovery_message, session_message, sign_out_message,
+};
 mod security;
 mod social;
 use limits::{Caller, Limit, Limits, too_many};
@@ -729,6 +734,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     ratings::create_tables(&db)?;
     charts::create_tables(&db)?;
     moderate::create_tables(&db)?;
+    recovery::create_tables(&db)?;
     Ok(db)
 }
 
@@ -796,6 +802,11 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/accounts/sign-in", post(password::sign_in))
         .route("/accounts/sign-in/{name}", get(password::sign_in_salt))
         .route("/accounts/two-step", post(security::set_two_step))
+        .route("/accounts/recovery-codes", post(recovery::new_codes))
+        .route("/accounts/session", post(recovery::new_session))
+        .route("/accounts/sign-out-everywhere", post(recovery::sign_out_everywhere))
+        .route("/accounts/reset", post(recovery::ask_reset))
+        .route("/accounts/reset/finish", post(recovery::finish_reset))
         .route("/accounts/email", post(email::set_email))
         .route("/accounts/email/verify", post(email::verify_email))
         .route("/accounts/{id}/security", get(security::security))
@@ -1089,6 +1100,9 @@ fn save_account(
     let db = db.lock().unwrap();
     if crate::owner::is_banned(&db, &account.player_id) {
         return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
+    }
+    if recovery::was_moved(&db, &account.player_id) {
+        return Err((StatusCode::GONE, SIGNED_OUT.into()));
     }
     let internal = |e: rusqlite::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     let last: Option<(i64, String)> = db
@@ -1439,7 +1453,9 @@ async fn profile(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<J
         )
         .optional()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let (player_id, number, name, about, look, created) = found.ok_or(StatusCode::NOT_FOUND)?;
+    let Some((player_id, number, name, about, look, created)) = found else {
+        return Err(if recovery::was_moved(&db, &id) { StatusCode::GONE } else { StatusCode::NOT_FOUND });
+    };
     let mut statement = db
         .prepare(&format!(
             "SELECT {GAME_COLUMNS} FROM {GAMES} WHERE g.author_id = ?1 ORDER BY g.plays DESC, g.updated DESC"
@@ -1969,6 +1985,28 @@ impl HubClient {
     /// back its identity key (32 bytes) to keep on this computer. The
     /// password is stretched here and never sent. Takes a moment.
     pub fn sign_in(&self, name: &str, password: &str, code: Option<&str>) -> Result<[u8; 32], String> {
+        self.sign_in_on(name, password, code, None).map(|(key, _)| key)
+    }
+
+    /// [`Self::sign_in`], naming the device; gives back the key and the session.
+    pub fn sign_in_on(
+        &self,
+        name: &str,
+        password: &str,
+        code: Option<&str>,
+        device: Option<&str>,
+    ) -> Result<([u8; 32], String), String> {
+        let salt = self.salt_for(name)?;
+        let time = social::now_ms();
+        let (mut attempt, seal) = password::sign_in_with(name.trim(), password, &salt, time)?;
+        attempt.code = code.map(str::to_owned);
+        attempt.device = device.map(str::to_owned);
+        let signed_in: SignedIn = self.post_signed("/accounts/sign-in", &attempt)?;
+        let key = password::open_sealed(&seal, &signed_in)?;
+        Ok((key, signed_in.session))
+    }
+
+    fn salt_for(&self, name: &str) -> Result<SignInSalt, String> {
         let name = name.trim();
         let answer = |r: Result<ureq::http::Response<ureq::Body>, ureq::Error>| {
             let mut r = r.map_err(|e| format!("could not reach the Hub: {e}"))?;
@@ -1989,51 +2027,124 @@ impl HubClient {
         .body_mut()
         .read_json()
         .map_err(|e| e.to_string())?;
+        Ok(salt)
+    }
+
+    /// New recovery codes for an account with two-step sign-in.
+    pub fn recovery_codes(&self, key: &[u8; 32]) -> Result<Vec<String>, String> {
+        let player_id = player_id_of(key);
         let time = social::now_ms();
-        let (mut attempt, seal) = password::sign_in_with(name, password, &salt, time)?;
-        attempt.code = code.map(str::to_owned);
-        let signed_in: SignedIn = answer(
-            self.agent
-                .post(format!("{}/accounts/sign-in", self.base))
-                .config()
-                .http_status_as_error(false)
-                .build()
-                .send_json(&attempt),
-        )?
-        .body_mut()
-        .read_json()
-        .map_err(|e| e.to_string())?;
-        password::open_sealed(&seal, &signed_in)
+        let ask = RecoveryAsk { signature: sign(key, &recovery_message(&player_id, time)), player_id, time };
+        self.post_signed::<_, RecoveryCodes>("/accounts/recovery-codes", &ask).map(|r| r.codes)
+    }
+
+    /// Names this device in the account's list, giving back the session.
+    pub fn start_session(&self, key: &[u8; 32], device: &str) -> Result<String, String> {
+        let player_id = player_id_of(key);
+        let time = social::now_ms();
+        let start = SessionStart {
+            signature: sign(key, &session_message(&player_id, device, time)),
+            player_id,
+            device: device.to_owned(),
+            time,
+        };
+        self.post_signed::<_, Session>("/accounts/session", &start).map(|s| s.session)
+    }
+
+    /// Mails a code for resetting the password of the account called `name`.
+    pub fn ask_reset(&self, name: &str) -> Result<(), String> {
+        self.post_raw("/accounts/reset", &ResetAsk { name: name.trim().to_owned() }).map(|_| ())
+    }
+
+    /// Resets the password with the mailed code. The account moves to a new
+    /// key, given back with the session; every other device is signed out.
+    pub fn finish_reset(
+        &self,
+        name: &str,
+        code: &str,
+        two_step: Option<&str>,
+        new_password: &str,
+        device: Option<&str>,
+    ) -> Result<([u8; 32], String), String> {
+        let key = password::new_key();
+        let password = seal_password(&key, new_password, social::now_ms() / 1000)?;
+        let reset = ResetFinish {
+            name: name.trim().to_owned(),
+            code: code.trim().to_owned(),
+            two_step: two_step.map(str::to_owned),
+            password,
+            device: device.map(str::to_owned),
+        };
+        let session: Session = self.post_signed("/accounts/reset/finish", &reset)?;
+        Ok((key, session.session))
+    }
+
+    /// Signs out every other device by moving the account to a new key,
+    /// given back with the session. Needs the password (and a two-step code).
+    pub fn sign_out_everywhere(
+        &self,
+        key: &[u8; 32],
+        name: &str,
+        password: &str,
+        code: Option<&str>,
+        device: Option<&str>,
+    ) -> Result<([u8; 32], String), String> {
+        let salt = self.salt_for(name)?;
+        let login = password::login_key(password, &salt)?;
+        let new = password::new_key();
+        let new_password = seal_password(&new, password, social::now_ms() / 1000)?;
+        let player_id = player_id_of(key);
+        let time = social::now_ms();
+        let message = sign_out_message(&player_id, &new_password, time);
+        let out = SignOutEverywhere {
+            signature: sign(key, &message),
+            login_signature: sign(&login, &message),
+            player_id,
+            password: new_password,
+            code: code.map(str::to_owned),
+            device: device.map(str::to_owned),
+            time,
+        };
+        let session: Session = self.post_signed("/accounts/sign-out-everywhere", &out)?;
+        Ok((new, session.session))
     }
 
     /// Turns two-step sign-in on or off (see [`TwoStepSet`]).
-    pub fn set_two_step(&self, set: &TwoStepSet) -> Result<(), String> {
-        self.agent
-            .post(format!("{}/accounts/two-step", self.base))
-            .config()
-            .http_status_as_error(false)
-            .build()
-            .send_json(set)
-            .map_err(|e| format!("could not reach the Hub: {e}"))
-            .and_then(|mut r| {
-                if r.status().is_success() {
-                    Ok(())
-                } else {
-                    Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
-                }
-            })
+    /// Turning it on gives back the recovery codes.
+    pub fn set_two_step(&self, set: &TwoStepSet) -> Result<Vec<String>, String> {
+        self.post_signed::<_, RecoveryCodes>("/accounts/two-step", set).map(|r| r.codes)
     }
 
     /// How a player's account is kept safe, with [`security_message`] for
     /// `time` (milliseconds) signed by that player.
     pub fn security(&self, player_id: &str, time: i64, signature: &str) -> Result<Security, String> {
-        self.agent
+        self.security_on(player_id, time, signature, None)
+    }
+
+    /// [`Self::security`], marking this device's `session`. A signed-out key gets [`SIGNED_OUT`].
+    pub fn security_on(
+        &self,
+        player_id: &str,
+        time: i64,
+        signature: &str,
+        session: Option<&str>,
+    ) -> Result<Security, String> {
+        let mut r = self
+            .agent
             .get(format!("{}/accounts/{player_id}/security", self.base))
             .query("time", time.to_string())
             .query("signature", signature)
+            .query("session", session.unwrap_or(""))
+            .config()
+            .http_status_as_error(false)
+            .build()
             .call()
-            .and_then(|mut r| r.body_mut().read_json())
-            .map_err(|e| format!("could not get your account's security from the Hub: {e}"))
+            .map_err(|e| format!("could not reach the Hub: {e}"))?;
+        match r.status().as_u16() {
+            410 => Err(SIGNED_OUT.into()),
+            s if (200..300).contains(&s) => r.body_mut().read_json().map_err(|e| e.to_string()),
+            _ => Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string())),
+        }
     }
 
     /// Gives the account an email, which mails it a code (see [`Self::verify_email`]).
@@ -2147,6 +2258,7 @@ impl HubClient {
         let mut result = result;
         match result.status().as_u16() {
             404 => Ok(None),
+            410 => Err(SIGNED_OUT.into()),
             s if (200..300).contains(&s) => {
                 result.body_mut().read_json().map(Some).map_err(|e| e.to_string())
             }

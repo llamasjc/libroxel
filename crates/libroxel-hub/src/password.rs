@@ -87,6 +87,9 @@ pub struct SignIn {
     /// The code from the authenticator app, for accounts that use two-step sign-in.
     #[serde(default)]
     pub code: Option<String>,
+    /// What the device is, for the account's list of devices.
+    #[serde(default)]
+    pub device: Option<String>,
 }
 
 /// What signing in signs.
@@ -99,6 +102,8 @@ pub fn sign_in_message(name: &str, time: i64) -> Vec<u8> {
 pub struct SignedIn {
     pub player_id: String,
     pub sealed: String,
+    #[serde(default)]
+    pub session: String,
 }
 
 /// The two keys a password makes: one to sign in, one to seal.
@@ -270,7 +275,24 @@ pub(crate) fn sign_in_with(
         data_encoding::HEXLOWER.decode(salt.salt.as_bytes()).map_err(|_| "the Hub sent a bad salt")?;
     let keys = stretch(password, &salt_bytes, salt.memory_kib, salt.passes)?;
     let signature = sign(&keys.login, &sign_in_message(name, time));
-    Ok((SignIn { name: name.to_owned(), time, signature, code: None }, keys.seal))
+    Ok((SignIn { name: name.to_owned(), time, signature, code: None, device: None }, keys.seal))
+}
+
+/// A new identity key.
+pub(crate) fn new_key() -> [u8; 32] {
+    random::<32>()
+}
+
+/// The key `password` makes for signing in, stretched the way `salt` says.
+pub(crate) fn login_key(password: &str, salt: &SignInSalt) -> Result<[u8; 32], String> {
+    if !(MIN_MEMORY_KIB..=MAX_MEMORY_KIB).contains(&salt.memory_kib)
+        || !(MIN_PASSES..=MAX_PASSES).contains(&salt.passes)
+    {
+        return Err("the Hub asks for unsafe password settings".into());
+    }
+    let salt_bytes =
+        data_encoding::HEXLOWER.decode(salt.salt.as_bytes()).map_err(|_| "the Hub sent a bad salt")?;
+    Ok(stretch(password, &salt_bytes, salt.memory_kib, salt.passes)?.login)
 }
 
 /// Opens the sealed identity key from a sign-in, checking it is the account's.
@@ -316,14 +338,8 @@ fn internal(e: rusqlite::Error) -> Failure {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
-pub(crate) async fn set_password(
-    State(db): State<Db>,
-    Json(set): Json<PasswordSet>,
-) -> Result<StatusCode, Failure> {
+pub(crate) fn check_password_set(set: &PasswordSet) -> Result<(), Failure> {
     let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
-    if !verify(&set.player_id, &password_message(&set), &set.signature) {
-        return Err((StatusCode::FORBIDDEN, "the signature does not match that player".into()));
-    }
     if (set.time - now()).abs() > 24 * 60 * 60 {
         return bad("this computer's clock is too far off");
     }
@@ -340,7 +356,22 @@ pub(crate) async fn set_password(
     if !salt_ok || !sealed_ok || set.login_id.parse::<iroh_base::PublicKey>().is_err() {
         return bad("that is not a sealed key the Hub can keep");
     }
+    Ok(())
+}
+
+pub(crate) async fn set_password(
+    State(db): State<Db>,
+    Json(set): Json<PasswordSet>,
+) -> Result<StatusCode, Failure> {
+    let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
+    if !verify(&set.player_id, &password_message(&set), &set.signature) {
+        return Err((StatusCode::FORBIDDEN, "the signature does not match that player".into()));
+    }
+    check_password_set(&set)?;
     let db = db.lock().unwrap();
+    if crate::recovery::was_moved(&db, &set.player_id) {
+        return Err((StatusCode::GONE, crate::recovery::SIGNED_OUT.into()));
+    }
     if crate::owner::is_banned(&db, &set.player_id) {
         return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
     }
@@ -442,7 +473,8 @@ pub(crate) async fn sign_in(
     // Each sign-in is used once.
     super::social::fresh(&db, &player_id, "sign in", attempt.time)?;
     crate::security::record_sign_in(&db, &player_id, &caller.0);
-    Ok(Json(SignedIn { player_id, sealed }))
+    let session = crate::recovery::start_session(&db, &player_id, attempt.device.as_deref(), &caller.0);
+    Ok(Json(SignedIn { player_id, sealed, session }))
 }
 
 #[cfg(test)]
