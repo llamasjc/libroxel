@@ -479,6 +479,14 @@ impl Joined {
         if self.glide.is_empty() {
             return;
         }
+        let mut models = HashSet::new();
+        for id in self.glide.keys() {
+            let mut up = tree.parent(*id).ok().flatten();
+            if up.is_some_and(|p| tree.class(p) == Ok(ClassKind::Accessory)) {
+                up = up.and_then(|p| tree.parent(p).ok().flatten());
+            }
+            models.extend(up);
+        }
         let step = 1.0 - (-GLIDE_RATE * dt).exp();
         self.glide.retain(|id, (to, to_turn)| {
             let (Some(at), Some(turn)) =
@@ -498,6 +506,9 @@ impl Joined {
             let _ = tree.set(*id, Property::Orientation, PropertyValue::Vec3(orientation));
             !there
         });
+        for model in models {
+            crate::character::stick_to_head(tree, model);
+        }
     }
 
     /// Rewrites instances in script values from the host's ids to ours.
