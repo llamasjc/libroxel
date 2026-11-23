@@ -368,6 +368,13 @@ impl Menu {
         let pane = egui::Rect::from_min_max(egui::pos2(screen.min.x, bar.max.y), screen.max)
             .shrink2(egui::vec2(22.0, 18.0));
         theme::frosted_pane(ui.painter(), pane);
+        ui.painter().text(
+            screen.right_bottom() - egui::vec2(10.0, 3.0),
+            egui::Align2::RIGHT_BOTTOM,
+            crate::update::VERSION,
+            egui::FontId::proportional(11.0),
+            theme::MUTED,
+        );
         let page = pane.shrink2(egui::vec2(22.0, 18.0));
         let mut pick = None;
         ui.scope_builder(egui::UiBuilder::new().max_rect(page), |ui| {

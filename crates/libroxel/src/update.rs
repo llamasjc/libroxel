@@ -24,6 +24,7 @@ enum Kind {
     Mac,
     AppImage,
     Deb,
+    Android,
 }
 
 impl Kind {
@@ -33,6 +34,7 @@ impl Kind {
             Kind::Mac => "macos",
             Kind::AppImage => "appimage",
             Kind::Deb => "deb",
+            Kind::Android => "android",
         }
     }
 }
@@ -43,6 +45,12 @@ struct Staged {
     file: PathBuf,
 }
 
+#[cfg(target_os = "android")]
+fn kind() -> Option<Kind> {
+    (!android::from_play()).then_some(Kind::Android)
+}
+
+#[cfg(not(target_os = "android"))]
 fn kind() -> Option<Kind> {
     let exe = std::env::current_exe().ok()?;
     if cfg!(windows) {
@@ -168,7 +176,11 @@ fn check() -> Result<Option<Staged>, String> {
     if name.contains(['/', '\\']) || name.starts_with('.') {
         return Err("bad file name".into());
     }
-    let bytes = get(&format!("{RELEASES}/download/v{version}/{name}"))?;
+    let url = format!("{RELEASES}/download/v{version}/{name}");
+    if kind == Kind::Android {
+        return Ok(Some(Staged { version, file: PathBuf::from(url) }));
+    }
+    let bytes = get(&url)?;
     if HEXLOWER.encode(&Sha256::digest(&bytes)) != sha.to_ascii_lowercase() {
         return Err("the download doesn't match the signed checksum".into());
     }
@@ -182,6 +194,10 @@ fn check() -> Result<Option<Staged>, String> {
 
 fn install(s: &Staged) -> Result<(), String> {
     let kind = kind().ok_or("not installed")?;
+    #[cfg(target_os = "android")]
+    if kind == Kind::Android {
+        return android::open(&s.file.to_string_lossy());
+    }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     match kind {
         Kind::Windows => {
@@ -220,6 +236,7 @@ fn install(s: &Staged) -> Result<(), String> {
             std::fs::rename(&part, &path).map_err(|e| e.to_string())?;
             Command::new(&path).spawn().map_err(|e| e.to_string())?;
         }
+        Kind::Android => {}
         Kind::Deb => {
             Command::new("sh")
                 .arg("-c")
@@ -236,6 +253,77 @@ fn install(s: &Staged) -> Result<(), String> {
 fn run(cmd: &mut Command) -> Result<(), String> {
     let status = cmd.status().map_err(|e| e.to_string())?;
     status.success().then_some(()).ok_or_else(|| format!("{cmd:?} failed"))
+}
+
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+mod android {
+    use jni::objects::{JObject, JString, JValue};
+    use jni::{JNIEnv, JavaVM};
+
+    fn with_activity<T>(
+        f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<T>,
+    ) -> Result<T, String> {
+        let app = bevy::android::ANDROID_APP.get().ok_or("no app")?;
+        let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }.map_err(|e| e.to_string())?;
+        let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+        let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
+        let result = f(&mut env, &activity);
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+        }
+        result.map_err(|e| e.to_string())
+    }
+
+    pub fn from_play() -> bool {
+        with_activity(|env, activity| {
+            let manager = env
+                .call_method(activity, "getPackageManager", "()Landroid/content/pm/PackageManager;", &[])?
+                .l()?;
+            let name = env.call_method(activity, "getPackageName", "()Ljava/lang/String;", &[])?.l()?;
+            let installer = env
+                .call_method(
+                    &manager,
+                    "getInstallerPackageName",
+                    "(Ljava/lang/String;)Ljava/lang/String;",
+                    &[JValue::Object(&name)],
+                )?
+                .l()?;
+            if installer.is_null() {
+                return Ok(false);
+            }
+            let installer: String = env.get_string(&JString::from(installer))?.into();
+            Ok(installer == "com.android.vending")
+        })
+        .unwrap_or(false)
+    }
+
+    pub fn open(url: &str) -> Result<(), String> {
+        with_activity(|env, activity| {
+            let url = env.new_string(url)?;
+            let uri = env
+                .call_static_method(
+                    "android/net/Uri",
+                    "parse",
+                    "(Ljava/lang/String;)Landroid/net/Uri;",
+                    &[JValue::Object(&url)],
+                )?
+                .l()?;
+            let action = env.new_string("android.intent.action.VIEW")?;
+            let intent = env.new_object(
+                "android/content/Intent",
+                "(Ljava/lang/String;Landroid/net/Uri;)V",
+                &[JValue::Object(&action), JValue::Object(&uri)],
+            )?;
+            env.call_method(
+                activity,
+                "startActivity",
+                "(Landroid/content/Intent;)V",
+                &[JValue::Object(&intent)],
+            )?;
+            Ok(())
+        })
+    }
 }
 
 #[cfg(test)]

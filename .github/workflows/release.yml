@@ -45,6 +45,7 @@ jobs:
             echo "LIBROXEL_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
           else
             echo "VERSION=dev-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+            echo "LIBROXEL_VERSION=dev-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
           fi
 
       - name: Install dependencies
@@ -182,7 +183,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
         run: |
-          [[ "$GITHUB_REF_TYPE" == "tag" ]] && export LIBROXEL_VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then export LIBROXEL_VERSION="${GITHUB_REF_NAME#v}"; else export LIBROXEL_VERSION="dev-${GITHUB_SHA::7}"; fi
           cargo build --locked --profile dist -p libroxel --target ${{ matrix.target }}
       - name: Copy binary
         run: |
@@ -330,7 +331,7 @@ jobs:
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             export VERSION="${GITHUB_REF_NAME#v}" LIBROXEL_VERSION="${GITHUB_REF_NAME#v}"
           else
-            export VERSION="dev-${GITHUB_SHA::7}"
+            export VERSION="dev-${GITHUB_SHA::7}" LIBROXEL_VERSION="dev-${GITHUB_SHA::7}"
           fi
           export VERSION_CODE="$GITHUB_RUN_NUMBER"
           ndk="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64"
@@ -409,7 +410,7 @@ jobs:
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             VERSION="${GITHUB_REF_NAME#v}"; export LIBROXEL_VERSION="$VERSION"
           else
-            VERSION="dev-${GITHUB_SHA::7}"
+            VERSION="dev-${GITHUB_SHA::7}"; export LIBROXEL_VERSION="$VERSION"
           fi
           export IPHONEOS_DEPLOYMENT_TARGET=15.0
           cargo build --locked --profile dist -p libroxel --bin libroxel --target aarch64-apple-ios
@@ -491,13 +492,14 @@ jobs:
         run: |
           if [[ -z "$UPDATE_KEY" ]]; then echo "::warning::UPDATE_KEY is not set, so apps won't update to this release"; exit 0; fi
           cd dist
-          entry() { f=$(compgen -G "libroxel-*$1"); jq -n --arg n "$f" --arg s "$(sha256sum "$f" | cut -d' ' -f1)" '{name: $n, sha256: $s}'; }
+          entry() { f=$(compgen -G "libroxel-*$1") || { echo null; return; }; jq -n --arg n "$f" --arg s "$(sha256sum "$f" | cut -d' ' -f1)" '{name: $n, sha256: $s}'; }
           jq -n --arg v "${GITHUB_REF_NAME#v}" \
             --argjson windows "$(entry -windows-x86_64-setup.exe)" \
             --argjson macos "$(entry -macos-universal.app.tar.gz)" \
             --argjson appimage "$(entry -linux-x86_64.AppImage)" \
             --argjson deb "$(entry -linux-x86_64.deb)" \
-            '{version: $v, files: {windows: $windows, macos: $macos, appimage: $appimage, deb: $deb}}' > latest.json
+            --argjson android "$(entry -android.apk)" \
+            '{version: $v, files: {windows: $windows, macos: $macos, appimage: $appimage, deb: $deb, android: $android}}' > latest.json
           printf '%s\n' "$UPDATE_KEY" > ../key.pem
           openssl pkeyutl -sign -rawin -inkey ../key.pem -in latest.json | base64 -w0 > latest.json.sig
           rm ../key.pem
