@@ -9,6 +9,8 @@ and attaches the builds to a GitHub Release whenever a version tag is pushed.
 | `libroxel-<version>-macos-universal.dmg` | macOS 11+ (Apple silicon and Intel) | `Libroxel.app` with its icon, on a window that shows dragging it onto Applications |
 | `libroxel-<version>-linux-x86_64.AppImage` | Linux (x86-64, glibc 2.35+) | the app for any distribution: make it executable and open it; it adds itself to the app menu with its icon |
 | `libroxel-<version>-linux-x86_64.deb` | Debian and Ubuntu | the same app as a package, with its menu entry and icon (`sudo apt install ./…deb`, or open it in Software) |
+| `libroxel-<version>-windows-aarch64-setup.exe` | Windows 11 on ARM | the same setup wizard, built for ARM (when that build worked) |
+| `libroxel-<version>-linux-aarch64.AppImage`, `.deb` | Linux on 64-bit ARM (glibc 2.35+) | the same app for ARM Linux, such as a Raspberry Pi 4 or 5 on a 64-bit system (when that build worked) |
 | `libroxel-hub-linux-x86_64` | Linux servers (x86-64) | the Hub on its own, for the official Hub server |
 | `setup-hub.sh`, `update-hub.sh` | | set a Hub server up, and update it (see [OFFICIAL_HUB.md](OFFICIAL_HUB.md)) |
 | `SHA256SUMS.txt` | | checksums of the files above |
@@ -79,7 +81,11 @@ push the tag again.
 
 - Code signing for Windows and notarization for macOS (both need paid
   certificates; add them as repository secrets when there are some).
-- Linux and Windows builds for ARM.
+- The ARM builds for Linux and Windows haven't been tried on ARM hardware
+  yet. They're optional: a release still comes out without them if they
+  fail to build, and ARM copies update only to ARM builds
+  (`windows-aarch64`, `appimage-aarch64` and `deb-aarch64` in
+  `latest.json`).
 
 ## Nothing changes until a release is finished
 

@@ -52,9 +52,23 @@ jobs:
           - name: linux-x86_64
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            arch: x86_64
           - name: windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
+            arch: x64compatible
+          # ARM builds are new: one that fails doesn't hold the release back.
+          - name: linux-aarch64
+            os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            arch: aarch64
+            optional: true
+          - name: windows-aarch64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            arch: arm64
+            optional: true
+    continue-on-error: ${{ matrix.optional == true }}
     env:
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
       SIGN: ${{ github.ref_type == 'tag' && secrets.SIGNPATH_API_TOKEN != '' }}
@@ -109,15 +123,17 @@ jobs:
           cp packaging/icons/libroxel-256.png "$appdir/libroxel.png"
           cp packaging/icons/libroxel-256.png "$appdir/usr/share/icons/hicolor/256x256/apps/libroxel.png"
           ln -s libroxel.png "$appdir/.DirIcon"
-          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          arch="${{ matrix.arch }}"
+          curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$arch.AppImage"
           chmod +x appimagetool
-          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$appdir" "$name.AppImage"
+          ARCH="$arch" ./appimagetool --appimage-extract-and-run "$appdir" "$name.AppImage"
 
           deb="deb/libroxel"
           mkdir -p "$deb/DEBIAN" "$deb/usr/lib/libroxel" "$deb/usr/bin" "$deb/usr/share/applications" "$deb/usr/share/doc/libroxel"
           debver="${VERSION//[^0-9A-Za-z.+~]/\~}"
           [[ "$debver" =~ ^[0-9] ]] || debver="0~$debver"
-          sed "s/@VERSION@/$debver/" packaging/linux/deb/control > "$deb/DEBIAN/control"
+          debarch=$(dpkg --print-architecture)
+          sed -e "s/@VERSION@/$debver/" -e "s/^Architecture: .*/Architecture: $debarch/" packaging/linux/deb/control > "$deb/DEBIAN/control"
           install -m 755 "$bin" "$deb/usr/lib/libroxel/libroxel"
           ln -s ../lib/libroxel/libroxel "$deb/usr/bin/libroxel"
           cp packaging/linux/libroxel.desktop "$deb/usr/share/applications/"
@@ -148,7 +164,7 @@ jobs:
           numeric=$(echo "$VERSION" | grep -oE '^[0-9]+(\.[0-9]+){0,3}' || true)
           numeric="${numeric:-0}.0.0.0"; numeric=$(echo "$numeric" | cut -d. -f1-4)
           export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
-          iscc "/DVersion=$VERSION" "/DNumericVersion=$numeric" "/DSource=$(cygpath -w "$PWD/$src")" "/DOutput=$name" "/O$(cygpath -w "$PWD")" "$(cygpath -w packaging/windows/libroxel.iss)"
+          iscc "/DVersion=$VERSION" "/DNumericVersion=$numeric" "/DArch=${{ matrix.arch }}" "/DSource=$(cygpath -w "$PWD/$src")" "/DOutput=$name" "/O$(cygpath -w "$PWD")" "$(cygpath -w packaging/windows/libroxel.iss)"
           echo "ASSET=$name.exe" >> "$GITHUB_ENV"
 
       - name: Upload unsigned installer
@@ -528,7 +544,11 @@ jobs:
             --argjson appimage "$(entry -linux-x86_64.AppImage)" \
             --argjson deb "$(entry -linux-x86_64.deb)" \
             --argjson android "$(entry -android.apk)" \
-            '{version: $v, files: {windows: $windows, macos: $macos, appimage: $appimage, deb: $deb, android: $android}}' > latest.json
+            --argjson windows_arm "$(entry -windows-aarch64-setup.exe)" \
+            --argjson appimage_arm "$(entry -linux-aarch64.AppImage)" \
+            --argjson deb_arm "$(entry -linux-aarch64.deb)" \
+            '{version: $v, files: {windows: $windows, macos: $macos, appimage: $appimage, deb: $deb, android: $android,
+              "windows-aarch64": $windows_arm, "appimage-aarch64": $appimage_arm, "deb-aarch64": $deb_arm}}' > latest.json
           printf '%s\n' "$UPDATE_KEY" > ../key.pem
           openssl pkeyutl -sign -rawin -inkey ../key.pem -in latest.json | base64 -w0 > latest.json.sig
           rm ../key.pem
@@ -551,6 +571,7 @@ jobs:
             - **Windows:** `libroxel-…-windows-x86_64-setup.exe`, open it and follow the setup wizard
             - **Mac** (Apple silicon and Intel): `libroxel-…-macos-universal.dmg`, open it and drag Libroxel onto Applications, then right-click it there and choose Open the first time
             - **Linux:** `libroxel-…-linux-x86_64.AppImage` for any Linux (make it executable and open it), or `libroxel-…-linux-x86_64.deb` for Debian and Ubuntu
+            - **ARM computers:** `libroxel-…-windows-aarch64-setup.exe` for Windows on ARM (Snapdragon laptops), and `libroxel-…-linux-aarch64.AppImage` or `.deb` for ARM Linux (a Raspberry Pi 4 or 5 with 64-bit Raspberry Pi OS, for one)
 
             After installing, typing `libroxel` in a new terminal opens it.
 
