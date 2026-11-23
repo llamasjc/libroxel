@@ -14,6 +14,8 @@ use libroxel_instance::serde_json::{self, Value as Json, json};
 use crate::server::data_dir;
 
 type Fetched = Arc<Mutex<Option<Result<Vec<ServerInfo>, String>>>>;
+mod family;
+
 type Slot<T> = Arc<Mutex<Option<Result<T, String>>>>;
 
 /// A published game fetched to play: where it was saved, and whether to
@@ -120,6 +122,7 @@ pub struct Platform {
     pub item_status: Option<Result<String, String>>,
     /// Friends, online status, pings and the game being played.
     pub social: crate::social::Social,
+    family: family::FamilyUi,
 }
 
 impl Default for Platform {
@@ -194,6 +197,7 @@ impl Default for Platform {
             reporting: None,
             item_status: None,
             social: crate::social::Social::default(),
+            family: family::FamilyUi::default(),
         }
     }
 }
@@ -300,6 +304,7 @@ impl Platform {
                         self.account_about = profile.about.clone();
                         self.look_to_save = None;
                         self.fetch_security();
+                        self.family.fetch(self.client());
                     }
                     if old.is_none_or(|o| o.look != profile.look) && profile.look.is_object() {
                         self.account_look = Some(profile.look.clone());
@@ -322,6 +327,7 @@ impl Platform {
             }
             self.account_status = Some(result);
         }
+        self.family.tick();
         if let Some(Ok(security)) = self.security_found.lock().unwrap().take() {
             self.security = Some(security);
         }
@@ -708,6 +714,7 @@ impl Platform {
         let (name, about) = (self.account_name.trim().to_owned(), self.account_about.trim().to_owned());
         let new = self.account.is_none();
         let email = Some(self.account_email.trim().to_owned()).filter(|e| new && !e.is_empty());
+        let birthday = self.family.ready().filter(|_| new);
         let out = self.account_saved.clone();
         let time = self.signed_time();
         self.look_to_save = None;
@@ -727,6 +734,9 @@ impl Platform {
                     time,
                 };
                 client.update_account(&account)?;
+                if let Some((born, parent)) = birthday {
+                    family::set_birthday(&client, born, parent)?;
+                }
                 Ok(match &email {
                     Some(email) => format!(
                         "Welcome, {name}! We sent a code to {email}: type it below to prove the email is yours."
@@ -1217,6 +1227,7 @@ impl Platform {
         self.password_status = Some(said);
         self.saved_accounts = None;
         self.weak_password = None;
+        self.family.forget();
     }
 
     /// The accounts saved on this computer: switch to one, or sign out.
@@ -1295,11 +1306,13 @@ impl Platform {
                         .hint_text("you@example.com, kept private"),
                 );
                 ui.end_row();
+                self.family.birthday_rows(ui);
             }
         });
         let name = self.account_name.trim().to_owned();
         let email_ok = self.account.is_some() || libroxel_hub::valid_email(self.account_email.trim());
-        let valid = libroxel_hub::valid_account_name(&name) && email_ok;
+        let born_ok = self.account.is_some() || self.family.ready().is_some();
+        let valid = libroxel_hub::valid_account_name(&name) && email_ok && born_ok;
         ui.horizontal(|ui| {
             let label = if self.account.is_some() { "Save changes" } else { "Make an account" };
             if ui.add_enabled(valid && !self.account_busy, egui::Button::new(label)).clicked() {
@@ -1348,7 +1361,20 @@ impl Platform {
                 ));
             }
         }
+        if self.account.is_some() {
+            let client = self.client();
+            self.family.parent_ui(ui, client);
+        }
         self.password_ui(ui);
+    }
+
+    pub fn needs_birthday(&self) -> bool {
+        self.account.is_some() && self.family.family.as_ref().is_some_and(|f| !f.has_birthday)
+    }
+
+    pub fn birthday_page(&mut self, ui: &mut egui::Ui) {
+        let client = self.client();
+        self.family.birthday_page(ui, client);
     }
 
     /// Whether a publish is on its way.
@@ -1402,8 +1428,17 @@ impl Platform {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.stop_finding = stop.clone();
         let client = self.client();
-        let request =
-            libroxel_hub::PlayRequest { game_id: game_id.to_owned(), ticket: libroxel_hub::new_secret() };
+        let mut request = libroxel_hub::PlayRequest {
+            game_id: game_id.to_owned(),
+            ticket: libroxel_hub::new_secret(),
+            ..Default::default()
+        };
+        if let Ok(me) = crate::identity()
+            && self.account.is_some()
+        {
+            request.signature = Some(me.sign(&libroxel_hub::play_message(&me.player_id(), &request.ticket)));
+            request.player_id = Some(me.player_id());
+        }
         let out = self.found.clone();
         std::thread::spawn(move || {
             let started = Instant::now();

@@ -265,6 +265,12 @@ pub(crate) async fn change_friend(
             if account_name(&db, them)?.is_none() {
                 return Err((StatusCode::NOT_FOUND, "there is nobody with that id".into()));
             }
+            if !crate::family::may_friend(&db, me) {
+                return Err((StatusCode::FORBIDDEN, "a parent turned off friend requests".into()));
+            }
+            if !crate::family::may_friend(&db, them) {
+                return Err((StatusCode::FORBIDDEN, "they can't take friend requests".into()));
+            }
             fresh(&db, me, "friends", change.time)?;
             let (_, they_asked, friends) = standing(&db, me, them)?;
             if friends {
@@ -319,6 +325,7 @@ pub(crate) async fn update_presence(
         return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
     }
     fresh(&db, &update.player_id, "presence", update.time)?;
+    crate::family::count_play(&db, &update.player_id);
     let text = |s: &Option<String>| s.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(clip);
     db.execute(
         "INSERT INTO presence (player_id, online, game, game_id, server_id, last_seen)

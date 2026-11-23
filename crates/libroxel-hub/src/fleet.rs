@@ -69,13 +69,21 @@ impl FleetOptions {
 }
 
 /// What the app sends to `POST /play`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct PlayRequest {
     /// A published game's id, or `starter:<name>`.
     pub game_id: String,
     /// Any random word of 8 to 64 letters and digits, the same each time
     /// the app asks for the same press of Play.
     pub ticket: String,
+    #[serde(default)]
+    pub player_id: Option<String>,
+    #[serde(default)]
+    pub signature: Option<String>,
+}
+
+pub fn play_message(player_id: &str, ticket: &str) -> Vec<u8> {
+    format!("libroxel play\n{player_id}\n{ticket}").into_bytes()
 }
 
 /// What `POST /play` answers.

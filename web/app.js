@@ -330,7 +330,7 @@ async function work(playerId, name, progress) {
 }
 
 /** Makes a new account with a password, as the app does, and signs in. */
-async function createAccount(name, password, email, onStep) {
+async function createAccount(name, password, email, onStep, [born, parent]) {
   const secret = random(32);
   const playerId = playerIdOf(secret);
   onStep('Checking you are not a bot…');
@@ -344,6 +344,7 @@ async function createAccount(name, password, email, onStep) {
   lastSigned.account = time;
   onStep('Locking your account with your password…');
   await setPassword(secret, playerId, password);
+  await setBirthday(secret, playerId, born, parent);
   return { playerId, secret: hex(secret), name };
 }
 
@@ -853,7 +854,9 @@ function render() {
   tabs();
   const views = { home, game, games: gamesPage, creator: creatorPage, search: searchPage, friends: friendsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
   // An account that signed in with an easy password sees nothing else until it sets a new one.
-  const view = session?.mustChange ? passwordPage : views[route.name] || home;
+  loadFamily();
+  const needsBirthday = session && familyInfo && !familyInfo.loading && !familyInfo.error && !familyInfo.has_birthday;
+  const view = session?.mustChange ? passwordPage : needsBirthday ? birthdayPage : views[route.name] || home;
   const nodes = [];
   if (flash) {
     nodes.push(status(flash.text, flash.kind || ''));
@@ -1292,6 +1295,7 @@ function avatar() {
     el('div', { class: 'form-actions' }, save),
     draft.message && status(draft.message.text, draft.message.kind),
     security(),
+    parentPanel(),
   ];
 }
 
@@ -1531,6 +1535,147 @@ function creatorPage() {
   return out;
 }
 
+let familyInfo = null;
+let familyMessage = null;
+let parentPin = null;
+
+function loadFamily() {
+  if (!session || (familyInfo && familyInfo.for === session.playerId)) return;
+  familyInfo = { for: session.playerId, loading: true };
+  const time = Date.now();
+  const signature = signText(secretKey(), `libroxel family read\n${session.playerId}\n${time}`);
+  api(`/accounts/${session.playerId}/family`, { query: { time, signature } })
+    .then((f) => { familyInfo = { for: session.playerId, ...f }; })
+    .catch((e) => { familyInfo = { for: session.playerId, error: e.message }; })
+    .finally(() => render());
+}
+
+function ageOn(born) {
+  const [y, m, d] = born.split('-').map(Number);
+  const now = new Date();
+  let age = now.getFullYear() - y;
+  if (now.getMonth() + 1 < m || (now.getMonth() + 1 === m && now.getDate() < d)) age -= 1;
+  return age;
+}
+
+async function setBirthday(secret, playerId, born, parentEmail) {
+  const parent = (parentEmail || '').trim().toLowerCase();
+  const offset = -new Date().getTimezoneOffset();
+  const time = Date.now();
+  const signature = signText(secret, `libroxel birthday\n${playerId}\n${born}\n${parent}\n${offset}\n${time}`);
+  return api('/accounts/birthday', { method: 'POST', body: { player_id: playerId, born, parent_email: parent || null, utc_offset_mins: offset, time, signature } });
+}
+
+async function familyCall(work, done, after) {
+  try {
+    const f = await work();
+    if (f) familyInfo = { for: session.playerId, ...f };
+    else familyInfo = null;
+    familyMessage = done ? { text: done } : null;
+    after?.();
+  } catch (e) {
+    familyMessage = { text: e.message, kind: 'error' };
+  }
+  render();
+}
+
+function birthdayFields() {
+  const born = el('input', { type: 'date', max: new Date().toISOString().slice(0, 10) });
+  const parent = el('input', { type: 'email', maxlength: 254, placeholder: 'parent@example.com' });
+  const parentField = el('label', { class: 'field', style: 'display:none' }, el('span', {}, "Parent's email"), parent);
+  born.addEventListener('input', () => { parentField.style.display = born.value && ageOn(born.value) < 13 ? '' : 'none'; });
+  const check = () => {
+    if (!born.value) return 'Pick your birthday.';
+    if (ageOn(born.value) < 13 && !validEmail(parent.value)) return "Type a parent's email.";
+    return null;
+  };
+  const value = () => [born.value, ageOn(born.value) < 13 ? parent.value.trim() : null];
+  return { nodes: [el('label', { class: 'field' }, el('span', {}, 'Birthday'), born), parentField], check, value };
+}
+
+function birthdayPage() {
+  const fields = birthdayFields();
+  const message = el('div', {});
+  const form = el('form', { class: 'narrow' }, ...fields.nodes, el('div', { class: 'form-actions' }, el('button', { class: 'btn go', type: 'submit' }, 'Save')), message);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const problem = fields.check();
+    if (problem) return message.replaceChildren(status(problem, 'error'));
+    const [born, parent] = fields.value();
+    await familyCall(() => setBirthday(secretKey(), session.playerId, born, parent));
+  });
+  return [el('h1', { class: 'title' }, "When's your birthday?"), form, familyMessage && status(familyMessage.text, familyMessage.kind)];
+}
+
+function parentPanel() {
+  loadFamily();
+  const f = familyInfo;
+  if (!f || f.loading || f.error || !f.has_birthday) return null;
+  const panel = el('div', { class: 'panel', style: 'margin-top:26px' }, el('h3', {}, icon(ICON.lock), ' Parent settings'));
+  const pinBox = (placeholder) => el('input', { type: 'password', inputmode: 'numeric', maxlength: 4, placeholder, style: 'max-width:120px' });
+  const id = session.playerId;
+  if (f.under_13 && !f.consent) {
+    const code = el('input', { type: 'text', inputmode: 'numeric', maxlength: 6, placeholder: '6-digit code', style: 'max-width:140px' });
+    const pin = pinBox("Parent's new PIN");
+    const email = el('input', { type: 'email', maxlength: 254, placeholder: f.parent_email || 'parent@example.com' });
+    add(panel, [
+      el('p', { style: 'color:var(--amber)' }, `Chat is off until a parent approves. We mailed a code to ${f.parent_email || 'a parent'}.`),
+      el('div', { class: 'search' }, code, pin, el('button', { class: 'btn go small', onclick: () => familyCall(() => {
+        const time = Date.now();
+        const signature = signText(secretKey(), `libroxel consent\n${id}\n${code.value.trim()}\n${pin.value}\n${time}`);
+        return api('/accounts/family/consent', { method: 'POST', body: { player_id: id, code: code.value.trim(), pin: pin.value, time, signature } });
+      }, 'Approved. Chat is on with the strict filter.') }, 'Approve')),
+      el('div', { class: 'search' }, email, el('button', { class: 'chip', onclick: () => familyCall(async () => {
+        const to = (email.value.trim() || f.parent_email || '').toLowerCase();
+        const time = Date.now();
+        const signature = signText(secretKey(), `libroxel parent email\n${id}\n${to}\n${time}`);
+        await api('/accounts/family/parent', { method: 'POST', body: { player_id: id, parent_email: to, time, signature } });
+        return null;
+      }, 'Sent.') }, 'Send code')),
+    ]);
+  } else if (parentPin === null) {
+    const pin = pinBox(f.has_pin ? 'PIN' : 'New PIN');
+    add(panel, [el('div', { class: 'search' }, pin, el('button', { class: 'btn go small', onclick: () => {
+      if (!/^\d{4}$/.test(pin.value)) return;
+      parentPin = f.has_pin ? { pin: pin.value, newPin: null } : { pin: '', newPin: pin.value };
+      render();
+    } }, f.has_pin ? 'Open' : 'Set PIN'))]);
+  } else {
+    const s = { ...f.settings };
+    const choice = (key, options) => el('div', { class: 'hats' }, options.map(([value, label, off]) => el('button', { type: 'button', class: `chip${s[key] === value ? ' on' : ''}`, disabled: off, onclick: (e) => { s[key] = value; e.target.parentNode.querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', c === e.target)); } }, label)));
+    const friendsBox = el('input', { type: 'checkbox', checked: s.friend_requests });
+    const limit = (value) => el('input', { type: 'text', inputmode: 'numeric', value: value ?? '', placeholder: 'No limit', style: 'max-width:120px' });
+    const playtime = limit(s.playtime_mins);
+    const spend = limit(s.spend_limit);
+    const newPin = pinBox('New PIN');
+    add(panel, [
+      el('div', { class: 'caps' }, 'Chat'), choice('chat', [['off', 'Off'], ['strict', 'Strict'], ['standard', 'Standard', f.under_13]]),
+      el('div', { class: 'caps' }, 'Messages'), choice('messages', [['everyone', 'Everyone'], ['friends', 'Friends'], ['off', 'Off']]),
+      el('label', { class: 'check' }, friendsBox, 'Friend requests'),
+      el('label', { class: 'field' }, el('span', {}, `Playtime a day, in minutes (played today: ${f.played_mins})`), playtime),
+      el('label', { class: 'field' }, el('span', {}, 'Spending a month'), spend),
+      el('label', { class: 'field' }, el('span', {}, 'New PIN'), newPin),
+      el('div', { class: 'form-actions' },
+        el('button', { class: 'btn go', onclick: () => {
+          const num = (box) => (box.value === '' ? null : Math.max(0, Math.floor(Number(box.value))));
+          const settings = { chat: s.chat, messages: s.messages, friend_requests: friendsBox.checked, spend_limit: num(spend), playtime_mins: num(playtime) };
+          const fresh = parentPin.newPin || (/^\d{4}$/.test(newPin.value) ? newPin.value : null);
+          const { pin } = parentPin;
+          familyCall(() => {
+            const time = Date.now();
+            const signature = signText(secretKey(), `libroxel family\n${id}\n${pin}\n${fresh || ''}\n${JSON.stringify(settings)}\n${time}`);
+            return api('/accounts/family', { method: 'POST', body: { player_id: id, pin, new_pin: fresh, settings, time, signature } });
+          }, 'Saved.', () => { if (fresh) parentPin = { pin: fresh, newPin: null }; });
+        } }, 'Save'),
+        el('button', { class: 'chip', onclick: () => { parentPin = null; render(); } }, 'Close')),
+    ]);
+  }
+  if (familyMessage) {
+    panel.append(status(familyMessage.text, familyMessage.kind || ''));
+    familyMessage = null;
+  }
+  return panel;
+}
 
 // --- Sign in, make an account -------------------------------------------------
 
@@ -1685,6 +1830,7 @@ function createPage() {
   if (from?.password) password.value = from.password;
   const again = el('input', { type: 'password', autocomplete: 'new-password' });
   const email = el('input', { type: 'email', autocomplete: 'email', maxlength: 254, placeholder: 'you@example.com' });
+  const birthday = birthdayFields();
   const remember = el('input', { type: 'checkbox', checked: true });
   const message = el('div', {}, from && status(`There's no account called ${from.name} yet. Type the password again to make it.`, 'wait'));
   const go = el('button', { class: 'btn go', type: 'submit' }, icon(ICON.userPlus), 'Make my account');
@@ -1693,6 +1839,7 @@ function createPage() {
     el('label', { class: 'field' }, el('span', {}, `Password (at least ${MIN_PASSWORD} characters, not a common one, without your name in it)`), password),
     el('label', { class: 'field' }, el('span', {}, 'Password again'), again),
     el('label', { class: 'field' }, el('span', {}, "Email (kept private: we mail it a code to prove it's yours)"), email),
+    ...birthday.nodes,
     el('label', { class: 'check' }, remember, 'Keep me signed in on this computer'),
     el('div', { class: 'form-actions' }, go),
     message);
@@ -1708,14 +1855,15 @@ function createPage() {
     const problem = !/^[A-Za-z0-9_]{3,20}$/.test(n) || !/[A-Za-z]/.test(n)
       ? 'A name is 3 to 20 letters, digits or underscores, with at least one letter.'
       : passwordProblem(password.value, n) || (password.value !== again.value ? "The passwords don't match." : null)
-        || (validEmail(email.value) ? null : 'Type your email: the Hub mails it a code to prove it is yours.');
+        || (validEmail(email.value) ? null : 'Type your email: the Hub mails it a code to prove it is yours.')
+        || birthday.check();
     if (problem) return say(problem, 'error');
     go.disabled = true;
     try {
       say('Checking the name is free…');
       const existing = await accountNamed(n);
       if (existing) throw new Error(`Someone already has the name ${existing.name} (names ignore capitals). If it's yours, sign in instead.`);
-      const made = await createAccount(n, password.value, email.value.trim(), say);
+      const made = await createAccount(n, password.value, email.value.trim(), say, birthday.value());
       saveSession(made, remember.checked);
       securityInfo = null;
       flash = { text: `Welcome, ${n}! We mailed a code to ${email.value.trim()}: type it here to prove the email is yours.` };
