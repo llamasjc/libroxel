@@ -15,6 +15,30 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  wait-for-main:
+    # A tag pushed with main starts two Release runs at once, and their Mac jobs
+    # queue for the same few Macs until GitHub cancels one. On a tag, wait for
+    # main's run of this commit to finish first, which also leaves its cache ready.
+    name: Wait for main
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Wait for main's build of this commit
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          for _ in $(seq 120); do
+            left=$(gh api "repos/$GH_REPO/actions/workflows/release.yml/runs?branch=main&head_sha=$GITHUB_SHA&per_page=20" \
+              --jq '[.workflow_runs[] | select(.status != "completed")] | length') || left=0
+            [[ "$left" == 0 ]] && exit 0
+            echo "main is still building this commit, checking again in 30 seconds"
+            sleep 30
+          done
+          echo "::warning::main was still building after an hour, carrying on anyway"
+
   build:
     name: Build (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
@@ -163,6 +187,7 @@ jobs:
 
   mac-half:
     name: Build (${{ matrix.name }})
+    needs: wait-for-main
     runs-on: macos-latest
     strategy:
       fail-fast: false
@@ -377,6 +402,7 @@ jobs:
 
   ios:
     name: Build (iOS)
+    needs: wait-for-main
     runs-on: macos-latest
     continue-on-error: true
     env:
