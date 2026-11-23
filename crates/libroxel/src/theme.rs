@@ -791,6 +791,7 @@ pub fn block_button(ui: &mut egui::Ui, kind: Kind, glyph: &str, label: &str, hei
     let width = ui.painter().layout_no_wrap(text.clone(), font.clone(), Color32::WHITE).size().x
         + height.max(24.0) * 0.95;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height + EDGE), Sense::click());
+    name_for_screen_readers(ui, &response, egui::WidgetType::Button, label, None);
     let enabled = ui.is_enabled();
     let (top, bottom, rim, ink) = kind.colours();
     let (top, bottom, rim, ink) = if enabled {
@@ -845,6 +846,8 @@ pub fn tool_button(ui: &mut egui::Ui, glyph: &str, label: &str, on: bool) -> Res
     let size = galley.size() + padding * 2.0;
     let size = Vec2::new(size.x, size.y.max(ui.spacing().interact_size.y));
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let spoken_name = if label.is_empty() { icon_name(glyph) } else { label };
+    name_for_screen_readers(ui, &response, egui::WidgetType::Button, spoken_name, on.then_some(true));
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         let hovered = response.hovered() && ui.is_enabled();
@@ -886,7 +889,21 @@ pub fn hot_track(painter: &egui::Painter, rect: Rect, strong: bool) {
 /// it's the open one, a faint one under the pointer.
 pub fn tab(ui: &mut egui::Ui, glyph: &str, label: &str, on: bool) -> Response {
     let text = if label.is_empty() { glyph.to_owned() } else { format!("{glyph}  {label}") };
-    tab_with(ui, &text, on, label.is_empty())
+    let response = tab_with(ui, &text, on, label.is_empty());
+    let spoken_name = if label.is_empty() { icon_name(glyph) } else { label };
+    name_for_screen_readers(ui, &response, egui::WidgetType::SelectableLabel, spoken_name, Some(on));
+    response
+}
+
+/// What an icon shown on its own means, for screen readers.
+pub fn icon_name(glyph: &str) -> &'static str {
+    match glyph {
+        icon::CARET_DOWN => "More",
+        icon::MAGNIFYING_GLASS => "Search",
+        icon::CHAT_CIRCLE => "Messages",
+        icon::ARROW_CIRCLE_UP => "Update",
+        _ => "",
+    }
 }
 
 /// How wide [`tab`] draws a tab, so a bar can tell whether its tabs fit.
@@ -1004,6 +1021,7 @@ pub fn paint_logo(painter: &egui::Painter, at: Pos2, size: f32) {
 /// like a picked tab while `on`, and lights up under the pointer.
 pub fn logo_button(ui: &mut egui::Ui, on: bool) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(52.0, 44.0), Sense::click());
+    name_for_screen_readers(ui, &response, egui::WidgetType::SelectableLabel, "Home", Some(on));
     let painter = ui.painter();
     let pill = rect.shrink2(Vec2::new(1.0, 2.0));
     if on {
@@ -1287,6 +1305,7 @@ pub fn ribbon_button(ui: &mut egui::Ui, glyph: &str, label: &str, on: bool) -> R
     let name = ui.painter().layout_no_wrap(label.to_owned(), FontId::proportional(12.0), TEXT);
     let width = name.size().x.max(30.0) + 14.0;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, RIBBON_HEIGHT), Sense::click());
+    name_for_screen_readers(ui, &response, egui::WidgetType::Button, label, on.then_some(true));
     let painter = ui.painter();
     let hovered = response.hovered() && enabled;
     if on || hovered || (response.is_pointer_button_down_on() && enabled) {
@@ -1359,6 +1378,7 @@ pub fn ribbon_group<R>(ui: &mut egui::Ui, caption: &str, add: impl FnOnce(&mut e
 pub fn ribbon_tab(ui: &mut egui::Ui, label: &str, on: bool) -> Response {
     let galley = ui.painter().layout_no_wrap(label.to_owned(), FontId::proportional(13.0), TEXT);
     let (rect, response) = ui.allocate_exact_size(Vec2::new(galley.size().x + 22.0, 26.0), Sense::click());
+    name_for_screen_readers(ui, &response, egui::WidgetType::SelectableLabel, label, Some(on));
     let painter = ui.painter();
     if on {
         let tab = rect.expand2(Vec2::new(0.0, 0.0));
@@ -1386,6 +1406,7 @@ pub fn ribbon_tab(ui: &mut egui::Ui, label: &str, on: bool) -> Response {
 pub fn toolbox_tile(ui: &mut egui::Ui, glyph: &str, colour: Color32, label: &str) -> Response {
     let size = Vec2::new(74.0, 66.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    name_for_screen_readers(ui, &response, egui::WidgetType::Button, label, None);
     let painter = ui.painter();
     if response.hovered() && ui.is_enabled() {
         hot_track(painter, rect, false);
@@ -1409,4 +1430,123 @@ pub fn toolbox_tile(ui: &mut egui::Ui, glyph: &str, colour: Color32, label: &str
         rect.width() - 10.0,
     );
     response
+}
+
+/// Gives a control drawn by hand the name, kind and state a screen reader
+/// reads out (egui's own widgets do this themselves). `selected` is for
+/// tabs and choices that stay picked.
+pub fn name_for_screen_readers(
+    ui: &egui::Ui,
+    response: &Response,
+    kind: egui::WidgetType,
+    label: &str,
+    selected: Option<bool>,
+) {
+    let enabled = ui.is_enabled();
+    let label = spoken(label);
+    response.widget_info(|| match selected {
+        Some(on) => egui::WidgetInfo::selected(kind, enabled, on, &label),
+        None => egui::WidgetInfo::labeled(kind, enabled, &label),
+    });
+}
+
+/// `text` without icon glyphs (they sit in the private use area, and a
+/// screen reader would read them as nothing or as gibberish).
+pub fn spoken(text: &str) -> String {
+    let kept: String = text.chars().filter(|c| !('\u{E000}'..='\u{F8FF}').contains(c)).collect();
+    kept.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A plain name for a colour ("dark red", "light blue"), for screen readers.
+pub fn colour_name([r, g, b]: [u8; 3]) -> String {
+    let (r, g, b) = (f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0);
+    let most = r.max(g).max(b);
+    let least = r.min(g).min(b);
+    let light = (most + least) / 2.0;
+    let chroma = most - least;
+    let shade = if light < 0.3 {
+        "dark "
+    } else if light > 0.72 {
+        "light "
+    } else {
+        ""
+    };
+    if chroma < 0.12 {
+        return match light {
+            l if l < 0.15 => "black".to_owned(),
+            l if l > 0.9 => "white".to_owned(),
+            _ => format!("{shade}grey"),
+        };
+    }
+    let hue = if most == r {
+        60.0 * (((g - b) / chroma).rem_euclid(6.0))
+    } else if most == g {
+        60.0 * ((b - r) / chroma + 2.0)
+    } else {
+        60.0 * ((r - g) / chroma + 4.0)
+    };
+    // Reds and oranges that aren't bright are the browns of skin and wood.
+    let name = match hue {
+        h if !(15.0..345.0).contains(&h) => "red",
+        h if h < 45.0 => {
+            if light < 0.55 || chroma < 0.45 {
+                "brown"
+            } else {
+                "orange"
+            }
+        }
+        h if h < 70.0 => "yellow",
+        h if h < 165.0 => "green",
+        h if h < 200.0 => "teal",
+        h if h < 255.0 => "blue",
+        h if h < 290.0 => "purple",
+        _ => "pink",
+    };
+    format!("{shade}{name}")
+}
+
+#[cfg(test)]
+mod screen_reader_tests {
+    use super::*;
+
+    #[test]
+    fn icons_are_left_out_of_spoken_names() {
+        assert_eq!(spoken(&format!("{}  Play", icon::PLAY)), "Play");
+        assert_eq!(spoken("Kart race"), "Kart race");
+    }
+
+    #[test]
+    fn colours_have_plain_names() {
+        assert_eq!(colour_name([0, 0, 0]), "black");
+        assert_eq!(colour_name([255, 255, 255]), "white");
+        assert_eq!(colour_name([200, 30, 30]), "red");
+        assert_eq!(colour_name([30, 90, 220]), "blue");
+        assert_eq!(colour_name([120, 72, 40]), "brown");
+        assert_eq!(colour_name([40, 160, 60]), "green");
+        assert_eq!(colour_name([128, 128, 128]), "grey");
+    }
+
+    /// Hand-drawn buttons reach screen readers with their names.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn hand_drawn_buttons_are_named_for_screen_readers() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        // The theme's fonts arrive a frame after they're installed, as in the app.
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            install(ui.ctx());
+        });
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            assert!(install(ui.ctx()), "the theme is ready");
+            block_button(ui, Kind::Primary, icon::PLAY, "Play", 40.0);
+            tab(ui, icon::MAGNIFYING_GLASS, "", true);
+            ribbon_button(ui, icon::PLAY, "Test", false);
+        });
+        let update = output.platform_output.accesskit_update.expect("an accessibility tree");
+        let names: Vec<String> =
+            update.nodes.iter().filter_map(|(_, node)| node.label().map(str::to_owned)).collect();
+        for want in ["Play", "Search", "Test"] {
+            assert!(names.iter().any(|n| n == want), "{want:?} in {names:?}");
+        }
+    }
 }

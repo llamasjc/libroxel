@@ -235,6 +235,12 @@ fn count(n: u32) -> String {
 /// and what they're doing.
 fn friend_bubble(ui: &mut egui::Ui, friend: &Friend) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(96.0, 128.0), egui::Sense::click());
+    let spoken_name = if friend.online {
+        format!("{}, {}", friend.name, whereabouts(friend).0)
+    } else {
+        format!("{}, offline", friend.name)
+    };
+    theme::name_for_screen_readers(ui, &response, egui::WidgetType::Button, &spoken_name, None);
     let painter = ui.painter_at(rect);
     let centre = egui::pos2(rect.center().x, rect.min.y + 42.0);
     if response.hovered() {
@@ -276,6 +282,7 @@ fn friend_bubble(ui: &mut egui::Ui, friend: &Friend) -> egui::Response {
 /// The round "add friends" button at the start of the row.
 fn add_bubble(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(96.0, 128.0), egui::Sense::click());
+    theme::name_for_screen_readers(ui, &response, egui::WidgetType::Button, "Add friends", None);
     let painter = ui.painter_at(rect);
     let centre = egui::pos2(rect.center().x, rect.min.y + 42.0);
     let top = if response.hovered() { Color32::from_rgb(240, 250, 255) } else { Color32::WHITE };
@@ -301,6 +308,11 @@ fn add_bubble(ui: &mut egui::Ui) -> egui::Response {
 /// friends' faces on it when they are in.
 fn game_tile(ui: &mut egui::Ui, entry: &Entry, friends: &[&Friend]) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(188.0, 214.0), egui::Sense::click());
+    let spoken_name = match entry.playing() {
+        0 => format!("{}, by {}", entry.title, entry.by),
+        n => format!("{}, {n} playing", entry.title),
+    };
+    theme::name_for_screen_readers(ui, &response, egui::WidgetType::Button, &spoken_name, None);
     let painter = ui.painter_at(rect.expand(20.0));
     let hovered = response.hovered();
     let face = rect.translate(egui::vec2(0.0, if hovered { -3.0 } else { 0.0 }));
