@@ -561,7 +561,7 @@ pub fn editor_ui(
             }
             let list_on = engine.session.as_ref().is_none_or(|s| s.runtime().core_gui_enabled("PlayerList"));
             if playing && list_on {
-                leaderboard(ui, &tree_rc.borrow());
+                leaderboard(ui, &tree_rc.borrow(), &mut editor.platform);
             }
             ui.max_rect()
         })
@@ -2006,7 +2006,7 @@ fn property_editor(
 }
 
 /// While playing: everyone's `leaderstats` values in the top-right corner.
-fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree) {
+fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree, platform: &mut crate::browse::Platform) {
     let Some(players) = tree.service(ClassKind::Players) else { return };
     // Each player: their name, their stats (name and value), and their team.
     type Row = (String, Vec<(String, String)>, Option<InstanceId>);
@@ -2103,7 +2103,20 @@ fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree) {
                             ui.label(RichText::new(label).strong().color(color));
                             ui.end_row();
                         }
-                        ui.label(RichText::new(name).color(theme::TEXT));
+                        let address = platform.hub_address.clone();
+                        let tag = platform.badges.tag(|| libroxel_hub::HubClient::new(&address), name);
+                        ui.horizontal(|ui| {
+                            if let Some(tag) = tag {
+                                ui.label(
+                                    RichText::new(format!(" {tag} "))
+                                        .small()
+                                        .strong()
+                                        .color(Color32::WHITE)
+                                        .background_color(crate::groups::BADGE),
+                                );
+                            }
+                            ui.label(RichText::new(name).color(theme::TEXT));
+                        });
                         for c in &columns {
                             let v =
                                 stats.iter().find(|(n, _)| n == c).map(|(_, v)| v.as_str()).unwrap_or("-");

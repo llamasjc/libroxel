@@ -20,6 +20,7 @@ mod command;
 mod debugging;
 mod file_picker;
 mod game_ratings;
+mod groups;
 mod gui;
 mod history;
 mod hub_assets;

@@ -27,6 +27,7 @@ pub struct Downloaded {
 
 /// Everything about the Hub the editor keeps between frames.
 pub struct Platform {
+    pub badges: crate::groups::Badges,
     /// The Hub's address ([`libroxel_hub::hub_address`]). It isn't
     /// something to change in the app: there is one Hub.
     pub hub_address: String,
@@ -129,6 +130,7 @@ pub struct Platform {
 impl Default for Platform {
     fn default() -> Self {
         Self {
+            badges: Default::default(),
             hub_address: libroxel_hub::hub_address(),
             open: false,
             search: String::new(),
@@ -687,6 +689,11 @@ impl Platform {
     }
 
     /// Looks up this player's account on the Hub, once for each Hub.
+    pub fn refresh_account(&mut self) {
+        self.account_checked = None;
+        self.look_up_account();
+    }
+
     pub fn look_up_account(&mut self) {
         self.send_look();
         let same_hub = self.account_hub.as_deref() == Some(self.hub_address.as_str());
@@ -1350,7 +1357,12 @@ impl Platform {
                 1 => "1 published game".to_owned(),
                 n => format!("{n} published games"),
             };
-            ui.label(format!("Your page: {} (#{}) · {games}", profile.name, profile.number));
+            ui.horizontal(|ui| {
+                ui.label(format!("Your page: {} (#{}) · {games}", profile.name, profile.number));
+                if let Some(badge) = &profile.badge {
+                    crate::groups::badge(ui, badge);
+                }
+            });
             if profile.admin {
                 ui.colored_label(crate::theme::AMBER, "You are an admin of the Hub.");
             } else if profile.verified {
@@ -1793,7 +1805,7 @@ fn libroxel_hub_now_ms() -> i64 {
 }
 
 /// "3 minutes ago" and the like.
-fn ago(secs: i64) -> String {
+pub(crate) fn ago(secs: i64) -> String {
     let (n, unit) = match secs.max(0) {
         s if s < 60 => return "just now".into(),
         s if s < 3600 => (s / 60, "minute"),

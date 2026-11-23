@@ -1134,7 +1134,7 @@ fn game_page(
 }
 
 /// A row in the Friends tab: portrait, name, status and buttons.
-fn person_row(
+pub(crate) fn person_row(
     ui: &mut egui::Ui,
     look: &Json,
     name: &str,
@@ -1315,7 +1315,7 @@ pub fn friends_tab(
 }
 
 /// A search box with a Find button; whether to search now.
-fn search_box(ui: &mut egui::Ui, search: &mut String, hint: &str) -> bool {
+pub(crate) fn search_box(ui: &mut egui::Ui, search: &mut String, hint: &str) -> bool {
     let mut go = false;
     ui.horizontal(|ui| {
         let field = ui.add(

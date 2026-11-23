@@ -244,6 +244,11 @@ label.field span { display: block; margin-bottom: 4px; }
 .tag { padding: 0 7px; border-radius: 8px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #fff; background-image: var(--gloss); }
 .tag.admin { background-color: rgb(232, 140, 20); }
 .tag.verified { background-color: var(--accent); }
+.tag.group { background-color: rgb(120, 80, 200); text-transform: none; }
+.group-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.post { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.post .link { float: right; }
+.form { display: flex; flex-direction: column; gap: 8px; }
 .fill { width: 120px; flex: none; font-size: 13px; }
 .fill .bar { height: 6px; background: linear-gradient(rgb(230, 230, 230), rgb(250, 250, 250)); border: 1px solid rgb(178, 178, 178); border-radius: 3px; margin-top: 3px; overflow: hidden; }
 .fill .bar i { display: block; height: 100%; background: var(--gloss), linear-gradient(rgb(110, 220, 80), rgb(40, 160, 30)); }

@@ -26,7 +26,8 @@ pub const HUB_HELP: &str = "\
   reports                      list reported games, hats, comments and messages
   clear <kind> <id>            say a reported one is fine: list it again
   remove <kind> <id>           take one down for good (kind: game, item,
-                               comment or message)
+                               comment, message
+                               or group)
   accounts [search]            list accounts
   owners                       list the Hub's owners (its admins)
   owner add|remove <name or player id>
@@ -229,7 +230,7 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
             Ok(())
         }
         _ => {
-            Err("usage: libroxel-hub [reports | clear <game|item|comment> <id> | remove <game|item|comment> <id> | accounts \
+            Err("usage: libroxel-hub [reports | clear <kind> <id> | remove <kind> <id> | accounts \
                   [search] | owners | owner add|remove <who> | ban <who> [reason] | unban <who> | rename <who> <name> | verify|unverify <who>]"
                 .into())
         }
