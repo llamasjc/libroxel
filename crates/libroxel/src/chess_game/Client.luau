@@ -591,7 +591,8 @@ round(toastBox, 6)
 local heard = { offer = -1, chat = nil, lowTime = false, challenges = 0 }
 
 -- Lichess's sound sets.
-local SOUND_SETS = { "sfx", "piano", "nes", "futuristic" }
+local SOUND_SETS = { "wood", "sfx", "piano", "nes", "futuristic" }
+local WOOD = { move = "move", capture = "capture", notify = "notify", victory = "notify", defeat = "notify", draw = "notify", lowtime = "lowtime", confirm = "confirm", challenge = "social", message = "social" }
 local SOUND_NAMES = { "move", "capture", "check", "notify", "victory", "defeat", "draw", "lowtime", "confirm", "challenge", "message" }
 local soundSet = 1
 local sounds = {}
@@ -601,7 +602,10 @@ end
 local function useSoundSet(i)
 	soundSet = i
 	for name, sound in sounds do
-		sound.SoundId = if SOUND_SETS[i] then "libroxel://lichess/" .. SOUND_SETS[i] .. "/" .. name else ""
+		local set = SOUND_SETS[i]
+		sound.SoundId = if set == "wood" then (if WOOD[name] then "libroxel://wood/" .. WOOD[name] else "")
+			elseif set then "libroxel://lichess/" .. set .. "/" .. name
+			else ""
 	end
 end
 useSoundSet(1)
@@ -619,7 +623,7 @@ local soundButton = make("TextButton", {
 	BackgroundColor3 = CARD,
 	TextColor3 = MUTED,
 	TextSize = 13,
-	Text = "♪ sfx",
+	Text = "♪ wood",
 	AutoButtonColor = true,
 }, panel)
 round(soundButton, 4)
