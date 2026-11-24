@@ -134,8 +134,12 @@ fn server(args: &[String]) -> Result<(), String> {
             (game, text, Path::new(path).with_file_name("server-identity.key"), flags.get("--game-id"))
         }
         (None, Some(id)) => {
-            let (game, text) = game_by_id(id, &hub)?;
-            (game, text, data_dir().join("server-identity.key"), Some(id))
+            let key =
+                flags.get("--key").map_or_else(|| data_dir().join("server-identity.key"), PathBuf::from);
+            let identity = Identity::load_or_create(&key)
+                .map_err(|e| format!("could not load {}: {e}", key.display()))?;
+            let (game, text) = game_by_id(id, &hub, &identity)?;
+            (game, text, key, Some(id))
         }
         (None, None) => return Err("usage: libroxel server <game.lrx> (see libroxel help)".into()),
     };
@@ -185,7 +189,7 @@ fn starters() -> Result<(), String> {
 
 /// A game's title and saved place by its id: a starter game, or a published
 /// one fetched from the Hub.
-fn game_by_id(id: &str, hub: &HubUse) -> Result<(String, String), String> {
+fn game_by_id(id: &str, hub: &HubUse, identity: &Identity) -> Result<(String, String), String> {
     // From the Hub even when this server isn't listed on it.
     let address = match hub {
         HubUse::At(address) => address.clone(),
@@ -201,7 +205,8 @@ fn game_by_id(id: &str, hub: &HubUse) -> Result<(String, String), String> {
         return Ok((game.name.to_owned(), text));
     }
     let info = client.game(id)?;
-    Ok((info.title, client.download(id)?))
+    let proof = libroxel_hub::DownloadProof::new(id, identity.player_id(), |m| identity.sign(m));
+    Ok((info.title, client.download(id, Some(&proof))?))
 }
 
 /// Whether a server lists itself on the Hub.

@@ -255,9 +255,18 @@ pub(crate) async fn manage(
             )
             .map_err(internal)?;
             keep_version(&db, &game_id, current + 1, &title, &place, now).map_err(internal)?;
+            let owner: String = db
+                .query_row(
+                    "SELECT COALESCE(author_id, game_id) FROM games WHERE game_id = ?1",
+                    params![game_id],
+                    |r| r.get(0),
+                )
+                .map_err(internal)?;
+            crate::copies::keep(&db, &game_id, &owner, &crate::copies::prints(&place)).map_err(internal)?;
         }
         Change::Remove => {
             db.execute("DELETE FROM games WHERE game_id = ?1", params![game_id]).map_err(internal)?;
+            crate::copies::forget(&db, &game_id);
             forget(&db, &game_id);
         }
     }

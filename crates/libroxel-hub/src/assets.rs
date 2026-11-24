@@ -102,20 +102,25 @@ fn has(db: &Connection, hash: &str) -> bool {
 
 pub(crate) async fn get_asset(
     State(db): State<Db>,
+    State(limits): State<Arc<Limits>>,
+    Extension(caller): Extension<Caller>,
     UrlPath(hash): UrlPath<String>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, (StatusCode, String)> {
     if !valid_hash(&hash) {
-        return Err(StatusCode::NOT_FOUND);
+        return Err((StatusCode::NOT_FOUND, String::new()));
+    }
+    if !caller.local() && !limits.take_logged(Limit::AssetGet, &caller.0) {
+        return Err(too_many("files downloaded"));
     }
     let db = db.lock().unwrap();
     let data: Vec<u8> = db
         .query_row("SELECT data FROM assets WHERE hash = ?1", params![hash], |r| r.get(0))
         .optional()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, String::new()))?
+        .ok_or((StatusCode::NOT_FOUND, String::new()))?;
     Ok((
         [
-            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            (header::CACHE_CONTROL, "private, max-age=31536000, immutable"),
             (header::CONTENT_TYPE, "application/octet-stream"),
         ],
         data,
@@ -170,6 +175,7 @@ pub fn set_official(db: &Connection, games: &[StarterPlace]) -> Result<(), Strin
     let fail = |e: rusqlite::Error| format!("could not keep the official games: {e}");
     let tx = db.unchecked_transaction().map_err(fail)?;
     tx.execute("DELETE FROM official", []).map_err(fail)?;
+    tx.execute("DELETE FROM prints WHERE game_id LIKE 'starter:%'", []).map_err(fail)?;
     for (position, game) in games.iter().enumerate() {
         tx.execute(
             "INSERT OR REPLACE INTO official (name, about, symbol, place, hash, position, updated)
@@ -183,6 +189,13 @@ pub fn set_official(db: &Connection, games: &[StarterPlace]) -> Result<(), Strin
                 position as i64,
                 now()
             ],
+        )
+        .map_err(fail)?;
+        crate::copies::keep(
+            &tx,
+            &format!("starter:{}", game.name),
+            "starter",
+            &crate::copies::prints(&game.place),
         )
         .map_err(fail)?;
     }

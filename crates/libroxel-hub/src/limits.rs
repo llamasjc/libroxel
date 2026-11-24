@@ -35,6 +35,8 @@ pub(crate) enum Limit {
     Asset,
     /// Messages sent, per IP and per sender.
     Message,
+    Download,
+    AssetGet,
 }
 
 impl Limit {
@@ -54,6 +56,8 @@ impl Limit {
             Limit::Email => (10, 60 * MINUTE),
             Limit::Asset => (2000, 60 * MINUTE),
             Limit::Message => (30, MINUTE),
+            Limit::Download => (200, 60 * MINUTE),
+            Limit::AssetGet => (20_000, 60 * MINUTE),
         }
     }
 }
@@ -61,6 +65,7 @@ impl Limit {
 pub(crate) struct Window {
     start: Instant,
     count: u32,
+    noted: bool,
 }
 
 /// Every count the Hub keeps.
@@ -86,16 +91,33 @@ impl Limits {
         if windows.len() > 50_000 {
             windows.retain(|(limit, _), w| now.duration_since(w.start) < limit.rule().1);
         }
-        let window =
-            windows.entry((limit, who.to_ascii_lowercase())).or_insert(Window { start: now, count: 0 });
+        let window = windows.entry((limit, who.to_ascii_lowercase())).or_insert(Window {
+            start: now,
+            count: 0,
+            noted: false,
+        });
         if now.duration_since(window.start) >= every {
-            *window = Window { start: now, count: 0 };
+            *window = Window { start: now, count: 0, noted: false };
         }
         if window.count >= most {
             return false;
         }
         window.count += 1;
         true
+    }
+
+    pub(crate) fn take_logged(&self, limit: Limit, who: &str) -> bool {
+        if self.take(limit, who) {
+            return true;
+        }
+        let mut windows = self.windows.lock().unwrap();
+        if let Some(window) = windows.get_mut(&(limit, who.to_ascii_lowercase()))
+            && !window.noted
+        {
+            window.noted = true;
+            eprintln!("{who} hit the {limit:?} limit");
+        }
+        false
     }
 
     /// Whether `who` is over `limit` right now, without counting anything.
@@ -114,6 +136,12 @@ impl Limits {
 /// Who is calling, as the Hub saw the connection.
 #[derive(Debug, Clone)]
 pub(crate) struct Caller(pub String);
+
+impl Caller {
+    pub(crate) fn local(&self) -> bool {
+        self.0.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+    }
+}
 
 /// The answer when a limit is reached.
 pub(crate) fn too_many(what: &str) -> (StatusCode, String) {
@@ -171,6 +199,11 @@ mod tests {
             assert!(limits.take(Limit::WrongPassword, "Alice2"));
         }
         assert!(limits.over(Limit::WrongPassword, "alice2"));
+        for _ in 0..200 {
+            assert!(limits.take_logged(Limit::Download, "9.9.9.9"));
+        }
+        assert!(!limits.take_logged(Limit::Download, "9.9.9.9"));
+        assert!(!limits.take_logged(Limit::Download, "9.9.9.9"));
     }
 
     #[test]

@@ -17,5 +17,5 @@ fn big_games_publish_and_download() {
             author_signature: None,
         })
         .unwrap();
-    assert_eq!(client.download(&done.game_id).unwrap(), place);
+    assert_eq!(client.download(&done.game_id, None).unwrap(), place);
 }
