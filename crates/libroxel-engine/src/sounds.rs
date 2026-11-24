@@ -7,8 +7,8 @@
 //! in four sets, `wood/`, `glass/`, `retro/` and `digital/`, each with
 //! [`EVENTS`] (`move`, `capture`, `check` and so on); `table/` sounds
 //! (`drop`, `bad`, `win`, `lose`) and `cards/` sounds (`click`, `slide`,
-//! `win`, `lose`). All are made here, as sound waves; older names some
-//! games used are kept (see [`renamed`]).
+//! `win`, `lose`). All but `wood/move` and `wood/capture` are made here,
+//! as sound waves; older names some games used are kept (see [`renamed`]).
 //!
 //! A sound inside a part sounds quieter the further the camera is from it:
 //! full volume within 10 studs, then falling off until it can't be heard at
@@ -104,11 +104,20 @@ const NEAR: f32 = 10.0;
 /// Past this many studs a sound in a part can't be heard.
 pub const HEARING_DISTANCE: f32 = 200.0;
 
+/// Built-in sounds that are recordings rather than made here.
+const FILES: &[(&str, &[u8])] = &[
+    ("wood/move", include_bytes!("../assets/sounds/move.ogg")),
+    ("wood/capture", include_bytes!("../assets/sounds/capture.ogg")),
+];
+
 /// The file a sound name means, if it can be found.
 pub fn bytes_for(name: &str) -> Option<Vec<u8>> {
     let name = name.trim();
     if let Some(built_in) = name.strip_prefix(BUILT_IN) {
         let name = renamed(built_in).unwrap_or_else(|| built_in.to_owned());
+        if let Some((_, bytes)) = FILES.iter().find(|(n, _)| *n == name) {
+            return Some(bytes.to_vec());
+        }
         return synth(&name).map(|samples| wav(&samples));
     }
     crate::pictures::bytes_for_kind(name, &["ogg", "wav", "mp3"])
@@ -643,7 +652,8 @@ mod tests {
                     "{name}: {} samples, peak {peak}",
                     s.len()
                 );
-                assert_eq!(&bytes_for(&format!("{BUILT_IN}{name}")).unwrap()[0..4], b"RIFF");
+                let head = &bytes_for(&format!("{BUILT_IN}{name}")).unwrap()[0..4];
+                assert!(head == b"RIFF" || head == b"OggS", "{name}");
             }
         }
     }
