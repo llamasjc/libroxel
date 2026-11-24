@@ -34,6 +34,8 @@ ureq = "3"
 sha2 = "0.10"
 ed25519-dalek = "3"
 data-encoding = "2"
+# Which language the computer is set to, for the app's text.
+sys-locale = "0.3"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 # `accesskit` hands the menus and panels to screen readers (Narrator on

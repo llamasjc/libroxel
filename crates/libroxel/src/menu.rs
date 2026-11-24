@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use bevy_egui::egui::{self, Color32, RichText};
 
 use crate::browse::Platform;
+use crate::i18n::{t, tf};
 use crate::server::data_dir;
 use crate::{games_dir, theme};
 use libroxel_engine::character::{BodyColors, Hat, Look};
@@ -26,8 +27,8 @@ pub enum Game {
 impl Game {
     pub fn label(&self) -> String {
         match self {
-            Game::Starter(name) => (*name).into(),
-            Game::Blank => "New empty world".into(),
+            Game::Starter(name) => t(name).into(),
+            Game::Blank => t("New empty world").into(),
             Game::File(path) => path
                 .file_stem()
                 .map_or_else(|| path.display().to_string(), |s| s.to_string_lossy().into_owned()),
@@ -432,7 +433,7 @@ impl Menu {
                     }
                     Tab::Profile => {
                         let look = self.look().to_json();
-                        theme::heading(ui, "Profile");
+                        theme::heading(ui, t("Profile"));
                         ui.add_space(8.0);
                         platform.account_ui(ui, look);
                         None
@@ -470,12 +471,13 @@ impl Menu {
         ui.add_space(10.0);
         ui.spacing_mut().item_spacing.x = 2.0;
         let chip = player_chip_width(ui, &self.name);
-        let right = chip + 104.0 + 24.0 + if crate::update::ready().is_some() { 110.0 } else { 0.0 };
+        let right = chip + 148.0 + 24.0 + if crate::update::ready().is_some() { 110.0 } else { 0.0 };
         let wide: f32 =
-            TOP_TABS.iter().map(|(_, glyph, label)| theme::tab_width(ui, glyph, label)).sum::<f32>()
+            TOP_TABS.iter().map(|(_, glyph, label)| theme::tab_width(ui, glyph, t(label))).sum::<f32>()
                 + 2.0 * TOP_TABS.len() as f32;
         let compact = wide > ui.available_width() - right;
         for (tab, glyph, label) in TOP_TABS {
+            let label = t(label);
             let shown = if compact { "" } else { label };
             let response = theme::tab(ui, glyph, shown, self.tab == tab);
             let response = if compact { response.on_hover_text(label) } else { response };
@@ -485,12 +487,12 @@ impl Menu {
         }
         #[cfg(target_os = "macos")]
         {
-            let more = theme::tab(ui, theme::icon::CARET_DOWN, "", false).on_hover_text("More");
+            let more = theme::tab(ui, theme::icon::CARET_DOWN, "", false).on_hover_text(t("More"));
             egui::Popup::menu(&more).show(|ui| {
                 ui.set_min_width(190.0);
                 if ui
-                    .button(format!("{}  Add the libroxel command", theme::icon::TERMINAL_WINDOW))
-                    .on_hover_text("Links /usr/local/bin/libroxel to this app, so typing libroxel in Terminal opens it. Asks for your password.")
+                    .button(format!("{}  {}", theme::icon::TERMINAL_WINDOW, t("Add the libroxel command")))
+                    .on_hover_text(t("Links /usr/local/bin/libroxel to this app, so typing libroxel in Terminal opens it. Asks for your password."))
                     .clicked()
                 {
                     ui.close();
@@ -510,17 +512,36 @@ impl Menu {
                 let unread = platform.chats.unread();
                 let label = if unread > 0 { unread.min(99).to_string() } else { String::new() };
                 let messages = theme::tab(ui, theme::icon::CHAT_CIRCLE, &label, self.tab == Tab::Messages);
-                if messages.on_hover_text("Messages").clicked() {
+                if messages.on_hover_text(t("Messages")).clicked() {
                     self.go(Tab::Messages);
                 }
             }
+            let globe = theme::tab(ui, theme::icon::GLOBE, "", false).on_hover_text(t("Language"));
+            egui::Popup::menu(&globe).show(|ui| {
+                ui.set_min_width(180.0);
+                for language in crate::i18n::Language::ALL {
+                    let missing_font =
+                        language == crate::i18n::Language::Chinese && !theme::has_chinese_font();
+                    let item = ui
+                        .add_enabled(
+                            !missing_font,
+                            egui::Button::selectable(crate::i18n::current() == language, language.name()),
+                        )
+                        .on_disabled_hover_text(t("This computer has no font with Chinese characters."));
+                    if item.clicked() {
+                        crate::i18n::set(language, true);
+                        theme::reload_fonts(ui.ctx());
+                        ui.close();
+                    }
+                }
+            });
             let search = theme::tab(ui, theme::icon::MAGNIFYING_GLASS, "", self.tab == Tab::Search);
-            if search.on_hover_text("Search for players and games").clicked() {
+            if search.on_hover_text(t("Search for players and games")).clicked() {
                 self.go(Tab::Search);
             }
             if let Some(version) = crate::update::ready() {
-                let update = theme::tab(ui, theme::icon::ARROW_CIRCLE_UP, "Update", false);
-                if update.on_hover_text(format!("Restart with {version}")).clicked()
+                let update = theme::tab(ui, theme::icon::ARROW_CIRCLE_UP, t("Update"), false);
+                if update.on_hover_text(tf("Restart with {version}", &[("version", &version)])).clicked()
                     && let Err(why) = crate::update::restart()
                 {
                     self.error = Some(why);
@@ -553,9 +574,9 @@ impl Menu {
 
     fn avatar_tab(&mut self, ui: &mut egui::Ui, platform: &mut Platform) {
         let mut look = self.look();
-        theme::heading(ui, "Your avatar");
+        theme::heading(ui, t("Your avatar"));
         ui.label(
-            RichText::new("How you look in every game you play or join. Other players see it too.")
+            RichText::new(t("How you look in every game you play or join. Other players see it too."))
                 .color(SOFT),
         );
         ui.add_space(12.0);
@@ -570,15 +591,15 @@ impl Menu {
                     ("Shirt", &mut look.colors.shirt),
                     ("Trousers", &mut look.colors.pants),
                 ] {
-                    theme::label_caps(ui, label);
+                    theme::label_caps(ui, t(label));
                     swatches(ui, color, label);
                     ui.add_space(8.0);
                 }
-                theme::label_caps(ui, "Hat");
+                theme::label_caps(ui, t("Hat"));
                 ui.horizontal_wrapped(|ui| {
                     for hat in Hat::ALL {
                         let on = look.hat == hat && look.item.is_none();
-                        if ui.selectable_label(on, hat.name()).clicked() {
+                        if ui.selectable_label(on, t(hat.name())).clicked() {
                             look.hat = hat;
                             // A hat from here replaces one from the catalog.
                             look.item = None;
@@ -590,7 +611,7 @@ impl Menu {
                     swatches(ui, &mut look.hat_color, "Hat");
                 }
                 ui.add_space(12.0);
-                if ui.button("Back to the usual look").clicked() {
+                if ui.button(t("Back to the usual look")).clicked() {
                     look = Look::for_player(0);
                 }
             });
@@ -605,7 +626,7 @@ impl Menu {
             self.look = Some(look);
             let saved = std::fs::create_dir_all(data_dir()).and_then(|_| std::fs::write(avatar_file(), json));
             if let Err(e) = saved {
-                self.error = Some(format!("Could not save your avatar: {e}"));
+                self.error = Some(tf("Could not save your avatar: {error}", &[("error", &e)]));
             }
         }
     }
@@ -615,10 +636,14 @@ impl Menu {
         let mut chosen = None;
         let mut tiles: Vec<(Game, &str, String)> = Vec::new();
         if with_blank {
-            tiles.insert(0, (Game::Blank, theme::icon::PLUS, "Start from an empty baseplate".to_owned()));
+            tiles.insert(0, (Game::Blank, theme::icon::PLUS, t("Start from an empty baseplate").to_owned()));
         }
         for path in &self.games {
-            tiles.push((Game::File(path.clone()), theme::icon::FLOPPY_DISK, "Saved on this computer".into()));
+            tiles.push((
+                Game::File(path.clone()),
+                theme::icon::FLOPPY_DISK,
+                t("Saved on this computer").into(),
+            ));
         }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(16.0, 16.0);
@@ -649,31 +674,32 @@ impl Menu {
             }
             Some(crate::file_picker::Picked::Unavailable) => {
                 self.error =
-                    Some("No file picker could be opened here. Type the file's path instead.".into());
+                    Some(t("No file picker could be opened here. Type the file's path instead.").into());
             }
             Some(crate::file_picker::Picked::Cancelled) | None => {}
         }
-        theme::heading(ui, "Make a game");
-        ui.label(RichText::new("Opens the editor: build with parts, scripts and terrain, press Play to test, and save it to play from Play.").color(SOFT));
+        theme::heading(ui, t("Make a game"));
+        ui.label(RichText::new(t("Opens the editor: build with parts, scripts and terrain, press Play to test, and save it to play from Play.")).color(SOFT));
         ui.add_space(12.0);
         if let Some(game) = self.game_tiles(ui, true) {
             pick = Some(Pick::Edit(game));
         }
         ui.add_space(16.0);
-        ui.label(format!("Games are saved in {}", games_dir().display()));
+        ui.label(tf("Games are saved in {folder}", &[("folder", &games_dir().display())]));
         ui.horizontal(|ui| {
             let typed = ui.add(
                 egui::TextEdit::singleline(&mut self.path)
-                    .hint_text("or open a .lrx, .rbxl or .rbxlx file by its path")
+                    .hint_text(t("or open a .lrx, .rbxl or .rbxlx file by its path"))
                     .desired_width(320.0),
             );
             let enter = typed.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let typed_path = !self.path.trim().is_empty();
-            let open =
-                ui.button("Open").on_hover_text("Open the typed path, or pick a file from your computer");
+            let open = ui
+                .button(t("Open"))
+                .on_hover_text(t("Open the typed path, or pick a file from your computer"));
             let browse = ui
-                .add_enabled(!self.picker.is_open(), egui::Button::new("Browse…"))
-                .on_hover_text("Pick a game file from your computer");
+                .add_enabled(!self.picker.is_open(), egui::Button::new(t("Browse…")))
+                .on_hover_text(t("Pick a game file from your computer"));
             if (open.clicked() || enter) && typed_path {
                 pick = Some(Pick::Edit(Game::File(PathBuf::from(self.path.trim()))));
             } else if browse.clicked() || open.clicked() {
@@ -681,7 +707,7 @@ impl Menu {
                 self.picker.open(&games_dir());
             }
             if theme::tool_button(ui, theme::icon::ARROW_CLOCKWISE, "", false)
-                .on_hover_text("Look for saved games again")
+                .on_hover_text(t("Look for saved games again"))
                 .clicked()
             {
                 self.scanned = false;
@@ -704,7 +730,8 @@ const TOP_TABS: [(Tab, &str, &str); 6] = [
 const CHIP_CAPS: &str = "Playing as";
 
 fn player_chip_width(ui: &egui::Ui, name: &str) -> f32 {
-    let caps = ui.painter().layout_no_wrap(CHIP_CAPS.into(), theme::display(12.0), theme::HEADING).size().x;
+    let caps =
+        ui.painter().layout_no_wrap(t(CHIP_CAPS).into(), theme::display(12.0), theme::HEADING).size().x;
     let shown = ui.painter().layout_no_wrap(name.to_owned(), theme::display(15.0), theme::TEXT).size().x;
     caps + shown.min(160.0) + 34.0
 }
@@ -719,7 +746,7 @@ fn player_chip(ui: &mut egui::Ui, name: &str, signed_in: bool) -> egui::Response
         ui,
         &response,
         egui::WidgetType::Button,
-        &format!("Playing as {name}"),
+        &tf("Playing as {name}", &[("name", &name)]),
         None,
     );
     let painter = ui.painter();
@@ -729,7 +756,7 @@ fn player_chip(ui: &mut egui::Ui, name: &str, signed_in: bool) -> egui::Response
         Color32::from_rgba_unmultiplied(235, 247, 255, 150)
     };
     theme::glass(painter, rect, 18.0, tint);
-    let caps = painter.layout_no_wrap(CHIP_CAPS.into(), theme::display(12.0), theme::HEADING);
+    let caps = painter.layout_no_wrap(t(CHIP_CAPS).into(), theme::display(12.0), theme::HEADING);
     let x = rect.min.x + 14.0;
     painter.galley(egui::pos2(x, rect.center().y - caps.size().y / 2.0), caps.clone(), theme::HEADING);
     let mut job =
@@ -742,9 +769,9 @@ fn player_chip(ui: &mut egui::Ui, name: &str, signed_in: bool) -> egui::Response
         theme::TEXT,
     );
     let hint = if signed_in {
-        "Your account's name. Change it on the Profile tab."
+        t("Your account's name. Change it on the Profile tab.")
     } else {
-        "Make an account on the Profile tab to play as yourself."
+        t("Make an account on the Profile tab to play as yourself.")
     };
     response.on_hover_text(hint).on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -772,7 +799,10 @@ fn swatches(ui: &mut egui::Ui, color: &mut Color3, label: &str) {
                 ui,
                 &response,
                 egui::WidgetType::RadioButton,
-                &format!("{label} colour {}", crate::theme::colour_name([r, g, b])),
+                &tf(
+                    "{part} colour {colour}",
+                    &[("part", &t(label)), ("colour", &t(&crate::theme::colour_name([r, g, b])))],
+                ),
                 Some(chosen),
             );
             let face = if chosen { rect.translate(egui::vec2(0.0, -2.0)) } else { rect };
