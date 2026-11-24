@@ -53,11 +53,11 @@ local ui = Screen.new(script.Parent, folder, {
 		radius = 6,
 	},
 	sounds = {
-		move = "libroxel://aisleriot/click",
-		bad = "libroxel://aisleriot/slide",
-		win = "libroxel://aisleriot/victory",
-		lose = "libroxel://aisleriot/splat",
-		draw = "libroxel://aisleriot/splat",
+		move = "libroxel://cards/click",
+		bad = "libroxel://cards/slide",
+		win = "libroxel://cards/win",
+		lose = "libroxel://cards/lose",
+		draw = "libroxel://cards/lose",
 	},
 	colourOf = function(seat)
 		return SEAT_COLOURS[seat]

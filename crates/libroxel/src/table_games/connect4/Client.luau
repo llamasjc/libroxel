@@ -51,11 +51,11 @@ local ui = Screen.new(script.Parent, folder, {
 		return if seat == 1 then "Red" else "Green"
 	end,
 	sounds = {
-		move = "libroxel://four-in-a-row/slide",
-		bad = "libroxel://four-in-a-row/bad",
-		win = "libroxel://four-in-a-row/bonus",
-		lose = "libroxel://four-in-a-row/reverse",
-		draw = "libroxel://four-in-a-row/reverse",
+		move = "libroxel://table/drop",
+		bad = "libroxel://table/bad",
+		win = "libroxel://table/win",
+		lose = "libroxel://table/lose",
+		draw = "libroxel://table/lose",
 	},
 	rules = {
 		"Take turns dropping marbles into a column.",

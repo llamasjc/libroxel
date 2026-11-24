@@ -9,7 +9,9 @@
 //! cards named `card-` then `a`, `2` to `10`, `j`, `q` or `k` then `c`, `d`,
 //! `h` or `s` (and `card-back`, `baize`), Connect 4 tiles `c4-red`, `c4-green`,
 //! `c4-hole` and `c4-top`, and draughts pieces `draughts-white`,
-//! `draughts-black`, `draughts-white-king` and `draughts-black-king`.
+//! `draughts-black`, `draughts-white-king` and `draughts-black-king`. The
+//! chess and draughts pieces also come carved in wood: `chess-wood-wk`,
+//! `draughts-wood-white-king` and so on.
 //!
 //! Games brought in from Roblox Studio name their files by asset number
 //! (`rbxassetid://123`, or a web address ending `?id=123`). Those are
@@ -105,6 +107,22 @@ pub const PICTURES: &[(&str, &[u8])] = &[
     ("c4-red", include_bytes!("../assets/connect4/c4-red.png")),
     ("c4-top", include_bytes!("../assets/connect4/c4-top.png")),
     ("draughts-black-king", include_bytes!("../assets/draughts/draughts-black-king.png")),
+    ("chess-wood-wk", include_bytes!("../assets/chess-wood-wk.png")),
+    ("chess-wood-wq", include_bytes!("../assets/chess-wood-wq.png")),
+    ("chess-wood-wr", include_bytes!("../assets/chess-wood-wr.png")),
+    ("chess-wood-wb", include_bytes!("../assets/chess-wood-wb.png")),
+    ("chess-wood-wn", include_bytes!("../assets/chess-wood-wn.png")),
+    ("chess-wood-wp", include_bytes!("../assets/chess-wood-wp.png")),
+    ("chess-wood-bk", include_bytes!("../assets/chess-wood-bk.png")),
+    ("chess-wood-bq", include_bytes!("../assets/chess-wood-bq.png")),
+    ("chess-wood-br", include_bytes!("../assets/chess-wood-br.png")),
+    ("chess-wood-bb", include_bytes!("../assets/chess-wood-bb.png")),
+    ("chess-wood-bn", include_bytes!("../assets/chess-wood-bn.png")),
+    ("chess-wood-bp", include_bytes!("../assets/chess-wood-bp.png")),
+    ("draughts-wood-white", include_bytes!("../assets/draughts/draughts-wood-white.png")),
+    ("draughts-wood-white-king", include_bytes!("../assets/draughts/draughts-wood-white-king.png")),
+    ("draughts-wood-black", include_bytes!("../assets/draughts/draughts-wood-black.png")),
+    ("draughts-wood-black-king", include_bytes!("../assets/draughts/draughts-wood-black-king.png")),
     ("draughts-black", include_bytes!("../assets/draughts/draughts-black.png")),
     ("draughts-white-king", include_bytes!("../assets/draughts/draughts-white-king.png")),
     ("draughts-white", include_bytes!("../assets/draughts/draughts-white.png")),
