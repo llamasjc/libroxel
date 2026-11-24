@@ -418,3 +418,52 @@ fn a_motor_transform_moves_its_part_like_roblox() {
     let p = t.get_vec3(arm, libroxel_instance::Property::Position).unwrap();
     assert!((p.x - 1.0).abs() < 1e-3 && (p.y - 12.0).abs() < 1e-3, "arm at {p:?}");
 }
+
+#[test]
+fn any_humanoid_dies_once_when_its_health_reaches_zero() {
+    let printed = run_for(
+        &[r#"
+        -- A humanoid with no body to walk: only its health says it died.
+        local model = Instance.new("Model")
+        local hum = Instance.new("Humanoid")
+        hum.Parent = model
+        model.Parent = workspace
+        local deaths = 0
+        hum.Died:Connect(function() deaths += 1 end)
+        hum.Health = 0
+        task.wait(0.1)
+        hum.Health = 0
+        task.wait(0.1)
+        print("deaths", deaths)
+        "#],
+        30,
+    );
+    assert!(printed.contains(&"deaths 1".to_owned()), "{printed:?}");
+}
+
+#[test]
+fn tweens_say_where_they_are_and_how_they_ended() {
+    let printed = run_for(
+        &[r#"
+        local TS = game:GetService("TweenService")
+        local part = workspace.Crate
+        local t = TS:Create(part, TweenInfo.new(0.2), { Transparency = 1 })
+        print(t.PlaybackState.Name, t.Instance == part)
+        t.Completed:Connect(function(state) print("done", state.Name) end)
+        t:Play()
+        print(t.PlaybackState.Name)
+        task.wait(0.4)
+        print(t.PlaybackState.Name)
+        local u = TS:Create(part, TweenInfo.new(5), { Transparency = 0 })
+        u.Completed:Connect(function(state) print("stopped", state.Name) end)
+        u:Play()
+        u:Cancel()
+        print(u.PlaybackState.Name)
+        "#],
+        40,
+    );
+    assert_eq!(
+        printed,
+        vec!["Begin true", "Playing", "done Completed", "Completed", "stopped Cancelled", "Cancelled"]
+    );
+}
