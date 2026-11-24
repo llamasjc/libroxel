@@ -40,6 +40,7 @@ mod party_games;
 mod render_scale;
 mod report;
 mod rich_text;
+mod safe_area;
 mod server;
 mod social;
 mod starter_games;
@@ -466,6 +467,13 @@ pub fn run() {
         })
         .add_systems(Last, cap_frame_rate);
     }
+    #[cfg(target_os = "ios")]
+    app.add_systems(
+        PreUpdate,
+        safe_area::follow
+            .after(bevy_egui::EguiPreUpdateSet::ProcessInput)
+            .before(bevy_egui::EguiPreUpdateSet::BeginPass),
+    );
     #[cfg(target_os = "android")]
     app.add_systems(First, graphics::match_android_window)
         .add_systems(

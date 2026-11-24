@@ -820,7 +820,7 @@ impl<'a> Importer<'a> {
     }
 }
 
-const EXPANDED_TERRAIN: &str = "This place uses Studio's newer expanded terrain, whose voxel format Libroxel can't read yet, so its terrain was left out.";
+const EXPANDED_TERRAIN: &str = "This place uses Studio's newer expanded terrain, which keeps its voxels outside the place file, so the file has no terrain to bring across.";
 
 fn is_folder(class: ClassKind) -> bool {
     matches!(class, ClassKind::StarterPlayerScripts | ClassKind::StarterCharacterScripts)
