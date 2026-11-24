@@ -328,6 +328,9 @@ pub fn editor_ui(
         editor.menu.scanned = false;
     }
     if editor.menu.open {
+        if engine.session.is_none() && !editor.dirty {
+            let _ = crate::update::apply(false);
+        }
         capture.pointer = true;
         capture.keyboard = true;
         let mut picks: Vec<crate::menu::Pick> =
@@ -639,8 +642,6 @@ pub fn editor_ui(
             .show(&ctx, |ui| {
                 ui.label(RichText::new(text).size(22.0).color(Color32::WHITE));
             });
-    } else if editor.menu.open && engine.session.is_none() && !editor.dirty {
-        let _ = crate::update::apply(false);
     }
 
     // Touch screens get on-screen controls while playing.
