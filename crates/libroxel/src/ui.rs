@@ -657,6 +657,7 @@ pub fn editor_ui(
         actions.push(Action::GuiHover(gui_hit.map(|(id, _)| id).filter(|_| over_view)));
     }
     capture.keyboard = ctx.egui_wants_keyboard_input();
+    capture.confine = editor.player_mode;
     if editor.paused {
         capture.pointer = true;
         capture.keyboard = true;
