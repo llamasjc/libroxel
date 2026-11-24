@@ -24,6 +24,14 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
   on Windows, macOS and Linux.
 - **ARM builds** for Windows on ARM and 64-bit ARM Linux, with their own
   updates.
+- **Libroxel's own game art and sounds:** the chess, checkers and Connect 4
+  pieces, the cards and table cloth are drawn by Libroxel, and every game
+  sound is made in code, replacing the GPL and AGPL ones. Chess has four
+  sound sets (wood, glass, retro, digital), and chess and checkers have
+  wooden pieces too. Games using the older sound names still work.
+- `Model:AddPersistentPlayer` and `RemovePersistentPlayer`.
+- The editor's help for each class is translated too.
+- The desktop Mac apps build on `macos-15`, where Macs are easier to get.
 - Hide and seek's seeker bots search spot by spot instead of at random.
 - The website no longer shows "falsefalse" in the top bar.
 
