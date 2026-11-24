@@ -89,6 +89,20 @@ pub enum Property {
     FieldOfView,
     /// On a camera: whether it follows the character or scripts move it.
     CameraType,
+    /// On the workspace: whether each player's computer is sent only the
+    /// parts near them.
+    StreamingEnabled,
+    /// On the workspace: how near (in studs) parts must be to be sent.
+    StreamingTargetRadius,
+    /// On the workspace: how near parts are always sent first.
+    StreamingMinRadius,
+    /// On the workspace: when parts sent to a player are let go again.
+    StreamOutBehavior,
+    /// On a model: how it streams to players' computers.
+    ModelStreamingMode,
+    /// On a player: what their computer is sent parts near, instead of
+    /// their character.
+    ReplicationFocus,
     /// On a light: how far it reaches, in studs.
     Range,
     /// On a spot light: how wide its cone is, in degrees.
@@ -601,6 +615,10 @@ impl Property {
             Property::TeamColor => "Color3",
             Property::CornerRadius | Property::Padding => "UDim",
             Property::CameraType => EnumKind::CameraType.kind_name(),
+            Property::StreamOutBehavior => EnumKind::StreamOutBehavior.kind_name(),
+            Property::ModelStreamingMode => EnumKind::ModelStreamingMode.kind_name(),
+            Property::StreamingEnabled => "bool",
+            Property::StreamingTargetRadius | Property::StreamingMinRadius => "number",
             Property::FillDirection => EnumKind::FillDirection.kind_name(),
             Property::GuiPosition | Property::GuiSize => "UDim2",
             Property::AnchorPoint => "Vec2",
@@ -644,7 +662,8 @@ impl Property {
             | Property::ObjectValue
             | Property::Attachment0
             | Property::Attachment1
-            | Property::PrimaryPart => "ref",
+            | Property::PrimaryPart
+            | Property::ReplicationFocus => "ref",
         }
     }
 
@@ -655,6 +674,8 @@ impl Property {
             Property::Material => Some(EnumKind::Material),
             Property::KeyboardKeyCode => Some(EnumKind::KeyCode),
             Property::CameraType => Some(EnumKind::CameraType),
+            Property::StreamOutBehavior => Some(EnumKind::StreamOutBehavior),
+            Property::ModelStreamingMode => Some(EnumKind::ModelStreamingMode),
             Property::FillDirection => Some(EnumKind::FillDirection),
             Property::TextXAlignment => Some(EnumKind::TextXAlignment),
             Property::ScaleType => Some(EnumKind::ScaleType),
@@ -721,6 +742,12 @@ impl Property {
         Property::ClearTextOnFocus,
         Property::FieldOfView,
         Property::CameraType,
+        Property::StreamingEnabled,
+        Property::StreamingTargetRadius,
+        Property::StreamingMinRadius,
+        Property::StreamOutBehavior,
+        Property::ModelStreamingMode,
+        Property::ReplicationFocus,
         Property::Range,
         Property::Angle,
         Property::CornerRadius,
@@ -945,6 +972,12 @@ impl Property {
             Property::ClearTextOnFocus => "clear_text_on_focus",
             Property::FieldOfView => "field_of_view",
             Property::CameraType => "camera_type",
+            Property::StreamingEnabled => "streaming_enabled",
+            Property::StreamingTargetRadius => "streaming_target_radius",
+            Property::StreamingMinRadius => "streaming_min_radius",
+            Property::StreamOutBehavior => "stream_out_behavior",
+            Property::ModelStreamingMode => "model_streaming_mode",
+            Property::ReplicationFocus => "replication_focus",
             Property::Range => "range",
             Property::Angle => "angle",
             Property::CornerRadius => "corner_radius",

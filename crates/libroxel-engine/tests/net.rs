@@ -5,7 +5,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use libroxel_engine::{CharacterInput, PlaySession};
-use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property, PropertyValue, Vec3};
+use libroxel_instance::{
+    ClassKind, EnumValue, InstanceId, InstanceTree, ModelStreamingMode, Property, PropertyValue,
+    StreamOutBehavior, Vec3,
+};
 
 const DT: f32 = 1.0 / 60.0;
 
@@ -472,4 +475,135 @@ fn two_players_on_one_spawn_stay_on_the_ground() {
     let host_at = host_sees(&host).unwrap();
     assert!(guest_at.y < 12.0, "the joined player stayed down: {guest_at:?}");
     assert!(host_at.y < 12.0, "and the host has them down too: {host_at:?}");
+}
+
+/// A streamed world, as a place saved with StreamingEnabled: a floor and
+/// spawn at the middle, a part near it, a part far away, a far persistent
+/// model, an atomic model with one part near and one far, and a far folder
+/// of values.
+fn host_streamed(behavior: StreamOutBehavior) -> PlaySession {
+    let mut tree = InstanceTree::new();
+    let ws = tree.workspace();
+    tree.set(ws, Property::StreamingEnabled, PropertyValue::Bool(true)).unwrap();
+    tree.set(ws, Property::StreamingTargetRadius, PropertyValue::Number(128.0)).unwrap();
+    tree.set(ws, Property::StreamOutBehavior, PropertyValue::Enum(EnumValue::StreamOutBehavior(behavior)))
+        .unwrap();
+    block(&mut tree, "Floor", Vec3::new(0.0, -0.5, 0.0), Vec3::new(60.0, 1.0, 60.0));
+    let spawn = add(&mut tree, ClassKind::SpawnLocation, ws, "Spawn");
+    tree.set(spawn, Property::Size, PropertyValue::Vec3(Vec3::new(6.0, 1.0, 6.0))).unwrap();
+    tree.set(spawn, Property::Position, PropertyValue::Vec3(Vec3::new(0.0, 0.5, 0.0))).unwrap();
+    block(&mut tree, "Near", Vec3::new(20.0, 2.0, 0.0), Vec3::new(2.0, 2.0, 2.0));
+    block(&mut tree, "Far", Vec3::new(900.0, 2.0, 0.0), Vec3::new(2.0, 2.0, 2.0));
+    let model = |tree: &mut InstanceTree, name: &str, mode: ModelStreamingMode, parts: &[(&str, f32)]| {
+        let ws = tree.workspace();
+        let m = add(tree, ClassKind::Model, ws, name);
+        tree.set(m, Property::ModelStreamingMode, PropertyValue::Enum(EnumValue::ModelStreamingMode(mode)))
+            .unwrap();
+        for (part, x) in parts {
+            let id = block(tree, part, Vec3::new(*x, 2.0, 40.0), Vec3::new(2.0, 1.0, 2.0));
+            tree.set_parent(id, Some(m)).unwrap();
+        }
+    };
+    model(&mut tree, "Statue", ModelStreamingMode::Persistent, &[("Stone", -900.0)]);
+    model(&mut tree, "Bridge", ModelStreamingMode::Atomic, &[("Plank1", 30.0), ("Plank2", 700.0)]);
+    let settings = add(&mut tree, ClassKind::Folder, ws, "Settings");
+    add(&mut tree, ClassKind::NumberValue, settings, "Speed");
+    PlaySession::host(Rc::new(RefCell::new(tree)), 0, None, true).unwrap()
+}
+
+fn has(session: &PlaySession, path: &[&str]) -> bool {
+    let t = session.runtime().tree().borrow();
+    let mut at = t.workspace();
+    for name in path {
+        match t.find_first_child(at, name).ok().flatten() {
+            Some(next) => at = next,
+            None => return false,
+        }
+    }
+    true
+}
+
+#[test]
+fn a_streamed_game_sends_each_player_only_what_is_near_them() {
+    let mut host = host_streamed(StreamOutBehavior::Opportunistic);
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| {
+        g.character().is_some() && has(g, &["Near"])
+    });
+    assert!(has(&guest, &["Floor"]) && has(&guest, &["Spawn"]));
+    assert!(!has(&guest, &["Far"]), "far parts aren't sent");
+    // A persistent model always is, however far.
+    assert!(has(&guest, &["Statue", "Stone"]));
+    // An atomic model with a part near comes whole.
+    assert!(has(&guest, &["Bridge", "Plank1"]) && has(&guest, &["Bridge", "Plank2"]));
+    // Folders and what isn't in a part always come.
+    assert!(has(&guest, &["Settings", "Speed"]));
+    // Everything is still on the host.
+    assert!(has(&host, &["Far"]));
+
+    // The host moves them across the map: the far part streams in, and with
+    // Opportunistic, the near one streams out.
+    host.runtime().run("tp", "workspace.Bea.HumanoidRootPart.Position = Vector3.new(890, 5, 0)").unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| has(g, &["Far"]) && !has(g, &["Near"]));
+    assert!(has(&guest, &["Statue", "Stone"]), "persistent stays");
+}
+
+#[test]
+fn parts_stay_once_sent_unless_streaming_out_is_opportunistic() {
+    let mut host = host_streamed(StreamOutBehavior::Default);
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| {
+        g.character().is_some() && has(g, &["Near"])
+    });
+    host.runtime().run("tp", "workspace.Bea.HumanoidRootPart.Position = Vector3.new(890, 5, 0)").unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| has(g, &["Far"]));
+    assert!(has(&guest, &["Near"]), "with Default, what was sent stays");
+}
+
+#[test]
+fn a_server_script_can_stream_an_area_or_move_the_focus() {
+    let mut host = host_streamed(StreamOutBehavior::Opportunistic);
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| {
+        g.character().is_some() && has(g, &["Near"])
+    });
+    assert!(!has(&guest, &["Far"]));
+    host.runtime().run("ask", "game.Players.Bea:RequestStreamAroundAsync(Vector3.new(900, 2, 0))").unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| has(g, &["Far"]));
+    assert!(has(&guest, &["Near"]), "their own surroundings stay too");
+
+    // A ReplicationFocus replaces the character as the centre.
+    let mut host = host_streamed(StreamOutBehavior::Opportunistic);
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| {
+        g.character().is_some() && has(g, &["Near"])
+    });
+    host.runtime().run("focus", "game.Players.Bea.ReplicationFocus = workspace.Far").unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| has(g, &["Far"]) && !has(g, &["Near"]));
+}
+
+#[test]
+fn a_game_without_streaming_still_sends_everything() {
+    let tree = Rc::new(RefCell::new(game()));
+    block(&mut tree.borrow_mut(), "Far", Vec3::new(5000.0, 2.0, 0.0), Vec3::new(2.0, 2.0, 2.0));
+    let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| {
+        g.character().is_some() && has(g, &["Far"])
+    });
 }

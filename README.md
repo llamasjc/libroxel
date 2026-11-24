@@ -782,6 +782,21 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   upright and doesn't spin off walls, and the camera swings round behind
   it as it turns.
 - **Gravity:** `workspace.Gravity` (196.2 studs/s² unless changed).
+- **Streaming:** with `workspace.StreamingEnabled` on (set it in the place;
+  it can't change while the game runs), each joined player's computer is
+  sent only the parts within `StreamingTargetRadius` (1024 unless changed;
+  never less than `StreamingMinRadius`, 64) of their character, or of their
+  `Player.ReplicationFocus` when set. Everything outside the workspace,
+  models, folders and what isn't inside a part are always sent. A model's
+  `ModelStreamingMode` can be `Atomic` (all of it comes and goes together)
+  or `Persistent` (always sent); `Default`, `Nonatomic` and
+  `PersistentPerPlayer` stream part by part. With `workspace.StreamOutBehavior`
+  set to `Opportunistic`, parts more than half the radius past it are let
+  go; otherwise what was sent stays. A server script's
+  `player:RequestStreamAroundAsync(position, timeOut?)` sends the parts
+  around a place too, for `timeOut` seconds (30 unless given). Local
+  scripts should wait for parts with `WaitForChild`, as anything far away
+  isn't there yet.
 - **NPCs:** any `Model` in the workspace with a `Humanoid` and an unanchored
   `HumanoidRootPart` is a character. `Humanoid:MoveTo(position)` walks it
   there and fires `MoveToFinished(reached)` (it gives up after 8 seconds),
