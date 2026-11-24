@@ -1013,6 +1013,8 @@ fn tab_with(ui: &mut egui::Ui, text: &str, on: bool, icon_only: bool) -> Respons
 
 /// A page heading: large, light letters in deep blue.
 pub fn heading(ui: &mut egui::Ui, text: &str) {
+    // Shown in the app's language (names from the API stay as they are).
+    let text = crate::i18n::t(text);
     let galley = ui.painter().layout_no_wrap(text.to_owned(), light(27.0), HEADING);
     let (rect, _) = ui.allocate_exact_size(galley.size(), Sense::hover());
     glow_text(ui.painter(), rect.min, galley, HEADING);
@@ -1020,6 +1022,8 @@ pub fn heading(ui: &mut egui::Ui, text: &str) {
 
 /// A smaller heading inside a page, in the heading blue.
 pub fn label_caps(ui: &mut egui::Ui, text: &str) -> Response {
+    // Shown in the app's language (names from the API stay as they are).
+    let text = crate::i18n::t(text);
     ui.label(RichText::new(text).font(display(13.0)).color(HEADING))
 }
 
@@ -1169,6 +1173,8 @@ pub fn orb(painter: &egui::Painter, centre: Pos2, radius: f32, colour: Color32) 
 
 /// A status light with a word beside it, for connection states.
 pub fn status(ui: &mut egui::Ui, colour: Color32, text: &str) -> Response {
+    // Shown in the app's language (names from the API stay as they are).
+    let text = crate::i18n::t(text);
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
         orb(ui.painter(), rect.center(), 5.5, colour);
@@ -1322,6 +1328,8 @@ pub fn text_line(painter: &egui::Painter, at: Pos2, text: &str, font: FontId, co
 /// The title along the top of an editor panel: a pale blue band with its
 /// icon and name, like the header of a pane in a file window.
 pub fn panel_title(ui: &mut egui::Ui, glyph: &str, text: &str) {
+    // Shown in the app's language (names from the API stay as they are).
+    let text = crate::i18n::t(text);
     ui.add_space(2.0);
     let width = ui.available_width();
     let top = ui.cursor().min;
@@ -1342,6 +1350,8 @@ pub fn panel_title(ui: &mut egui::Ui, glyph: &str, text: &str) {
 
 /// A panel's icon and name on one line, for rows that hold more after it.
 pub fn panel_name(ui: &mut egui::Ui, glyph: &str, text: &str) {
+    // Shown in the app's language (names from the API stay as they are).
+    let text = crate::i18n::t(text);
     ui.label(RichText::new(glyph).color(ACCENT).size(14.0));
     ui.label(RichText::new(text).font(display(14.0)).color(HEADING));
 }
@@ -1373,6 +1383,8 @@ pub fn ribbon_back(rect: Rect) -> Shape {
 
 /// A big ribbon button: its icon over its name, lit while `on`.
 pub fn ribbon_button(ui: &mut egui::Ui, glyph: &str, label: &str, on: bool) -> Response {
+    // Shown in the app's language (names from the API stay as they are).
+    let label = crate::i18n::t(label);
     let enabled = ui.is_enabled();
     let name = ui.painter().layout_no_wrap(label.to_owned(), FontId::proportional(12.0), TEXT);
     let width = name.size().x.max(30.0) + 14.0;
@@ -1410,6 +1422,8 @@ pub fn ribbon_button(ui: &mut egui::Ui, glyph: &str, label: &str, on: bool) -> R
 
 /// A group of ribbon buttons with its name under them and a divider after.
 pub fn ribbon_group<R>(ui: &mut egui::Ui, caption: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    // Shown in the app's language (names from the API stay as they are).
+    let caption = crate::i18n::t(caption);
     let inner = ui
         .vertical(|ui| {
             let r = ui.horizontal(|ui| {
@@ -1448,6 +1462,8 @@ pub fn ribbon_group<R>(ui: &mut egui::Ui, caption: &str, add: impl FnOnce(&mut e
 
 /// A tab along the ribbon's top edge.
 pub fn ribbon_tab(ui: &mut egui::Ui, label: &str, on: bool) -> Response {
+    // Shown in the app's language (names from the API stay as they are).
+    let label = crate::i18n::t(label);
     let galley = ui.painter().layout_no_wrap(label.to_owned(), FontId::proportional(13.0), TEXT);
     let (rect, response) = ui.allocate_exact_size(Vec2::new(galley.size().x + 22.0, 26.0), Sense::click());
     name_for_screen_readers(ui, &response, egui::WidgetType::SelectableLabel, label, Some(on));
@@ -1476,6 +1492,8 @@ pub fn ribbon_tab(ui: &mut egui::Ui, label: &str, on: bool) -> Response {
 
 /// A tile in the toolbox: an icon over a name.
 pub fn toolbox_tile(ui: &mut egui::Ui, glyph: &str, colour: Color32, label: &str) -> Response {
+    // Shown in the app's language (names from the API stay as they are).
+    let label = crate::i18n::t(label);
     let size = Vec2::new(74.0, 66.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     name_for_screen_readers(ui, &response, egui::WidgetType::Button, label, None);

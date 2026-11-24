@@ -334,10 +334,13 @@ The first build compiles Bevy and takes a while. After that it is quick.
     a menu with a big **Play** button against an Easy, Medium or Hard
     computer player, or **Find a game** and **Play** buttons to sit down
     with people in the server. Wins are saved with the game's data.
-- **Languages:** the home screen is in English, Chinese (Simplified),
-  Spanish, Portuguese (Brazil) and French, following the computer's
-  language until you pick one with the 🌐 button on the top bar. The editor
-  is still in English. Chinese uses the computer's own Chinese font
+- **Languages:** the home screen and the editor's menus, ribbon, panels
+  and dialogs are in English, Chinese (Simplified), Spanish, Portuguese
+  (Brazil) and French, following the computer's language until you pick
+  one with the 🌐 button on the top bar. Class, property and enum names,
+  and Luau, stay as they are in every language (as in Roblox Studio), so
+  scripts and Roblox files work the same; the help shown for each class is
+  still in English. Chinese uses the computer's own Chinese font
   (Microsoft YaHei, PingFang, Noto Sans CJK or WenQuanYi); without one, it
   can't be picked. Translations live in `crates/libroxel/assets/lang/`,
   one file per language, keyed by the English text.

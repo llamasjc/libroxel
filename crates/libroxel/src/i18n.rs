@@ -213,7 +213,7 @@ mod tests {
     /// in either would leave text in English.
     #[test]
     fn the_code_only_asks_for_wordings_the_files_have() {
-        let sources = [include_str!("menu.rs"), include_str!("hub_home.rs")];
+        let sources = [include_str!("menu.rs"), include_str!("hub_home.rs"), include_str!("ui.rs")];
         let table = Language::Spanish.table();
         let mut missing = Vec::new();
         for source in sources {
