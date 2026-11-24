@@ -103,6 +103,8 @@ pub struct Autosave {
     pending_since: Option<f64>,
     /// Whether this run has written a copy (so it is ours to delete).
     wrote: bool,
+    /// The app was in the background last frame.
+    backgrounded: bool,
 }
 
 impl Autosave {
@@ -135,7 +137,12 @@ impl Autosave {
             return None;
         }
         let since = *self.pending_since.get_or_insert(now);
-        if now - since < EVERY.as_secs_f64() {
+        // Going into the background, a phone may close the app without
+        // asking: keep a copy straight away.
+        let backgrounded = libroxel_engine::sounds::silent();
+        let leaving = backgrounded && !std::mem::replace(&mut self.backgrounded, backgrounded);
+        self.backgrounded = backgrounded;
+        if now - since < EVERY.as_secs_f64() && !leaving {
             return None;
         }
         self.pending_since = Some(now);

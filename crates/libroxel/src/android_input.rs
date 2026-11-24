@@ -26,9 +26,12 @@ fn key(key: bevy_egui::egui::Key, pressed: bool) -> bevy_egui::egui::Event {
     }
 }
 
-/// Hands this frame's typing and back button to egui.
+/// Hands this frame's typing and back button to egui. Outside a game,
+/// the back button puts Libroxel in the background, as in other apps.
 #[cfg(target_os = "android")]
+#[allow(unsafe_code)]
 pub fn keyboard(
+    engine: Option<bevy::prelude::NonSend<libroxel_engine::view::EngineState>>,
     mut last: bevy::prelude::Local<String>,
     keys: bevy::prelude::Res<bevy::input::ButtonInput<bevy::input::keyboard::Key>>,
     mut contexts: bevy::prelude::Query<
@@ -43,8 +46,22 @@ pub fn keyboard(
     let Ok((mut input, mut ctx)) = contexts.single_mut() else { return };
     let events = &mut input.0.events;
     if keys.just_pressed(bevy::input::keyboard::Key::BrowserBack) {
-        events.push(key(egui::Key::Escape, true));
-        events.push(key(egui::Key::Escape, false));
+        if engine.as_ref().is_some_and(|e| e.session.is_none()) {
+            // SAFETY: the Java VM and activity Android gave the app.
+            if let Ok(vm) = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) }
+                && let Ok(mut env) = vm.attach_current_thread()
+            {
+                let activity = unsafe { jni::objects::JObject::from_raw(app.activity_as_ptr().cast()) };
+                let _ =
+                    env.call_method(&activity, "moveTaskToBack", "(Z)Z", &[jni::objects::JValue::Bool(1)]);
+                if env.exception_check().unwrap_or(false) {
+                    let _ = env.exception_clear();
+                }
+            }
+        } else {
+            events.push(key(egui::Key::Escape, true));
+            events.push(key(egui::Key::Escape, false));
+        }
     }
     let typing = ctx.get_mut().memory(|m| m.focused().is_some());
     let state = app.text_input_state();

@@ -418,7 +418,31 @@ pub struct SoundPlugin;
 
 impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Playing>().add_systems(Update, play_sounds.after(crate::view::EngineSet::Sync));
+        app.init_resource::<Playing>()
+            .add_systems(Update, (follow_lifecycle, play_sounds.after(crate::view::EngineSet::Sync)).chain());
+    }
+}
+
+/// The app is in the background (a phone switched to another app, or
+/// locked): it makes no sound and doesn't listen.
+static SILENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the app is in the background, where it is silent.
+pub fn silent() -> bool {
+    SILENT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Goes silent as the system puts the app in the background, and back as
+/// it returns.
+fn follow_lifecycle(mut events: MessageReader<bevy::window::AppLifecycle>) {
+    use bevy::window::AppLifecycle as L;
+    for event in events.read() {
+        let quiet = match event {
+            L::WillSuspend | L::Suspended => true,
+            L::WillResume | L::Running => false,
+            L::Idle => continue,
+        };
+        SILENT.store(quiet, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -497,6 +521,15 @@ fn play_sounds(
         }
         return;
     };
+    // In the background: everything pauses, and carries on where it was after.
+    if silent() {
+        for voice in playing.voices.values() {
+            if let Ok(sink) = sinks.get_mut(voice.entity) {
+                sink.pause();
+            }
+        }
+        return;
+    }
     if playing.generation != crate::pictures::generation() {
         playing.generation = crate::pictures::generation();
         playing.loaded.clear();
