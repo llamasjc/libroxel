@@ -5,6 +5,20 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
 
 ## Unreleased
 
+- **Roblox places keep more:** attributes holding a NumberRange,
+  NumberSequence, ColorSequence, Rect or CFrame, particle emitters'
+  Lifetime and Speed, and parts' `CustomPhysicalProperties` now come
+  across (they were dropped).
+- **Materials have physics:** parts weigh, grip and bounce by their
+  material as in Roblox (ice slides, metal is heavy; plastic is as
+  before), and `CustomPhysicalProperties` sets a part's own.
+- **Fixes:** attributes of the kinds above now save and reach joined
+  players (they read nil before); any humanoid whose health reaches 0
+  fires `Died`, not only characters; tweens have `PlaybackState`, and
+  `Completed` says how they ended.
+- **Phones:** menus and buttons stay clear of a notch, sounds and voice
+  chat pause while Libroxel is in the background (with unsaved work kept),
+  and Back on the home screen leaves the app.
 - **Your games** on the Create page, in the app and on the site: change a
   game's name and description, who can play, and max players, remove it,
   or put an older version back live.
