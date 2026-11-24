@@ -94,6 +94,55 @@ pub fn vibrate(mut screen: bevy::prelude::ResMut<libroxel_engine::devices::Scree
     }
 }
 
+/// Keeps the app's menus and buttons out from under a notch or camera
+/// cut-out: asks the activity how far in the screen is clear (now and then,
+/// as it changes only when the screen turns) and tells egui, whose panels
+/// and windows then stay inside.
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+pub fn safe_area(
+    mut frames: bevy::prelude::Local<u32>,
+    mut last: bevy::prelude::Local<[i32; 4]>,
+    window: bevy::prelude::Query<&bevy::window::Window, bevy::prelude::With<bevy::window::PrimaryWindow>>,
+    mut contexts: bevy::prelude::Query<
+        &mut bevy_egui::EguiInput,
+        bevy::prelude::With<bevy_egui::PrimaryEguiContext>,
+    >,
+) {
+    use jni::JavaVM;
+    use jni::objects::{JIntArray, JObject};
+
+    *frames += 1;
+    if *frames % 60 != 1 {
+        return;
+    }
+    let Some(app) = bevy::android::ANDROID_APP.get() else { return };
+    let Ok(vm) = (unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }) else { return };
+    let Ok(mut env) = vm.attach_current_thread() else { return };
+    let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
+    let mut insets = [0i32; 4];
+    let got = env
+        .call_method(&activity, "getSafeInsets", "()[I", &[])
+        .and_then(|v| v.l())
+        .and_then(|array| env.get_int_array_region(JIntArray::from(array), 0, &mut insets));
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+    }
+    if got.is_err() || insets == *last {
+        return;
+    }
+    *last = insets;
+    let (Ok(window), Ok(mut input)) = (window.single(), contexts.single_mut()) else { return };
+    let ppp = window.scale_factor().max(0.1);
+    let points = |px: i32| px.max(0) as f32 / ppp;
+    input.0.safe_area_insets = Some(bevy_egui::egui::SafeAreaInsets(bevy_egui::egui::epaint::MarginF32 {
+        left: points(insets[0]),
+        top: points(insets[1]),
+        right: points(insets[2]),
+        bottom: points(insets[3]),
+    }));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
