@@ -336,6 +336,7 @@ fn use_documents() {
 }
 
 pub fn run() {
+    report::catch_panics();
     #[cfg(target_os = "ios")]
     use_documents();
     let args: Vec<String> = if MOBILE { Vec::new() } else { std::env::args().skip(1).collect() };
@@ -441,7 +442,6 @@ pub fn run() {
     .add_systems(EguiPrimaryContextPass, ui::editor_ui)
     .add_systems(Update, (viewport::draw_selection, viewport::draw_grid).after(EngineSet::Sync))
     .add_systems(Update, (update_title, toggle_fullscreen));
-    report::catch_panics();
     report::run(&mut app);
 }
 

@@ -442,5 +442,7 @@
  "{n}% liked": "{n}% de me gusta",
  "{part} colour {colour}": "Color de {part}: {colour}",
  "{shape} part": "Pieza {shape}",
- "{why} You can also host it yourself.": "{why} También puedes alojarlo tú."
+ "{why} You can also host it yourself.": "{why} También puedes alojarlo tú.",
+ "Updating…": "Actualizando…",
+ "A different version of Libroxel": "Otra versión de Libroxel"
 }

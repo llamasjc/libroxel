@@ -678,6 +678,7 @@ pub(crate) struct Joined {
     waiting: Vec<(InstanceId, Property, u64)>,
     total: usize,
     got: usize,
+    wrong_version: bool,
 }
 
 /// How quickly a part glides to where the host put it, a second.
@@ -1375,6 +1376,7 @@ impl PlaySession {
             waiting: Vec::new(),
             total: 0,
             got: 0,
+            wrong_version: false,
         }));
         session.info("🔗 Joining the game (its address stays hidden here)".to_owned());
         Ok(session)
@@ -1447,6 +1449,10 @@ impl PlaySession {
         }
         let part = if joined.total == 0 { 0.0 } else { joined.got as f32 / joined.total as f32 };
         Some(part.clamp(0.0, 1.0))
+    }
+
+    pub fn wrong_version(&self) -> bool {
+        matches!(&self.link, Link::Client(joined) if joined.wrong_version)
     }
 
     /// Whether this computer has joined someone else's game.
@@ -1974,10 +1980,14 @@ impl PlaySession {
                 }
                 "refused" => {
                     let why = message.get("why").and_then(Json::as_str).unwrap_or("no reason given");
+                    joined.wrong_version |= why.contains("version");
                     self.warn(format!("The game turned us away: {why}"));
                 }
                 _ => {}
             }
+        }
+        if joined.conn.closed && !joined.conn.ready() {
+            joined.wrong_version = true;
         }
         if joined.conn.closed && joined.inbox.is_empty() && !joined.reported {
             joined.reported = true;

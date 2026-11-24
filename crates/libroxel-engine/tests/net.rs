@@ -659,3 +659,38 @@ fn players_hear_each_other() {
     assert_eq!(host_heard.first(), Some(&("Bea".to_owned(), FRAME)));
     assert_eq!(guest_heard.first(), Some(&(host_name, FRAME)));
 }
+
+#[test]
+fn a_host_that_cannot_agree_keys_is_a_different_version() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let old = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        use std::io::Write;
+        let _ = stream.write_all(b"{\"t\":\"refused\",\"why\":\"a different version of Libroxel\"}\n");
+    });
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    old.join().unwrap();
+    for _ in 0..200 {
+        guest.step(DT, CharacterInput::default());
+        if guest.wrong_version() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("never saw the version differ");
+}
+
+#[test]
+fn a_game_that_works_is_not_a_different_version() {
+    let tree = Rc::new(RefCell::new(game()));
+    let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| g.character().is_some());
+    assert!(!guest.wrong_version());
+}
