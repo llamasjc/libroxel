@@ -203,6 +203,7 @@ local ENUMS = {
 	SortDirection = { "Ascending", "Descending" },
 	DevComputerMovementMode = { "UserChoice", "KeyboardMouse", "ClickToMove", "Scriptable" },
 	DevTouchMovementMode = { "UserChoice", "Thumbstick", "DPad", "Thumbpad", "ClickToMove", "Scriptable", "DynamicThumbstick" },
+	SwipeDirection = { "Right", "Left", "Up", "Down", "None" },
 	ComputerMovementMode = { "Default", "KeyboardMouse", "ClickToMove" },
 	DevCameraOcclusionMode = { "Zoom", "Invisicam" },
 	RollOffMode = { "Inverse", "Linear", "LinearSquare", "InverseTapered" },
@@ -3811,6 +3812,201 @@ function L.globals()
 	g.UserSettings = function()
 		return user_settings
 	end
+end
+
+-- Touches ---------------------------------------------------------------
+-- The app passes every finger on the screen here; scripts hear of them as
+-- in Roblox: TouchStarted, TouchMoved and TouchEnded with one InputObject
+-- per finger (the same one from start to end, as Roblox gives), InputBegan,
+-- InputChanged and InputEnded with it too, and the gestures made of them:
+-- TouchTap, TouchTapInWorld, TouchLongPress, TouchPan, TouchPinch,
+-- TouchRotate and TouchSwipe.
+
+local UIS = "service:UserInputService"
+-- How far a finger may wander and still be tapping (pixels), how long a
+-- long press is, and how fast and far a swipe goes.
+local SLOP, LONG_PRESS, SWIPE_TIME, SWIPE_DISTANCE = 10, 0.5, 0.4, 50
+
+local fingers = {} -- id -> { obj, start, at, began, moved, gui }
+local order = {} -- ids, first finger first
+local gesture = { most = 0 } -- what the fingers on the screen are doing
+
+local function uis_event(name, ...)
+	L.fire_event(UIS, name, ...)
+end
+
+local function positions()
+	local out = {}
+	for _, id in order do
+		local f = fingers[id]
+		table.insert(out, Vector2.new(f.at.X, f.at.Y))
+	end
+	return out
+end
+
+local function two()
+	local a, b = fingers[order[1]], fingers[order[2]]
+	if a and b and not order[3] then
+		return a.at, b.at
+	end
+	return nil
+end
+
+-- Ends whichever gestures are going on, as Roblox does when a finger lifts.
+local function end_two(processed)
+	if gesture.pinch then
+		uis_event("TouchPinch", positions(), gesture.scale or 1, 0, Enum.UserInputState.End, processed)
+		gesture.pinch = nil
+	end
+	if gesture.rotate then
+		uis_event("TouchRotate", positions(), gesture.rotation or 0, 0, Enum.UserInputState.End, processed)
+		gesture.rotate = nil
+	end
+end
+
+function L.touch_event(id, phase, x, y, processed, t)
+	local at = Vector2.new(x, y)
+	local f = fingers[id]
+	if phase == "began" then
+		local obj = {
+			UserInputType = Enum.UserInputType.Touch,
+			UserInputState = Enum.UserInputState.Begin,
+			KeyCode = Enum.KeyCode.Unknown,
+			Position = Vector3.new(x, y, 0),
+			Delta = Vector3.zero,
+		}
+		function obj:IsA(class)
+			return class == "InputObject" or class == "Instance"
+		end
+		function obj:IsModifierKeyDown()
+			return false
+		end
+		end_two(processed)
+		f = { obj = obj, start = at, at = at, began = t, last = t, moved = false, gui = processed }
+		fingers[id] = f
+		table.insert(order, id)
+		gesture.most = math.max(gesture.most, #order)
+		if #order == 2 then
+			local a, b = two()
+			gesture.width = (a - b).Magnitude
+			gesture.angle = math.deg(math.atan2(b.Y - a.Y, b.X - a.X))
+		end
+		L.fire_input("began", obj, processed)
+		uis_event("TouchStarted", obj, processed)
+		return
+	end
+	if not f then
+		return
+	end
+	local obj = f.obj
+	if phase == "moved" then
+		local dt = math.max(t - f.last, 1 / 240)
+		local moved = at - f.at
+		f.at, f.last = at, t
+		obj.Delta = Vector3.new(moved.X, moved.Y, 0)
+		obj.Position = Vector3.new(x, y, 0)
+		obj.UserInputState = Enum.UserInputState.Change
+		uis_event("InputChanged", obj, processed)
+		uis_event("TouchMoved", obj, processed)
+		if not f.moved and (at - f.start).Magnitude > SLOP then
+			f.moved = true
+			if f.pressed then
+				uis_event("TouchLongPress", positions(), Enum.UserInputState.End, processed)
+				f.pressed = nil
+			end
+		end
+		if f.moved and id == order[1] then
+			local state = gesture.pan and Enum.UserInputState.Change or Enum.UserInputState.Begin
+			gesture.pan = true
+			uis_event("TouchPan", positions(), at - f.start, moved / dt, state, processed)
+		end
+		local a, b = two()
+		if a and gesture.width and gesture.width > 0 then
+			local scale = (a - b).Magnitude / gesture.width
+			local state = gesture.pinch and Enum.UserInputState.Change or Enum.UserInputState.Begin
+			local speed = (scale - (gesture.scale or 1)) / dt
+			gesture.pinch, gesture.scale = true, scale
+			uis_event("TouchPinch", positions(), scale, speed, state, processed)
+			local angle = math.deg(math.atan2(b.Y - a.Y, b.X - a.X))
+			local rotation = (angle - gesture.angle + 180) % 360 - 180
+			state = gesture.rotate and Enum.UserInputState.Change or Enum.UserInputState.Begin
+			speed = (rotation - (gesture.rotation or 0)) / dt
+			gesture.rotate, gesture.rotation = true, rotation
+			uis_event("TouchRotate", positions(), rotation, speed, state, processed)
+		end
+		return
+	end
+	-- The finger lifted.
+	obj.Position = Vector3.new(x, y, 0)
+	obj.Delta = Vector3.zero
+	obj.UserInputState = Enum.UserInputState.End
+	f.at = at
+	local held = t - f.began
+	local travelled = at - f.start
+	if f.pressed then
+		uis_event("TouchLongPress", positions(), Enum.UserInputState.End, processed)
+	elseif not f.moved and #order == 1 then
+		uis_event("TouchTap", { at }, processed)
+		uis_event("TouchTapInWorld", at, processed)
+	elseif f.moved and held <= SWIPE_TIME and travelled.Magnitude >= SWIPE_DISTANCE then
+		local direction
+		if math.abs(travelled.X) > math.abs(travelled.Y) then
+			direction = travelled.X > 0 and Enum.SwipeDirection.Right or Enum.SwipeDirection.Left
+		else
+			direction = travelled.Y > 0 and Enum.SwipeDirection.Down or Enum.SwipeDirection.Up
+		end
+		uis_event("TouchSwipe", direction, gesture.most, processed)
+	end
+	end_two(processed)
+	if id == order[1] and gesture.pan then
+		uis_event("TouchPan", positions(), travelled, Vector2.zero, Enum.UserInputState.End, processed)
+		gesture.pan = nil
+	end
+	L.fire_input("ended", obj, processed)
+	uis_event("TouchEnded", obj, processed)
+	fingers[id] = nil
+	table.remove(order, table.find(order, id))
+	if #order == 0 then
+		gesture = { most = 0 }
+	elseif #order == 2 then
+		local a, b = two()
+		gesture.width = (a - b).Magnitude
+		gesture.angle = math.deg(math.atan2(b.Y - a.Y, b.X - a.X))
+	end
+end
+
+-- A finger held still for a while is a long press.
+function L.touch_tick(t)
+	if #order ~= 1 then
+		return
+	end
+	local f = fingers[order[1]]
+	if not f.moved and not f.pressed and t - f.began >= LONG_PRESS then
+		f.pressed = true
+		uis_event("TouchLongPress", positions(), Enum.UserInputState.Begin, f.gui)
+	end
+end
+
+-- Whether the game wants the stick and jump button on screen: not when a
+-- script set UserInputService.ModalEnabled, turned GuiService's
+-- TouchControlsEnabled off, or moves the character itself
+-- (DevTouchMovementMode Scriptable).
+function L.touch_controls_shown()
+	local uis = store[UIS]
+	if uis and uis.values.ModalEnabled == true then
+		return false
+	end
+	local gui = store["service:GuiService"]
+	if gui and gui.values.TouchControlsEnabled == false then
+		return false
+	end
+	local ok, mode = pcall(function()
+		return game:GetService("Players").LocalPlayer.DevTouchMovementMode
+	end)
+	if ok and typeof(mode) == "EnumItem" and mode.Name == "Scriptable" then
+		return false
+	end
+	return true
 end
 
 return L

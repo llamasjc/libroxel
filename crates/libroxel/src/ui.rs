@@ -243,6 +243,7 @@ pub fn editor_ui(
     window: Query<&Window, With<PrimaryWindow>>,
     time: Res<Time>,
     mut touch_input: ResMut<libroxel_engine::devices::VirtualInput>,
+    mut screen_touches: ResMut<libroxel_engine::devices::ScreenTouches>,
     adapter: Option<Res<bevy::render::renderer::RenderAdapterInfo>>,
     mut quality: Option<ResMut<libroxel_engine::view::GraphicsQuality>>,
 ) -> Result {
@@ -626,7 +627,22 @@ pub fn editor_ui(
 
     // Touch screens get on-screen controls while playing.
     if playing && !editor.menu.open && !editor.paused {
-        editor.touch.show(&ctx, central, &boxes.inputs);
+        editor.touch.hidden = screen_touches.controls_hidden;
+        for (id, phase, pos, processed) in editor.touch.show(&ctx, central, &boxes.inputs) {
+            let phase = match phase {
+                egui::TouchPhase::Start => libroxel_script::TouchPhase::Began,
+                egui::TouchPhase::Move => libroxel_script::TouchPhase::Moved,
+                egui::TouchPhase::End | egui::TouchPhase::Cancel => libroxel_script::TouchPhase::Ended,
+            };
+            let at = pos - central.min;
+            screen_touches.touches.push(libroxel_engine::devices::ScreenTouch {
+                id,
+                phase,
+                x: at.x,
+                y: at.y,
+                processed,
+            });
+        }
         let stick = editor.touch.stick(central);
         touch_input.stick = Vec2::new(stick.x, stick.y);
         touch_input.jump = editor.touch.jump();

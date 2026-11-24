@@ -89,7 +89,7 @@ pub enum UserInput {
 }
 
 /// What the player plays with, for scripts' input service.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Devices {
     /// They have touched the screen.
     pub touch: bool,
@@ -97,6 +97,30 @@ pub struct Devices {
     pub gamepad: bool,
     /// The kind of input they used last.
     pub last: libroxel_instance::UserInputType,
+    /// There is a keyboard (not on phones and tablets).
+    pub keyboard: bool,
+    /// There is a mouse (not on phones and tablets).
+    pub mouse: bool,
+}
+
+impl Default for Devices {
+    fn default() -> Self {
+        Devices {
+            touch: false,
+            gamepad: false,
+            last: libroxel_instance::UserInputType::default(),
+            keyboard: true,
+            mouse: true,
+        }
+    }
+}
+
+/// Where a finger on the screen is in its touch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchPhase {
+    Began,
+    Moved,
+    Ended,
 }
 
 /// Where the player's mouse points: a ray into the world from the camera,
@@ -381,8 +405,45 @@ impl ScriptRuntime {
     }
 
     /// Tells scripts what the player plays with (touch, a controller).
-    pub fn set_devices(&self, devices: Devices) {
-        world::set_devices(&self.lua, devices)
+    pub fn set_devices(&self, devices: Devices) -> Vec<ScriptError> {
+        world::set_devices(&self.lua, devices);
+        bindings::take_errors(&self.lua)
+    }
+
+    /// A finger touched, moved on or left the screen at `x`, `y` (pixels
+    /// from the view's top left corner) at `time` seconds. `processed` is
+    /// true when the game's UI or the on-screen controls took it. Scripts
+    /// hear of it through the input service's touch events and gestures.
+    pub fn touch(
+        &self,
+        id: u64,
+        phase: TouchPhase,
+        x: f32,
+        y: f32,
+        processed: bool,
+        time: f64,
+    ) -> Vec<ScriptError> {
+        let phase = match phase {
+            TouchPhase::Began => "began",
+            TouchPhase::Moved => "moved",
+            TouchPhase::Ended => "ended",
+        };
+        let result = lenient::touch_event(&self.lua, id, phase, x, y, processed, time);
+        services::report(&self.lua, result);
+        bindings::take_errors(&self.lua)
+    }
+
+    /// Lets time pass for fingers held still (a long press), at `time` seconds.
+    pub fn touch_tick(&self, time: f64) -> Vec<ScriptError> {
+        let result = lenient::touch_tick(&self.lua, time);
+        services::report(&self.lua, result);
+        bindings::take_errors(&self.lua)
+    }
+
+    /// Whether the game wants the on-screen stick and jump button (scripts
+    /// can hide them as in Roblox).
+    pub fn touch_controls_shown(&self) -> bool {
+        lenient::touch_controls_shown(&self.lua)
     }
 
     /// Tells scripts where each screen GUI object was drawn (its corner

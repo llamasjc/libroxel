@@ -558,6 +558,7 @@ impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_scene)
             .init_resource::<crate::devices::VirtualInput>()
+            .init_resource::<crate::devices::ScreenTouches>()
             .add_systems(Update, (camera_controls, play_input, forward_keys).chain().in_set(EngineSet::Input))
             .init_resource::<crate::mesh_files::MeshFiles>()
             .init_resource::<MeshTextures>()
@@ -1764,6 +1765,7 @@ pub fn script_key(key: KeyCode) -> Option<libroxel_instance::KeyCode> {
 }
 
 /// Passes key presses and releases to the play session's scripts and prompts.
+#[allow(clippy::too_many_arguments)]
 fn forward_keys(
     mut engine: NonSendMut<EngineState>,
     capture: Res<InputCapture>,
@@ -1771,11 +1773,25 @@ fn forward_keys(
     mouse: Res<ButtonInput<MouseButton>>,
     gamepads: Query<&Gamepad>,
     touch: Res<crate::devices::VirtualInput>,
+    mut screen: ResMut<crate::devices::ScreenTouches>,
+    time: Res<Time>,
     mut last: Local<libroxel_instance::UserInputType>,
 ) {
     use libroxel_instance::UserInputType;
     let engine = &mut *engine;
-    let Some(session) = engine.session.as_mut() else { return };
+    let Some(session) = engine.session.as_mut() else {
+        screen.touches.clear();
+        screen.controls_hidden = false;
+        return;
+    };
+    let now = time.elapsed_secs_f64();
+    let touches = std::mem::take(&mut screen.touches);
+    let touched_now = !touches.is_empty();
+    for one in touches {
+        session.touch(one, now);
+    }
+    session.touch_tick(now);
+    screen.controls_hidden = !session.touch_controls_shown();
     // A controller's buttons stand in for the mouse button and keys.
     let pad = crate::devices::read_pads(gamepads.iter());
     if let Some(down) = pad.click {
@@ -1800,7 +1816,7 @@ fn forward_keys(
     // What scripts are told the player plays with.
     if pad.used {
         *last = UserInputType::Gamepad1;
-    } else if touch.stick != Vec2::ZERO || touch.jump || touch.look != Vec2::ZERO {
+    } else if touched_now || touch.stick != Vec2::ZERO || touch.jump || touch.look != Vec2::ZERO {
         *last = UserInputType::Touch;
     } else if keys.get_just_pressed().next().is_some() {
         *last = UserInputType::Keyboard;
@@ -1809,10 +1825,15 @@ fn forward_keys(
     } else if mouse.just_pressed(MouseButton::Right) {
         *last = UserInputType::MouseButton2;
     }
+    // Phones and tablets have neither a keyboard nor a mouse (unless one is
+    // plugged in, which scripts then see once it's used).
+    let phone = cfg!(any(target_os = "android", target_os = "ios"));
     session.set_devices(libroxel_script::Devices {
         touch: touch.touched,
         gamepad: !gamepads.is_empty(),
         last: *last,
+        keyboard: !phone || *last == UserInputType::Keyboard,
+        mouse: !phone || matches!(*last, UserInputType::MouseButton1 | UserInputType::MouseButton2),
     });
     if !capture.keyboard {
         for key in keys.get_just_pressed().filter_map(|k| script_key(*k)) {

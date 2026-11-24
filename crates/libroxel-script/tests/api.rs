@@ -1108,6 +1108,7 @@ fn scripts_see_what_the_player_plays_with() {
         touch: true,
         gamepad: true,
         last: libroxel_instance::UserInputType::Gamepad1,
+        ..Default::default()
     });
     run(
         &rt,
@@ -1158,4 +1159,114 @@ fn destroying_disconnects() {
     rt.fire_changes(&changes);
     assert_eq!(printed(&rt).len(), 50);
     assert_eq!(rt.connection_count(), 0);
+}
+
+#[test]
+fn touches_reach_scripts_as_roblox_sends_them() {
+    use libroxel_script::TouchPhase::{Began, Ended, Moved};
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local uis = game:GetService("UserInputService")
+        uis.TouchStarted:Connect(function(t, p)
+            print("started", t.UserInputType.Name, t.Position.X, t.Position.Y, p)
+        end)
+        uis.TouchMoved:Connect(function(t)
+            print("moved", t.Delta.X, t.UserInputState.Name)
+        end)
+        uis.TouchEnded:Connect(function(t)
+            print("ended", t.UserInputState.Name)
+        end)
+        uis.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch then
+                print("input began")
+            end
+        end)
+        uis.TouchTap:Connect(function(at, p)
+            print("tap", #at, at[1].X, p)
+        end)
+        uis.TouchLongPress:Connect(function(at, state)
+            print("long", state.Name)
+        end)
+        uis.TouchPan:Connect(function(at, total, speed, state)
+            print("pan", state.Name, total.X)
+        end)
+        uis.TouchPinch:Connect(function(at, scale, speed, state)
+            print("pinch", state.Name, string.format("%.1f", scale))
+        end)
+        uis.TouchSwipe:Connect(function(direction, count)
+            print("swipe", direction.Name, count)
+        end)
+        "#,
+    );
+    // A tap.
+    rt.touch(1, Began, 100.0, 50.0, false, 0.0);
+    rt.touch(1, Ended, 102.0, 50.0, false, 0.1);
+    assert_eq!(
+        printed(&rt),
+        vec!["input began", "started Touch 100 50 false", "tap 1 102 false", "ended End"]
+    );
+    // A finger held still is a long press.
+    rt.touch(2, Began, 10.0, 10.0, true, 1.0);
+    rt.touch_tick(1.2);
+    rt.touch_tick(1.6);
+    rt.touch(2, Ended, 10.0, 10.0, true, 2.0);
+    let lines = printed(&rt);
+    assert!(lines.contains(&"long Begin".to_owned()) && lines.contains(&"long End".to_owned()), "{lines:?}");
+    assert!(!lines.iter().any(|l| l.starts_with("tap")), "a long press isn't a tap: {lines:?}");
+    // A quick flick to the right is a pan and a swipe.
+    rt.touch(3, Began, 0.0, 100.0, false, 3.0);
+    rt.touch(3, Moved, 40.0, 100.0, false, 3.05);
+    rt.touch(3, Moved, 120.0, 100.0, false, 3.1);
+    rt.touch(3, Ended, 120.0, 100.0, false, 3.15);
+    let lines = printed(&rt);
+    for want in ["moved 40 Change", "pan Begin 40", "pan Change 120", "swipe Right 1", "pan End 120"] {
+        assert!(lines.contains(&want.to_owned()), "{want} in {lines:?}");
+    }
+    // Two fingers spreading apart pinch.
+    rt.touch(4, Began, 100.0, 100.0, false, 5.0);
+    rt.touch(5, Began, 200.0, 100.0, false, 5.0);
+    rt.touch(5, Moved, 300.0, 100.0, false, 5.1);
+    rt.touch(5, Ended, 300.0, 100.0, false, 5.2);
+    rt.touch(4, Ended, 100.0, 100.0, false, 5.2);
+    let lines = printed(&rt);
+    for want in ["pinch Begin 2.0", "pinch End 2.0"] {
+        assert!(lines.contains(&want.to_owned()), "{want} in {lines:?}");
+    }
+}
+
+#[test]
+fn games_can_hide_the_touch_controls_and_see_what_the_player_has() {
+    let rt = runtime();
+    assert!(rt.touch_controls_shown());
+    run(
+        &rt,
+        r#"
+        local uis = game:GetService("UserInputService")
+        uis.LastInputTypeChanged:Connect(function(kind)
+            print("now", kind.Name)
+        end)
+        print(uis.KeyboardEnabled, uis.MouseEnabled)
+        uis.ModalEnabled = true
+        "#,
+    );
+    assert!(!rt.touch_controls_shown());
+    run(&rt, r#"game:GetService("UserInputService").ModalEnabled = false"#);
+    assert!(rt.touch_controls_shown());
+    run(&rt, r#"game:GetService("GuiService").TouchControlsEnabled = false"#);
+    assert!(!rt.touch_controls_shown());
+    run(&rt, r#"game:GetService("GuiService").TouchControlsEnabled = true"#);
+    rt.set_devices(libroxel_script::Devices {
+        touch: true,
+        last: libroxel_instance::UserInputType::Touch,
+        keyboard: false,
+        mouse: false,
+        ..Default::default()
+    });
+    run(
+        &rt,
+        r#"local uis = game:GetService("UserInputService") print(uis.KeyboardEnabled, uis.TouchEnabled)"#,
+    );
+    assert_eq!(printed(&rt), vec!["true true", "now Touch", "false true"]);
 }

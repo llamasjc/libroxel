@@ -26,6 +26,28 @@ pub struct VirtualInput {
     pub touched: bool,
 }
 
+/// A finger on the screen this frame, for scripts' touch events.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScreenTouch {
+    pub id: u64,
+    pub phase: libroxel_script::TouchPhase,
+    /// Where, in pixels from the 3D view's top left corner.
+    pub x: f32,
+    pub y: f32,
+    /// The game's UI or the on-screen controls took it.
+    pub processed: bool,
+}
+
+/// What the host app's touch screen did this frame, and what the game asks
+/// of the on-screen controls.
+#[derive(Resource, Default, Debug, Clone, PartialEq)]
+pub struct ScreenTouches {
+    /// This frame's touches, oldest first; the engine passes them on.
+    pub touches: Vec<ScreenTouch>,
+    /// The game hid the stick and jump button (ModalEnabled and the like).
+    pub controls_hidden: bool,
+}
+
 /// How far a stick must be pushed before it counts.
 pub const DEAD_ZONE: f32 = 0.15;
 
