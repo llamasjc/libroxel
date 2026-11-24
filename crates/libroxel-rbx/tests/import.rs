@@ -97,6 +97,30 @@ fn links_attributes_and_tags_come_across() {
     );
     assert_eq!(tree.get_attribute(folder, "Number").unwrap(), Some(PropertyValue::Number(12345.0)));
     assert_eq!(tree.get_attribute(folder, "Boolean").unwrap(), Some(PropertyValue::Bool(true)));
+    // Kinds with no value of their own here are kept as text scripts read
+    // back as the kind they were.
+    for name in ["NumberRange", "NumberSequence", "ColorSequence", "Rect"] {
+        match tree.get_attribute(folder, name).unwrap() {
+            Some(PropertyValue::String(text)) => {
+                let rest = text.strip_prefix(libroxel_instance::RICH_ATTRIBUTE).expect(name);
+                assert!(rest.starts_with(name), "{name}: {rest}");
+            }
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn particle_lifetimes_and_speeds_come_across() {
+    let (tree, report) = libroxel_rbx::open(&file("all-instances-415-binary.rbxl")).unwrap();
+    let emitter = tree.descendants_of_class(tree.root(), ClassKind::ParticleEmitter)[0];
+    assert!(tree.get(emitter, Property::Lifetime).is_ok());
+    assert!(
+        !report.skipped_properties.contains_key("ParticleEmitter.Lifetime"),
+        "{:?}",
+        report.skipped_properties
+    );
+    assert!(!report.skipped_properties.contains_key("ParticleEmitter.Speed"));
 }
 
 /// A rotation of `degrees` about Y, as the file stores it (by rows).

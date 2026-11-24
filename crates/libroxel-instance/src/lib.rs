@@ -29,6 +29,14 @@ pub use enums::{
     Material, ModelStreamingMode, NormalId, PartShape, PathStatus, PathWaypointAction, RaycastFilterType,
     ScaleType, StreamOutBehavior, TextXAlignment, TextYAlignment, UserInputState, UserInputType,
 };
+/// How an attribute whose value has no kind of its own here (a
+/// NumberRange, NumberSequence, ColorSequence, Rect or CFrame) is kept: this,
+/// then the kind's name and its numbers, separated by spaces, such as
+/// `NumberRange 1 5` or `ColorSequence 0 1 0 0 1 0 0 1` (time, red, green,
+/// blue for each point). Kept as text, it saves with the place and reaches
+/// joined players like any other attribute.
+pub const RICH_ATTRIBUTE: &str = "\u{1}rbx:";
+
 /// The collision group parts are in unless put in another.
 pub const DEFAULT_COLLISION_GROUP: &str = "Default";
 

@@ -691,7 +691,7 @@ impl<'a> Importer<'a> {
                         Variant::Color3(c) => Some(PropertyValue::Color3(Color3::new(c.r, c.g, c.b))),
                         Variant::UDim2(u) => Some(PropertyValue::UDim2(udim2(u))),
                         Variant::UDim(u) => Some(PropertyValue::UDim(UDim::new(u.scale, u.offset as f32))),
-                        _ => None,
+                        other => rich_attribute(other).map(PropertyValue::String),
                     };
                     if !v.is_some_and(|v| tree.set_attribute(id, key, Some(v)).is_ok()) {
                         self.report.skip("Attribute", key);
@@ -759,6 +759,8 @@ impl<'a> Importer<'a> {
             }),
             PropertyValue::Vec2(_) => PropertyValue::Vec2(match value {
                 Variant::Vector2(v) => Vec2::new(v.x, v.y),
+                // A particle emitter's Lifetime and Speed: least and most.
+                Variant::NumberRange(r) => Vec2::new(r.min, r.max),
                 Variant::Vector2int16(v) => Vec2::new(f32::from(v.x), f32::from(v.y)),
                 _ => return None,
             }),
@@ -934,6 +936,35 @@ fn extra_value(value: &Variant) -> Option<PropertyValue> {
         }
         _ => return None,
     })
+}
+
+/// An attribute value with no kind of its own in Libroxel, as the text it
+/// keeps such values as (see [`libroxel_instance::RICH_ATTRIBUTE`]).
+fn rich_attribute(value: &Variant) -> Option<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut put = |kind: &str, numbers: &[f32]| {
+        out.push(kind.to_owned());
+        out.extend(numbers.iter().map(|n| format!("{n}")));
+    };
+    match value {
+        Variant::NumberRange(r) => put("NumberRange", &[r.min, r.max]),
+        Variant::NumberSequence(s) => {
+            let numbers: Vec<f32> = s.keypoints.iter().flat_map(|k| [k.time, k.value]).collect();
+            put("NumberSequence", &numbers);
+        }
+        Variant::ColorSequence(s) => {
+            let numbers: Vec<f32> =
+                s.keypoints.iter().flat_map(|k| [k.time, k.color.r, k.color.g, k.color.b]).collect();
+            put("ColorSequence", &numbers);
+        }
+        Variant::Rect(r) => put("Rect", &[r.min.x, r.min.y, r.max.x, r.max.y]),
+        Variant::CFrame(cf) => {
+            let (p, m) = (cf.position, cf.orientation);
+            put("CFrame", &[p.x, p.y, p.z, m.x.x, m.x.y, m.x.z, m.y.x, m.y.y, m.y.z, m.z.x, m.z.y, m.z.z]);
+        }
+        _ => return None,
+    }
+    Some(format!("{}{}", libroxel_instance::RICH_ATTRIBUTE, out.join(" ")))
 }
 
 fn number(value: &Variant) -> Option<f64> {

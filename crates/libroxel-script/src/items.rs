@@ -78,8 +78,77 @@ fn rich_values(lua: &Lua) -> mlua::Result<mlua::Table> {
     Ok(t)
 }
 
-/// The tree's stand-in for a value only scripts keep.
+/// Turns attribute values with no kind of their own in the tree into text
+/// and back (see [`libroxel_instance::RICH_ATTRIBUTE`]).
+const CODEC: &str = r#"
+local function n(x) return string.format("%.9g", x) end
+local codec = {}
+function codec.encode(v)
+    local kind = typeof(v)
+    local out = { kind }
+    if kind == "NumberRange" then
+        table.insert(out, n(v.Min)); table.insert(out, n(v.Max))
+    elseif kind == "NumberSequence" then
+        for _, k in v.Keypoints do table.insert(out, n(k.Time)); table.insert(out, n(k.Value)) end
+    elseif kind == "ColorSequence" then
+        for _, k in v.Keypoints do
+            table.insert(out, n(k.Time))
+            table.insert(out, n(k.Value.R)); table.insert(out, n(k.Value.G)); table.insert(out, n(k.Value.B))
+        end
+    elseif kind == "Rect" then
+        for _, x in { v.Min.X, v.Min.Y, v.Max.X, v.Max.Y } do table.insert(out, n(x)) end
+    elseif kind == "CFrame" then
+        for _, x in { v:GetComponents() } do table.insert(out, n(x)) end
+    else
+        return nil
+    end
+    return table.concat(out, " ")
+end
+function codec.decode(text)
+    local parts = string.split(text, " ")
+    local kind = table.remove(parts, 1)
+    local x = {}
+    for i, p in parts do x[i] = tonumber(p) or 0 end
+    if kind == "NumberRange" then
+        return NumberRange.new(x[1] or 0, x[2] or x[1] or 0)
+    elseif kind == "NumberSequence" then
+        local points = {}
+        for i = 1, #x - 1, 2 do table.insert(points, NumberSequenceKeypoint.new(x[i], x[i + 1])) end
+        return NumberSequence.new(points)
+    elseif kind == "ColorSequence" then
+        local points = {}
+        for i = 1, #x - 3, 4 do
+            table.insert(points, ColorSequenceKeypoint.new(x[i], Color3.new(x[i + 1], x[i + 2], x[i + 3])))
+        end
+        return ColorSequence.new(points)
+    elseif kind == "Rect" then
+        return Rect.new(x[1] or 0, x[2] or 0, x[3] or 0, x[4] or 0)
+    elseif kind == "CFrame" then
+        return CFrame.new(table.unpack(x, 1, 12))
+    end
+    return nil
+end
+return codec
+"#;
+const CODEC_KEY: &str = "libroxel.rich_attribute_codec";
+
+fn codec(lua: &Lua) -> mlua::Result<mlua::Table> {
+    if let Ok(t) = lua.named_registry_value::<mlua::Table>(CODEC_KEY) {
+        return Ok(t);
+    }
+    let t: mlua::Table = lua.load(CODEC).set_name("=libroxel.attributes").eval()?;
+    lua.set_named_registry_value(CODEC_KEY, &t)?;
+    Ok(t)
+}
+
+/// The tree's stand-in for a value with no kind of its own there: as text,
+/// when it has a text form (so it saves and reaches joined players), or
+/// else kept by scripts alone.
 fn rich_attribute(lua: &Lua, id: InstanceId, name: &str, value: Value) -> mlua::Result<PropertyValue> {
+    let text: Option<String> = codec(lua)?.get::<mlua::Function>("encode")?.call(value.clone())?;
+    if let Some(text) = text {
+        return Ok(PropertyValue::String(format!("{}{text}", libroxel_instance::RICH_ATTRIBUTE)));
+    }
     let key = format!("{}:{name}", id.to_bits());
     rich_values(lua)?.raw_set(key.as_str(), value)?;
     Ok(PropertyValue::String(format!("{RICH}{key}")))
@@ -87,6 +156,11 @@ fn rich_attribute(lua: &Lua, id: InstanceId, name: &str, value: Value) -> mlua::
 
 /// An attribute's value for scripts.
 fn attribute_to_lua(lua: &Lua, value: PropertyValue) -> mlua::Result<Value> {
+    if let PropertyValue::String(text) = &value
+        && let Some(encoded) = text.strip_prefix(libroxel_instance::RICH_ATTRIBUTE)
+    {
+        return codec(lua)?.get::<mlua::Function>("decode")?.call(encoded);
+    }
     if let PropertyValue::String(text) = &value
         && let Some(n) = text.strip_prefix(RICH)
     {
