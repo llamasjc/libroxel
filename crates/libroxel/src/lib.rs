@@ -37,6 +37,7 @@ mod messages;
 mod my_games;
 mod open;
 mod party_games;
+mod render_scale;
 mod report;
 mod rich_text;
 mod server;
@@ -441,6 +442,8 @@ pub fn run() {
     .add_plugins((EnginePlugin, RenderPlugin))
     .insert_resource(load_graphics())
     .add_systems(Startup, setup_ui_camera)
+    .init_resource::<render_scale::RenderScale>()
+    .add_systems(PostUpdate, render_scale::apply)
     .add_systems(EguiPrimaryContextPass, ui::editor_ui)
     .add_systems(Update, (viewport::draw_selection, viewport::draw_grid).after(EngineSet::Sync))
     .add_systems(Update, (update_title, toggle_fullscreen));

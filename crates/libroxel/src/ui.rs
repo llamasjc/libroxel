@@ -244,6 +244,7 @@ pub fn editor_ui(
     time: Res<Time>,
     mut touch_input: ResMut<libroxel_engine::devices::VirtualInput>,
     mut screen_touches: ResMut<libroxel_engine::devices::ScreenTouches>,
+    render_scale: Res<crate::render_scale::RenderScale>,
     adapter: Option<Res<bevy::render::renderer::RenderAdapterInfo>>,
     mut quality: Option<ResMut<libroxel_engine::view::GraphicsQuality>>,
 ) -> Result {
@@ -465,8 +466,24 @@ pub fn editor_ui(
         }
         Some(crate::file_picker::Picked::Cancelled) | None => {}
     }
+    // On phones the 3D view is drawn with fewer pixels, into a picture
+    // that goes under everything else here (see render_scale.rs).
+    let world_picture = render_scale.image.as_ref().map(|image| {
+        contexts
+            .image_id(image)
+            .unwrap_or_else(|| contexts.add_image(bevy_egui::EguiTextureHandle::Weak(image.id())))
+    });
     let central = egui::CentralPanel::no_frame()
         .show(&mut root, |ui| {
+            if let Some(picture) = world_picture {
+                let whole = ctx.content_rect();
+                let rect = ui.max_rect();
+                let uv = egui::Rect::from_min_max(
+                    egui::pos2(rect.min.x / whole.width(), rect.min.y / whole.height()),
+                    egui::pos2(rect.max.x / whole.width(), rect.max.y / whole.height()),
+                );
+                ui.painter().image(picture, rect, uv, Color32::WHITE);
+            }
             if let Ok((cam, gt, _, _)) = cameras.single() {
                 gizmo_hot = viewport::gizmo(
                     ui,
@@ -835,11 +852,17 @@ pub fn editor_ui(
 
     // Fit the 3D camera to the free space between panels.
     if let (Ok(window), Ok((mut cam, _, mut transform, rig))) = (window.single(), cameras.single_mut()) {
-        let scale = window.scale_factor();
+        // In the window's pixels, or the smaller picture's on a phone.
+        let scale = render_scale.pixels_per_point.max(0.01);
+        let share = scale / window.scale_factor().max(0.01);
+        let (width, height) = (
+            (window.physical_width() as f32 * share).ceil() as u32,
+            (window.physical_height() as f32 * share).ceil() as u32,
+        );
         let min = UVec2::new((central.min.x * scale) as u32, (central.min.y * scale) as u32);
         let max = UVec2::new(
-            ((central.max.x * scale) as u32).min(window.physical_width()),
-            ((central.max.y * scale) as u32).min(window.physical_height()),
+            ((central.max.x * scale) as u32).min(width),
+            ((central.max.y * scale) as u32).min(height),
         );
         if max.x > min.x + 8 && max.y > min.y + 8 {
             cam.viewport = Some(Viewport { physical_position: min, physical_size: max - min, ..default() });
