@@ -344,11 +344,26 @@ jobs:
   android:
     name: Build (Android)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # No continue-on-error: a release without the Android app must not publish.
+    timeout-minutes: 120
     env:
       PLAY: ${{ github.ref_type == 'tag' && secrets.PLAY_SERVICE_ACCOUNT != '' && secrets.ANDROID_KEYSTORE != '' }}
     steps:
       - uses: actions/checkout@v4
+      - name: Make room for the LTO build
+        # The fat LTO link of each Android library needs more memory than the
+        # runner has: the armv7 link ran it out and the runner was shut down
+        # (v0.1.13 and v0.1.14). Swap and the disk freed for it cover that.
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo swapoff -a
+          sudo rm -f /swapfile /mnt/swapfile
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+          df -h /
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android, armv7-linux-androideabi
@@ -427,7 +442,7 @@ jobs:
     name: Build (iOS)
     needs: wait-for-main
     runs-on: macos-latest
-    continue-on-error: true
+    # No continue-on-error: a release without the iOS app must not publish.
     env:
       SIGN: ${{ secrets.IOS_CERTIFICATE != '' && secrets.IOS_PROFILE != '' }}
       UPLOAD: ${{ github.ref_type == 'tag' && secrets.IOS_CERTIFICATE != '' && secrets.IOS_PROFILE != '' && secrets.APP_STORE_CONNECT_KEY != '' }}
@@ -532,8 +547,10 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Check files
+        # Every platform but the optional ARM builds must be here, or nothing publishes.
         run: |
-          for end in -windows-x86_64-setup.exe -macos-universal.dmg -macos-universal.app.tar.gz -linux-x86_64.AppImage -linux-x86_64.deb; do
+          for end in -windows-x86_64-setup.exe -macos-universal.dmg -macos-universal.app.tar.gz -linux-x86_64.AppImage -linux-x86_64.deb \
+            -android.apk -android.aab "-ios*.ipa"; do
             compgen -G "dist/libroxel-*$end" >/dev/null || { echo "::error::Missing libroxel-*$end"; exit 1; }
           done
       - name: Checksums
