@@ -1122,6 +1122,21 @@ impl GraphicsQuality {
     pub fn view_distance(&self) -> f32 {
         Self::VIEW_DISTANCE[self.index()]
     }
+
+    /// On a phone or tablet, how many pixels the 3D view draws for each
+    /// point of the screen (menus and text stay at the screen's own). A
+    /// phone's screen packs in three or more; the 3D view looks much the
+    /// same at far fewer, and each one it skips is time saved. `None` on a
+    /// computer: the 3D view draws every pixel.
+    pub fn render_density(&self) -> Option<f32> {
+        self.phone.then_some(match self.level {
+            1 | 2 => 1.0,
+            3 | 4 => 1.25,
+            5 | 6 => 1.5,
+            7 | 8 => 2.0,
+            _ => 3.0,
+        })
+    }
 }
 
 #[allow(clippy::type_complexity)]
@@ -2663,6 +2678,8 @@ mod tests {
             q.frame(1.0 / 60.0);
         }
         assert_eq!(q.level, 6);
+        assert_eq!(q.render_density(), Some(1.5));
+        assert_eq!(GraphicsQuality::default().render_density(), None, "computers draw every pixel");
     }
 
     fn close(a: Vec3, b: Vec3) -> bool {
