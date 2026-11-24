@@ -36,7 +36,8 @@ const ICON = {
   chart: '', profile: '', heart: '',
 };
 
-const DONATE = 'https://github.com/sponsors/llamasjc';
+const PAYPAL = 'https://paypal.me/llamasjc';
+const SPONSORS = 'https://github.com/sponsors/llamasjc';
 
 // The app's colours, for drawing.
 const C = {
@@ -830,7 +831,7 @@ function parseRoute() {
     case 'user': return { name: 'user', id: parts[1] };
     case 'creator': return { name: 'creator', id: parts[1] };
     case 'messages': return { name: 'messages', id: parts[1] };
-    case 'games': case 'charts': case 'profile': case 'search': case 'friends': case 'groups': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': case 'moderation': case 'stats': return { name: parts[0] };
+    case 'games': case 'charts': case 'profile': case 'search': case 'friends': case 'groups': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': case 'donate': case 'moderation': case 'stats': return { name: parts[0] };
     case 'group': return { name: 'group', id: parts[1] };
     default: return { name: 'home' };
   }
@@ -853,7 +854,7 @@ function tabs() {
   const who = document.getElementById('who');
   // Search sits at the right, by who you play as, as in the app.
   const search = el('a', { class: `tab iconbtn${route.name === 'search' ? ' active' : ''}`, href: '/search', title: 'Search for players and games' }, icon(ICON.search));
-  const donate = el('a', { class: 'tab iconbtn', href: DONATE, target: '_blank', rel: 'noopener', title: 'Libroxel is open source. Donations are highly appreciated.' }, icon(ICON.heart));
+  const donate = el('a', { class: `tab iconbtn${route.name === 'donate' ? ' active' : ''}`, href: '/donate', title: 'Donate' }, icon(ICON.heart));
   if (session) {
     const unread = chats.list?.reduce((n, c) => n + c.unread, 0) || 0;
     const messages = el('a', { class: `tab iconbtn${route.name === 'messages' ? ' active' : ''}`, href: '/messages', title: 'Messages' },
@@ -956,7 +957,7 @@ window.addEventListener('unhandledrejection', (e) => crashed(e.reason));
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, games: gamesPage, charts: chartsPage, profile, creator: creatorPage, search: searchPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, stats: statsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy };
+  const views = { home, game, games: gamesPage, charts: chartsPage, profile, creator: creatorPage, search: searchPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, stats: statsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy, donate: donatePage };
   // An account that signed in with an easy password sees nothing else until it sets a new one.
   loadFamily();
   const needsBirthday = session && familyInfo && !familyInfo.loading && !familyInfo.error && !familyInfo.has_birthday;
@@ -982,6 +983,7 @@ const DESCRIPTIONS = {
   home: 'Play games people make, with your friends. Press Play and Libroxel opens straight into the game.',
   download: 'Download Libroxel for Windows, macOS and Linux. Free and open source.',
   privacy: 'What Libroxel keeps about you, why, and how to have it removed.',
+  donate: 'Libroxel is free and open source. Donations are highly appreciated.',
   charts: 'The games people play most on Libroxel, trending, top rated and new.',
   search: 'Find players and games on Libroxel.',
   'sign-in': 'Sign in to Libroxel.',
@@ -991,7 +993,7 @@ const DESCRIPTIONS = {
 function titleFor(r) {
   if (r.name === 'game') return entries().find((e) => e.key === r.key)?.title || 'Game';
   if (r.name === 'group') return groupPages.get(r.id)?.group?.name || 'Group';
-  return { home: 'Home', creator: 'Create', games: 'Games', charts: 'Charts', profile: 'Profile', search: 'Search', friends: 'Friends', groups: 'Groups', group: 'Group', messages: 'Messages', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy', moderation: 'Moderation', stats: 'Stats' }[r.name] || 'Libroxel';
+  return { home: 'Home', creator: 'Create', games: 'Games', charts: 'Charts', profile: 'Profile', search: 'Search', friends: 'Friends', groups: 'Groups', group: 'Group', messages: 'Messages', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy', donate: 'Donate', moderation: 'Moderation', stats: 'Stats' }[r.name] || 'Libroxel';
 }
 
 function whereabouts(friend) {
@@ -3036,6 +3038,56 @@ function download() {
       el('li', {}, 'Sign in to the app with the same name and password as here, so your friends see you.')),
   );
   return out;
+}
+
+// --- Donate ------------------------------------------------------------------
+
+const AMOUNTS = [5, 10, 25, 50, 100];
+const giving = { monthly: false, amount: 25, other: '' };
+
+function donatePage() {
+  const once = el('button', { class: 'seg' }, 'One-time');
+  const monthly = el('button', { class: 'seg' }, 'Monthly');
+  const presets = AMOUNTS.map((n) => el('button', { class: 'amount' }, `$${n}`));
+  const other = el('input', { type: 'text', inputmode: 'numeric', placeholder: 'Other', 'aria-label': 'Other amount' });
+  other.value = giving.other;
+  const paypal = el('a', { class: 'btn big go', target: '_blank', rel: 'noopener' });
+  const sponsors = el('a', { class: 'btn big', target: '_blank', rel: 'noopener' });
+  const onceOnly = el('p', { class: 'soft' }, 'PayPal is one-time only.');
+  const update = () => {
+    const n = giving.other ? Number(giving.other) : giving.amount;
+    once.classList.toggle('on', !giving.monthly);
+    monthly.classList.toggle('on', giving.monthly);
+    presets.forEach((b, i) => b.classList.toggle('on', !giving.other && AMOUNTS[i] === n));
+    const shown = n ? ` $${n}${giving.monthly ? ' a month' : ''}` : '';
+    fill(paypal, icon(ICON.heart), `Donate${shown} with PayPal`);
+    fill(sponsors, icon(ICON.heart), `Donate${shown} with GitHub Sponsors`);
+    paypal.classList.toggle('hidden', giving.monthly);
+    onceOnly.classList.toggle('hidden', !giving.monthly);
+    paypal.href = n ? `${PAYPAL}/${n}USD` : PAYPAL;
+    const query = { frequency: giving.monthly ? 'recurring' : 'one-time' };
+    if (n) query.amount = n;
+    sponsors.href = `${SPONSORS}/sponsorships?${new URLSearchParams(query)}`;
+  };
+  once.onclick = () => { giving.monthly = false; update(); };
+  monthly.onclick = () => { giving.monthly = true; update(); };
+  presets.forEach((b, i) => {
+    b.onclick = () => { giving.amount = AMOUNTS[i]; giving.other = ''; other.value = ''; update(); };
+  });
+  other.oninput = () => {
+    other.value = other.value.replace(/[^0-9]/g, '').replace(/^0+/, '').slice(0, 5);
+    giving.other = other.value;
+    update();
+  };
+  update();
+  return el('div', { class: 'donate' },
+    el('div', { class: 'donate-heart' }, icon(ICON.heart)),
+    el('h1', { class: 'title' }, 'Support Libroxel'),
+    el('p', { class: 'note' }, 'Libroxel is free and open source. Donations are highly appreciated.'),
+    el('div', { class: 'segs' }, once, monthly),
+    el('div', { class: 'amounts' }, presets, el('label', { class: 'other' }, el('span', {}, '$'), other)),
+    el('div', { class: 'givers' }, paypal, sponsors, onceOnly),
+  );
 }
 
 // --- Privacy -----------------------------------------------------------------

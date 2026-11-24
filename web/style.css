@@ -395,3 +395,19 @@ footer a { color: var(--heading); text-decoration: underline; }
 .numbers th:first-child, .numbers td:first-child { text-align: left; }
 .games.row { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 188px; overflow-x: auto; max-width: none; padding-bottom: 6px; }
 .rank { position: absolute; right: 8px; top: 8px; min-width: 28px; height: 28px; padding: 0 6px; border-radius: 14px; background: rgba(10, 40, 80, 0.75); color: #fff; font: 700 15px/28px var(--body); text-align: center; }
+
+.donate { max-width: 520px; margin: 10px auto 20px; text-align: center; }
+.donate .title { font-size: 34px; font-weight: 600; }
+.donate-heart { width: 72px; height: 72px; margin: 0 auto 12px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 34px; background: var(--gloss), linear-gradient(rgb(255, 128, 150), rgb(214, 46, 86)); border: 1px solid rgb(160, 30, 64); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.5), 0 0 18px rgba(255, 110, 140, 0.6); }
+.segs { display: inline-flex; margin: 10px 0 18px; border: 1px solid rgb(132, 142, 156); border-radius: 9px; overflow: hidden; box-shadow: 0 2px 6px rgba(10, 40, 80, 0.15); }
+.seg { padding: 9px 26px; border: 0; cursor: pointer; font: 600 15px var(--display); color: var(--text); background: var(--gloss), linear-gradient(rgb(252, 252, 252), rgb(214, 220, 228)); }
+.seg + .seg { border-left: 1px solid rgb(160, 168, 178); }
+.seg.on { color: #fff; text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35); background: var(--gloss), linear-gradient(rgb(96, 176, 246), rgb(30, 110, 200)); }
+.amounts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 22px; }
+.amount, .other { height: 54px; border: 1px solid var(--line); border-radius: 9px; background: linear-gradient(#fff, rgb(240, 247, 254)); font: 600 20px var(--display); color: var(--heading); cursor: pointer; }
+.amount:hover, .other:focus-within { border-color: rgb(60, 127, 177); box-shadow: var(--glow); }
+.amount.on { color: #fff; border-color: rgb(26, 100, 24); text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35); background: var(--gloss), linear-gradient(rgb(140, 220, 96), rgb(46, 150, 36)); }
+.other { display: flex; align-items: center; gap: 4px; padding: 0 12px; cursor: text; }
+.other input[type=text] { border: 0; padding: 0; background: none; box-shadow: none; font: inherit; color: inherit; min-width: 0; }
+.givers { display: flex; flex-direction: column; gap: 10px; }
+.givers .btn { width: 100%; min-width: 0; height: auto; min-height: 52px; padding: 8px 18px; white-space: normal; }

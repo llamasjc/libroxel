@@ -740,7 +740,7 @@ const TOP_TABS: [(Tab, &str, &str); 6] = [
 ];
 
 const CHIP_CAPS: &str = "Playing as";
-const DONATE: &str = "https://github.com/sponsors/llamasjc";
+const DONATE: &str = "https://libroxel.com/donate";
 
 fn player_chip_width(ui: &egui::Ui, name: &str) -> f32 {
     let caps =
