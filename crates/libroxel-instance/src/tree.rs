@@ -1135,6 +1135,11 @@ impl InstanceTree {
         self.structure
     }
 
+    /// A number that changes whenever anything is reparented or destroyed.
+    pub fn game_structure(&self) -> u64 {
+        self.structure_all
+    }
+
     fn note_moved(&mut self, id: InstanceId) {
         // A long log drops its older half. Readers that keep up (every
         // frame) never notice; one that fell further behind starts over.

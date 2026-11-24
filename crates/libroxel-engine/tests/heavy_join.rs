@@ -46,7 +46,10 @@ fn joining_a_heavy_game_comes_in_over_many_short_steps() {
     let mut guest =
         PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
             .unwrap();
-    let want = MODELS * PARTS_EACH + 1;
+    let near = |x: f32, z: f32| x.hypot(z) < 900.0;
+    let want =
+        (0..MODELS).filter(|m| near((m % 60) as f32 * 30.0 - 900.0, (m / 60) as f32 * 30.0 - 900.0)).count()
+            * PARTS_EACH;
     let mut slowest_guest = Duration::ZERO;
     let mut slowest_host = Duration::ZERO;
     let mut steps = 0;
@@ -62,7 +65,11 @@ fn joining_a_heavy_game_comes_in_over_many_short_steps() {
         assert!(!guest.disconnected(), "lost the connection after {steps} steps");
         let have = {
             let t = guest.runtime().tree().borrow();
-            t.descendants_of_class(t.workspace(), ClassKind::Part).len()
+            t.descendants_of_class(t.workspace(), ClassKind::Part)
+                .into_iter()
+                .filter_map(|p| t.get_vec3(p, Property::Position))
+                .filter(|at| at.y >= 1.0 && near(at.x, at.z))
+                .count()
         };
         if have >= want && guest.character().is_some() {
             break;

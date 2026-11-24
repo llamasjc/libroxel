@@ -24,6 +24,10 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
   and server storage never reach players. Copies of someone else's game
   are turned away when published, and bulk downloads of games and files
   are limited and logged.
+- **Big maps stream:** each player is sent only the parts and terrain
+  near them, nearest first, with far parts updated less often. Maps with
+  more than 5,000 parts stream even without `StreamingEnabled`, so no
+  player's computer ever gets the whole map.
 - **Your games** on the Create page, in the app and on the site: change a
   game's name and description, who can play, and max players, remove it,
   or put an older version back live.
