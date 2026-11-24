@@ -5,9 +5,14 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
 
 ## Unreleased
 
-- **Languages:** the home screen in Chinese (Simplified), Spanish,
-  Portuguese (Brazil) and French, picked with the 🌐 button or following
-  the computer's language. The editor is still in English.
+- **Languages:** the home screen and the editor in Chinese (Simplified),
+  Spanish, Portuguese (Brazil) and French, picked with the 🌐 button or
+  following the computer's language. API names stay in English.
+- **Streaming,** as Roblox documents it: `Workspace.StreamingEnabled`,
+  `StreamingTargetRadius`, `StreamingMinRadius`, `StreamOutBehavior`,
+  `Model.ModelStreamingMode`, `Player.ReplicationFocus` and
+  `Player:RequestStreamAroundAsync`. Places saved with them in Roblox
+  Studio keep them.
 - **Multiplayer:** every connection is encrypted, direct joins by address
   included. Long messages are compressed, so joining a big game sends up to
   ten times less. The host refuses impossible moves (teleports and speed
@@ -20,6 +25,7 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
 - **ARM builds** for Windows on ARM and 64-bit ARM Linux, with their own
   updates.
 - Hide and seek's seeker bots search spot by spot instead of at random.
+- The website no longer shows "falsefalse" in the top bar.
 
 ## 0.1.5 (2026-11-23)
 
