@@ -28,6 +28,7 @@ static ASKED: AtomicBool = AtomicBool::new(false);
 static TRIED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 enum Kind {
     Windows,
     Mac,

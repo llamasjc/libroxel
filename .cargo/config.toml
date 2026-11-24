@@ -5,4 +5,4 @@ rustflags = ["--cfg", 'target_abi="sim"', "-A", "explicit_builtin_cfgs_in_flags"
 # off for this target, but every device that runs Android 8 (our oldest)
 # has it, and Bevy's maths, physics and drawing use it everywhere.
 [target.armv7-linux-androideabi]
-rustflags = ["-C", "target-feature=+neon"]
+rustflags = ["-C", "target-cpu=cortex-a8"]
