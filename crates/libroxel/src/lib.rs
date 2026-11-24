@@ -418,6 +418,16 @@ pub fn run() {
                     } else {
                         bevy::window::WindowMode::Windowed
                     },
+                    // iPhones and iPads: no status bar, the home bar fades away
+                    // while playing, and swipes in from an edge reach the game
+                    // first (a second swipe still goes home), as in other games.
+                    prefers_status_bar_hidden: MOBILE,
+                    prefers_home_indicator_hidden: MOBILE,
+                    preferred_screen_edges_deferring_system_gestures: if MOBILE {
+                        bevy::window::ScreenEdge::All
+                    } else {
+                        bevy::window::ScreenEdge::None
+                    },
                     ..default()
                 }),
                 ..default()
