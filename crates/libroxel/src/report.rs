@@ -140,7 +140,8 @@ pub fn run(app: &mut bevy::app::App) {
         let _ = std::fs::remove_file(crash_path());
         return;
     }
-    if std::env::var_os("LIBROXEL_CRASHED").is_none()
+    if !crate::MOBILE
+        && std::env::var_os("LIBROXEL_CRASHED").is_none()
         && let Ok(exe) = std::env::current_exe()
     {
         let _ = std::process::Command::new(exe).env("LIBROXEL_CRASHED", "1").spawn();

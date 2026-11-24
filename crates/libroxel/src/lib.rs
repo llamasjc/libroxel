@@ -302,12 +302,17 @@ const MOBILE: bool = cfg!(any(target_os = "android", target_os = "ios"));
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 fn android_main(app: bevy::android::android_activity::AndroidApp) {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        std::process::exit(0);
+    }
     let home = app.internal_data_path();
     let _ = bevy::android::ANDROID_APP.set(app);
     if let Some(home) = home {
         unsafe { std::env::set_var("HOME", home) };
     }
     run();
+    std::process::exit(0);
 }
 
 #[cfg(target_os = "ios")]
