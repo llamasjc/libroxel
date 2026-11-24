@@ -763,6 +763,7 @@ pub enum Kind {
     Plain,
     /// Stopping or removing.
     Danger,
+    Donate,
 }
 
 impl Kind {
@@ -791,6 +792,12 @@ impl Kind {
                 Color32::from_rgb(246, 124, 112),
                 Color32::from_rgb(196, 40, 34),
                 Color32::from_rgb(132, 24, 20),
+                Color32::WHITE,
+            ),
+            Kind::Donate => (
+                Color32::from_rgb(255, 120, 146),
+                Color32::from_rgb(214, 40, 84),
+                Color32::from_rgb(160, 30, 64),
                 Color32::WHITE,
             ),
         }

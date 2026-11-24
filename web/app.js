@@ -854,7 +854,7 @@ function tabs() {
   const who = document.getElementById('who');
   // Search sits at the right, by who you play as, as in the app.
   const search = el('a', { class: `tab iconbtn${route.name === 'search' ? ' active' : ''}`, href: '/search', title: 'Search for players and games' }, icon(ICON.search));
-  const donate = el('a', { class: `tab iconbtn${route.name === 'donate' ? ' active' : ''}`, href: '/donate', title: 'Donate' }, icon(ICON.heart));
+  const donate = el('a', { class: 'btn small donate-btn', href: '/donate', title: 'Libroxel is open source. Donations are highly appreciated.' }, icon(ICON.heart), 'Donate');
   if (session) {
     const unread = chats.list?.reduce((n, c) => n + c.unread, 0) || 0;
     const messages = el('a', { class: `tab iconbtn${route.name === 'messages' ? ' active' : ''}`, href: '/messages', title: 'Messages' },
@@ -3042,37 +3042,49 @@ function download() {
 
 // --- Donate ------------------------------------------------------------------
 
-const AMOUNTS = [5, 10, 25, 50, 100];
-const giving = { monthly: false, amount: 25, other: '' };
+const PLANS = {
+  once: { label: 'One-time', amounts: [5, 10, 25, 50, 100], per: '' },
+  month: { label: 'Monthly', amounts: [3, 5, 10, 25, 50], per: ' a month' },
+  year: { label: 'Yearly', amounts: [25, 50, 100, 250, 500], per: ' a year' },
+};
+const giving = { plan: 'once', amount: 25, other: '' };
 
 function donatePage() {
-  const once = el('button', { class: 'seg' }, 'One-time');
-  const monthly = el('button', { class: 'seg' }, 'Monthly');
-  const presets = AMOUNTS.map((n) => el('button', { class: 'amount' }, `$${n}`));
+  const segs = Object.entries(PLANS).map(([id, plan]) => [id, el('button', { class: 'seg' }, plan.label)]);
+  const presets = [0, 1, 2, 3, 4].map(() => el('button', { class: 'amount' }));
   const other = el('input', { type: 'text', inputmode: 'numeric', placeholder: 'Other', 'aria-label': 'Other amount' });
   other.value = giving.other;
-  const paypal = el('a', { class: 'btn big go', target: '_blank', rel: 'noopener' });
+  const paypal = el('a', { class: 'btn big donate-btn', target: '_blank', rel: 'noopener' });
   const sponsors = el('a', { class: 'btn big', target: '_blank', rel: 'noopener' });
-  const onceOnly = el('p', { class: 'soft' }, 'PayPal is one-time only.');
+  const note = el('p', { class: 'soft' });
   const update = () => {
+    const plan = PLANS[giving.plan];
     const n = giving.other ? Number(giving.other) : giving.amount;
-    once.classList.toggle('on', !giving.monthly);
-    monthly.classList.toggle('on', giving.monthly);
-    presets.forEach((b, i) => b.classList.toggle('on', !giving.other && AMOUNTS[i] === n));
-    const shown = n ? ` $${n}${giving.monthly ? ' a month' : ''}` : '';
+    segs.forEach(([id, b]) => b.classList.toggle('on', id === giving.plan));
+    presets.forEach((b, i) => {
+      fill(b, `$${plan.amounts[i]}`);
+      b.classList.toggle('on', !giving.other && plan.amounts[i] === n);
+    });
+    const shown = n ? ` $${n}${plan.per}` : '';
     fill(paypal, icon(ICON.heart), `Donate${shown} with PayPal`);
     fill(sponsors, icon(ICON.heart), `Donate${shown} with GitHub Sponsors`);
-    paypal.classList.toggle('hidden', giving.monthly);
-    onceOnly.classList.toggle('hidden', !giving.monthly);
+    paypal.classList.toggle('hidden', giving.plan === 'month');
     paypal.href = n ? `${PAYPAL}/${n}USD` : PAYPAL;
-    const query = { frequency: giving.monthly ? 'recurring' : 'one-time' };
+    const query = { frequency: giving.plan === 'month' ? 'recurring' : 'one-time' };
     if (n) query.amount = n;
     sponsors.href = `${SPONSORS}/sponsorships?${new URLSearchParams(query)}`;
+    fill(note, { once: '', month: 'Monthly gifts go through GitHub Sponsors.', year: 'Paid once for the year.' }[giving.plan]);
   };
-  once.onclick = () => { giving.monthly = false; update(); };
-  monthly.onclick = () => { giving.monthly = true; update(); };
+  segs.forEach(([id, b]) => {
+    b.onclick = () => {
+      const i = PLANS[giving.plan].amounts.indexOf(giving.amount);
+      giving.plan = id;
+      giving.amount = PLANS[id].amounts[i < 0 ? 2 : i];
+      update();
+    };
+  });
   presets.forEach((b, i) => {
-    b.onclick = () => { giving.amount = AMOUNTS[i]; giving.other = ''; other.value = ''; update(); };
+    b.onclick = () => { giving.amount = PLANS[giving.plan].amounts[i]; giving.other = ''; other.value = ''; update(); };
   });
   other.oninput = () => {
     other.value = other.value.replace(/[^0-9]/g, '').replace(/^0+/, '').slice(0, 5);
@@ -3082,11 +3094,11 @@ function donatePage() {
   update();
   return el('div', { class: 'donate' },
     el('div', { class: 'donate-heart' }, icon(ICON.heart)),
-    el('h1', { class: 'title' }, 'Support Libroxel'),
+    el('h1', { class: 'title' }, 'Donate to Libroxel'),
     el('p', { class: 'note' }, 'Libroxel is free and open source. Donations are highly appreciated.'),
-    el('div', { class: 'segs' }, once, monthly),
+    el('div', { class: 'segs' }, segs.map(([, b]) => b)),
     el('div', { class: 'amounts' }, presets, el('label', { class: 'other' }, el('span', {}, '$'), other)),
-    el('div', { class: 'givers' }, paypal, sponsors, onceOnly),
+    el('div', { class: 'givers' }, paypal, sponsors, note),
   );
 }
 

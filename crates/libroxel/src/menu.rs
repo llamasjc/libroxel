@@ -474,7 +474,7 @@ impl Menu {
         ui.add_space(10.0);
         ui.spacing_mut().item_spacing.x = 2.0;
         let chip = player_chip_width(ui, &self.name);
-        let right = chip + 184.0 + 24.0 + if crate::update::ready().is_some() { 110.0 } else { 0.0 };
+        let right = chip + 260.0 + 24.0 + if crate::update::ready().is_some() { 110.0 } else { 0.0 };
         let wide: f32 =
             TOP_TABS.iter().map(|(_, glyph, label)| theme::tab_width(ui, glyph, t(label))).sum::<f32>()
                 + 2.0 * TOP_TABS.len() as f32;
@@ -519,15 +519,12 @@ impl Menu {
                     self.go(Tab::Messages);
                 }
             }
-            let heart = theme::tab(ui, theme::icon::HEART, "", false).on_hover_text(t("Donate"));
-            egui::Popup::menu(&heart).show(|ui| {
-                ui.set_max_width(240.0);
-                ui.label(t("Libroxel is open source. Donations are highly appreciated."));
-                if ui.button(format!("{}  {}", theme::icon::HEART, t("Donate"))).clicked() {
-                    crate::report::open_url(DONATE);
-                    ui.close();
-                }
-            });
+            if theme::block_button(ui, theme::Kind::Donate, theme::icon::HEART, t("Donate"), 28.0)
+                .on_hover_text(t("Libroxel is open source. Donations are highly appreciated."))
+                .clicked()
+            {
+                crate::report::open_url(DONATE);
+            }
             let globe = theme::tab(ui, theme::icon::GLOBE, "", false).on_hover_text(t("Language"));
             egui::Popup::menu(&globe).show(|ui| {
                 ui.set_min_width(180.0);
