@@ -70,6 +70,13 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+// Replaces what's in `node`, skipping false, null and undefined like `el`
+// does (the browser's own replaceChildren would show them as text).
+function fill(node, ...children) {
+  node.replaceChildren();
+  return add(node, children);
+}
+
 function add(node, children) {
   for (const child of children.flat(Infinity)) {
     if (child === undefined || child === null || child === false) continue;
@@ -764,7 +771,7 @@ function launch(link, what) {
     document.removeEventListener('visibilitychange', left);
   };
   const show = (...children) => {
-    box.replaceChildren(...children);
+    fill(box, ...children);
   };
   show(
     el('div', { class: 'spinner' }),
@@ -848,7 +855,7 @@ function tabs() {
     const unread = chats.list?.reduce((n, c) => n + c.unread, 0) || 0;
     const messages = el('a', { class: `tab iconbtn${route.name === 'messages' ? ' active' : ''}`, href: '/messages', title: 'Messages' },
       icon(ICON.chat), unread > 0 && el('span', { class: 'badge' }, unread > 99 ? '99+' : unread));
-    who.replaceChildren(
+    fill(who,
       search,
       data.me?.admin && el('a', { class: `tab iconbtn${route.name === 'moderation' ? ' active' : ''}`, href: '/moderation', title: 'Moderation' }, icon(ICON.flag)),
       data.me?.admin && el('a', { class: `tab iconbtn${route.name === 'stats' ? ' active' : ''}`, href: '/stats', title: 'Stats' }, icon(ICON.signal)),
@@ -2462,7 +2469,7 @@ function chart(points, { bars = false, label }) {
     const px = ((e.clientX - r.left) / r.width) * w;
     const i = Math.max(0, Math.min(points.length - 1, Math.round(bars ? (px - l) / slot - 0.5 : ((px - l) / (w - l - 4)) * (points.length - 1))));
     const p = points[i];
-    hover.replaceChildren(svg('line', { x1: x(i), x2: x(i), y1: t, y2: h - b, class: 'cross' }), !bars && svg('circle', { cx: x(i), cy: y(p.v), r: 4, class: 'dot' }));
+    fill(hover, svg('line', { x1: x(i), x2: x(i), y1: t, y2: h - b, class: 'cross' }), !bars && svg('circle', { cx: x(i), cy: y(p.v), r: 4, class: 'dot' }));
     tip.replaceChildren(el('b', {}, count(p.v)), ' ', p.long);
     tip.style.left = `${(x(i) / w) * 100}%`;
     tip.hidden = false;
@@ -2761,7 +2768,7 @@ function signInPage() {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     go.disabled = true;
-    const say = (...text) => message.replaceChildren(el('div', { class: 'status wait' }, ...text));
+    const say = (...text) => fill(message, el('div', { class: 'status wait' }, ...text));
     const fail = (text) => message.replaceChildren(status(text, 'error'));
     try {
       if (!pending?.keys) {
