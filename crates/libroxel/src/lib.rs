@@ -15,6 +15,7 @@
 //! ```
 
 mod accounts;
+mod android_input;
 mod autosave;
 mod browse;
 mod command;
@@ -443,7 +444,12 @@ pub fn run() {
     .add_systems(Update, (viewport::draw_selection, viewport::draw_grid).after(EngineSet::Sync))
     .add_systems(Update, (update_title, toggle_fullscreen));
     #[cfg(target_os = "android")]
-    app.add_systems(First, graphics::match_android_window);
+    app.add_systems(First, graphics::match_android_window).add_systems(
+        PreUpdate,
+        android_input::keyboard
+            .after(bevy_egui::EguiPreUpdateSet::ProcessInput)
+            .before(bevy_egui::EguiPreUpdateSet::BeginPass),
+    );
     report::run(&mut app);
 }
 
