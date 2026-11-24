@@ -613,7 +613,8 @@ pub fn editor_ui(
             }
             let list_on = engine.session.as_ref().is_none_or(|s| s.runtime().core_gui_enabled("PlayerList"));
             if playing && list_on {
-                leaderboard(ui, &tree_rc.borrow(), &mut editor.platform);
+                let game = game_name(editor);
+                leaderboard(ui, &tree_rc.borrow(), &mut editor.platform, &game);
             }
             ui.max_rect()
         })
@@ -2184,7 +2185,7 @@ fn property_editor(
 }
 
 /// While playing: everyone's `leaderstats` values in the top-right corner.
-fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree, platform: &mut crate::browse::Platform) {
+fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree, platform: &mut crate::browse::Platform, game: &str) {
     let Some(players) = tree.service(ClassKind::Players) else { return };
     // Each player: their name, their stats (name and value), and their team.
     type Row = (String, Vec<(String, String)>, Option<InstanceId>);
@@ -2287,7 +2288,12 @@ fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree, platform: &mut crate::bro
                             if let Some(badge) = badge {
                                 crate::groups::badge(ui, &badge);
                             }
-                            ui.label(RichText::new(name).color(theme::TEXT));
+                            ui.label(RichText::new(name).color(theme::TEXT)).context_menu(|ui| {
+                                if ui.button(format!("{} {}", theme::icon::FLAG, t("Report"))).clicked() {
+                                    platform.report_player(name, format!("In {game}"));
+                                    ui.close();
+                                }
+                            });
                         });
                         for c in &columns {
                             let v =
@@ -2297,6 +2303,9 @@ fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree, platform: &mut crate::bro
                         ui.end_row();
                     }
                 });
+                if platform.reporting_player() {
+                    platform.report_row(ui);
+                }
             });
         });
 }

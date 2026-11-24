@@ -140,8 +140,9 @@ fn players_like_favorite_and_comment() {
             kind: "comment".into(),
             target: target.clone(),
             reason: "mean".into(),
+            evidence: String::new(),
             time,
-            signature: sign(&who.key, &report_message(&who.id, "comment", &target, "mean", time)),
+            signature: sign(&who.key, &report_message(&who.id, "comment", &target, "mean", "", time)),
         })
         .unwrap();
     }

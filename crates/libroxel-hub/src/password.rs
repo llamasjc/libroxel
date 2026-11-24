@@ -459,9 +459,6 @@ pub(crate) async fn sign_in(
     if !verify(&login_id, &sign_in_message(&attempt.name, attempt.time), &attempt.signature) {
         return wrong();
     }
-    if crate::owner::is_banned(&db, &player_id) {
-        return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
-    }
     match crate::security::check_code(&db, &player_id, attempt.code.as_deref()) {
         Ok(()) => {}
         Err(why) if why == crate::security::NEEDS_CODE => return Err((StatusCode::UNAUTHORIZED, why)),

@@ -131,8 +131,9 @@ fn friends_message_each_other_and_bad_words_are_masked() {
             kind: "message".into(),
             target: target.into(),
             reason: "rude".into(),
+            evidence: String::new(),
             time,
-            signature: sign(&who.key, &report_message(&who.id, "message", target, "rude", time)),
+            signature: sign(&who.key, &report_message(&who.id, "message", target, "rude", "", time)),
         })
     };
     assert!(report(&ana, &rude.message_id).is_err());

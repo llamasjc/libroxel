@@ -154,13 +154,15 @@ impl Platform {
             let result = crate::identity().and_then(|me| {
                 let reporter_id = me.player_id();
                 let reason = "message";
-                let signed = libroxel_hub::report_message(&reporter_id, "message", &message_id, reason, time);
+                let signed =
+                    libroxel_hub::report_message(&reporter_id, "message", &message_id, reason, "", time);
                 client.report(&Report {
                     signature: me.sign(&signed),
                     reporter_id,
                     kind: "message".into(),
                     target: message_id,
                     reason: reason.into(),
+                    evidence: String::new(),
                     time,
                 })
             });

@@ -84,8 +84,9 @@ pub use messages::{
     Conversation, MAX_MESSAGE, Message, Moderation, NewMessage, message_message, read_messages_message,
 };
 pub use moderate::{
-    Dashboard, LogEntry, ModAction, ModChange, Penalty, Queued, ReportReason, Warning, WarningsSeen,
-    moderate_message, moderation_message, warnings_seen_message,
+    Appeal, AppealAsk, ChatLine, Dashboard, LogEntry, MAX_APPEAL, ModAction, ModChange, OpenAppeal, Penalty,
+    Queued, ReportReason, Standing, Warning, WarningsSeen, appeal_message, moderate_message,
+    moderation_message, warnings_seen_message,
 };
 mod owner;
 mod parties;
@@ -452,20 +453,37 @@ pub struct Item {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Report {
     pub reporter_id: String,
-    /// "game", "item" or "comment".
+    /// "game", "item", "comment", "message", "group", "post" or "player".
     pub kind: String,
-    /// The game's or item's id.
+    /// The thing's id; for a player, their player id or name.
     pub target: String,
     pub reason: String,
+    /// What the reporter saw, such as the game and what was said there.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub evidence: String,
     pub time: i64,
     /// [`report_message`] signed with the reporter's identity key.
     pub signature: String,
 }
 
 /// What a reporter signs.
-pub fn report_message(reporter_id: &str, kind: &str, target: &str, reason: &str, time: i64) -> Vec<u8> {
-    format!("libroxel report\n{reporter_id}\n{kind}\n{target}\n{reason}\n{time}").into_bytes()
+pub fn report_message(
+    reporter_id: &str,
+    kind: &str,
+    target: &str,
+    reason: &str,
+    evidence: &str,
+    time: i64,
+) -> Vec<u8> {
+    let mut out = format!("libroxel report\n{reporter_id}\n{kind}\n{target}\n{reason}\n{time}");
+    if !evidence.is_empty() {
+        out.push('\n');
+        out.push_str(evidence);
+    }
+    out.into_bytes()
 }
+
+pub const MAX_EVIDENCE: usize = 2000;
 
 /// How many different players must report a game or item before the Hub
 /// stops listing it (until whoever runs the Hub looks at it).
@@ -855,6 +873,7 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/moderation", post(moderate::moderate))
         .route("/moderation/{id}", get(moderate::get_dashboard))
         .route("/accounts/warnings/seen", post(moderate::warnings_seen))
+        .route("/appeals", post(moderate::appeal))
         .route("/charts", get(charts::get_charts))
         .route("/for-you/{id}", get(charts::for_you))
         .route("/groups", get(groups::list_groups).post(groups::change_group))
@@ -1433,14 +1452,23 @@ async fn report(
         return Err(too_many("reports"));
     }
     let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
-    if !["game", "item", "comment", "message", "group", "post"].contains(&report.kind.as_str()) {
-        return bad("only games, items, comments, messages, groups and posts can be reported");
+    if !["game", "item", "comment", "message", "group", "post", "player"].contains(&report.kind.as_str()) {
+        return bad("only players, games, items, comments, messages, groups and posts can be reported");
     }
     if report.reason.trim().is_empty() || report.reason.chars().count() > 300 {
         return bad("a report needs a short reason");
     }
-    let message =
-        report_message(&report.reporter_id, &report.kind, &report.target, &report.reason, report.time);
+    if report.evidence.chars().count() > MAX_EVIDENCE {
+        return bad("that's too much to send with a report");
+    }
+    let message = report_message(
+        &report.reporter_id,
+        &report.kind,
+        &report.target,
+        &report.reason,
+        &report.evidence,
+        report.time,
+    );
     if !verify(&report.reporter_id, &message, &report.signature) {
         return Err((StatusCode::FORBIDDEN, "the signature does not match that player".into()));
     }
@@ -1448,18 +1476,26 @@ async fn report(
     if crate::owner::is_banned(&db, &report.reporter_id) {
         return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
     }
+    let mut target = report.target.trim().to_owned();
+    if report.kind == "player" {
+        target = owner::resolve(&db, &target).map_err(|e| (StatusCode::NOT_FOUND, e))?;
+        if target == report.reporter_id {
+            return bad("you can't report yourself");
+        }
+    }
     let table = match report.kind.as_str() {
         "game" => "games WHERE game_id = ?1",
         "item" => "items WHERE item_id = ?1",
         "comment" => "game_comments WHERE comment_id = ?1",
         "group" => "groups WHERE group_id = ?1",
         "post" => "group_posts WHERE post_id = ?1",
+        "player" => "accounts WHERE player_id = ?1",
         _ => "messages WHERE message_id = ?1 AND to_id = ?2",
     };
     let exists: Option<i64> = db
         .query_row(
             &format!("SELECT 1 FROM {table} AND ?2 IS NOT NULL"),
-            params![report.target, report.reporter_id],
+            params![target, report.reporter_id],
             |r| r.get(0),
         )
         .optional()
@@ -1467,11 +1503,12 @@ async fn report(
     if exists.is_none() {
         return Err((StatusCode::NOT_FOUND, "there is nothing with that id".into()));
     }
-    // One report per player per thing; reporting again changes the reason.
+    let chat = moderate::chat_around(&db, &report.kind, &target, &report.reporter_id);
     db.execute(
-        "INSERT INTO reports (kind, target, reporter_id, reason, time) VALUES (?1, ?2, ?3, ?4, ?5)
-         ON CONFLICT(kind, target, reporter_id) DO UPDATE SET reason = ?4, time = ?5",
-        params![report.kind, report.target, report.reporter_id, report.reason.trim(), now()],
+        "INSERT INTO reports (kind, target, reporter_id, reason, time, evidence, chat)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(kind, target, reporter_id) DO UPDATE SET reason = ?4, time = ?5, evidence = ?6, chat = ?7",
+        params![report.kind, target, report.reporter_id, report.reason.trim(), now(), report.evidence.trim(), chat],
     )
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
@@ -2495,13 +2532,38 @@ impl HubClient {
         }
     }
 
-    /// Reports a game or item as not OK.
+    /// Reports a player, game or item as not OK.
     pub fn report(&self, report: &Report) -> Result<(), String> {
-        self.agent
+        let mut r = self
+            .agent
             .post(format!("{}/reports", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
             .send_json(report)
-            .map(|_| ())
-            .map_err(|e| format!("the Hub did not take the report: {e}"))
+            .map_err(|e| format!("could not reach the Hub: {e}"))?;
+        if r.status().is_success() {
+            Ok(())
+        } else {
+            Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+        }
+    }
+
+    /// Asks the Hub's owners to lift a ban, mute or warning.
+    pub fn appeal(&self, ask: &AppealAsk) -> Result<(), String> {
+        let mut r = self
+            .agent
+            .post(format!("{}/appeals", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(ask)
+            .map_err(|e| format!("could not reach the Hub: {e}"))?;
+        if r.status().is_success() {
+            Ok(())
+        } else {
+            Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+        }
     }
 
     fn answer<T: serde::de::DeserializeOwned>(

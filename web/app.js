@@ -963,6 +963,8 @@ function render() {
   const nudge = emailNudge();
   if (nudge) nodes.push(nudge);
   if (session && securityInfo?.warnings?.length) nodes.push(warningsBar());
+  const banned = session && bannedBar();
+  if (banned) nodes.push(banned);
   page.replaceChildren(...nodes, ...[view()].flat(Infinity).filter(Boolean));
   document.title = route.name === 'home' ? 'Libroxel: play games people make' : `${titleFor(route)} · Libroxel`;
   const description = DESCRIPTIONS[route.name] || DESCRIPTIONS.home;
@@ -1150,7 +1152,7 @@ function game() {
         el('div', { class: 'hint' }, hint))),
   ];
   if (entry.about) out.push(el('div', { class: 'about' }, el('div', { class: 'caps' }, 'About'), entry.about));
-  if (hostable) out.push(ratingBar(entry));
+  if (hostable) out.push(ratingBar(entry), reportPanel('game', entry.key));
 
   const hide = el('input', { type: 'checkbox', checked: view.hideFull });
   hide.addEventListener('change', () => { view.hideFull = hide.checked; render(); });
@@ -1220,7 +1222,8 @@ function ratingBar(entry) {
     el('button', { class: `chip${r.vote === 'like' ? ' on' : ''}`, disabled: !can, title: tip, onclick: () => press(r.vote === 'like' ? 'none' : 'like', r.favorite) }, icon(ICON.like), count(r.likes)),
     el('button', { class: `chip${r.vote === 'dislike' ? ' on' : ''}`, disabled: !can, title: tip, onclick: () => press(r.vote === 'dislike' ? 'none' : 'dislike', r.favorite) }, icon(ICON.dislike), count(r.dislikes)),
     total > 0 && el('div', { class: 'ratio', title: `${r.likes} of ${total} liked it` }, el('i', { style: `width:${(r.likes / total) * 100}%` })),
-    el('button', { class: `chip${r.favorite ? ' on' : ''}`, disabled: !can, title: tip, onclick: () => press(r.vote, !r.favorite) }, icon(ICON.star), r.favorite ? 'Favorited' : 'Favorite', ` ${count(r.favorites)}`));
+    el('button', { class: `chip${r.favorite ? ' on' : ''}`, disabled: !can, title: tip, onclick: () => press(r.vote, !r.favorite) }, icon(ICON.star), r.favorite ? 'Favorited' : 'Favorite', ` ${count(r.favorites)}`),
+    can && entry.game && entry.byId !== session.playerId && el('button', { class: 'chip', title: 'Report', onclick: () => startReport('game', entry.key, entry.title) }, icon(ICON.flag)));
 }
 
 async function postComment(key) {
@@ -1251,6 +1254,48 @@ async function removeComment(c) {
     flash = { text: e.message, kind: 'error' };
   }
   render();
+}
+
+const REPORT_REASONS = ['Rude, hateful or bullying', 'Sexual or not OK for kids', 'A scam or a cheat', "Something else that's wrong"];
+let reporting = null;
+
+function startReport(kind, target, name) {
+  reporting = { kind, target, name, reason: REPORT_REASONS[0], note: '', busy: false };
+  render();
+}
+
+async function sendReport() {
+  const r = reporting;
+  const time = nowSecs();
+  const evidence = r.note.trim();
+  const tail = evidence ? `\n${evidence}` : '';
+  const signature = signText(secretKey(), `libroxel report\n${session.playerId}\n${r.kind}\n${r.target}\n${r.reason}\n${time}${tail}`);
+  r.busy = true;
+  render();
+  try {
+    await api('/reports', { method: 'POST', body: { reporter_id: session.playerId, kind: r.kind, target: r.target, reason: r.reason, evidence, time, signature } });
+    flash = { text: 'Reported. Thanks.' };
+    reporting = null;
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+    r.busy = false;
+  }
+  render();
+}
+
+function reportPanel(kind, target) {
+  const r = reporting;
+  if (!r || r.kind !== kind || r.target !== target) return null;
+  const reason = el('select', {}, REPORT_REASONS.map((x) => el('option', { value: x, selected: x === r.reason }, x)));
+  reason.addEventListener('change', () => { r.reason = reason.value; });
+  const note = el('textarea', { rows: 3, maxlength: 2000, placeholder: 'What happened (optional)' }, r.note);
+  note.addEventListener('input', () => { r.note = note.value; });
+  return el('div', { class: 'report-card' },
+    el('b', {}, `Report ${r.name}`),
+    reason, note,
+    el('div', { class: 'buttons' },
+      el('button', { class: 'btn small', disabled: r.busy, onclick: sendReport }, icon(ICON.flag), 'Send'),
+      el('button', { class: 'chip', onclick: () => { reporting = null; render(); } }, 'Cancel')));
 }
 
 async function reportComment(c) {
@@ -1677,7 +1722,9 @@ function user() {
       el('div', {},
         el('h1', {}, p.name, ' ', p.badge && badge(p.badge), ' ', p.admin && el('span', { class: 'tag admin' }, 'Admin'), ' ', p.verified && el('span', { class: 'tag verified' }, 'Verified')),
         el('div', { class: 'soft' }, `#${p.number ?? 0} · `, days < 1 ? 'Joined today' : `Joined ${ago(p.joined_secs_ago)}`),
-        action && el('div', { style: 'margin-top:8px' }, action))),
+        (action || (session && !isMe)) && el('div', { style: 'margin-top:8px' }, action, ' ',
+          session && !isMe && el('button', { class: 'chip', title: 'Report', onclick: () => startReport('player', p.player_id, p.name) }, icon(ICON.flag))))),
+    reportPanel('player', p.player_id),
     p.about && el('div', { class: 'about' }, p.about),
     el('h2', { class: 'section' }, `Games (${p.games.length})`),
     p.games.length
@@ -2021,7 +2068,8 @@ function statsPage() {
 
 const mod = { board: null, error: null, busy: false, for: null, at: 0 };
 const HOURS = [[1, '1 hour'], [24, '1 day'], [168, '7 days'], [720, '30 days']];
-const KINDS = { game: 'Game', item: 'Item', comment: 'Comment', message: 'Message', group: 'Group', post: 'Post' };
+const KINDS = { player: 'Player', game: 'Game', item: 'Item', comment: 'Comment', message: 'Message', group: 'Group', post: 'Post', appeal: 'Appeal' };
+const PENALTIES = { ban: 'Ban', mute: 'Mute', warning: 'Warning' };
 
 function loadModeration() {
   mod.for = session.playerId;
@@ -2076,11 +2124,14 @@ function reportCard(q) {
       q.author_id ? playerLink(q.author_id, q.author) : el('span', { class: 'soft' }, 'Gone'),
       el('span', { class: 'soft' }, ` · ${n} ${n === 1 ? 'report' : 'reports'}`),
       q.hidden && el('span', { class: 'tag admin', style: 'margin-left:6px' }, 'Hidden')),
-    q.text !== null && el('div', { class: 'text' }, href ? el('a', { href }, q.text) : q.text),
-    el('ul', { class: 'reasons soft' }, q.reports.map((r) => el('li', {}, `${r.reporter || 'Someone'}: ${r.reason} · ${ago(r.secs_ago)}`))),
+    q.text !== null && q.kind !== 'player' && el('div', { class: 'text' }, href ? el('a', { href }, q.text) : q.text),
+    el('ul', { class: 'reasons soft' }, q.reports.map((r) => el('li', {}, `${r.reporter || 'Someone'}: ${r.reason} · ${ago(r.secs_ago)}`,
+      r.evidence && el('pre', {}, r.evidence),
+      (r.chat || []).length > 0 && el('details', {}, el('summary', {}, `Chat (${r.chat.length})`),
+        el('pre', {}, r.chat.map((l) => `${l.reported ? '> ' : ''}${l.from || l.from_id.slice(0, 8)}: ${l.text}`).join('\n')))))),
     el('div', { class: 'buttons' },
       reason,
-      q.text !== null && el('button', { class: 'chip', disabled: mod.busy, onclick: () => step('remove', {}, 'Removed.') }, icon(ICON.trash), 'Remove'),
+      q.text !== null && q.kind !== 'player' && el('button', { class: 'chip', disabled: mod.busy, onclick: () => step('remove', {}, 'Removed.') }, icon(ICON.trash), 'Remove'),
       el('button', { class: 'chip', disabled: mod.busy, onclick: () => step('dismiss', {}, 'Dismissed.') }, icon(ICON.check), 'Dismiss')),
     q.author_id && el('div', { class: 'buttons' },
       el('button', { class: 'chip', disabled: mod.busy, onclick: () => step('warn', {}, 'Warned.') }, icon(ICON.bell), 'Warn'),
@@ -2095,6 +2146,22 @@ function penaltyRow(p, action, done) {
     el('div', { class: 'what' }, playerLink(p.player_id, p.name),
       el('small', { class: 'soft' }, `${p.reason} · ${lasts(p.left_secs)}`)),
     el('div', { class: 'buttons' }, el('button', { class: 'chip', disabled: mod.busy, onclick: () => moderate(action, { player_id: p.player_id }, done) }, 'Lift')));
+}
+
+function appealCard(a) {
+  const reply = el('input', { type: 'text', placeholder: 'Reply', maxlength: 300 });
+  const step = (action, done) => moderate(action, { kind: 'appeal', target: String(a.appeal_id), reason: reply.value.trim() }, done);
+  const left = a.kind === 'warning' ? '' : ` · ${lasts(a.left_secs)} left`;
+  return el('div', { class: 'report-card' },
+    el('div', {}, el('span', { class: 'tag kind' }, PENALTIES[a.kind] || a.kind), ' ', playerLink(a.player_id, a.name),
+      el('span', { class: 'soft' }, ` · ${ago(a.secs_ago)}${left}`)),
+    el('div', { class: 'soft' }, a.penalty),
+    el('div', { class: 'text' }, a.text),
+    a.history.length > 0 && el('details', {}, el('summary', {}, `History (${a.history.length})`), a.history.map(logRow)),
+    el('div', { class: 'buttons' },
+      reply,
+      el('button', { class: 'chip', disabled: mod.busy, onclick: () => step('accept', 'Lifted.') }, icon(ICON.check), 'Lift'),
+      el('button', { class: 'chip', disabled: mod.busy, onclick: () => step('deny', 'Kept.') }, icon(ICON.lock), 'Keep')));
 }
 
 function logRow(l) {
@@ -2115,6 +2182,9 @@ function moderationPage() {
   if (mod.error) return [...out, status(mod.error, 'error')];
   const b = mod.board;
   if (!b) return [...out, el('p', { class: 'soft' }, 'Loading…')];
+  const appeals = b.appeals || [];
+  out.push(el('h2', { class: 'section' }, `Appeals (${appeals.length})`));
+  out.push(appeals.length ? appeals.map(appealCard) : el('div', { class: 'empty' }, 'No appeals.'));
   out.push(el('h2', { class: 'section' }, `Reports (${b.reports.length})`));
   out.push(b.reports.length ? b.reports.map(reportCard) : el('div', { class: 'empty' }, 'Nothing reported.'));
   out.push(el('div', { class: 'columns' },
@@ -2123,6 +2193,62 @@ function moderationPage() {
   out.push(el('h2', { class: 'section' }, 'Log'));
   out.push(b.log.length ? b.log.map(logRow) : el('p', { class: 'soft' }, 'Nothing yet.'));
   return out;
+}
+
+const appealing = { key: null, text: '', busy: false };
+
+async function sendAppeal(kind, warningId) {
+  const time = Date.now();
+  const text = appealing.text.trim();
+  const signature = signText(secretKey(), `libroxel appeal\n${session.playerId}\n${kind}\n${warningId}\n${text}\n${time}`);
+  appealing.busy = true;
+  render();
+  try {
+    await api('/appeals', { method: 'POST', body: { player_id: session.playerId, kind, warning_id: warningId, text, time, signature } });
+    flash = { text: 'Sent. A moderator will look at it.' };
+    appealing.key = null;
+    appealing.text = '';
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  appealing.busy = false;
+  securityInfo = null;
+  loadSecurity();
+  render();
+}
+
+function appealRow(kind, warningId, label, appeals) {
+  const key = `${kind}:${warningId}`;
+  const sent = appeals.find((a) => a.kind === kind && (kind !== 'warning' || a.warning_id === warningId));
+  const said = { open: 'Appeal sent', accepted: 'Appeal accepted', denied: 'Appeal denied' };
+  let tail;
+  if (sent) tail = el('span', { class: 'soft' }, ` · ${said[sent.state] || sent.state}${sent.reply ? `: ${sent.reply}` : ''}`);
+  else if (appealing.key !== key) tail = el('button', { class: 'link', onclick: () => { appealing.key = key; appealing.text = ''; render(); } }, 'Appeal');
+  const row = [el('div', {}, label, ' ', tail)];
+  if (!sent && appealing.key === key) {
+    const box = el('textarea', { rows: 3, maxlength: 1000, placeholder: 'Why should it be lifted?' }, appealing.text);
+    box.addEventListener('input', () => { appealing.text = box.value; });
+    row.push(box, el('div', { class: 'buttons' },
+      el('button', { class: 'btn small', disabled: appealing.busy, onclick: () => sendAppeal(kind, warningId) }, 'Send'),
+      el('button', { class: 'chip', onclick: () => { appealing.key = null; render(); } }, 'Cancel')));
+  }
+  return el('div', { class: 'report-card' }, row);
+}
+
+function standingPanel() {
+  const st = securityInfo?.standing;
+  if (!st || (!st.banned && !st.muted && !st.warnings.length && !st.appeals.length)) return null;
+  const out = [el('h2', { class: 'section', id: 'standing' }, 'Standing')];
+  if (st.banned) out.push(appealRow('ban', 0, `Banned: ${st.banned.reason} · ${lasts(st.banned.left_secs)}`, st.appeals));
+  if (st.muted) out.push(appealRow('mute', 0, `Muted: ${st.muted.reason || 'no reason given'} · ${lasts(st.muted.left_secs)}`, st.appeals));
+  for (const w of st.warnings) out.push(appealRow('warning', w.warning_id, `Warning: ${w.reason} · ${ago(w.secs_ago)}`, st.appeals));
+  return out;
+}
+
+function bannedBar() {
+  const b = securityInfo?.standing?.banned;
+  if (!b || route.name === 'profile') return null;
+  return el('div', { class: 'status error' }, `Your account is banned: ${b.reason}. `, el('a', { href: '/profile#standing' }, 'Appeal'));
 }
 
 function warningsBar() {
@@ -2138,7 +2264,7 @@ function warningsBar() {
     render();
   };
   return el('div', { class: 'status error' }, `Warning: ${securityInfo.warnings.map((w) => w.reason).join(' · ')}`,
-    el('button', { class: 'chip', onclick: seen }, 'OK'));
+    el('button', { class: 'chip', onclick: seen }, 'OK'), el('a', { href: '/profile#standing' }, 'Appeal'));
 }
 
 // --- Avatar -----------------------------------------------------------------
@@ -2207,6 +2333,7 @@ function avatar() {
 
 function profile() {
   if (!session) return needSignIn('Sign in to see your profile.');
+  if (!data.me && securityInfo?.standing?.banned) return [el('h1', { class: 'title' }, 'Profile'), standingPanel(), el('div', { class: 'form-actions', style: 'margin-top:18px' }, el('button', { class: 'chip', onclick: signOut }, icon(ICON.signOut), 'Sign out'))];
   if (!data.me) return [el('h1', { class: 'title' }, 'Profile'), el('p', { class: 'soft' }, data.loaded ? 'Your account could not be loaded.' : 'Loading…')];
   startDraft();
   const about = el('textarea', { rows: 3, maxlength: 2000 }, draft.about);
@@ -2222,6 +2349,7 @@ function profile() {
     el('div', { class: 'form-actions' }, save),
     draft.message && status(draft.message.text, draft.message.kind),
     security(),
+    standingPanel(),
     parentPanel(),
     el('div', { class: 'form-actions', style: 'margin-top:18px' }, el('button', { class: 'chip', onclick: signOut }, icon(ICON.signOut), 'Sign out')),
   ];

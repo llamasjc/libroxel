@@ -247,6 +247,8 @@ pub struct Security {
     pub sessions: Vec<crate::recovery::SessionInfo>,
     #[serde(default)]
     pub recovery_codes_left: u32,
+    #[serde(default)]
+    pub standing: crate::Standing,
 }
 
 /// Remembers a sign-in on another computer.
@@ -316,6 +318,7 @@ pub(crate) async fn security(
         muted_secs: crate::moderate::muted_for(&db, &id),
         sessions: crate::recovery::sessions(&db, &id, signed.session.as_deref()),
         recovery_codes_left: crate::recovery::recovery_codes_left(&db, &id),
+        standing: crate::moderate::standing(&db, &id),
     }))
 }
 

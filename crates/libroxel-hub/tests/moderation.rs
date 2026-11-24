@@ -1,7 +1,7 @@
 use libroxel_hub::{
-    AccountUpdate, FriendAction, FriendChange, HubClient, ModAction, ModChange, NewMessage, Report,
-    account_message, add_owner, friend_message, message_message, moderate_message, moderation_message,
-    open_db, player_id_of, report_message, security_message, sign, start,
+    AccountUpdate, AppealAsk, FriendAction, FriendChange, HubClient, ModAction, ModChange, NewMessage,
+    Report, account_message, add_owner, appeal_message, friend_message, message_message, moderate_message,
+    moderation_message, open_db, player_id_of, report_message, security_message, sign, start,
 };
 
 struct Player {
@@ -68,10 +68,58 @@ impl Player {
             kind: "message".into(),
             target: target.into(),
             reason: "rude".into(),
+            evidence: String::new(),
             time,
-            signature: sign(&self.key, &report_message(&self.id, "message", target, "rude", time)),
+            signature: sign(&self.key, &report_message(&self.id, "message", target, "rude", "", time)),
         })
         .unwrap();
+    }
+
+    fn report_player(&self, hub: &HubClient, who: &str, evidence: &str) -> Result<(), String> {
+        let time = self.tick();
+        hub.report(&Report {
+            reporter_id: self.id.clone(),
+            kind: "player".into(),
+            target: who.into(),
+            reason: "Bullying".into(),
+            evidence: evidence.into(),
+            time,
+            signature: sign(&self.key, &report_message(&self.id, "player", who, "Bullying", evidence, time)),
+        })
+    }
+
+    fn appeal(&self, hub: &HubClient, kind: &str, warning_id: i64) -> Result<(), String> {
+        let time = self.tick();
+        let text = "it was a joke between friends";
+        hub.appeal(&AppealAsk {
+            player_id: self.id.clone(),
+            kind: kind.into(),
+            warning_id,
+            text: text.into(),
+            time,
+            signature: sign(&self.key, &appeal_message(&self.id, kind, warning_id, text, time)),
+        })
+    }
+
+    fn standing(&self, hub: &HubClient) -> libroxel_hub::Standing {
+        let time = self.tick();
+        hub.security(&self.id, time, &sign(&self.key, &security_message(&self.id, time))).unwrap().standing
+    }
+
+    fn answer(&self, hub: &HubClient, action: ModAction, appeal_id: i64) -> Result<(), String> {
+        let mut c = ModChange {
+            moderator_id: self.id.clone(),
+            action,
+            kind: "appeal".into(),
+            target: appeal_id.to_string(),
+            player_id: String::new(),
+            reason: "ok".into(),
+            hours: 0,
+            time: self.tick(),
+            signature: String::new(),
+        };
+        c.signature = sign(&self.key, &moderate_message(&c));
+        hub.moderate(&c)
     }
 
     fn dashboard(&self, hub: &HubClient) -> Result<libroxel_hub::Dashboard, String> {
@@ -179,6 +227,89 @@ fn owners_work_through_reports() {
     db.execute("UPDATE banned SET until = 1", []).unwrap();
     drop(db);
     bo.send(&hub, &ana, "back").unwrap();
+    drop(running);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn players_report_players_and_appeal() {
+    let dir = std::env::temp_dir().join(format!("libroxel-appeals-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let data = dir.join("hub.sqlite");
+    let running = start("127.0.0.1:0".parse().unwrap(), Some(&data)).unwrap();
+    let hub = HubClient::new(&running.url());
+    let (boss, ana, bo) = (Player::new(31), Player::new(32), Player::new(33));
+    boss.claim(&hub, "Chief");
+    ana.claim(&hub, "Annie");
+    bo.claim(&hub, "Bobo");
+    ana.add(&hub, &bo);
+    bo.add(&hub, &ana);
+    add_owner(&open_db(Some(&data)).unwrap(), "Chief").unwrap();
+
+    ana.send(&hub, &bo, "hi").unwrap();
+    bo.send(&hub, &ana, "you're bad at this").unwrap();
+    assert!(ana.report_player(&hub, "Annie", "").unwrap_err().contains("yourself"));
+    assert!(ana.report_player(&hub, "Nobody", "").is_err());
+    ana.report_player(&hub, "Bobo", "In Kart Racer: Bobo: quit the game").unwrap();
+
+    let board = boss.dashboard(&hub).unwrap();
+    let q = &board.reports[0];
+    assert_eq!(
+        (q.kind.as_str(), q.target.as_str(), q.text.as_deref()),
+        ("player", bo.id.as_str(), Some("Bobo"))
+    );
+    assert!(!q.hidden);
+    assert_eq!(q.reports[0].evidence, "In Kart Racer: Bobo: quit the game");
+    let chat: Vec<&str> = q.reports[0].chat.iter().map(|l| l.text.as_str()).collect();
+    assert_eq!(chat, ["hi", "you're bad at this"]);
+    assert_eq!(q.reports[0].chat[1].from.as_deref(), Some("Bobo"));
+
+    let mut warn = ModChange {
+        moderator_id: boss.id.clone(),
+        action: ModAction::Warn,
+        kind: "player".into(),
+        target: bo.id.clone(),
+        player_id: String::new(),
+        reason: "be kind".into(),
+        hours: 0,
+        time: boss.tick(),
+        signature: String::new(),
+    };
+    warn.signature = sign(&boss.key, &moderate_message(&warn));
+    hub.moderate(&warn).unwrap();
+    let warning = bo.standing(&hub).warnings[0].warning_id;
+    assert!(bo.appeal(&hub, "ban", 0).unwrap_err().contains("aren't banned"));
+    bo.appeal(&hub, "warning", warning).unwrap();
+    assert!(bo.appeal(&hub, "warning", warning).unwrap_err().contains("already"));
+
+    boss.moderate(&hub, ModAction::Ban, "", &bo.id, 0).unwrap();
+    bo.appeal(&hub, "ban", 0).unwrap();
+    let mine = bo.standing(&hub);
+    assert!(mine.banned.is_some() && mine.banned.as_ref().unwrap().left_secs.is_none());
+    assert_eq!(mine.appeals.len(), 2);
+    assert!(mine.appeals.iter().all(|a| a.state == "open"));
+
+    let board = boss.dashboard(&hub).unwrap();
+    assert_eq!(board.appeals.len(), 2);
+    let ban = board.appeals.iter().find(|a| a.kind == "ban").unwrap();
+    let warned = board.appeals.iter().find(|a| a.kind == "warning").unwrap();
+    assert_eq!(ban.name.as_deref(), Some("Bobo"));
+    assert_eq!(warned.penalty, "be kind");
+    assert_eq!(ban.history.len(), 2);
+
+    boss.answer(&hub, ModAction::Deny, warned.appeal_id).unwrap();
+    assert!(boss.answer(&hub, ModAction::Accept, warned.appeal_id).unwrap_err().contains("already"));
+    assert!(bo.send(&hub, &ana, "let me back").unwrap_err().contains("banned"));
+    boss.answer(&hub, ModAction::Accept, ban.appeal_id).unwrap();
+    bo.send(&hub, &ana, "thanks").unwrap();
+
+    let mine = bo.standing(&hub);
+    assert!(mine.banned.is_none());
+    assert_eq!(mine.warnings.len(), 1);
+    let states: Vec<&str> = mine.appeals.iter().map(|a| a.state.as_str()).collect();
+    assert!(states.contains(&"accepted") && states.contains(&"denied"));
+    assert!(boss.dashboard(&hub).unwrap().appeals.is_empty());
+    assert_eq!(boss.dashboard(&hub).unwrap().log[0].action, "accept");
     drop(running);
     let _ = std::fs::remove_dir_all(&dir);
 }

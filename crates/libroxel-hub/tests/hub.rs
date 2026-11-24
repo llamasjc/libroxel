@@ -259,11 +259,12 @@ fn reported_games_drop_off_until_whoever_runs_the_hub_clears_them() {
         let secret = [key; 32];
         let me = player_id_of(&secret);
         Report {
-            signature: sign(&secret, &report_message(&me, "game", &id, reason, 1)),
+            signature: sign(&secret, &report_message(&me, "game", &id, reason, "", 1)),
             reporter_id: me,
             kind: "game".into(),
             target: id.clone(),
             reason: reason.into(),
+            evidence: String::new(),
             time: 1,
         }
     };

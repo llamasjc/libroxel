@@ -129,8 +129,13 @@ pub struct Platform {
     /// What the Hub said about the last report.
     reported: Slot<String>,
     pub report_status: Option<Result<String, String>>,
-    /// The game or item whose ⚑ was pressed: its kind, id and name.
-    reporting: Option<(&'static str, String, String)>,
+    /// The player, game or item whose ⚑ was pressed: its kind, id, name and what was seen.
+    reporting: Option<(&'static str, String, String, String)>,
+    /// The ban, mute or warning being appealed, and why.
+    appealing: Option<(&'static str, i64)>,
+    appeal_text: String,
+    appeal_done: Slot<String>,
+    appeal_status: Option<Result<String, String>>,
     /// What the Hub said about the last item shared, for the editor's output.
     pub item_status: Option<Result<String, String>>,
     /// Friends, online status, pings and the game being played.
@@ -222,6 +227,10 @@ impl Default for Platform {
             reported: Arc::default(),
             report_status: None,
             reporting: None,
+            appealing: None,
+            appeal_text: String::new(),
+            appeal_done: Arc::default(),
+            appeal_status: None,
             item_status: None,
             social: crate::social::Social::default(),
             family: family::FamilyUi::default(),
@@ -302,6 +311,15 @@ impl Platform {
         }
         if let Some(result) = self.reported.lock().unwrap().take() {
             self.report_status = Some(result);
+        }
+        let taken = self.appeal_done.lock().unwrap().take();
+        if let Some(result) = taken {
+            if result.is_ok() {
+                self.appealing = None;
+                self.appeal_text.clear();
+                self.fetch_security();
+            }
+            self.appeal_status = Some(result);
         }
         if let Some(result) = self.item_shared.lock().unwrap().take() {
             self.item_status = Some(result);
@@ -538,7 +556,7 @@ impl Platform {
     }
 
     /// Reports a game or item (`kind`) to the Hub, signed as this player.
-    fn report(&mut self, kind: &'static str, target: String, reason: &'static str) {
+    fn report(&mut self, kind: &'static str, target: String, reason: &'static str, evidence: String) {
         let client = self.client();
         let out = self.reported.clone();
         std::thread::spawn(move || {
@@ -547,17 +565,23 @@ impl Platform {
                 let time = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_secs() as i64);
-                let message = libroxel_hub::report_message(&reporter_id, kind, &target, reason, time);
+                let message =
+                    libroxel_hub::report_message(&reporter_id, kind, &target, reason, &evidence, time);
                 let report = Report {
                     signature: me.sign(&message),
                     reporter_id,
                     kind: kind.into(),
                     target,
                     reason: reason.into(),
+                    evidence,
                     time,
                 };
                 client.report(&report)?;
-                Ok("Thanks, the Hub has your report. Enough reports hide it until someone looks.".to_owned())
+                Ok(if kind == "player" {
+                    "Thanks, a moderator will look at it.".to_owned()
+                } else {
+                    "Thanks, the Hub has your report. Enough reports hide it until someone looks.".to_owned()
+                })
             });
             *out.lock().unwrap() = Some(result);
         });
@@ -635,7 +659,8 @@ impl Platform {
                                 picked = Some(Some(hat));
                             }
                             if report_button(ui, "hat") {
-                                reporting = Some(("item", item.item_id.clone(), item.name.clone()));
+                                reporting =
+                                    Some(("item", item.item_id.clone(), item.name.clone(), String::new()));
                             }
                         });
                     });
@@ -658,14 +683,24 @@ impl Platform {
 
     /// Asks why, when the ⚑ beside a game or hat was pressed, and shows
     /// what the Hub said about the report.
-    fn report_row(&mut self, ui: &mut egui::Ui) {
-        if let Some((kind, target, name)) = self.reporting.clone() {
+    /// Starts reporting a player met in a game.
+    pub fn report_player(&mut self, name: &str, evidence: String) {
+        self.reporting = Some(("player", name.to_owned(), name.to_owned(), evidence));
+        self.report_status = None;
+    }
+
+    pub fn reporting_player(&self) -> bool {
+        self.reporting.as_ref().is_some_and(|r| r.0 == "player") || self.report_status.is_some()
+    }
+
+    pub(crate) fn report_row(&mut self, ui: &mut egui::Ui) {
+        if let Some((kind, target, name, evidence)) = self.reporting.clone() {
             let mut done = false;
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(format!("{} Report {name} for:", crate::theme::icon::FLAG)).strong());
                 for reason in REPORT_REASONS {
                     if ui.button(reason).clicked() {
-                        self.report(kind, target.clone(), reason);
+                        self.report(kind, target.clone(), reason, evidence.clone());
                         done = true;
                     }
                 }
@@ -1003,6 +1038,109 @@ impl Platform {
             }
             None => {}
         }
+    }
+
+    fn standing_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(standing) = self.security.as_ref().map(|s| s.standing.clone()) else { return };
+        let mut rows: Vec<(&'static str, i64, String)> = Vec::new();
+        let lasts = |left: Option<i64>| match left {
+            None => "for good".to_owned(),
+            Some(secs) => format!("{} left", ago(secs).trim_end_matches(" ago")),
+        };
+        if let Some(b) = &standing.banned {
+            rows.push(("ban", 0, format!("Banned: {} ({})", b.reason, lasts(b.left_secs))));
+        }
+        if let Some(m) = &standing.muted {
+            rows.push(("mute", 0, format!("Muted: {} ({})", m.reason, lasts(m.left_secs))));
+        }
+        for w in &standing.warnings {
+            rows.push(("warning", w.warning_id, format!("Warning: {} ({})", w.reason, ago(w.secs_ago))));
+        }
+        if rows.is_empty() {
+            return;
+        }
+        ui.add_space(10.0);
+        ui.label(RichText::new("Standing").strong());
+        for (kind, warning_id, label) in rows {
+            let sent = standing
+                .appeals
+                .iter()
+                .find(|a| a.kind == kind && (kind != "warning" || a.warning_id == Some(warning_id)));
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(crate::theme::AMBER, &label);
+                match sent {
+                    Some(a) => {
+                        let state = match a.state.as_str() {
+                            "accepted" => "Appeal accepted",
+                            "denied" => "Appeal denied",
+                            _ => "Appeal sent",
+                        };
+                        let reply = if a.reply.is_empty() { String::new() } else { format!(": {}", a.reply) };
+                        ui.label(RichText::new(format!("{state}{reply}")).color(crate::theme::MUTED));
+                    }
+                    None if self.appealing != Some((kind, warning_id))
+                        && ui.small_button("Appeal").clicked() =>
+                    {
+                        self.appealing = Some((kind, warning_id));
+                        self.appeal_text.clear();
+                        self.appeal_status = None;
+                    }
+                    None => {}
+                }
+            });
+            if sent.is_none() && self.appealing == Some((kind, warning_id)) {
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.appeal_text)
+                        .char_limit(libroxel_hub::MAX_APPEAL)
+                        .hint_text("Why should it be lifted?")
+                        .desired_rows(3),
+                );
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(!self.appeal_text.trim().is_empty(), egui::Button::new("Send"))
+                        .clicked()
+                    {
+                        self.send_appeal(kind, warning_id);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.appealing = None;
+                    }
+                });
+            }
+        }
+        match &self.appeal_status {
+            Some(Ok(said)) => {
+                ui.colored_label(crate::theme::GREEN, said);
+            }
+            Some(Err(why)) => {
+                crate::report::error(ui, why);
+            }
+            None => {}
+        }
+    }
+
+    fn send_appeal(&mut self, kind: &'static str, warning_id: i64) {
+        let client = self.client();
+        let text = self.appeal_text.trim().to_owned();
+        let out = self.appeal_done.clone();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| {
+                let player_id = me.player_id();
+                let time = libroxel_hub_now_ms();
+                let signature =
+                    me.sign(&libroxel_hub::appeal_message(&player_id, kind, warning_id, &text, time));
+                client.appeal(&libroxel_hub::AppealAsk {
+                    player_id,
+                    kind: kind.into(),
+                    warning_id,
+                    text,
+                    time,
+                    signature,
+                })?;
+                Ok("Sent. A moderator will look at it.".to_owned())
+            });
+            *out.lock().unwrap() = Some(result);
+        });
     }
 
     /// Asks the Hub how this account is kept safe (only its owner may).
@@ -1418,6 +1556,7 @@ impl Platform {
             }
             self.security_ui(ui);
         }
+        self.standing_ui(ui);
         let header = if self.account.is_some() {
             "Sign in to a different account"
         } else {
@@ -1884,7 +2023,8 @@ impl Platform {
                                 chosen = Some((game.clone(), true));
                             }
                             if report_button(ui, "game") {
-                                reporting = Some(("game", game.game_id.clone(), game.title.clone()));
+                                reporting =
+                                    Some(("game", game.game_id.clone(), game.title.clone(), String::new()));
                             }
                         });
                         ui.end_row();

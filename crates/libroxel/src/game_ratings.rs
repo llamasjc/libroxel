@@ -144,13 +144,14 @@ impl GameRatings {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs() as i64);
             let (target, reason) = (comment_id.to_string(), "Not OK".to_owned());
-            let message = libroxel_hub::report_message(&reporter_id, "comment", &target, &reason, time);
+            let message = libroxel_hub::report_message(&reporter_id, "comment", &target, &reason, "", time);
             client.report(&Report {
                 signature: me.sign(&message),
                 reporter_id,
                 kind: "comment".into(),
                 target,
                 reason,
+                evidence: String::new(),
                 time,
             })
         });
