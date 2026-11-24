@@ -336,7 +336,7 @@ fn fields_of(op: &Json) -> Vec<String> {
             fields.push(key.to_owned());
         }
     }
-    for (key, prefix) in [("v", "v:"), ("a", "a:")] {
+    for (key, prefix) in [("v", "v:"), ("a", "a:"), ("e", "e:")] {
         if let Some(map) = op.get(key).and_then(Json::as_object) {
             fields.extend(map.keys().map(|k| format!("{prefix}{k}")));
         }
@@ -473,7 +473,7 @@ impl Guest {
                 map.remove(key);
             }
         }
-        for (key, prefix) in [("v", "v:"), ("a", "a:")] {
+        for (key, prefix) in [("v", "v:"), ("a", "a:"), ("e", "e:")] {
             if let Some(values) = map.get_mut(key).and_then(Json::as_object_mut) {
                 values.retain(|k, _| !mine.contains(format!("{prefix}{k}").as_str()));
             }

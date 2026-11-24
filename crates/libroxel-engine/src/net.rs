@@ -715,6 +715,7 @@ pub(crate) struct Sent {
     name: String,
     props: Vec<(Property, PropertyValue)>,
     attributes: BTreeMap<String, PropertyValue>,
+    extras: BTreeMap<String, PropertyValue>,
     tags: Vec<String>,
     /// The terrain cells' version (0 for anything without cells).
     voxels: u64,
@@ -734,6 +735,7 @@ fn snapshot(tree: &InstanceTree, id: InstanceId) -> Option<Sent> {
         name: tree.name(id).ok()?.to_owned(),
         props,
         attributes: tree.attributes(id).ok()?.clone(),
+        extras: tree.extras(id).ok()?.clone(),
         tags: tree.tags(id).ok()?.to_vec(),
         voxels: tree.voxels(id).ok()?.version(),
     })
@@ -880,6 +882,17 @@ impl Replicator {
                 attributes.insert(name.clone(), Json::Null);
             }
         }
+        let mut extras = Map::new();
+        for (name, value) in &now.extras {
+            if old.and_then(|o| o.extras.get(name)) != Some(value) {
+                extras.insert(name.clone(), place::attribute_to_json(value));
+            }
+        }
+        if let Some(old) = old {
+            for name in old.extras.keys().filter(|n| !now.extras.contains_key(*n)) {
+                extras.insert(name.clone(), Json::Null);
+            }
+        }
         match old {
             None if !service => {
                 op.insert("c".into(), bits(id));
@@ -902,6 +915,9 @@ impl Replicator {
         }
         if !attributes.is_empty() {
             op.insert("a".into(), Json::Object(attributes));
+        }
+        if !extras.is_empty() {
+            op.insert("e".into(), Json::Object(extras));
         }
         if old.map_or(!now.tags.is_empty(), |o| o.tags != now.tags) {
             op.insert("g".into(), json!(now.tags));
@@ -1211,6 +1227,11 @@ pub(crate) fn set_fields(
     if let Some(attributes) = op.get("a").and_then(Json::as_object) {
         for (name, value) in attributes {
             let _ = tree.set_attribute(id, name, place::attribute_from_json(value));
+        }
+    }
+    if let Some(extras) = op.get("e").and_then(Json::as_object) {
+        for (name, value) in extras {
+            let _ = tree.set_extra(id, name, place::attribute_from_json(value));
         }
     }
     if let Some(text) = op.get("x").and_then(Json::as_str) {
