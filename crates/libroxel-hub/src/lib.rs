@@ -6,9 +6,9 @@
 //! announcing drops off the list. There is one Hub, run on a server with
 //! the `libroxel-hub` program; it keeps its data in one SQLite file.
 //!
-//! A Hub also keeps **published** games: whole saved places that anyone
-//! who reaches the Hub can download and play, or host for friends, with no
-//! one needing to be online. Whoever publishes a game gets a secret back;
+//! A Hub also keeps **published** games: whole saved places that players
+//! can play with no one needing to be online. On a Hub that runs its own
+//! game servers, only a game's creator and those servers get its place. Whoever publishes a game gets a secret back;
 //! publishing again with the same id and secret puts out a new version.
 //!
 //! Players can also claim an **account**: a name (unique on that Hub), a
@@ -40,7 +40,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Extension, FromRef, Path as UrlPath, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -57,6 +57,7 @@ pub use assets::{
 };
 pub use charts::{Chart, ChartStats, Charts, ForYou, Played, for_you_message, guess_genre, wilson};
 mod cli;
+mod copies;
 mod email;
 mod family;
 pub use family::{
@@ -579,6 +580,8 @@ pub struct GameInfo {
     pub private: bool,
     #[serde(default)]
     pub max_players: u32,
+    #[serde(default)]
+    pub closed: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -748,8 +751,16 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     moderate::create_tables(&db)?;
     recovery::create_tables(&db)?;
     manage::create_tables(&db)?;
+    copies::create_tables(&db)?;
     seal::install(&db, path)?;
+    closed_games(&db, false).map_err(|e| format!("could not set up the Hub database: {e}"))?;
     Ok(db)
+}
+
+fn closed_games(db: &Connection, closed: bool) -> rusqlite::Result<()> {
+    db.create_scalar_function("closed_games", 0, rusqlite::functions::FunctionFlags::SQLITE_UTF8, move |_| {
+        Ok(closed)
+    })
 }
 
 /// The Hub's routes over `db`.
@@ -766,6 +777,7 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
     let limits =
         Arc::new(Limits { trust_proxy: options.behind_proxy, off: options.no_limits, ..Limits::default() });
     let fleet = options.fleet.map(|o| Arc::new(fleet::Fleet::new(o)));
+    closed_games(&db, fleet.is_some()).expect("the database takes functions");
     let hub = Hub {
         db: Arc::new(Mutex::new(db)),
         limits,
@@ -913,7 +925,7 @@ const GAME_COLUMNS: &str = concat!(
     (SELECT COUNT(*) FROM game_votes v WHERE v.game_id = g.game_id AND v.vote = 1),
     (SELECT COUNT(*) FROM game_votes v WHERE v.game_id = g.game_id AND v.vote = -1),
     (SELECT COUNT(*) FROM game_favorites f WHERE f.game_id = g.game_id),
-    gr.group_id, gr.name, gr.tag, gr.color, g.private, g.max_players"
+    gr.group_id, gr.name, gr.tag, gr.color, g.private, g.max_players, closed_games()"
 );
 const GAMES: &str = "games g LEFT JOIN accounts a ON a.player_id = g.author_id
     LEFT JOIN group_games gg ON gg.game_id = g.game_id LEFT JOIN groups gr ON gr.group_id = gg.group_id";
@@ -951,6 +963,7 @@ fn game_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<GameInfo> {
         },
         private: r.get(18)?,
         max_players: r.get::<_, i64>(19)? as u32,
+        closed: r.get(20)?,
     })
 }
 
@@ -987,20 +1000,71 @@ async fn game_info(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result
     .ok_or(StatusCode::NOT_FOUND)
 }
 
-async fn download(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<String, StatusCode> {
+pub fn download_message(game_id: &str, player_id: &str, time: i64) -> Vec<u8> {
+    format!("libroxel download\n{game_id}\n{player_id}\n{time}").into_bytes()
+}
+
+#[derive(Debug, Clone)]
+pub struct DownloadProof {
+    pub player_id: String,
+    pub time: i64,
+    pub signature: String,
+}
+
+impl DownloadProof {
+    pub fn new(game_id: &str, player_id: String, sign: impl FnOnce(&[u8]) -> String) -> Self {
+        let time = now();
+        let signature = sign(&download_message(game_id, &player_id, time));
+        Self { player_id, time, signature }
+    }
+}
+
+const DOWNLOAD_SIGNED_FOR: i64 = 300;
+
+fn download_signer(headers: &HeaderMap, game_id: &str) -> Option<String> {
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    let player_id = header("x-libroxel-player")?;
+    let time: i64 = header("x-libroxel-time")?.parse().ok()?;
+    let signature = header("x-libroxel-signature")?;
+    ((now() - time).abs() <= DOWNLOAD_SIGNED_FOR
+        && verify(player_id, &download_message(game_id, player_id, time), signature))
+    .then(|| player_id.to_owned())
+}
+
+async fn download(
+    State(db): State<Db>,
+    State(limits): State<Arc<Limits>>,
+    State(fleet): State<Option<Arc<fleet::Fleet>>>,
+    Extension(caller): Extension<Caller>,
+    UrlPath(id): UrlPath<String>,
+    headers: HeaderMap,
+) -> Result<String, (StatusCode, String)> {
     let db = db.lock().unwrap();
-    let place: Option<String> = db
+    let game: Option<(String, Option<String>)> = db
         .query_row(
             &format!(
-                "SELECT place FROM games WHERE game_id = ?1 AND private = 0 AND NOT {}",
+                "SELECT place, author_id FROM games WHERE game_id = ?1 AND private = 0 AND NOT {}",
                 hidden_sql("game", "game_id")
             ),
             params![id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let place = place.ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let (place, author_id) =
+        game.ok_or((StatusCode::NOT_FOUND, "there is no published game with that id".to_owned()))?;
+    let trusted = download_signer(&headers, &id).is_some_and(|signer| {
+        author_id.as_deref() == Some(signer.as_str()) || fleet::runs(&db, &signer, &id)
+    });
+    if !trusted {
+        if !limits.take_logged(Limit::Download, &caller.0) {
+            return Err(too_many("games downloaded"));
+        }
+        if fleet.is_some() {
+            eprintln!("{} was refused the place of {id}", caller.0);
+            return Err((StatusCode::FORBIDDEN, "only its creator can download this game".into()));
+        }
+    }
     let _ = db.execute("UPDATE games SET plays = plays + 1 WHERE game_id = ?1", params![id]);
     Ok(place)
 }
@@ -1037,6 +1101,7 @@ async fn publish(
         }
         _ => None,
     };
+    let prints = copies::prints(&game.place);
     let db = db.lock().unwrap();
     if author_id.as_deref().is_some_and(|id| crate::owner::is_banned(&db, id)) {
         return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
@@ -1060,6 +1125,8 @@ async fn publish(
             if secret != seal::pepper(&db, &game.secret) {
                 return Err((StatusCode::FORBIDDEN, "someone else published that game".into()));
             }
+            let owner = author_id.clone().unwrap_or_else(|| id.to_owned());
+            not_copied(&db, id, &owner, &prints)?;
             db.execute(
                 "UPDATE games SET title = ?2, author = ?3, description = ?4, place = ?5, version = ?6,
                      updated = ?7, author_id = ?8 WHERE game_id = ?1",
@@ -1067,10 +1134,13 @@ async fn publish(
             )
             .map_err(internal)?;
             manage::keep_version(&db, id, version + 1, &title, &game.place, now).map_err(internal)?;
+            copies::keep(&db, id, &owner, &prints).map_err(internal)?;
             Ok(Json(Published { game_id: id.to_owned(), version: version as u32 + 1 }))
         }
         None => {
             let id = new_game_id();
+            let owner = author_id.clone().unwrap_or_else(|| id.clone());
+            not_copied(&db, &id, &owner, &prints)?;
             db.execute(
                 "INSERT INTO games (game_id, secret, title, author, description, place, version, plays, created,
                      updated, author_id)
@@ -1079,8 +1149,27 @@ async fn publish(
             )
             .map_err(internal)?;
             manage::keep_version(&db, &id, 1, &title, &game.place, now).map_err(internal)?;
+            copies::keep(&db, &id, &owner, &prints).map_err(internal)?;
             Ok(Json(Published { game_id: id, version: 1 }))
         }
+    }
+}
+
+fn not_copied(
+    db: &Connection,
+    game_id: &str,
+    owner: &str,
+    prints: &std::collections::HashSet<String>,
+) -> Result<(), (StatusCode, String)> {
+    match copies::copied_from(db, game_id, owner, prints) {
+        Some(title) => {
+            eprintln!("{owner} tried to publish a copy of {title}");
+            Err((
+                StatusCode::CONFLICT,
+                format!("this game looks copied from “{title}”, which someone else made"),
+            ))
+        }
+        None => Ok(()),
     }
 }
 
@@ -1528,6 +1617,7 @@ async fn unpublish(
         Ok(0) => StatusCode::NOT_FOUND,
         Ok(_) => {
             manage::forget(&db, &id);
+            copies::forget(&db, &id);
             StatusCode::NO_CONTENT
         }
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -1973,12 +2063,28 @@ impl HubClient {
     }
 
     /// A published game's saved place.
-    pub fn download(&self, game_id: &str) -> Result<String, String> {
-        self.slow
-            .get(format!("{}/games/{game_id}/place", self.base))
+    pub fn download(&self, game_id: &str, proof: Option<&DownloadProof>) -> Result<String, String> {
+        let mut request = self.slow.get(format!("{}/games/{game_id}/place", self.base));
+        if let Some(proof) = proof {
+            request = request
+                .header("x-libroxel-player", &proof.player_id)
+                .header("x-libroxel-time", proof.time.to_string())
+                .header("x-libroxel-signature", &proof.signature);
+        }
+        let mut response = request
+            .config()
+            .http_status_as_error(false)
+            .build()
             .call()
-            .and_then(|mut r| r.body_mut().with_config().limit(MAX_PLACE as u64 + 1).read_to_string())
-            .map_err(|e| format!("could not download the game: {e}"))
+            .map_err(|e| format!("could not download the game: {e}"))?;
+        let ok = response.status().is_success();
+        let text = response
+            .body_mut()
+            .with_config()
+            .limit(MAX_PLACE as u64 + 1)
+            .read_to_string()
+            .map_err(|e| format!("could not download the game: {e}"))?;
+        if ok { Ok(text) } else { Err(format!("could not download the game: {text}")) }
     }
 
     /// Claims or changes an account.

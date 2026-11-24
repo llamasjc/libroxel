@@ -159,6 +159,18 @@ pub(crate) fn is_fleet(db: &Connection, server_id: &str) -> bool {
         .is_some()
 }
 
+pub(crate) fn runs(db: &Connection, server_id: &str, game_id: &str) -> bool {
+    db.query_row(
+        "SELECT 1 FROM fleet WHERE server_id = ?1 AND game_id = ?2",
+        params![server_id, game_id],
+        |_| Ok(()),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .is_some()
+}
+
 /// Whether `game_id` names a game the Hub can run: a starter game, or a
 /// published one that hasn't been taken down.
 fn runnable(db: &Connection, game_id: &str) -> bool {

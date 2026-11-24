@@ -19,6 +19,11 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
 - **Phones:** menus and buttons stay clear of a notch, sounds and voice
   chat pause while Libroxel is in the background (with unsaved work kept),
   and Back on the home screen leaves the app.
+- **Closed games:** on a Hub that runs its own servers, only a game's
+  creator and those servers can download its place, so its server scripts
+  and server storage never reach players. Copies of someone else's game
+  are turned away when published, and bulk downloads of games and files
+  are limited and logged.
 - **Your games** on the Create page, in the app and on the site: change a
   game's name and description, who can play, and max players, remove it,
   or put an older version back live.

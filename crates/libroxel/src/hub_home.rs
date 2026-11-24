@@ -81,6 +81,16 @@ impl Entry {
     fn hostable(&self) -> bool {
         !matches!(self.source, Source::Live)
     }
+
+    fn host_here(&self, platform: &Platform) -> bool {
+        match &self.source {
+            Source::Published(game) if game.closed => {
+                let me = platform.account.as_ref().map(|a| a.player_id.as_str());
+                me.is_some() && game.author_id.as_deref() == me
+            }
+            _ => self.hostable(),
+        }
+    }
 }
 
 /// Every game worth showing: the starter games, the published ones and any
@@ -647,8 +657,8 @@ fn follow_link(state: &mut HomeState, platform: &mut Platform, list: &[Entry], n
     };
     state.view = View::Game(key);
     match pending.launch {
-        Launch::Play(_) => press_play(state, platform, entry, name),
-        _ => host(entry, platform),
+        Launch::Host(_) if entry.host_here(platform) => host(entry, platform),
+        _ => press_play(state, platform, entry, name),
     }
 }
 
@@ -1036,7 +1046,7 @@ fn game_page(
                     pick = press_play(state, platform, entry, name);
                 }
                 ui.add_space(10.0);
-                if entry.hostable()
+                if entry.host_here(platform)
                     && theme::block_button(ui, theme::Kind::Plain, icon::BROADCAST, t("Host it myself"), 52.0)
                         .on_hover_text(t(
                             "Run a server of this game on your own computer instead; it shows on this list",
@@ -1060,7 +1070,11 @@ fn game_page(
                 ui.horizontal_wrapped(|ui| {
                     ui.colored_label(
                         theme::RED,
-                        tf("{why} You can also host it yourself.", &[("why", &why)]),
+                        if entry.host_here(platform) {
+                            tf("{why} You can also host it yourself.", &[("why", &why)])
+                        } else {
+                            why.clone()
+                        },
                     );
                     crate::report::button(ui, why);
                 });

@@ -116,7 +116,7 @@ fn games_are_published_found_downloaded_and_updated() {
     assert_eq!(list[0].author, "Alice");
     assert!(client.games("kart").unwrap().is_empty());
 
-    assert_eq!(client.download(&first.game_id).unwrap(), r#"{"version":1,"root":{}}"#);
+    assert_eq!(client.download(&first.game_id, None).unwrap(), r#"{"version":1,"root":{}}"#);
     assert_eq!(client.games("").unwrap()[0].plays, 1);
 
     // A new version from whoever published it; no one else can replace it.
@@ -125,7 +125,7 @@ fn games_are_published_found_downloaded_and_updated() {
     assert_eq!(second.unwrap().version, 2);
     let stolen = client.publish(&game(Some(first.game_id.clone()), &new_secret(), "{}"));
     assert!(stolen.unwrap_err().contains("someone else"));
-    assert_eq!(client.download(&first.game_id).unwrap(), r#"{"version":1,"root":{"x":1}}"#);
+    assert_eq!(client.download(&first.game_id, None).unwrap(), r#"{"version":1,"root":{"x":1}}"#);
 
     // Only saved games are taken.
     assert!(client.publish(&game(None, &secret, "not a game")).is_err());
@@ -134,7 +134,7 @@ fn games_are_published_found_downloaded_and_updated() {
 
     client.unpublish(&first.game_id, &secret).unwrap();
     assert!(client.games("").unwrap().is_empty());
-    assert!(client.download(&first.game_id).is_err());
+    assert!(client.download(&first.game_id, None).is_err());
 }
 
 #[test]
@@ -279,7 +279,7 @@ fn reported_games_drop_off_until_whoever_runs_the_hub_clears_them() {
         client.report(&report(key, "rude")).unwrap();
     }
     assert!(client.games("").unwrap().is_empty(), "hidden once enough players report it");
-    assert!(client.download(&id).is_err());
+    assert!(client.download(&id, None).is_err());
 
     // Whoever runs the Hub sees why, and can put it back.
     let db = open_db(Some(&db_path)).unwrap();

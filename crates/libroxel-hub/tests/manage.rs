@@ -48,7 +48,7 @@ fn settings_versions_and_remove() {
     let game = hub.game(&id).unwrap();
     assert_eq!((game.title.as_str(), game.private, game.max_players), ("Tower", true, 100));
     assert!(hub.games("").unwrap().is_empty());
-    assert!(hub.download(&id).is_err());
+    assert!(hub.download(&id, None).is_err());
 
     let time = now_ms();
     let mine = player_id_of(&me);
@@ -67,7 +67,7 @@ fn settings_versions_and_remove() {
         max_players: 0,
     };
     hub.manage(&id, &ask(&me, &id, open)).unwrap();
-    assert_eq!(hub.download(&id).unwrap(), r#"{"v":5}"#);
+    assert_eq!(hub.download(&id, None).unwrap(), r#"{"v":5}"#);
     assert_eq!(hub.game(&id).unwrap().version, 13);
 
     hub.manage(&id, &ask(&me, &id, Change::Remove)).unwrap();

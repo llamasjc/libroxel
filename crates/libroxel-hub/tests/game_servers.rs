@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use libroxel_hub::{
-    FleetOptions, Heartbeat, HostKind, HubClient, HubOptions, PlayRequest, host_message, new_secret,
-    player_id_of, sign, start_with,
+    DownloadProof, FleetOptions, Heartbeat, HostKind, HubClient, HubOptions, PlayRequest, Publish,
+    host_message, new_secret, player_id_of, publish_message, sign, start_with,
 };
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -184,5 +184,70 @@ fn a_server_that_fails_to_start_is_not_retried_at_once() {
         });
         assert!(answer.unwrap_err().contains("couldn't start"));
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn place(seed: &str) -> String {
+    let scripts: Vec<String> = (0..6)
+        .map(|n| {
+            format!(
+                r#"{{"class":"script","name":"S{n}","properties":{{"source":"local {seed}{n} = {n}\n{}"}}}}"#,
+                "print(value) ".repeat(30)
+            )
+        })
+        .collect();
+    format!(r#"{{"format":"libroxel-place","version":1,"children":[{}]}}"#, scripts.join(","))
+}
+
+fn publish(hub: &HubClient, key: &[u8; 32], place: String) -> Result<String, String> {
+    let secret = new_secret();
+    hub.publish(&Publish {
+        game_id: None,
+        author_signature: Some(sign(key, &publish_message(&secret))),
+        secret,
+        title: "Closed Tower".into(),
+        author: "Alice".into(),
+        description: String::new(),
+        place,
+        author_id: Some(player_id_of(key)),
+    })
+    .map(|p| p.game_id)
+}
+
+fn proof(key: &[u8; 32], game_id: &str) -> DownloadProof {
+    DownloadProof::new(game_id, player_id_of(key), |m| sign(key, m))
+}
+
+#[test]
+fn only_the_creator_and_the_hubs_servers_get_a_games_place() {
+    let dir = temp_dir("fleet-closed");
+    let options = HubOptions {
+        no_limits: true,
+        fleet: Some(FleetOptions::new(stand_in(&dir), dir.join("servers"))),
+        ..Default::default()
+    };
+    let running = start_with("127.0.0.1:0".parse().unwrap(), None, options).unwrap();
+    let hub = HubClient::new(&running.url());
+    let (alice, bob) = ([1u8; 32], [2u8; 32]);
+    let id = publish(&hub, &alice, place("a")).unwrap();
+    assert!(hub.game(&id).unwrap().closed);
+
+    assert!(hub.download(&id, None).unwrap_err().contains("only its creator"));
+    assert!(hub.download(&id, Some(&proof(&bob, &id))).is_err());
+    assert_eq!(hub.download(&id, Some(&proof(&alice, &id))).unwrap(), place("a"));
+    let mut stale = proof(&alice, &id);
+    stale.time -= 3600;
+    stale.signature = sign(&alice, &libroxel_hub::download_message(&id, &stale.player_id, stale.time));
+    assert!(hub.download(&id, Some(&stale)).is_err());
+
+    hub.play(&PlayRequest { game_id: id.clone(), ticket: "ticketaaaa".into(), ..Default::default() })
+        .unwrap();
+    let call = &wait_for_calls(&dir, 1)[0];
+    let server: [u8; 32] = std::fs::read(flag(call, "--key")).unwrap().try_into().unwrap();
+    assert_eq!(hub.download(&id, Some(&proof(&server, &id))).unwrap(), place("a"));
+
+    assert!(publish(&hub, &bob, place("a")).unwrap_err().contains("copied"));
+    assert!(publish(&hub, &bob, place("b")).is_ok());
+    assert!(publish(&hub, &alice, place("a")).is_ok());
     let _ = std::fs::remove_dir_all(&dir);
 }

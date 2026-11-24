@@ -1782,6 +1782,9 @@ impl Platform {
         self.download_error = None;
         let client = self.client();
         let (id, title, version) = (game.game_id.clone(), game.title.clone(), game.version);
+        let proof = crate::identity()
+            .ok()
+            .map(|me| libroxel_hub::DownloadProof::new(&id, me.player_id(), |m| me.sign(m)));
         let out = self.downloaded.clone();
         std::thread::spawn(move || {
             let dir = data_dir().join("downloads");
@@ -1794,7 +1797,7 @@ impl Platform {
             let result = if cached {
                 Ok(Downloaded { path, host })
             } else {
-                client.download(&id).and_then(|text| {
+                client.download(&id, proof.as_ref()).and_then(|text| {
                     crate::hub_assets::write(&path, &text)?;
                     let _ = std::fs::write(&stamp, version.to_string());
                     Ok(Downloaded { path, host })
