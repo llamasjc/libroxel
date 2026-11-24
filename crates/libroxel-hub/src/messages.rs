@@ -160,7 +160,7 @@ fn row(r: &rusqlite::Row, at: usize) -> rusqlite::Result<Message> {
     })
 }
 
-const COLUMNS: &str = "m.message_id, m.from_id, m.to_id, m.text, m.sent, m.read";
+const COLUMNS: &str = "m.message_id, m.from_id, m.to_id, unseal(m.text), m.sent, m.read";
 
 pub(crate) async fn send_message(
     State(db): State<Db>,
@@ -221,7 +221,7 @@ pub(crate) async fn send_message(
         read: false,
     };
     db.execute(
-        "INSERT INTO messages (message_id, from_id, to_id, text, sent) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO messages (message_id, from_id, to_id, text, sent) VALUES (?1, ?2, ?3, seal(?4), ?5)",
         params![sent.message_id, sent.from_id, sent.to_id, sent.text, sent.sent],
     )
     .map_err(internal)?;

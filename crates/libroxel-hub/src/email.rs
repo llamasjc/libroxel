@@ -218,7 +218,7 @@ pub(crate) fn create_tables(db: &Connection) -> Result<(), String> {
 
 /// An account's email, and whether it's proved.
 pub(crate) fn email_of(db: &Connection, player_id: &str) -> Option<(String, bool)> {
-    db.query_row("SELECT email, verified FROM emails WHERE player_id = ?1", params![player_id], |r| {
+    db.query_row("SELECT unseal(email), verified FROM emails WHERE player_id = ?1", params![player_id], |r| {
         Ok((r.get(0)?, r.get(1)?))
     })
     .optional()
@@ -226,8 +226,11 @@ pub(crate) fn email_of(db: &Connection, player_id: &str) -> Option<(String, bool
     .flatten()
 }
 
-fn hash(code: &str) -> String {
-    data_encoding::HEXLOWER.encode(&sha2::Sha256::digest(format!("libroxel email code\n{code}")))
+fn hash(db: &Connection, code: &str) -> String {
+    crate::seal::pepper(
+        db,
+        &data_encoding::HEXLOWER.encode(&sha2::Sha256::digest(format!("libroxel email code\n{code}"))),
+    )
 }
 
 pub(crate) fn new_code() -> String {
@@ -255,7 +258,7 @@ pub(crate) fn keep(
     let now = now();
     let before: Option<(String, bool, Option<i64>)> = db
         .query_row(
-            "SELECT email, verified, sent_at FROM emails WHERE player_id = ?1",
+            "SELECT unseal(email), verified, sent_at FROM emails WHERE player_id = ?1",
             params![player_id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
@@ -278,13 +281,13 @@ pub(crate) fn keep(
     let code = mail.sends().then(new_code);
     db.execute(
         "INSERT INTO emails (player_id, email, verified, code, code_until, tries, sent_at)
-         VALUES (?1, ?2, 0, ?3, ?4, 0, ?5)
-         ON CONFLICT(player_id) DO UPDATE SET email = ?2, verified = 0, code = ?3, code_until = ?4,
+         VALUES (?1, seal(?2), 0, ?3, ?4, 0, ?5)
+         ON CONFLICT(player_id) DO UPDATE SET email = seal(?2), verified = 0, code = ?3, code_until = ?4,
              tries = 0, sent_at = ?5",
         params![
             player_id,
             email,
-            code.as_deref().map(hash),
+            code.as_deref().map(|c| hash(db, c)),
             code.as_ref().map(|_| now + CODE_LASTS_SECS),
             code.as_ref().map(|_| now)
         ],
@@ -368,7 +371,7 @@ pub(crate) async fn verify_email(
     if until < now() || tries >= MOST_TRIES {
         return Err((StatusCode::BAD_REQUEST, "that code has run out; ask for a new one".into()));
     }
-    if hash(sent.code.trim()) != code {
+    if hash(&db, sent.code.trim()) != code {
         db.execute("UPDATE emails SET tries = tries + 1 WHERE player_id = ?1", params![sent.player_id])
             .map_err(internal)?;
         return Err((StatusCode::BAD_REQUEST, "that's not the code we sent".into()));

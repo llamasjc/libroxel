@@ -239,8 +239,12 @@ fn pin_ok(pin: &str) -> bool {
     pin.len() == 4 && pin.chars().all(|c| c.is_ascii_digit())
 }
 
-fn hash(player_id: &str, kind: &str, secret: &str) -> String {
-    data_encoding::HEXLOWER.encode(&sha2::Sha256::digest(format!("libroxel {kind}\n{player_id}\n{secret}")))
+fn hash(db: &Connection, player_id: &str, kind: &str, secret: &str) -> String {
+    crate::seal::pepper(
+        db,
+        &data_encoding::HEXLOWER
+            .encode(&sha2::Sha256::digest(format!("libroxel {kind}\n{player_id}\n{secret}"))),
+    )
 }
 
 fn fresh(time: i64) -> Result<(), Failure> {
@@ -266,7 +270,7 @@ struct Row {
 
 fn row(db: &Connection, player_id: &str) -> Result<Option<Row>, Failure> {
     db.query_row(
-        "SELECT born, utc_offset, parent_email, consent, code, code_until, sent_at, pin, tries, locked_until,
+        "SELECT born, utc_offset, unseal(parent_email), consent, code, code_until, sent_at, pin, tries, locked_until,
              settings FROM family WHERE player_id = ?1",
         params![player_id],
         |r| {
@@ -510,12 +514,12 @@ fn new_parent_code(
     let code = mail.sends().then(crate::email::new_code);
     let now = now();
     db.execute(
-        "UPDATE family SET parent_email = ?2, code = ?3, code_until = ?4, sent_at = ?5, tries = 0
+        "UPDATE family SET parent_email = seal(?2), code = ?3, code_until = ?4, sent_at = ?5, tries = 0
          WHERE player_id = ?1",
         params![
             player_id,
             email,
-            code.as_deref().map(|c| hash(player_id, "consent", c)),
+            code.as_deref().map(|c| hash(db, player_id, "consent", c)),
             code.as_ref().map(|_| now + CONSENT_LASTS_SECS),
             code.as_ref().map(|_| now)
         ],
@@ -660,10 +664,10 @@ pub(crate) async fn consent(
     if until < now() {
         return Err(bad("that code has run out; ask for a new one"));
     }
-    check_try(&db, &c.player_id, &row, hash(&c.player_id, "consent", c.code.trim()) == *code)?;
+    check_try(&db, &c.player_id, &row, hash(&db, &c.player_id, "consent", c.code.trim()) == *code)?;
     db.execute(
         "UPDATE family SET consent = 1, code = NULL, code_until = NULL, pin = ?2 WHERE player_id = ?1",
-        params![c.player_id, hash(&c.player_id, "pin", &c.pin)],
+        params![c.player_id, hash(&db, &c.player_id, "pin", &c.pin)],
     )
     .map_err(internal)?;
     Ok(Json(view(&db, &mail, &c.player_id)?))
@@ -690,7 +694,7 @@ pub(crate) async fn change(
         return Err((StatusCode::FORBIDDEN, "a parent needs to approve first".into()));
     }
     match &row.pin {
-        Some(pin) => check_try(&db, &c.player_id, &row, hash(&c.player_id, "pin", &c.pin) == *pin)?,
+        Some(pin) => check_try(&db, &c.player_id, &row, hash(&db, &c.player_id, "pin", &c.pin) == *pin)?,
         None if c.new_pin.is_none() => return Err(bad("set a PIN first")),
         None => {}
     }
@@ -699,7 +703,7 @@ pub(crate) async fn change(
         params![
             c.player_id,
             serde_json::to_string(&c.settings).unwrap_or_default(),
-            c.new_pin.as_deref().map(|p| hash(&c.player_id, "pin", p))
+            c.new_pin.as_deref().map(|p| hash(&db, &c.player_id, "pin", p))
         ],
     )
     .map_err(internal)?;
