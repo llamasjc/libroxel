@@ -228,6 +228,7 @@ pub struct PlaySession {
     pub(crate) link: crate::net::Link,
     /// The next `UserId` to give a player who joins.
     pub(crate) next_user_id: u32,
+    pub(crate) voice: crate::voice::Voice,
 }
 
 impl PlaySession {
@@ -270,6 +271,7 @@ impl PlaySession {
             hinges: Default::default(),
             link: Default::default(),
             next_user_id: 1,
+            voice: Default::default(),
         };
         // Scripts find the camera through the workspace, so it exists from the start.
         session.camera = {

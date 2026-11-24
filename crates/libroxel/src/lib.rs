@@ -50,6 +50,7 @@ mod update;
 mod url_handler;
 mod viewport;
 mod viewport_frame;
+mod voice;
 
 use std::path::PathBuf;
 
@@ -184,6 +185,7 @@ pub struct Editor {
     pub output_cache: ui::OutputCache,
     /// Shift+F1's frame stats.
     pub stats: ui::Stats,
+    pub voice: voice::Voice,
     /// While playing: the GUI button the left mouse button went down on.
     pub pressed_button: Option<InstanceId>,
     /// The Explorer's filter: only what matches (and what leads to it) shows.
@@ -263,6 +265,7 @@ impl Default for Editor {
             output_search: String::new(),
             output_cache: Default::default(),
             stats: Default::default(),
+            voice: Default::default(),
             pressed_button: None,
             explorer_filter: String::new(),
             properties_filter: String::new(),

@@ -22,6 +22,8 @@
   <string>11.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Voice chat</string>
   <!-- Play on the website opens libroxel:// links in the app. -->
   <key>CFBundleURLTypes</key>
   <array>
