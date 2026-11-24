@@ -384,6 +384,8 @@ jobs:
         env:
           CARGO_PROFILE_DIST_STRIP: "false"
           CARGO_PROFILE_DIST_LTO: fat
+          # SHA-256 of the certificate every released APK has been signed with (public, not a secret).
+          ANDROID_CERT_SHA256: d46e9e2345a84df08d5c4c227d2cdea817b97edbc932a68ad017ec0589dd32bc
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -412,6 +414,11 @@ jobs:
           export ANDROID_KEYSTORE="$RUNNER_TEMP/release.jks"
           if [[ -n "$ANDROID_KEYSTORE_BASE64" ]]; then
             echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE"
+          elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            # A throwaway key would make Android refuse the APK over any earlier
+            # release ("App not installed"), so a release must use the real key.
+            echo "::error::ANDROID_KEYSTORE is not set, so this release can't be signed with Libroxel's key"
+            exit 1
           else
             export ANDROID_KEYSTORE_PASSWORD=android ANDROID_KEY_ALIAS=libroxel ANDROID_KEY_PASSWORD=android
             keytool -genkeypair -keystore "$ANDROID_KEYSTORE" -storepass android -keypass android \
@@ -419,6 +426,17 @@ jobs:
           fi
           gradle -p packaging/android --no-daemon assembleRelease bundleRelease
           out=packaging/android/app/build/outputs
+          if [[ -n "$ANDROID_KEYSTORE_BASE64" ]]; then
+            # Every APK must carry the same certificate as the releases before it,
+            # or Android won't install it over them.
+            apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+            certs=$("$apksigner" verify --print-certs "$out/apk/release/app-release.apk")
+            grep -qi "certificate SHA-256 digest: $ANDROID_CERT_SHA256" <<< "$certs" || {
+              echo "$certs"
+              echo "::error::The APK isn't signed with Libroxel's release key ($ANDROID_CERT_SHA256), so Android would refuse it over earlier releases"
+              exit 1
+            }
+          fi
           mkdir dist
           cp "$out/apk/release/app-release.apk" "dist/libroxel-$VERSION-android.apk"
           cp "$out/bundle/release/app-release.aab" "dist/libroxel-$VERSION-android.aab"
