@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use crate::i18n::{t, tf};
 use crate::theme::{self, icon};
 use bevy::camera::Viewport;
 use bevy::prelude::*;
@@ -380,7 +381,7 @@ pub fn editor_ui(
                                 let tree = tree_rc.borrow();
                                 let filter = ExplorerFilter::new(&tree, &editor.explorer_filter);
                                 if filter.as_ref().is_some_and(|f| f.shown.is_empty()) {
-                                    ui.label(RichText::new("Nothing matches the filter.").weak());
+                                    ui.label(RichText::new(t("Nothing matches the filter.")).weak());
                                 }
                                 explorer_node(ui, &tree, tree.root(), editor, actions, 0, filter.as_ref());
                                 editor.reveal_selection = false;
@@ -990,18 +991,23 @@ fn session_status(
         let red = theme::RED;
         if let Some(address) = session.host_address() {
             let joined = session.joined_count();
-            let who = if joined == 1 { "1 joined".to_owned() } else { format!("{joined} joined") };
-            theme::status(ui, theme::GREEN, &format!("Hosting on port {} · {who}", address.port()))
-                .on_hover_text("Others on your network join with this computer's address and this port");
+            let who =
+                if joined == 1 { t("1 joined").to_owned() } else { tf("{n} joined", &[("n", &joined)]) };
+            theme::status(
+                ui,
+                theme::GREEN,
+                &tf("Hosting on port {port} · {who}", &[("port", &address.port()), ("who", &who)]),
+            )
+            .on_hover_text(t("Others on your network join with this computer's address and this port"));
             let players = session.joined_players();
             if !players.is_empty() {
-                ui.menu_button(format!("{}  Players", icon::USERS_THREE), |ui| {
+                ui.menu_button(format!("{}  {}", icon::USERS_THREE, t("Players")), |ui| {
                     for (player, name) in players {
                         ui.horizontal(|ui| {
                             ui.label(name);
                             if ui
                                 .small_button("Remove")
-                                .on_hover_text("Take them out of this game; they can't join it again")
+                                .on_hover_text(t("Take them out of this game; they can't join it again"))
                                 .clicked()
                             {
                                 actions.push(Action::Kick(player));
@@ -1013,14 +1019,14 @@ fn session_status(
             }
             if let Some(Tunnel::Host(tunnel)) = &editor.tunnel {
                 if let Some(code) = tunnel.code() {
-                    let copy = ui.button(format!("{}  Copy join code", icon::COPY)).on_hover_text(
+                    let copy = ui.button(format!("{}  {}", icon::COPY, t("Copy join code"))).on_hover_text(
                         "Friends anywhere paste it into Join. It isn't shown here, so it stays off streams.",
                     );
                     if copy.clicked() {
                         ui.ctx().copy_text(code);
                     }
                 } else if let Some(error) = tunnel.error() {
-                    ui.colored_label(red, "No join code").on_hover_text(&error);
+                    ui.colored_label(red, t("No join code")).on_hover_text(&error);
                     crate::report::button(ui, &format!("No join code: {error}"));
                 } else {
                     theme::status(ui, theme::AMBER, "Getting a join code…");
@@ -1047,15 +1053,15 @@ fn session_status(
 
 /// The File menu: new, open, save, publish and the main menu.
 fn file_menu(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut Vec<Action>) {
-    if ui.add_enabled(!playing, egui::Button::new("Main menu")).clicked() {
+    if ui.add_enabled(!playing, egui::Button::new(t("Main menu"))).clicked() {
         editor.menu.open = true;
         editor.menu.scanned = false;
     }
     ui.separator();
-    if ui.button("New").clicked() {
+    if ui.button(t("New")).clicked() {
         actions.push(Action::New);
     }
-    ui.menu_button("Open a starter game", |ui| {
+    ui.menu_button(t("Open a starter game"), |ui| {
         for game in crate::starter_games::STARTER_GAMES {
             if ui.button(format!("{} {}", game.symbol, game.name)).on_hover_text(game.about).clicked() {
                 actions.push(Action::OpenStarter(game.name));
@@ -1063,39 +1069,42 @@ fn file_menu(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mu
         }
     });
     if ui
-        .add_enabled(!playing, egui::Button::new("Clear saved data"))
-        .on_hover_text("Forget what this game's data stores saved in earlier play tests")
+        .add_enabled(!playing, egui::Button::new(t("Clear saved data")))
+        .on_hover_text(t("Forget what this game's data stores saved in earlier play tests"))
         .clicked()
     {
         actions.push(Action::ClearData);
     }
-    if ui.button("Open…       Ctrl+O").clicked() {
+    if ui.button(t("Open…       Ctrl+O")).clicked() {
         editor.picker.open(&games_dir());
     }
-    if ui.button("Open by path…").clicked() {
+    if ui.button(t("Open by path…")).clicked() {
         let path = games_dir().join("untitled.lrx").display().to_string();
         editor.dialog = Some(Dialog::Open { path });
     }
     ui.separator();
-    if ui.add_enabled(!playing, egui::Button::new("Save        Ctrl+S")).clicked() {
+    if ui.add_enabled(!playing, egui::Button::new(t("Save        Ctrl+S"))).clicked() {
         actions.push(Action::Save);
     }
-    if ui.add_enabled(!playing, egui::Button::new("Save as…")).clicked() {
+    if ui.add_enabled(!playing, egui::Button::new(t("Save as…"))).clicked() {
         let path =
             editor.file.clone().unwrap_or_else(|| games_dir().join("untitled.lrx")).display().to_string();
         editor.dialog = Some(Dialog::SaveAs { path });
     }
     ui.separator();
     if ui
-        .add_enabled(!playing, egui::Button::new(format!("{}  Publish…", icon::GLOBE_HEMISPHERE_WEST)))
-        .on_hover_text("Put this game on the Hub, so anyone can find it Online and play it")
+        .add_enabled(
+            !playing,
+            egui::Button::new(format!("{}  {}", icon::GLOBE_HEMISPHERE_WEST, t("Publish…"))),
+        )
+        .on_hover_text(t("Put this game on the Hub, so anyone can find it Online and play it"))
         .clicked()
     {
         let title = editor
             .file
             .as_ref()
             .and_then(|f| f.file_stem())
-            .map_or_else(|| "My game".to_owned(), |s| s.to_string_lossy().into_owned());
+            .map_or_else(|| t("My game").to_owned(), |s| s.to_string_lossy().into_owned());
         editor.platform.publish_status = None;
         editor.dialog = Some(Dialog::Publish { title, description: String::new() });
     }
@@ -1110,15 +1119,15 @@ fn insert_menu(ui: &mut egui::Ui, actions: &mut Vec<Action>) {
     }
     ui.separator();
     for &(shape, label) in SHAPES {
-        if ui.button(format!("{} part", label)).clicked() {
+        if ui.button(tf("{shape} part", &[("shape", &t(label))])).clicked() {
             actions.push(Action::InsertShape(shape));
         }
     }
     ui.separator();
-    if ui.button(format!("{}  Character (NPC)", icon::PERSON_SIMPLE)).clicked() {
+    if ui.button(format!("{}  {}", icon::PERSON_SIMPLE, t("Character (NPC)"))).clicked() {
         actions.push(Action::InsertNpc);
     }
-    if ui.button(format!("{}  Go-kart", icon::STEERING_WHEEL)).clicked() {
+    if ui.button(format!("{}  {}", icon::STEERING_WHEEL, t("Go-kart"))).clicked() {
         actions.push(Action::InsertKart);
     }
 }
@@ -1162,7 +1171,7 @@ fn game_menu(
             theme::panel().inner_margin(egui::Margin::same(22)).show(ui, |ui| {
                 ui.set_width(280.0);
                 ui.vertical_centered(|ui| {
-                    ui.label(RichText::new("Paused").font(theme::light(26.0)).color(theme::HEADING));
+                    ui.label(RichText::new(t("Paused")).font(theme::light(26.0)).color(theme::HEADING));
                     ui.add_space(14.0);
                     if theme::block_button(ui, theme::Kind::Primary, icon::PLAY, "Resume", 40.0).clicked() {
                         editor.paused = false;
@@ -1205,7 +1214,7 @@ fn graphics_picker(ui: &mut egui::Ui, quality: &mut libroxel_engine::view::Graph
     ui.add_space(4.0);
     let mut pick = None;
     ui.horizontal(|ui| {
-        if ui.selectable_label(quality.auto, "Auto").clicked() {
+        if ui.selectable_label(quality.auto, t("Auto")).clicked() {
             pick = Some((!quality.auto, quality.level));
         }
         ui.add_space(6.0);
@@ -1239,9 +1248,9 @@ fn terrain_bar(ui: &mut egui::Ui, editor: &mut Editor, actions: &mut Vec<Action>
     ui.horizontal(|ui| {
         theme::label_caps(ui, "Terrain");
         let brush = &mut editor.brush;
-        ui.selectable_value(&mut brush.mode, BrushMode::Add, "Add");
-        ui.selectable_value(&mut brush.mode, BrushMode::Dig, "Dig");
-        ui.selectable_value(&mut brush.mode, BrushMode::Paint, "Paint");
+        ui.selectable_value(&mut brush.mode, BrushMode::Add, t("Add"));
+        ui.selectable_value(&mut brush.mode, BrushMode::Dig, t("Dig"));
+        ui.selectable_value(&mut brush.mode, BrushMode::Paint, t("Paint"));
         ui.separator();
         egui::ComboBox::from_id_salt("terrain-material")
             .selected_text(libroxel_script::names::enum_item_name(EnumValue::Material(brush.material)))
@@ -1254,12 +1263,12 @@ fn terrain_bar(ui: &mut egui::Ui, editor: &mut Editor, actions: &mut Vec<Action>
                     );
                 }
             });
-        ui.add(egui::Slider::new(&mut brush.size, 1.0..=32.0).text("studs across"));
+        ui.add(egui::Slider::new(&mut brush.size, 1.0..=32.0).text(t("studs across")));
         ui.separator();
-        if ui.button("Make a hill").on_hover_text("A grassy hill where the view is looking").clicked() {
+        if ui.button(t("Make a hill")).on_hover_text(t("A grassy hill where the view is looking")).clicked() {
             actions.push(Action::MakeHill(libroxel_instance::Vec3::ZERO));
         }
-        if ui.button("Clear terrain").clicked() {
+        if ui.button(t("Clear terrain")).clicked() {
             actions.push(Action::ClearTerrain);
         }
     });
@@ -1382,7 +1391,7 @@ fn explorer_node(
         }
         inner.context_menu(|ui| {
             actions.push(Action::Select(Some(id)));
-            ui.menu_button("Insert", |ui| {
+            ui.menu_button(t("Insert"), |ui| {
                 for &c in INSERTABLE {
                     if ui.button(format!("{} {}", icon(c), names::class_name(c))).clicked() {
                         actions.push(Action::InsertInto(c, id));
@@ -1391,11 +1400,11 @@ fn explorer_node(
                 }
             });
             let editable = class.is_user_creatable();
-            if ui.add_enabled(editable, egui::Button::new("Rename")).clicked() {
+            if ui.add_enabled(editable, egui::Button::new(t("Rename"))).clicked() {
                 editor.renaming = Some((id, name.to_owned()));
                 ui.close();
             }
-            if ui.add_enabled(editable, egui::Button::new("Duplicate")).clicked() {
+            if ui.add_enabled(editable, egui::Button::new(t("Duplicate"))).clicked() {
                 actions.push(Action::Duplicate(id));
                 ui.close();
             }
@@ -1403,7 +1412,7 @@ fn explorer_node(
                 actions.push(Action::Delete(id));
                 ui.close();
             }
-            if is_code(class) && ui.button("Edit script").clicked() {
+            if is_code(class) && ui.button(t("Edit script")).clicked() {
                 actions.push(Action::OpenScript(id));
                 ui.close();
             }
@@ -1446,7 +1455,7 @@ fn properties(
 ) {
     let Some(id) = editor.selection.filter(|id| tree.exists(*id) && !tree.is_destroyed(*id).unwrap_or(true))
     else {
-        ui.label("Select something in the Explorer or click a part in the view.");
+        ui.label(t("Select something in the Explorer or click a part in the view."));
         return;
     };
     let Ok(class) = tree.class(id) else { return };
@@ -1455,7 +1464,7 @@ fn properties(
 
     ui.add(
         egui::TextEdit::singleline(&mut editor.properties_filter)
-            .hint_text(format!("{} Filter Properties (Ctrl+Shift+P)", icon::MAGNIFYING_GLASS))
+            .hint_text(format!("{} {}", icon::MAGNIFYING_GLASS, t("Filter Properties (Ctrl+Shift+P)")))
             .id(egui::Id::new("properties-filter"))
             .desired_width(f32::INFINITY),
     );
@@ -1902,7 +1911,7 @@ fn attributes_and_tags(
     }
     let mut edits: Vec<Edit> = Vec::new();
     ui.add_space(10.0);
-    ui.label(RichText::new("Attributes").strong());
+    ui.label(RichText::new(t("Attributes")).strong());
     let attributes = tree.attributes(id).cloned().unwrap_or_default();
     egui::Grid::new("attributes").num_columns(3).striped(true).spacing([8.0, 6.0]).show(ui, |ui| {
         for (name, value) in attributes {
@@ -1912,7 +1921,7 @@ fn attributes_and_tags(
                     edits.push(Edit::Set(name.clone(), Some(new)));
                 }
             });
-            if ui.small_button(icon::X).on_hover_text("Remove this attribute").clicked() {
+            if ui.small_button(icon::X).on_hover_text(t("Remove this attribute")).clicked() {
                 edits.push(Edit::Set(name, None));
             }
             ui.end_row();
@@ -1920,7 +1929,7 @@ fn attributes_and_tags(
     });
     ui.horizontal(|ui| {
         let (name, kind) = &mut editor.new_attribute;
-        ui.add(egui::TextEdit::singleline(name).hint_text("New attribute").desired_width(110.0));
+        ui.add(egui::TextEdit::singleline(name).hint_text(t("New attribute")).desired_width(110.0));
         let kinds = attribute_kinds();
         egui::ComboBox::from_id_salt("attribute-kind").selected_text(kinds[*kind].0).show_ui(ui, |ui| {
             for (i, (label, _)) in kinds.iter().enumerate() {
@@ -1928,27 +1937,28 @@ fn attributes_and_tags(
             }
         });
         let valid = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-        if ui.add_enabled(valid, egui::Button::new("Add")).clicked() {
+        if ui.add_enabled(valid, egui::Button::new(t("Add"))).clicked() {
             edits.push(Edit::Set(std::mem::take(name), Some(kinds[*kind].1.clone())));
         }
     });
 
     ui.add_space(8.0);
-    ui.label(RichText::new("Tags").strong());
+    ui.label(RichText::new(t("Tags")).strong());
     let tags = tree.tags(id).map(|t| t.to_vec()).unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
         for tag in tags {
-            if ui.button(format!("{tag}  {}", icon::X)).on_hover_text("Remove this tag").clicked() {
+            if ui.button(format!("{tag}  {}", icon::X)).on_hover_text(t("Remove this tag")).clicked() {
                 edits.push(Edit::RemoveTag(tag));
             }
         }
     });
     ui.horizontal(|ui| {
-        let response =
-            ui.add(egui::TextEdit::singleline(&mut editor.new_tag).hint_text("New tag").desired_width(150.0));
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut editor.new_tag).hint_text(t("New tag")).desired_width(150.0),
+        );
         let entered = response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
         let ready = !editor.new_tag.trim().is_empty();
-        if (ui.add_enabled(ready, egui::Button::new("Add")).clicked() || entered) && ready {
+        if (ui.add_enabled(ready, egui::Button::new(t("Add"))).clicked() || entered) && ready {
             edits.push(Edit::AddTag(editor.new_tag.trim().to_owned()));
             editor.new_tag.clear();
         }
@@ -2106,9 +2116,9 @@ fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree, platform: &mut crate::bro
                                 ClassKind::StringValue => tree.get_string(v, Property::StringValue)?,
                                 ClassKind::BoolValue => {
                                     if tree.get_bool(v, Property::BoolValue)? {
-                                        "Yes".into()
+                                        t("Yes").into()
                                     } else {
-                                        "No".into()
+                                        t("No").into()
                                     }
                                 }
                                 _ => return None,
@@ -2150,7 +2160,7 @@ fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree, platform: &mut crate::bro
         .show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).fill(theme::see_through(248, 252, 255, 230)).show(ui, |ui| {
                 egui::Grid::new("leaderboard-grid").spacing([16.0, 4.0]).show(ui, |ui| {
-                    ui.label(RichText::new("Player").strong().color(theme::HEADING));
+                    ui.label(RichText::new(t("Player")).strong().color(theme::HEADING));
                     for c in &columns {
                         ui.label(RichText::new(c).strong().color(theme::HEADING));
                     }
@@ -2170,7 +2180,7 @@ fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree, platform: &mut crate::bro
                                         Color32::from_rgb(byte(c.r), byte(c.g), byte(c.b)),
                                     )
                                 }
-                                None => ("Neutral".to_owned(), theme::MUTED),
+                                None => (t("Neutral").to_owned(), theme::MUTED),
                             };
                             ui.label(RichText::new(label).strong().color(color));
                             ui.end_row();
@@ -2266,9 +2276,9 @@ fn output(
     ui.horizontal(|ui| {
         theme::panel_name(ui, icon::TERMINAL_WINDOW, "Output");
         let views = [
-            (OutputView::Log, "Log".to_owned()),
-            (OutputView::Problems, format!("Problems ({})", problems.len())),
-            (OutputView::Missing, format!("Errors ({})", missing.len())),
+            (OutputView::Log, t("Log").to_owned()),
+            (OutputView::Problems, tf("Problems ({n})", &[("n", &problems.len())])),
+            (OutputView::Missing, tf("Errors ({n})", &[("n", &missing.len())])),
         ];
         for (view, label) in views {
             if ui.selectable_label(editor.output_view == view, label).clicked() {
@@ -2276,7 +2286,7 @@ fn output(
             }
         }
         ui.separator();
-        if ui.small_button("Clear").clicked() {
+        if ui.small_button(t("Clear")).clicked() {
             actions.push(Action::ClearOutput);
         }
         // The whole log, or a report of what went wrong, in one click.
@@ -2285,11 +2295,15 @@ fn output(
         let copied =
             ui.data(|d| d.get_temp::<(f64, u8)>(copied_at)).filter(|(t, _)| now - t < 1.5).map(|c| c.1);
         let label = |which: u8, text: &str, glyph: &str| {
-            if copied == Some(which) { format!("{} Copied", icon::CHECK) } else { format!("{glyph} {text}") }
+            if copied == Some(which) {
+                format!("{} {}", icon::CHECK, t("Copied"))
+            } else {
+                format!("{glyph} {text}")
+            }
         };
         let copy = ui
             .add_enabled(!engine.log.is_empty(), egui::Button::new(label(0, "Copy all", icon::COPY)).small())
-            .on_hover_text("Copy everything in the output, to paste into a message or a file");
+            .on_hover_text(t("Copy everything in the output, to paste into a message or a file"));
         if copy.clicked() {
             ui.ctx().copy_text(output_text(&engine.log));
             ui.data_mut(|d| d.insert_temp(copied_at, (now, 0)));
@@ -2299,19 +2313,19 @@ fn output(
                 !engine.log.is_empty(),
                 egui::Button::new(label(1, "Copy report", icon::BUG)).small(),
             )
-            .on_hover_text("Copy what's missing and each kind of error once, with where it happened");
+            .on_hover_text(t("Copy what's missing and each kind of error once, with where it happened"));
         if report.clicked() {
             let text = crate::debugging::report(&engine.log, &game_name(editor), editor.log_file.path());
             ui.ctx().copy_text(text);
             ui.data_mut(|d| d.insert_temp(copied_at, (now, 1)));
         }
         let last_error = engine.log.iter().rev().find(|e| e.level == LogLevel::Error);
-        if ui.add_enabled(last_error.is_some(), egui::Button::new("Report").small()).clicked()
+        if ui.add_enabled(last_error.is_some(), egui::Button::new(t("Report")).small()).clicked()
             && let Some(entry) = last_error
         {
             crate::report::open(&entry.text);
         }
-        let folder = ui.small_button(format!("{} Logs", icon::FOLDER_OPEN)).on_hover_text(format!(
+        let folder = ui.small_button(format!("{} {}", icon::FOLDER_OPEN, t("Logs"))).on_hover_text(format!(
             "Every Output is also saved to a file here (latest.log is the newest):\n{}",
             crate::debugging::logs_dir().display()
         ));
@@ -2327,22 +2341,25 @@ fn output(
             toggle(ui, &mut editor.show_errors, format!("{} {errors}", icon::X_CIRCLE), theme::RED);
             toggle(ui, &mut editor.show_warnings, format!("{} {warnings}", icon::WARNING), theme::AMBER);
             toggle(ui, &mut editor.show_prints, format!("{} {prints}", icon::INFO), theme::TEXT);
-            let group = RichText::new(format!("{} Group repeats", icon::STACK));
+            let group = RichText::new(format!("{} {}", icon::STACK, t("Group repeats")));
             if ui
                 .add(egui::Button::new(group).small().selected(editor.group_repeats))
-                .on_hover_text("Show an error or warning that keeps happening once, with how many times")
+                .on_hover_text(t("Show an error or warning that keeps happening once, with how many times"))
                 .clicked()
             {
                 editor.group_repeats = !editor.group_repeats;
             }
             ui.add(
                 egui::TextEdit::singleline(&mut editor.output_search)
-                    .hint_text(format!("{} Filter the output…", icon::MAGNIFYING_GLASS))
+                    .hint_text(format!("{} {}", icon::MAGNIFYING_GLASS, t("Filter the output…")))
                     .desired_width(220.0),
             );
             ui.separator();
-            let hint =
-                if playing { "Run Luau in the running game…" } else { "Press Play to run Luau commands" };
+            let hint = if playing {
+                t("Run Luau in the running game…")
+            } else {
+                t("Press Play to run Luau commands")
+            };
             let response = ui.add_enabled(
                 playing,
                 egui::TextEdit::singleline(&mut editor.command).hint_text(hint).desired_width(f32::INFINITY),
@@ -2386,7 +2403,7 @@ fn output(
         OutputView::Problems => {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 if problems.is_empty() {
-                    ui.label("No errors or warnings.");
+                    ui.label(t("No errors or warnings."));
                 }
                 let tree = engine.tree.borrow();
                 for (i, p) in problems.iter().enumerate() {
@@ -2399,7 +2416,7 @@ fn output(
                         };
                         let script = p.script.as_deref().and_then(|s| script_named(&tree, s));
                         if let Some(id) = script {
-                            if ui.link(at).on_hover_text("Open this script").clicked() {
+                            if ui.link(at).on_hover_text(t("Open this script")).clicked() {
                                 actions.push(Action::OpenScript(id));
                             }
                         } else if !at.is_empty() {
@@ -2422,7 +2439,7 @@ fn output(
         OutputView::Missing => {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 if missing.is_empty() {
-                    ui.label("Nothing missing so far: every member and class scripts asked for exists.");
+                    ui.label(t("Nothing missing so far: every member and class scripts asked for exists."));
                 } else {
                     ui.label(
                         "Members and classes your scripts asked for that don't exist here: either \
@@ -2528,7 +2545,7 @@ fn script_editor(ctx: &egui::Context, editor: &mut Editor, tree: &mut InstanceTr
         .show(ctx, |ui| {
             if playing {
                 ui.label(
-                    RichText::new("Changes made while playing apply next time you press Play.").italics(),
+                    RichText::new(t("Changes made while playing apply next time you press Play.")).italics(),
                 );
             }
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -2571,14 +2588,14 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
     let Some(dialog) = editor.dialog.as_mut() else { return };
     if let Dialog::Join { address, name } = dialog {
         let mut close = false;
-        egui::Window::new("Join a game").collapsible(false).resizable(false).default_width(360.0).show(
+        egui::Window::new(t("Join a game")).collapsible(false).resizable(false).default_width(360.0).show(
             ctx,
             |ui| {
                 egui::Grid::new("join").num_columns(2).show(ui, |ui| {
-                    ui.label("Join code or address");
+                    ui.label(t("Join code or address"));
                     theme::hidden_field(ui, address, "lrx1… or 192.168.1.20", 220.0);
                     ui.end_row();
-                    ui.label("Playing as");
+                    ui.label(t("Playing as"));
                     ui.label(egui::RichText::new(name.trim()).strong());
                     ui.end_row();
                 });
@@ -2588,14 +2605,14 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
                     libroxel_engine::net::DEFAULT_PORT
                 ));
                 ui.horizontal(|ui| {
-                    if ui.button("Join").clicked() {
+                    if ui.button(t("Join")).clicked() {
                         actions.push(Action::Join {
                             address: address.trim().to_owned(),
                             name: name.trim().to_owned(),
                         });
                         close = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(t("Cancel")).clicked() {
                         close = true;
                     }
                 });
@@ -2609,7 +2626,7 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
     if let Dialog::Publish { title, description } = dialog {
         let mut close = false;
         let busy = editor.platform.is_publishing();
-        egui::Window::new("Publish").collapsible(false).resizable(false).default_width(400.0).show(
+        egui::Window::new(t("Publish")).collapsible(false).resizable(false).default_width(400.0).show(
             ctx,
             |ui| {
                 ui.label(
@@ -2617,13 +2634,13 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
                      you're away. Publishing again puts out a new version.",
                 );
                 egui::Grid::new("publish").num_columns(2).show(ui, |ui| {
-                    ui.label("Title");
+                    ui.label(t("Title"));
                     ui.add(egui::TextEdit::singleline(title).char_limit(60));
                     ui.end_row();
-                    ui.label("About it");
+                    ui.label(t("About it"));
                     ui.add(egui::TextEdit::multiline(description).desired_rows(3).char_limit(2000));
                     ui.end_row();
-                    ui.label("By");
+                    ui.label(t("By"));
                     ui.label(editor.platform.name.trim());
                     ui.end_row();
                 });
@@ -2643,7 +2660,7 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
                     if ui
                         .add_enabled(
                             !busy && !title.trim().is_empty(),
-                            egui::Button::new(format!("{}  Publish", icon::GLOBE_HEMISPHERE_WEST)),
+                            egui::Button::new(format!("{}  {}", icon::GLOBE_HEMISPHERE_WEST, t("Publish"))),
                         )
                         .clicked()
                     {
@@ -2652,7 +2669,7 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
                             description: description.trim().to_owned(),
                         });
                     }
-                    if ui.button("Close").clicked() {
+                    if ui.button(t("Close")).clicked() {
                         close = true;
                     }
                 });
@@ -2665,34 +2682,37 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
     }
     if let Dialog::EditTogether { address, name } = dialog {
         let mut close = false;
-        egui::Window::new("Edit together").collapsible(false).resizable(false).default_width(380.0).show(
+        egui::Window::new(t("Edit together")).collapsible(false).resizable(false).default_width(380.0).show(
             ctx,
             |ui| {
-                ui.label("Share the game you have open, and others can change it with you as you work.");
-                if ui.button(format!("{}  Share this game", icon::USERS_THREE)).clicked() {
+                ui.label(t("Share the game you have open, and others can change it with you as you work."));
+                if ui.button(format!("{}  {}", icon::USERS_THREE, t("Share this game"))).clicked() {
                     actions.push(Action::ShareEdits);
                     close = true;
                 }
                 ui.separator();
-                ui.label("Or edit a game someone else shares. Its game replaces the one open here.");
+                ui.label(t("Or edit a game someone else shares. Its game replaces the one open here."));
                 egui::Grid::new("edit-together").num_columns(2).show(ui, |ui| {
-                    ui.label("Join code or address");
+                    ui.label(t("Join code or address"));
                     theme::hidden_field(ui, address, "lrx1… or 192.168.1.20", 220.0);
                     ui.end_row();
-                    ui.label("Playing as");
+                    ui.label(t("Playing as"));
                     ui.label(egui::RichText::new(name.trim()).strong());
                     ui.end_row();
                 });
-                ui.label(format!("Without a port, {} is used.", libroxel_engine::coedit::EDIT_PORT));
+                ui.label(tf(
+                    "Without a port, {port} is used.",
+                    &[("port", &libroxel_engine::coedit::EDIT_PORT)],
+                ));
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(!address.trim().is_empty(), egui::Button::new("Join")).clicked() {
+                    if ui.add_enabled(!address.trim().is_empty(), egui::Button::new(t("Join"))).clicked() {
                         actions.push(Action::JoinEdits {
                             address: address.trim().to_owned(),
                             name: name.trim().to_owned(),
                         });
                         close = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(t("Cancel")).clicked() {
                         close = true;
                     }
                 });
@@ -2704,8 +2724,8 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
         return;
     }
     let (title, button) = match dialog {
-        Dialog::Open { .. } => ("Open place", "Open"),
-        Dialog::SaveAs { .. } => ("Save place as", "Save"),
+        Dialog::Open { .. } => (t("Open place"), t("Open")),
+        Dialog::SaveAs { .. } => (t("Save place as"), t("Save")),
         Dialog::Join { .. } | Dialog::EditTogether { .. } | Dialog::Publish { .. } => return,
     };
     let opening = matches!(dialog, Dialog::Open { .. });
@@ -2723,7 +2743,7 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
         ui.add(egui::TextEdit::singleline(path).desired_width(f32::INFINITY));
         let places = list_places();
         if !places.is_empty() {
-            ui.label(format!("In {}:", games_dir().display()));
+            ui.label(tf("In {folder}:", &[("folder", &games_dir().display())]));
             for p in places {
                 let label = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 if ui.link(label).clicked() {
@@ -2740,7 +2760,7 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
                 actions.push(if opening { Action::Open(chosen) } else { Action::SaveTo(chosen) });
                 close = true;
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button(t("Cancel")).clicked() {
                 close = true;
             }
         });
@@ -2818,19 +2838,23 @@ fn together_status(ui: &mut egui::Ui, coedit: &libroxel_engine::coedit::CoEdit, 
     let red = theme::RED;
     if let Some(address) = coedit.local_addr() {
         let people = coedit.people();
-        let who = if people.is_empty() { "no one yet".to_owned() } else { people.join(", ") };
-        theme::status(ui, theme::GREEN, &format!("Sharing on port {} · {who}", address.port()))
-            .on_hover_text("Others on your network join with this computer's address and this port");
+        let who = if people.is_empty() { t("no one yet").to_owned() } else { people.join(", ") };
+        theme::status(
+            ui,
+            theme::GREEN,
+            &tf("Sharing on port {port} · {who}", &[("port", &address.port()), ("who", &who)]),
+        )
+        .on_hover_text(t("Others on your network join with this computer's address and this port"));
         if let Some(Tunnel::Host(tunnel)) = tunnel {
             if let Some(code) = tunnel.code() {
                 let copy = ui
-                    .button(format!("{}  Copy edit code", icon::COPY))
-                    .on_hover_text("Friends anywhere paste it into Edit together. It isn't shown here, so it stays off streams.");
+                    .button(format!("{}  {}", icon::COPY, t("Copy edit code")))
+                    .on_hover_text(t("Friends anywhere paste it into Edit together. It isn't shown here, so it stays off streams."));
                 if copy.clicked() {
                     ui.ctx().copy_text(code);
                 }
             } else if let Some(error) = tunnel.error() {
-                ui.colored_label(red, "No edit code").on_hover_text(&error);
+                ui.colored_label(red, t("No edit code")).on_hover_text(&error);
                 crate::report::button(ui, &format!("No edit code: {error}"));
             } else {
                 theme::status(ui, theme::AMBER, "Getting an edit code…");
@@ -2902,17 +2926,16 @@ fn recovery_screen(ctx: &egui::Context, engine: &mut EngineState, editor: &mut E
     let mut discard = false;
     egui::Modal::new(egui::Id::new("recovered")).show(ctx, |ui| {
         ui.set_max_width(460.0);
-        ui.heading("Unsaved work");
+        ui.heading(t("Unsaved work"));
         ui.add_space(6.0);
-        ui.label(format!(
-            "Libroxel closed before {} was saved. A copy from {} was kept.",
-            found.name(),
-            found.age(crate::autosave::now())
+        ui.label(tf(
+            "Libroxel closed before {game} was saved. A copy from {when} was kept.",
+            &[("game", &found.name()), ("when", &found.age(crate::autosave::now()))],
         ));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            open = ui.button("Open the copy").clicked();
-            discard = ui.button("Throw it away").clicked();
+            open = ui.button(t("Open the copy")).clicked();
+            discard = ui.button(t("Throw it away")).clicked();
         });
     });
     if open {
@@ -3018,7 +3041,7 @@ fn part_picker(
     egui::ComboBox::from_id_salt(("part_picker", id, property as u32)).selected_text(shown).show_ui(
         ui,
         |ui| {
-            if ui.selectable_label(current.is_none(), "(none)").clicked() {
+            if ui.selectable_label(current.is_none(), t("(none)")).clicked() {
                 picked = Some(None);
             }
             for part in ref_choices(tree, property) {
@@ -4005,7 +4028,7 @@ fn ribbon(
             ui.set_min_width(220.0);
             file_menu(ui, editor, playing, actions);
             ui.separator();
-            ui.menu_button("Keyboard shortcuts", help_items);
+            ui.menu_button(t("Keyboard shortcuts"), help_items);
         });
         ui.add_space(8.0);
         for tab in RibbonTab::ALL {
@@ -4142,7 +4165,7 @@ fn home_tab(
                 }
             });
             if theme::ribbon_button(ui, icon::APP_WINDOW, "UI", false)
-                .on_hover_text("A screen GUI in StarterGui")
+                .on_hover_text(t("A screen GUI in StarterGui"))
                 .clicked()
             {
                 actions.push(Action::Insert(ClassKind::ScreenGui));
@@ -4192,7 +4215,7 @@ fn model_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mu
             ui.spacing_mut().interact_size.y = 22.0;
             ui.add_space(2.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Rotate").color(theme::MUTED));
+                ui.label(RichText::new(t("Rotate")).color(theme::MUTED));
                 egui::ComboBox::from_id_salt("angle-snap")
                     .width(76.0)
                     .selected_text(if editor.angle_snap > 0.0 {
@@ -4201,14 +4224,14 @@ fn model_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mu
                         "Free".into()
                     })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut editor.angle_snap, 0.0, "Free");
+                        ui.selectable_value(&mut editor.angle_snap, 0.0, t("Free"));
                         for a in [5.0, 15.0, 45.0, 90.0] {
                             ui.selectable_value(&mut editor.angle_snap, a, format!("{a}°"));
                         }
                     });
             });
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Move  ").color(theme::MUTED));
+                ui.label(RichText::new(format!("{}  ", t("Move"))).color(theme::MUTED));
                 egui::ComboBox::from_id_salt("snap")
                     .width(76.0)
                     .selected_text(if editor.snap > 0.0 {
@@ -4217,7 +4240,7 @@ fn model_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mu
                         "Off".into()
                     })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut editor.snap, 0.0, "Off");
+                        ui.selectable_value(&mut editor.snap, 0.0, t("Off"));
                         for s in [0.25, 0.5, 1.0, 2.0, 4.0] {
                             ui.selectable_value(&mut editor.snap, s, format!("{s} studs"));
                         }
@@ -4298,20 +4321,20 @@ fn test_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
     ui.add_enabled_ui(!playing, |ui| {
         theme::ribbon_group(ui, "Clients and servers", |ui| {
             if theme::ribbon_button(ui, icon::BROADCAST, "Host", false)
-                .on_hover_text("Play, and let other computers join")
+                .on_hover_text(t("Play, and let other computers join"))
                 .clicked()
             {
                 actions.push(Action::Host);
             }
             if theme::ribbon_button(ui, icon::SIGN_IN, "Join", false)
-                .on_hover_text("Join a game another computer hosts")
+                .on_hover_text(t("Join a game another computer hosts"))
                 .clicked()
             {
                 editor.dialog =
                     Some(Dialog::Join { address: String::new(), name: editor.platform.player_name() });
             }
             if theme::ribbon_button(ui, icon::GLOBE_HEMISPHERE_WEST, "Browse", false)
-                .on_hover_text("Find games being hosted right now")
+                .on_hover_text(t("Find games being hosted right now"))
                 .clicked()
             {
                 editor.platform.open = true;
@@ -4320,7 +4343,7 @@ fn test_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
         theme::ribbon_group(ui, "Collaborate", |ui| {
             if editor.coedit.is_none() {
                 if theme::ribbon_button(ui, icon::USERS_THREE, "Edit together", false)
-                    .on_hover_text("Share this game so others can edit it with you, or join someone's")
+                    .on_hover_text(t("Share this game so others can edit it with you, or join someone's"))
                     .clicked()
                 {
                     let name = editor.platform.player_name();
@@ -4332,7 +4355,7 @@ fn test_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut
         });
         theme::ribbon_group(ui, "Data", |ui| {
             if theme::ribbon_button(ui, icon::DATABASE, "Clear saved", false)
-                .on_hover_text("Forget what this game's data stores saved in earlier play tests")
+                .on_hover_text(t("Forget what this game's data stores saved in earlier play tests"))
                 .clicked()
             {
                 actions.push(Action::ClearData);
@@ -4366,7 +4389,7 @@ fn view_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool) {
             editor.panels_in_play = true;
         }
         if theme::ribbon_button(ui, icon::SIDEBAR, "In play", editor.panels_in_play)
-            .on_hover_text("Keep the side panels open while playing (off: the game gets the whole width)")
+            .on_hover_text(t("Keep the side panels open while playing (off: the game gets the whole width)"))
             .clicked()
         {
             editor.panels_in_play = !editor.panels_in_play;
@@ -4377,20 +4400,20 @@ fn view_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool) {
             editor.show_grid = !editor.show_grid;
         }
         if theme::ribbon_button(ui, icon::GAUGE, "Stats", editor.stats.shown)
-            .on_hover_text("Frame rate and where each frame's time goes, while playing (Shift+F1)")
+            .on_hover_text(t("Frame rate and where each frame's time goes, while playing (Shift+F1)"))
             .clicked()
         {
             editor.stats.shown = !editor.stats.shown;
         }
         if theme::ribbon_button(ui, icon::HAND_TAP, "Touch", editor.touch.seen)
-            .on_hover_text("Show the on-screen stick and jump button while playing")
+            .on_hover_text(t("Show the on-screen stick and jump button while playing"))
             .clicked()
         {
             editor.touch.seen = !editor.touch.seen;
         }
         let sharing = crate::stats::enabled();
         if theme::ribbon_button(ui, icon::CHART_LINE_UP, "Share", sharing)
-            .on_hover_text("Send crash reports and usage stats to the Hub")
+            .on_hover_text(t("Send crash reports and usage stats to the Hub"))
             .clicked()
         {
             crate::stats::set_enabled(!sharing);
@@ -4426,7 +4449,7 @@ fn toolbox(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut 
     theme::panel_title(ui, icon::TOOLBOX, "Toolbox");
     ui.add(
         egui::TextEdit::singleline(&mut editor.toolbox_search)
-            .hint_text("Search")
+            .hint_text(t("Search"))
             .desired_width(f32::INFINITY),
     );
     ui.add_space(6.0);
@@ -4539,7 +4562,7 @@ fn toolbox(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut 
             }
             theme::label_caps(ui, "From Roblox Studio");
             ui.label(
-                RichText::new("Drop a .rbxm model on the window to add it, or a .rbxl place to open it.")
+                RichText::new(t("Drop a .rbxm model on the window to add it, or a .rbxl place to open it."))
                     .color(theme::MUTED),
             );
         });
