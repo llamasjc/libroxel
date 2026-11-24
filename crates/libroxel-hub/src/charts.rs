@@ -282,7 +282,11 @@ pub fn charts(db: &Connection) -> Charts {
         chart(
             "top-playing",
             "Top playing",
-            ranked(&list, |g| g.playing > 0 || g.hot() > 0.0, |g| g.playing as f64 + g.hot() / 100.0),
+            ranked(
+                &list,
+                |g| g.playing > 0 || g.hot() > 0.0 || g.age_days.is_none(),
+                |g| g.playing as f64 + g.hot() / 100.0 + if g.age_days.is_none() { 0.001 } else { 0.0 },
+            ),
         ),
         chart("trending", "Trending", ranked(&list, |g| g.plays(0, 1) + g.playing > 0, Game::trend)),
         chart("top-rated", "Top rated", ranked(&list, |g| g.likes + g.dislikes > 0, Game::rating)),

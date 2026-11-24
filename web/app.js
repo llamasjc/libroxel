@@ -885,7 +885,7 @@ function signOut() {
 }
 
 function goTo(path) {
-  if (location.pathname !== path) {
+  if (location.pathname + location.search !== path) {
     history.pushState(null, '', path);
     window.scrollTo(0, 0);
   }
@@ -3089,7 +3089,7 @@ document.addEventListener('click', (e) => {
   const path = a.getAttribute('href');
   if (!path.startsWith('/') || path.startsWith('/downloads/')) return;
   e.preventDefault();
-  goTo(a.pathname);
+  goTo(a.pathname + a.search);
 });
 window.addEventListener('popstate', render);
 function sayOnline() {
