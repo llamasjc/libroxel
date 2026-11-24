@@ -26,6 +26,7 @@ mod gui;
 mod history;
 mod hub_assets;
 mod hub_home;
+mod i18n;
 mod images;
 mod loading;
 mod menu;
@@ -351,6 +352,7 @@ pub fn run() {
         // Typing `libroxel` in a terminal opens this copy too.
         command::install();
     }
+    i18n::start();
     let mut editor = Editor {
         platform: browse::Platform::start(),
         crash: report::take_crash(),

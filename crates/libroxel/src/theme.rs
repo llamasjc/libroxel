@@ -79,6 +79,11 @@ pub fn light(size: f32) -> FontId {
 }
 
 fn fonts() -> FontDefinitions {
+    fonts_for(crate::i18n::current())
+}
+
+/// The fonts for showing the app in `language`.
+fn fonts_for(language: crate::i18n::Language) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let mut add = |name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.to_owned(), std::sync::Arc::new(FontData::from_static(bytes)));
@@ -91,11 +96,21 @@ fn fonts() -> FontDefinitions {
     add("atkinson", include_bytes!("../assets/fonts/AtkinsonHyperlegible-Regular.ttf"));
     add("plex-mono", include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf"));
     add("phosphor", egui_phosphor::variants::bytes::bold::FONT);
+    // Chinese needs a font with its characters: the computer's own, rather
+    // than adding megabytes to every download.
+    let cjk = (language == crate::i18n::Language::Chinese)
+        .then(chinese_font)
+        .flatten()
+        .map(|data| fonts.font_data.insert("cjk".to_owned(), data))
+        .is_some();
     // Each family falls back to the icons, then to egui's own fonts for
     // anything else (arrows, accents, other scripts).
     let fallback: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let family = |first: &str| {
         let mut list = vec![first.to_owned(), "atkinson".to_owned(), "phosphor".to_owned()];
+        if cjk {
+            list.push("cjk".to_owned());
+        }
         list.extend(fallback.iter().cloned());
         list
     };
@@ -113,8 +128,58 @@ fn fonts() -> FontDefinitions {
 /// Puts Libroxel's fonts and colours on `ctx`, once. New fonts only take
 /// effect from the next frame, so this says whether they can be used yet:
 /// draw nothing until it does.
+/// Where the computer keeps a font with Chinese characters, by system.
+const CHINESE_FONTS: &[&str] = &[
+    // Windows
+    "C:\\Windows\\Fonts\\msyh.ttc",
+    "C:\\Windows\\Fonts\\simhei.ttf",
+    "C:\\Windows\\Fonts\\simsun.ttc",
+    // macOS
+    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/System/Library/Fonts/STHeiti Medium.ttc",
+    "/Library/Fonts/Arial Unicode.ttf",
+    // Linux
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/wenquanyi/wqy-zenhei/wqy-zenhei.ttc",
+    "/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc",
+    "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+    // Android
+    "/system/fonts/NotoSansCJK-Regular.ttc",
+    "/system/fonts/NotoSansSC-Regular.otf",
+    "/system/fonts/DroidSansFallback.ttf",
+];
+
+/// The computer's Chinese font, if it has one (read once).
+fn chinese_font() -> Option<std::sync::Arc<FontData>> {
+    static FOUND: std::sync::LazyLock<Option<std::sync::Arc<FontData>>> = std::sync::LazyLock::new(|| {
+        CHINESE_FONTS
+            .iter()
+            .find_map(|path| std::fs::read(path).ok())
+            .map(|bytes| std::sync::Arc::new(FontData::from_owned(bytes)))
+    });
+    FOUND.clone()
+}
+
+/// Whether Chinese text can be drawn on this computer.
+pub fn has_chinese_font() -> bool {
+    chinese_font().is_some()
+}
+
+const INSTALLED: &str = "libroxel theme installed";
+
+/// Loads the fonts again on the next frame, for a new language.
+pub fn reload_fonts(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.remove::<bool>(egui::Id::new(INSTALLED)));
+}
+
 pub fn install(ctx: &egui::Context) -> bool {
-    let id = egui::Id::new("libroxel theme installed");
+    let id = egui::Id::new(INSTALLED);
     if ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false) {
         return ctx.fonts(|f| f.families().contains(&FontFamily::Name(LIGHT.into())));
     }
@@ -896,14 +961,15 @@ pub fn tab(ui: &mut egui::Ui, glyph: &str, label: &str, on: bool) -> Response {
 }
 
 /// What an icon shown on its own means, for screen readers.
-pub fn icon_name(glyph: &str) -> &'static str {
-    match glyph {
+pub fn icon_name(glyph: &str) -> &str {
+    crate::i18n::t(match glyph {
         icon::CARET_DOWN => "More",
         icon::MAGNIFYING_GLASS => "Search",
         icon::CHAT_CIRCLE => "Messages",
         icon::ARROW_CIRCLE_UP => "Update",
+        icon::GLOBE => "Language",
         _ => "",
-    }
+    })
 }
 
 /// How wide [`tab`] draws a tab, so a bar can tell whether its tabs fit.
@@ -1021,7 +1087,13 @@ pub fn paint_logo(painter: &egui::Painter, at: Pos2, size: f32) {
 /// like a picked tab while `on`, and lights up under the pointer.
 pub fn logo_button(ui: &mut egui::Ui, on: bool) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(52.0, 44.0), Sense::click());
-    name_for_screen_readers(ui, &response, egui::WidgetType::SelectableLabel, "Home", Some(on));
+    name_for_screen_readers(
+        ui,
+        &response,
+        egui::WidgetType::SelectableLabel,
+        crate::i18n::t("Home"),
+        Some(on),
+    );
     let painter = ui.painter();
     let pill = rect.shrink2(Vec2::new(1.0, 2.0));
     if on {
@@ -1513,6 +1585,28 @@ mod screen_reader_tests {
     fn icons_are_left_out_of_spoken_names() {
         assert_eq!(spoken(&format!("{}  Play", icon::PLAY)), "Play");
         assert_eq!(spoken("Kart race"), "Kart race");
+    }
+
+    /// In Chinese, the computer's Chinese font is used, so the app's
+    /// translated text draws as characters, not boxes.
+    #[test]
+    fn chinese_text_draws_with_the_computers_font() {
+        if !has_chinese_font() {
+            eprintln!("no Chinese font on this computer; nothing to check");
+            return;
+        }
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts_for(crate::i18n::Language::Chinese));
+        let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+        let home = crate::i18n::t_in(crate::i18n::Language::Chinese, "Home");
+        assert_eq!(home, "首页");
+        let drawn = ctx.fonts_mut(|f| f.has_glyphs(&display(15.0), home));
+        assert!(drawn, "{home} has its characters");
+        // In English the Chinese font isn't loaded at all.
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts_for(crate::i18n::Language::English));
+        let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+        assert!(!ctx.fonts_mut(|f| f.has_glyphs(&display(15.0), "首页")));
     }
 
     #[test]

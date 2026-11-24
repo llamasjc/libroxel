@@ -3,6 +3,7 @@
 //! page with its live servers (players, ping, friends inside and a Join
 //! button), the way a server browser lists them.
 
+use crate::i18n::{t, tf};
 use bevy_egui::egui::{self, Color32, RichText};
 use libroxel_engine::character::Look;
 use libroxel_hub::{Friend, FriendAction, GameInfo, ServerInfo};
@@ -198,11 +199,11 @@ pub fn paint_avatar(painter: &egui::Painter, centre: egui::Pos2, r: f32, look: &
 fn whereabouts(friend: &Friend) -> (String, Color32) {
     match (&friend.game, friend.online) {
         (Some(game), true) => (game.clone(), theme::LINK),
-        (None, true) => ("Online".into(), theme::GREEN),
+        (None, true) => (t("Online").into(), theme::GREEN),
         _ => (
             match friend.last_online_secs_ago {
-                Some(secs) => format!("Offline · {}", ago(secs)),
-                None => "Offline".into(),
+                Some(secs) => tf("Offline · {when}", &[("when", &ago(secs))]),
+                None => t("Offline").into(),
             },
             SOFT,
         ),
@@ -212,12 +213,12 @@ fn whereabouts(friend: &Friend) -> (String, Color32) {
 /// "5 min ago", "3 h ago", "2 days ago".
 pub(crate) fn ago(secs: i64) -> String {
     match secs {
-        ..60 => "just now".into(),
-        60..3600 => format!("{} min ago", secs / 60),
-        3600..86400 => format!("{} h ago", secs / 3600),
+        ..60 => t("just now").into(),
+        60..3600 => tf("{n} min ago", &[("n", &(secs / 60))]),
+        3600..86400 => tf("{n} h ago", &[("n", &(secs / 3600))]),
         _ => match secs / 86400 {
-            1 => "1 day ago".into(),
-            n => format!("{n} days ago"),
+            1 => t("1 day ago").into(),
+            n => tf("{n} days ago", &[("n", &n)]),
         },
     }
 }
@@ -238,7 +239,7 @@ fn friend_bubble(ui: &mut egui::Ui, friend: &Friend) -> egui::Response {
     let spoken_name = if friend.online {
         format!("{}, {}", friend.name, whereabouts(friend).0)
     } else {
-        format!("{}, offline", friend.name)
+        tf("{name}, offline", &[("name", &friend.name)])
     };
     theme::name_for_screen_readers(ui, &response, egui::WidgetType::Button, &spoken_name, None);
     let painter = ui.painter_at(rect);
@@ -272,8 +273,13 @@ fn friend_bubble(ui: &mut egui::Ui, friend: &Friend) -> egui::Response {
         centred(107.0, &status, egui::FontId::proportional(11.5), colour);
     }
     let hover = match &friend.server {
-        Some(server) => format!("{} is in {} on {}. Click to join.", friend.name, status, server.name),
-        None if friend.game.is_some() => format!("{} is playing {status}.", friend.name),
+        Some(server) => tf(
+            "{name} is in {game} on {server}. Click to join.",
+            &[("name", &friend.name), ("game", &status), ("server", &server.name)],
+        ),
+        None if friend.game.is_some() => {
+            tf("{name} is playing {game}.", &[("name", &friend.name), ("game", &status)])
+        }
         None => format!("{}: {status}", friend.name),
     };
     response.on_hover_text(hover).on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -282,7 +288,7 @@ fn friend_bubble(ui: &mut egui::Ui, friend: &Friend) -> egui::Response {
 /// The round "add friends" button at the start of the row.
 fn add_bubble(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(96.0, 128.0), egui::Sense::click());
-    theme::name_for_screen_readers(ui, &response, egui::WidgetType::Button, "Add friends", None);
+    theme::name_for_screen_readers(ui, &response, egui::WidgetType::Button, t("Add friends"), None);
     let painter = ui.painter_at(rect);
     let centre = egui::pos2(rect.center().x, rect.min.y + 42.0);
     let top = if response.hovered() { Color32::from_rgb(240, 250, 255) } else { Color32::WHITE };
@@ -295,7 +301,7 @@ fn add_bubble(ui: &mut egui::Ui) -> egui::Response {
         egui::FontId::proportional(28.0),
         theme::ACCENT,
     );
-    let galley = painter.layout_no_wrap("Add friends".into(), theme::display(14.0), theme::TEXT);
+    let galley = painter.layout_no_wrap(t("Add friends").into(), theme::display(14.0), theme::TEXT);
     painter.galley(
         egui::pos2(rect.center().x - galley.size().x / 2.0, rect.min.y + 88.0),
         galley,
@@ -309,8 +315,8 @@ fn add_bubble(ui: &mut egui::Ui) -> egui::Response {
 fn game_tile(ui: &mut egui::Ui, entry: &Entry, friends: &[&Friend]) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(188.0, 214.0), egui::Sense::click());
     let spoken_name = match entry.playing() {
-        0 => format!("{}, by {}", entry.title, entry.by),
-        n => format!("{}, {n} playing", entry.title),
+        0 => tf("{game}, by {author}", &[("game", &t(&entry.title)), ("author", &entry.by)]),
+        n => tf("{game}, {n} playing", &[("game", &t(&entry.title)), ("n", &n)]),
     };
     theme::name_for_screen_readers(ui, &response, egui::WidgetType::Button, &spoken_name, None);
     let painter = ui.painter_at(rect.expand(20.0));
@@ -376,11 +382,18 @@ fn game_tile(ui: &mut egui::Ui, entry: &Entry, friends: &[&Friend]) -> egui::Res
     let playing = entry.playing();
     let (line, colour) = if !friends.is_empty() {
         let names: Vec<&str> = friends.iter().map(|f| f.name.as_str()).collect();
-        (format!("{}  {} playing · {}", icon::USERS, count(playing), names.join(", ")), theme::LINK)
+        (
+            format!(
+                "{}  {}",
+                icon::USERS,
+                tf("{n} playing · {friends}", &[("n", &count(playing)), ("friends", &names.join(", "))])
+            ),
+            theme::LINK,
+        )
     } else if playing > 0 {
-        (format!("{}  {} playing", icon::USERS, count(playing)), theme::GREEN)
+        (format!("{}  {}", icon::USERS, tf("{n} playing", &[("n", &count(playing))])), theme::GREEN)
     } else {
-        (format!("{}  by {}", icon::USER, entry.by), SOFT)
+        (format!("{}  {}", icon::USER, tf("by {author}", &[("author", &entry.by)])), SOFT)
     };
     theme::text_line(
         &painter,
@@ -399,7 +412,7 @@ fn ping_badge(ui: &mut egui::Ui, ping: Option<Result<u32, String>>) {
     let painter = ui.painter_at(rect);
     let (bars, colour, text) = match &ping {
         None => (0, SOFT, "…".to_owned()),
-        Some(Err(_)) => (0, theme::RED, "no answer".to_owned()),
+        Some(Err(_)) => (0, theme::RED, t("no answer").to_owned()),
         Some(Ok(ms)) => {
             let (bars, colour) = match ms {
                 ..60 => (4, theme::GREEN),
@@ -428,7 +441,8 @@ fn ping_badge(ui: &mut egui::Ui, ping: Option<Result<u32, String>>) {
     if let Some(Err(why)) = ping {
         response.on_hover_text(why);
     } else {
-        response.on_hover_text("How long a message takes to get there and back, measured from this computer");
+        response
+            .on_hover_text(t("How long a message takes to get there and back, measured from this computer"));
     }
 }
 
@@ -447,9 +461,11 @@ fn players_bar(ui: &mut egui::Ui, server: &ServerInfo) {
             1.0,
             fill,
         );
-        format!("{} / {} players", server.players, server.max_players)
+        tf("{n} / {most} players", &[("n", &server.players), ("most", &server.max_players)])
+    } else if server.players == 1 {
+        t("1 player").to_owned()
     } else {
-        format!("{} {}", server.players, if server.players == 1 { "player" } else { "players" })
+        tf("{n} players", &[("n", &server.players)])
     };
     painter.text(
         rect.left_top(),
@@ -500,23 +516,27 @@ fn server_row(ui: &mut egui::Ui, platform: &mut Platform, server: &ServerInfo, k
                         libroxel_hub::HostKind::Player => theme::LINK,
                         libroxel_hub::HostKind::Official => theme::AMBER,
                     };
-                    let kind = if server.hub_server { "Libroxel" } else { server.kind.label() };
-                    ui.label(RichText::new(format!("{kind} server")).small().color(kind_colour))
-                        .on_hover_text(if server.hub_server {
-                            "Runs on Libroxel's own servers, so it's there whoever is playing"
-                        } else {
-                            "Someone runs this one themselves"
-                        });
+                    let kind = if server.hub_server { "Libroxel" } else { t(server.kind.label()) };
+                    ui.label(
+                        RichText::new(tf("{kind} server", &[("kind", &kind)])).small().color(kind_colour),
+                    )
+                    .on_hover_text(if server.hub_server {
+                        t("Runs on Libroxel's own servers, so it's there whoever is playing")
+                    } else {
+                        t("Someone runs this one themselves")
+                    });
                     // Only an account the Hub checked; the server's name is whatever the host typed.
                     if server.admin_host {
-                        ui.label(RichText::new("Admin").small().strong().color(theme::AMBER))
-                            .on_hover_text("Run by Libroxel, checked by the Hub.");
+                        ui.label(RichText::new(t("Admin")).small().strong().color(theme::AMBER))
+                            .on_hover_text(t("Run by Libroxel, checked by the Hub."));
                     } else if let Some(host) = &server.host {
-                        let verified = if server.host_verified { " · verified" } else { "" };
-                        ui.label(
-                            RichText::new(format!("hosted by {host}{verified}")).small().color(theme::TEXT),
-                        )
-                        .on_hover_text("The Hub checked this account really hosts it.");
+                        let hosted = if server.host_verified {
+                            tf("hosted by {host} · verified", &[("host", host)])
+                        } else {
+                            tf("hosted by {host}", &[("host", host)])
+                        };
+                        ui.label(RichText::new(hosted).small().color(theme::TEXT))
+                            .on_hover_text(t("The Hub checked this account really hosts it."));
                     }
                     if !friends.is_empty() {
                         for (name, look) in friends.iter().take(4) {
@@ -524,9 +544,9 @@ fn server_row(ui: &mut egui::Ui, platform: &mut Platform, server: &ServerInfo, k
                             paint_avatar(ui.painter(), r.center(), 9.0, look, name);
                         }
                         let names: Vec<&str> = friends.iter().map(|(n, _)| n.as_str()).collect();
-                        let verb = if names.len() == 1 { "is" } else { "are" };
+                        let here = if names.len() == 1 { "{names} is here" } else { "{names} are here" };
                         ui.label(
-                            RichText::new(format!("{} {verb} here", names.join(", ")))
+                            RichText::new(tf(here, &[("names", &names.join(", "))]))
                                 .small()
                                 .color(theme::LINK),
                         );
@@ -541,7 +561,7 @@ fn server_row(ui: &mut egui::Ui, platform: &mut Platform, server: &ServerInfo, k
                             ui,
                             theme::Kind::Go,
                             icon::SIGN_IN,
-                            if open { "Join" } else { "Full" },
+                            if open { t("Join") } else { t("Full") },
                             34.0,
                         )
                     })
@@ -689,14 +709,16 @@ pub fn home_tab(
         ui.vertical(|ui| {
             ui.add_space(8.0);
             ui.label(
-                RichText::new(format!("Hello, {name}!")).font(theme::display_bold(28.0)).color(theme::TEXT),
+                RichText::new(tf("Hello, {name}!", &[("name", &name)]))
+                    .font(theme::display_bold(28.0))
+                    .color(theme::TEXT),
             );
             let online = platform.social.friends.friends.iter().filter(|f| f.online).count();
             let note = match (platform.account.is_some(), online) {
-                (false, _) => "Make an account on the Profile tab to add friends.".to_owned(),
-                (true, 0) => "None of your friends are online right now.".to_owned(),
-                (true, 1) => "1 friend is online.".to_owned(),
-                (true, n) => format!("{n} friends are online."),
+                (false, _) => t("Make an account on the Profile tab to add friends.").to_owned(),
+                (true, 0) => t("None of your friends are online right now.").to_owned(),
+                (true, 1) => t("1 friend is online.").to_owned(),
+                (true, n) => tf("{n} friends are online.", &[("n", &n)]),
             };
             ui.label(RichText::new(note).color(SOFT));
         });
@@ -705,13 +727,20 @@ pub fn home_tab(
     // Friends, the ones in games first.
     let friends = platform.social.friends.friends.clone();
     let waiting = platform.social.friends.incoming.len();
-    let title = format!("Friends ({})", friends.len());
-    if section(ui, &title, Some("See all")) {
+    let title = tf("Friends ({n})", &[("n", &friends.len())]);
+    if section(ui, &title, Some(t("See all"))) {
         *tab = Tab::Friends;
     }
     if waiting > 0 {
-        let label =
-            format!("{} {waiting} friend request{} waiting", icon::BELL, if waiting == 1 { "" } else { "s" });
+        let label = format!(
+            "{} {}",
+            icon::BELL,
+            if waiting == 1 {
+                t("1 friend request waiting").to_owned()
+            } else {
+                tf("{n} friend requests waiting", &[("n", &waiting)])
+            }
+        );
         if ui
             .add(egui::Label::new(RichText::new(label).color(theme::AMBER)).sense(egui::Sense::click()))
             .clicked()
@@ -780,7 +809,7 @@ fn picks(state: &mut HomeState, ui: &mut egui::Ui, platform: &Platform, list: &[
         let played: Vec<&Entry> =
             mine.continue_playing.iter().filter_map(|p| find(&p.game_id)).take(12).collect();
         if !played.is_empty() {
-            section(ui, "Continue", None);
+            section(ui, t("Continue"), None);
             ui.add_space(6.0);
             tile_row(state, ui, "continue-row", &played, friends);
         }
@@ -797,7 +826,7 @@ fn picks(state: &mut HomeState, ui: &mut egui::Ui, platform: &Platform, list: &[
     };
     let picked: Vec<&Entry> = ids.into_iter().filter_map(|id| find(id)).take(12).collect();
     if !picked.is_empty() {
-        section(ui, "Recommended", None);
+        section(ui, t("Recommended"), None);
         ui.add_space(6.0);
         tile_row(state, ui, "recommended-row", &picked, friends);
     }
@@ -813,11 +842,11 @@ pub fn charts_tab(
         Ok(list) => list,
         Err(pick) => return pick,
     };
-    theme::heading(ui, "Charts");
+    theme::heading(ui, t("Charts"));
     ui.add_space(8.0);
     let charts = platform.social.charts.charts.clone();
     let Some(current) = charts.iter().find(|c| Some(&c.id) == state.chart.as_ref()).or(charts.first()) else {
-        ui.label(RichText::new("No games yet.").color(SOFT));
+        ui.label(RichText::new(t("No games yet.")).color(SOFT));
         return pick;
     };
     ui.horizontal_wrapped(|ui| {
@@ -848,7 +877,7 @@ pub fn charts_tab(
             if let Some(s) =
                 stats.iter().find(|s| s.game_id == entry.key).filter(|s| s.likes + s.dislikes > 0)
             {
-                let liked = format!("{}% liked", (100 * s.likes) / (s.likes + s.dislikes));
+                let liked = tf("{n}% liked", &[("n", &((100 * s.likes) / (s.likes + s.dislikes)))]);
                 painter.text(
                     egui::pos2(tile.rect.max.x, tile.rect.max.y - 4.0),
                     egui::Align2::RIGHT_BOTTOM,
@@ -917,7 +946,7 @@ fn getting(ui: &mut egui::Ui, platform: &Platform) {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.spinner();
-            ui.label(format!("Getting {title}…"));
+            ui.label(tf("Getting {game}…", &[("game", &title)]));
         });
     }
 }
@@ -925,9 +954,9 @@ fn getting(ui: &mut egui::Ui, platform: &Platform) {
 /// Games, busiest first.
 fn games(state: &mut HomeState, ui: &mut egui::Ui, list: &[Entry], friends: &[Friend]) {
     let in_games: Vec<&Friend> = friends.iter().filter(|f| f.game.is_some()).collect();
-    section(ui, "Games", None);
+    section(ui, t("Games"), None);
     ui.label(
-        RichText::new("Pick a game to see its servers, or press Play on its page to jump in.").color(SOFT),
+        RichText::new(t("Pick a game to see its servers, or press Play on its page to jump in.")).color(SOFT),
     );
     ui.add_space(10.0);
     ui.horizontal_wrapped(|ui| {
@@ -959,7 +988,7 @@ fn game_page(
     let mut pick = None;
     if ui
         .add(
-            egui::Label::new(RichText::new(format!("{} Home", icon::ARROW_LEFT)).color(theme::LINK))
+            egui::Label::new(RichText::new(format!("{} {}", icon::ARROW_LEFT, t("Home"))).color(theme::LINK))
                 .sense(egui::Sense::click()),
         )
         .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -983,7 +1012,7 @@ fn game_page(
         ui.add_space(26.0);
         ui.vertical(|ui| {
             ui.label(RichText::new(&entry.title).font(theme::display_bold(34.0)).color(theme::TEXT));
-            ui.label(RichText::new(format!("By {}", entry.by)).color(theme::LINK));
+            ui.label(RichText::new(tf("By {author}", &[("author", &entry.by)])).color(theme::LINK));
             ui.add_space(14.0);
             ui.horizontal(|ui| {
                 let stat = |ui: &mut egui::Ui, value: String, label: &str| {
@@ -993,11 +1022,11 @@ fn game_page(
                     });
                     ui.add_space(26.0);
                 };
-                stat(ui, count(playing), "Playing");
-                stat(ui, entry.servers.len().to_string(), "Servers");
+                stat(ui, count(playing), t("Playing"));
+                stat(ui, entry.servers.len().to_string(), t("Servers"));
                 if let Source::Published(game) = &entry.source {
-                    stat(ui, count(game.plays), "Visits");
-                    stat(ui, format!("v{}", game.version), "Version");
+                    stat(ui, count(game.plays), t("Visits"));
+                    stat(ui, format!("v{}", game.version), t("Version"));
                 }
             });
             ui.add_space(16.0);
@@ -1006,23 +1035,29 @@ fn game_page(
             ui.horizontal(|ui| {
                 let play = ui
                     .add_enabled_ui(can_play && !busy, |ui| {
-                        theme::block_button(ui, theme::Kind::Go, icon::PLAY, "      Play      ", 52.0)
+                        theme::block_button(
+                            ui,
+                            theme::Kind::Go,
+                            icon::PLAY,
+                            &format!("      {}      ", t("Play")),
+                            52.0,
+                        )
                     })
                     .inner;
                 let hint = if entry.hostable() {
-                    "Puts you on a Libroxel server of this game (with your friends, if they're playing)"
+                    t("Puts you on a Libroxel server of this game (with your friends, if they're playing)")
                 } else {
-                    "Joins the busiest server with room"
+                    t("Joins the busiest server with room")
                 };
                 if play.on_hover_text(hint).clicked() {
                     pick = press_play(state, platform, entry, name);
                 }
                 ui.add_space(10.0);
                 if entry.hostable()
-                    && theme::block_button(ui, theme::Kind::Plain, icon::BROADCAST, "Host it myself", 52.0)
-                        .on_hover_text(
+                    && theme::block_button(ui, theme::Kind::Plain, icon::BROADCAST, t("Host it myself"), 52.0)
+                        .on_hover_text(t(
                             "Run a server of this game on your own computer instead; it shows on this list",
-                        )
+                        ))
                         .clicked()
                 {
                     pick = host(entry, platform);
@@ -1032,22 +1067,25 @@ fn game_page(
             {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Finding you a server…");
-                    if ui.small_button("Cancel").clicked() {
+                    ui.label(t("Finding you a server…"));
+                    if ui.small_button(t("Cancel")).clicked() {
                         platform.stop_finding();
                         state.finding_for = None;
                     }
                 });
             } else if let Some(why) = &platform.find_error {
                 ui.horizontal_wrapped(|ui| {
-                    ui.colored_label(theme::RED, format!("{why} You can also host it yourself."));
+                    ui.colored_label(
+                        theme::RED,
+                        tf("{why} You can also host it yourself.", &[("why", &why)]),
+                    );
                     crate::report::button(ui, why);
                 });
             }
             if let Some(title) = platform.downloading() {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(format!("Getting {title}…"));
+                    ui.label(tf("Getting {game}…", &[("game", &title)]));
                 });
             }
             if entry.hostable() {
@@ -1058,21 +1096,21 @@ fn game_page(
     });
     if !entry.about.is_empty() {
         ui.add_space(18.0);
-        theme::label_caps(ui, "About");
+        theme::label_caps(ui, t("About"));
         ui.label(RichText::new(&entry.about).color(theme::TEXT));
     }
     ui.add_space(22.0);
     // The servers.
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Servers").font(theme::display(22.0)).color(theme::TEXT));
+        ui.label(RichText::new(t("Servers")).font(theme::display(22.0)).color(theme::TEXT));
         ui.add_space(16.0);
-        ui.label(RichText::new("Sort by").color(SOFT));
-        ui.selectable_value(&mut state.sort, Sort::Players, "Players");
-        ui.selectable_value(&mut state.sort, Sort::Ping, "Ping");
+        ui.label(RichText::new(t("Sort by")).color(SOFT));
+        ui.selectable_value(&mut state.sort, Sort::Players, t("Players"));
+        ui.selectable_value(&mut state.sort, Sort::Ping, t("Ping"));
         ui.add_space(8.0);
-        ui.checkbox(&mut state.hide_full, "Hide full");
+        ui.checkbox(&mut state.hide_full, t("Hide full"));
         ui.add_space(8.0);
-        if theme::tool_button(ui, icon::ARROW_CLOCKWISE, "Refresh", false).clicked() {
+        if theme::tool_button(ui, icon::ARROW_CLOCKWISE, t("Refresh"), false).clicked() {
             platform.refresh();
         }
     });
@@ -1101,7 +1139,7 @@ fn game_page(
         servers.into_iter().partition(|s| !platform.social.friends_in(&s.server_id).is_empty());
     let mut join = None;
     if !with_friends.is_empty() {
-        theme::label_caps(ui, "Servers your friends are in");
+        theme::label_caps(ui, t("Servers your friends are in"));
         ui.add_space(4.0);
         for server in &with_friends {
             if server_row(ui, platform, server, &entry.key) {
@@ -1110,17 +1148,17 @@ fn game_page(
             ui.add_space(6.0);
         }
         ui.add_space(10.0);
-        theme::label_caps(ui, "Other servers");
+        theme::label_caps(ui, t("Other servers"));
         ui.add_space(4.0);
     }
     if others.is_empty() && with_friends.is_empty() {
         theme::panel().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new("No servers are running this game right now.").color(theme::TEXT));
+            ui.label(RichText::new(t("No servers are running this game right now.")).color(theme::TEXT));
             let more = if entry.hostable() {
-                "Press New server to start one; it shows up here for everyone."
+                t("Press New server to start one; it shows up here for everyone.")
             } else {
-                "Servers show up here as soon as someone hosts it."
+                t("Servers show up here as soon as someone hosts it.")
             };
             ui.label(RichText::new(more).color(SOFT));
         });
@@ -1180,18 +1218,18 @@ pub fn friends_tab(
 ) -> Option<Pick> {
     platform.refresh_if_old();
     let mut pick = None;
-    theme::heading(ui, "Friends");
+    theme::heading(ui, t("Friends"));
     if platform.account.is_none() {
         ui.add_space(8.0);
         theme::panel().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new("Make an account first").font(theme::display(17.0)).color(theme::TEXT));
+            ui.label(RichText::new(t("Make an account first")).font(theme::display(17.0)).color(theme::TEXT));
             ui.label(
-                RichText::new("Friends find you by your name. It takes a second, on the Profile tab.")
+                RichText::new(t("Friends find you by your name. It takes a second, on the Profile tab."))
                     .color(SOFT),
             );
             ui.add_space(6.0);
-            if theme::block_button(ui, theme::Kind::Primary, icon::USER_CIRCLE, "Make an account", 38.0)
+            if theme::block_button(ui, theme::Kind::Primary, icon::USER_CIRCLE, t("Make an account"), 38.0)
                 .clicked()
             {
                 *tab = Tab::Profile;
@@ -1221,17 +1259,20 @@ pub fn friends_tab(
         let ui = &mut columns[0];
         let online = friends.friends.iter().filter(|f| f.online).count();
         ui.label(
-            RichText::new(format!("Your friends ({}) · {online} online", friends.friends.len()))
-                .font(theme::display(18.0))
-                .color(theme::TEXT),
+            RichText::new(tf(
+                "Your friends ({n}) · {online} online",
+                &[("n", &friends.friends.len()), ("online", &online)],
+            ))
+            .font(theme::display(18.0))
+            .color(theme::TEXT),
         );
         ui.add_space(6.0);
         if friends.friends.is_empty() {
             ui.label(
                 RichText::new(if friends_loaded {
-                    "No friends yet. Find someone by name on the right and send a request."
+                    t("No friends yet. Find someone by name on the right and send a request.")
                 } else {
-                    "Looking…"
+                    t("Looking…")
                 })
                 .color(SOFT),
             );
