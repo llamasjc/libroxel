@@ -556,6 +556,8 @@ struct Peer {
     stream: Replicator,
     /// Areas `RequestStreamAroundAsync` asked to send them, until when.
     stream_requests: Vec<(Vec3, Instant)>,
+    /// `PersistentPerPlayer` models `AddPersistentPlayer` added them to.
+    persistent: HashSet<InstanceId>,
 }
 
 enum Out {
@@ -579,6 +581,7 @@ impl Peer {
             warned: false,
             stream: Replicator::default(),
             stream_requests: Vec::new(),
+            persistent: HashSet::new(),
         }
     }
 
@@ -926,6 +929,8 @@ pub(crate) struct Focus {
     pub(crate) keep: f32,
     /// Characters, always sent.
     pub(crate) always: HashSet<InstanceId>,
+    /// `PersistentPerPlayer` models this player was added to, always sent too.
+    pub(crate) persistent: HashSet<InstanceId>,
 }
 
 impl Focus {
@@ -992,12 +997,15 @@ impl Focus {
                 };
                 match mode {
                     ModelStreamingMode::Persistent => Self::all(tree, child, wanted),
+                    ModelStreamingMode::PersistentPerPlayer if self.persistent.contains(&child) => {
+                        Self::all(tree, child, wanted)
+                    }
                     ModelStreamingMode::Atomic => {
                         if self.any_part_near(tree, child, sent) {
                             Self::all(tree, child, wanted);
                         }
                     }
-                    // PersistentPerPlayer goes like Default until players are added to it.
+                    // PersistentPerPlayer, for players not added to it, goes like Default.
                     _ => {
                         wanted.insert(child);
                         self.walk(tree, child, sent, wanted);
@@ -1732,6 +1740,15 @@ impl PlaySession {
     ) {
         let tree = self.runtime.tree().clone();
         let now = Instant::now();
+        for (model, player, add) in self.runtime.take_persistent_players() {
+            if let Some(peer) = host.peers.iter_mut().find(|p| p.player == Some(player)) {
+                if add {
+                    peer.persistent.insert(model);
+                } else {
+                    peer.persistent.remove(&model);
+                }
+            }
+        }
         for (player, at, seconds) in self.runtime.take_stream_requests() {
             if let Some(peer) = host.peers.iter_mut().find(|p| p.player == Some(player)) {
                 peer.stream_requests.push((at, now + Duration::from_secs_f32(seconds)));
@@ -1777,7 +1794,8 @@ impl PlaySession {
                 .or_else(|| t.get_ref(player, Property::Character).and_then(position_of))
                 .unwrap_or(spawn);
             points.push(centre);
-            let focus = Focus { points, radius, keep, always: always.clone() };
+            let focus =
+                Focus { points, radius, keep, always: always.clone(), persistent: peer.persistent.clone() };
             for (who, seq, pos, yaw) in &teleports {
                 if *who == player {
                     peer.send(

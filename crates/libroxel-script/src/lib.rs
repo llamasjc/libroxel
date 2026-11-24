@@ -248,6 +248,12 @@ impl ScriptRuntime {
         world::seated(&self.lua, humanoid, seat)
     }
 
+    /// Takes the `AddPersistentPlayer` (true) and `RemovePersistentPlayer`
+    /// (false) calls: model, player.
+    pub fn take_persistent_players(&self) -> Vec<(InstanceId, InstanceId, bool)> {
+        world::take_persistent_players(&self.lua)
+    }
+
     /// Takes the places `RequestStreamAroundAsync` asked to stream to
     /// players: player, where, and for how many seconds.
     pub fn take_stream_requests(&self) -> Vec<(InstanceId, Vec3, f32)> {

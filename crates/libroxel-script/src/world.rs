@@ -50,6 +50,9 @@ pub(crate) struct WorldState {
     /// Places `RequestStreamAroundAsync` asked to send players the parts
     /// around, and for how many seconds.
     stream_requests: Vec<(InstanceId, Vec3, f32)>,
+    /// `AddPersistentPlayer` (true) and `RemovePersistentPlayer` (false)
+    /// calls: model, player.
+    persistent_players: Vec<(InstanceId, InstanceId, bool)>,
     /// Seats scripts asked to sit humanoids in, with `Seat:Sit`.
     sits: Vec<(InstanceId, InstanceId)>,
     /// Particle emitters asked to send out particles at once, and how many.
@@ -278,6 +281,16 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
         host(lua).world.borrow_mut().stream_requests.push((this.0, at, keep));
         Ok(())
     });
+    for (method, add) in [(methods::ADD_PERSISTENT_PLAYER, true), (methods::REMOVE_PERSISTENT_PLAYER, false)]
+    {
+        m.add_method(method, move |lua, this, player: Value| {
+            require_class(lua, this.0, ClassKind::Model, method)?;
+            let Some(player) = crate::bindings::as_instance(&player) else { return Ok(()) };
+            require_class(lua, player, ClassKind::Player, method)?;
+            host(lua).world.borrow_mut().persistent_players.push((this.0, player, add));
+            Ok(())
+        });
+    }
     m.add_method(methods::GET_TEAMS, |lua, this, ()| {
         require_class(lua, this.0, ClassKind::Teams, methods::GET_TEAMS)?;
         let teams: Vec<InstanceId> = {
@@ -482,6 +495,10 @@ pub(crate) fn seated(lua: &Lua, humanoid: InstanceId, seat: Option<InstanceId>) 
         Ok(args)
     });
     take_errors(lua)
+}
+
+pub(crate) fn take_persistent_players(lua: &Lua) -> Vec<(InstanceId, InstanceId, bool)> {
+    std::mem::take(&mut host(lua).world.borrow_mut().persistent_players)
 }
 
 pub(crate) fn take_stream_requests(lua: &Lua) -> Vec<(InstanceId, Vec3, f32)> {
