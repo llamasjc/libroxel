@@ -339,8 +339,8 @@ The first build compiles Bevy and takes a while. After that it is quick.
   (Brazil) and French, following the computer's language until you pick
   one with the 🌐 button on the top bar. Class, property and enum names,
   and Luau, stay as they are in every language (as in Roblox Studio), so
-  scripts and Roblox files work the same; the help shown for each class is
-  still in English. Chinese uses the computer's own Chinese font
+  scripts and Roblox files work the same. The help shown for each class is
+  translated too, with the code in it left as it is. Chinese uses the computer's own Chinese font
   (Microsoft YaHei, PingFang, Noto Sans CJK or WenQuanYi); without one, it
   can't be picked. Translations live in `crates/libroxel/assets/lang/`,
   one file per language, keyed by the English text.

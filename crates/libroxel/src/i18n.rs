@@ -240,6 +240,42 @@ mod tests {
         assert!(missing.is_empty(), "not in the language files: {missing:#?}");
     }
 
+    /// Code in backticks (`script.Parent`, `Emit(count)`) is what people
+    /// type, so every language keeps it word for word.
+    #[test]
+    fn code_stays_as_it_is() {
+        let code =
+            |text: &str| -> Vec<String> { text.split('`').skip(1).step_by(2).map(str::to_owned).collect() };
+        for language in Language::ALL {
+            for (english, translated) in language.table() {
+                for piece in code(english) {
+                    assert!(
+                        translated.contains(&format!("`{piece}`")),
+                        "{}: {piece} in {translated}",
+                        language.code()
+                    );
+                }
+            }
+        }
+    }
+
+    /// The help the Properties panel shows for every class is translated.
+    #[test]
+    fn every_class_has_its_help_translated() {
+        let mut missing = Vec::new();
+        for class in libroxel_instance::ClassKind::ALL {
+            if let Some(hint) = crate::ui::class_hint(*class) {
+                for language in [Language::Chinese, Language::Spanish, Language::Portuguese, Language::French]
+                {
+                    if !language.table().contains_key(hint) {
+                        missing.push(format!("{}: {hint}", language.code()));
+                    }
+                }
+            }
+        }
+        assert!(missing.is_empty(), "{missing:#?}");
+    }
+
     #[test]
     fn blanks_are_filled_in() {
         let bea: [(&str, &dyn std::fmt::Display); 1] = [("name", &"Bea")];
