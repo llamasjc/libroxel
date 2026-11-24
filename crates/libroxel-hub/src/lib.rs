@@ -868,6 +868,7 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/messages", post(messages::send_message))
         .route("/messages/{id}", get(messages::conversations))
         .route("/messages/{id}/{other}", get(messages::conversation))
+        .fallback(|| async { (StatusCode::NOT_FOUND, NO_ROUTE) })
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
         .layer(axum::middleware::from_fn_with_state(hub.limits.clone(), limits::every_request))
         // Any web page may call the Hub, as the app does: everything that
@@ -903,6 +904,8 @@ async fn status(State(db): State<Db>) -> Json<HubStatus> {
         games: games as u32,
     })
 }
+
+pub const NO_ROUTE: &str = "this Hub is older than the site";
 
 fn clip_to(text: &str, most: usize) -> String {
     text.trim().chars().take(most).collect()

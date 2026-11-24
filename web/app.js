@@ -4,6 +4,7 @@
 // opens the installed app through a libroxel:// link.
 
 import * as crypto from './vendor/crypto.js';
+import { ROUTES, href, routeOf } from './routes.js';
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -184,7 +185,7 @@ async function api(path, { method = 'GET', body, query } = {}) {
   const text = await response.text();
   if (!response.ok) {
     remember(`${method} ${path} ${response.status}`);
-    const why = text.trim() || response.statusText || `error ${response.status}`;
+    const why = text.trim() === 'this Hub is older than the site' ? 'The Hub is updating. Try again in a few minutes.' : text.trim() || response.statusText || `error ${response.status}`;
     throw new HubError(response.status, why.charAt(0).toUpperCase() + why.slice(1));
   }
   return text ? JSON.parse(text) : null;
@@ -818,36 +819,18 @@ const page = document.getElementById('page');
 let route = { name: 'home' };
 let flash = null;
 
-function parseRoute() {
-  const parts = location.pathname.replace(/^\/+|\/+$/g, '').split('/').map((p) => {
-    try {
-      return decodeURIComponent(p);
-    } catch {
-      return p;
-    }
-  });
-  switch (parts[0]) {
-    case 'game': return { name: 'game', key: parts.slice(1).join('/') };
-    case 'user': return { name: 'user', id: parts[1] };
-    case 'creator': return { name: 'creator', id: parts[1], tab: parts[2] };
-    case 'messages': return { name: 'messages', id: parts[1] };
-    case 'games': return { name: 'charts' };
-    case 'charts': case 'profile': case 'search': case 'friends': case 'groups': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': case 'donate': case 'moderation': case 'stats': return { name: parts[0] };
-    case 'group': return { name: 'group', id: parts[1] };
-    default: return { name: 'home' };
-  }
-}
+const parseRoute = () => routeOf(location.pathname);
 
 function tabs() {
-  const tab = (name, glyph, label, href) =>
-    el('a', { class: `tab${route.name === name ? ' active' : ''}`, href }, icon(glyph), label);
+  const tab = (name, glyph) =>
+    el('a', { class: `tab${route.name === name ? ' active' : ''}`, href: href(name) }, icon(glyph), ROUTES[name].title);
   document.getElementById('tabs').replaceChildren(
-    tab('charts', ICON.chart, 'Charts', '/charts'),
-    tab('groups', ICON.shield, 'Groups', '/groups'),
-    tab('avatar', ICON.shirt, 'Avatar', '/avatar'),
-    tab('creator', ICON.hammer, 'Create', '/creator'),
-    tab('profile', ICON.profile, 'Profile', '/profile'),
-    tab('download', ICON.download, 'Download', '/download'),
+    tab('charts', ICON.chart),
+    tab('groups', ICON.shield),
+    tab('avatar', ICON.shirt),
+    tab('creator', ICON.hammer),
+    tab('profile', ICON.profile),
+    tab('download', ICON.download),
   );
   // The mark is Home, as in the app.
   document.getElementById('brand')?.classList.toggle('active', route.name === 'home');
@@ -993,7 +976,7 @@ const DESCRIPTIONS = {
 function titleFor(r) {
   if (r.name === 'game') return entries().find((e) => e.key === r.key)?.title || 'Game';
   if (r.name === 'group') return groupPages.get(r.id)?.group?.name || 'Group';
-  return { home: 'Home', creator: 'Create', games: 'Games', charts: 'Charts', profile: 'Profile', search: 'Search', friends: 'Friends', groups: 'Groups', group: 'Group', messages: 'Messages', avatar: 'Avatar', user: 'Player', 'sign-in': 'Sign in', create: 'Make an account', download: 'Download', password: 'Password', privacy: 'Privacy policy', donate: 'Donate', moderation: 'Moderation', stats: 'Stats' }[r.name] || 'Libroxel';
+  return ROUTES[r.name]?.title || 'Libroxel';
 }
 
 function whereabouts(friend) {
@@ -1188,9 +1171,8 @@ let rated = { key: null, who: null, ratings: null, comments: null, text: '', bus
 
 function loadRatings(key) {
   rated = { key, who: session?.playerId, ratings: null, comments: null, text: '', busy: false };
-  const path = `/games/${encodeURIComponent(key)}`;
   const query = session ? { player_id: session.playerId } : undefined;
-  Promise.all([api(`${path}/ratings`, { query }).catch(() => null), api(`${path}/comments`).catch(() => [])])
+  Promise.all([api(`/games/${encodeURIComponent(key)}/ratings`, { query }).catch(() => null), api(`/games/${encodeURIComponent(key)}/comments`).catch(() => [])])
     .then(([ratings, comments]) => {
       if (rated.key !== key) return;
       rated.ratings = ratings;
