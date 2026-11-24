@@ -57,7 +57,14 @@ pub struct TouchPad {
     /// A finger on the stick or the jump button came up this frame, so
     /// its tap isn't also a click on the world.
     released: bool,
+    /// The game hid the stick and jump button (every finger then looks
+    /// round, or presses the game's buttons).
+    pub hidden: bool,
 }
+
+/// A finger's touch this frame, for scripts: its number, what it did,
+/// where, and whether the controls or the game's buttons took it.
+pub type Touched = (u64, TouchPhase, Pos2, bool);
 
 /// Where the stick rests in `view` when no thumb is on it.
 pub fn stick_home(view: Rect) -> Pos2 {
@@ -81,7 +88,8 @@ pub fn stick_zone(view: Rect) -> Rect {
 
 impl TouchPad {
     /// Takes one touch event in a view of `view`. `on_gui` says whether a
-    /// point is on one of the game's buttons or text boxes.
+    /// point is on one of the game's buttons or text boxes. Returns whether
+    /// the controls or the game's buttons took the finger.
     pub fn touch(
         &mut self,
         id: u64,
@@ -89,15 +97,17 @@ impl TouchPad {
         pos: Pos2,
         view: Rect,
         on_gui: impl Fn(Pos2) -> bool,
-    ) {
+    ) -> bool {
+        let taken = |f: Option<&Finger>| matches!(f, Some(Finger::Stick { .. } | Finger::Jump | Finger::Gui));
         match phase {
             TouchPhase::Start => {
                 self.seen = true;
-                let finger = if pos.distance(jump_center(view)) <= jump_radius(view) * 1.35 {
+                let finger = if !self.hidden && pos.distance(jump_center(view)) <= jump_radius(view) * 1.35 {
                     Finger::Jump
                 } else if on_gui(pos) {
                     Finger::Gui
-                } else if stick_zone(view).contains(pos)
+                } else if !self.hidden
+                    && stick_zone(view).contains(pos)
                     && !self.fingers.values().any(|f| matches!(f, Finger::Stick { .. }))
                 {
                     Finger::Stick { origin: pos, at: pos }
@@ -105,10 +115,13 @@ impl TouchPad {
                     Finger::Look { at: pos }
                 };
                 self.fingers.insert(id, finger);
+                taken(Some(&finger))
             }
             TouchPhase::Move => {
                 let pinch_before = self.pinch_width();
                 let moved = match self.fingers.get_mut(&id) {
+                    Some(Finger::Gui | Finger::Jump) => return true,
+                    None => return false,
                     Some(Finger::Stick { origin, at }) => {
                         *at = pos;
                         // Past the edge, the stick follows the thumb, so
@@ -118,24 +131,26 @@ impl TouchPad {
                         if d.length() > r {
                             *origin = *at - d.normalized() * r;
                         }
-                        return;
+                        return true;
                     }
                     Some(Finger::Look { at }) => {
                         let moved = pos - *at;
                         *at = pos;
                         moved
                     }
-                    _ => return,
                 };
                 match (pinch_before, self.pinch_width()) {
                     (Some(a), Some(b)) => self.zoom += (b - a) / 40.0,
                     _ => self.look += moved,
                 }
+                false
             }
             TouchPhase::End | TouchPhase::Cancel => {
-                if matches!(self.fingers.remove(&id), Some(Finger::Stick { .. } | Finger::Jump)) {
+                let finger = self.fingers.remove(&id);
+                if matches!(finger, Some(Finger::Stick { .. } | Finger::Jump)) {
                     self.released = true;
                 }
+                taken(finger.as_ref())
             }
         }
     }
@@ -197,8 +212,8 @@ impl TouchPad {
 
     /// Reads this frame's touches, then draws the controls over `view`.
     /// `gui` holds where the game's buttons and text boxes are, which keep
-    /// their taps.
-    pub fn show(&mut self, ctx: &egui::Context, view: Rect, gui: &[Rect]) {
+    /// their taps. Returns this frame's touches, for scripts.
+    pub fn show(&mut self, ctx: &egui::Context, view: Rect, gui: &[Rect]) -> Vec<Touched> {
         self.released = false;
         let touches: Vec<(u64, TouchPhase, Pos2)> = ctx.input(|i| {
             i.events
@@ -209,11 +224,13 @@ impl TouchPad {
                 })
                 .collect()
         });
+        let mut touched = Vec::with_capacity(touches.len());
         for (id, phase, pos) in touches {
-            self.touch(id, phase, pos, view, |p| gui.iter().any(|r| r.contains(p)));
+            let taken = self.touch(id, phase, pos, view, |p| gui.iter().any(|r| r.contains(p)));
+            touched.push((id, phase, pos, taken));
         }
-        if !self.seen {
-            return;
+        if !self.seen || self.hidden {
+            return touched;
         }
         let (r, jr) = (stick_radius(view), jump_radius(view));
         let home = stick_home(view);
@@ -258,6 +275,7 @@ impl TouchPad {
             egui::FontId::proportional(jr * 0.75),
             Color32::WHITE,
         );
+        touched
     }
 }
 
@@ -332,6 +350,19 @@ mod tests {
         assert_eq!(pad.stick(v), Vec2::ZERO);
         assert_eq!(pad.take_look(), Vec2::ZERO);
         assert!(!pad.has_pointer());
+    }
+
+    #[test]
+    fn a_game_can_hide_the_stick_and_jump_button() {
+        let mut pad = TouchPad { hidden: true, ..Default::default() };
+        let v = view();
+        assert!(!pad.touch(1, TouchPhase::Start, jump_center(v), v, |_| false));
+        assert!(!pad.jump(), "no jump button to press");
+        pad.touch(1, TouchPhase::End, jump_center(v), v, |_| false);
+        pad.touch(2, TouchPhase::Start, Pos2::new(120.0, 480.0), v, |_| false);
+        pad.touch(2, TouchPhase::Move, Pos2::new(160.0, 480.0), v, |_| false);
+        assert_eq!(pad.stick(v), Vec2::ZERO, "no stick either: the finger looks round");
+        assert_eq!(pad.take_look(), Vec2::new(40.0, 0.0));
     }
 
     #[test]

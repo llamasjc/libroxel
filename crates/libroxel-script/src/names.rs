@@ -467,6 +467,9 @@ pub mod user_input {
     pub const GAMEPAD_ENABLED: &str = "GamepadEnabled";
     /// The kind of input the player used last.
     pub const GET_LAST_INPUT_TYPE: &str = "GetLastInputType";
+    /// Whether there is a keyboard, and a mouse (not on phones and tablets).
+    pub const KEYBOARD_ENABLED: &str = "KeyboardEnabled";
+    pub const MOUSE_ENABLED: &str = "MouseEnabled";
 }
 
 /// Members of the saved-data service and its stores.

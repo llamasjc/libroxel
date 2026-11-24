@@ -42,6 +42,21 @@ pub(crate) fn install(lua: &Lua, enum_lib: &Table) -> mlua::Result<()> {
             Ok((rect.map(|r| r[0]), rect.map(|r| r[1]), rect.map(|r| r[2]), rect.map(|r| r[3])))
         })?,
     )?;
+    // Touches' InputBegan and InputEnded, which are the input service's own.
+    layer.set(
+        "fire_input",
+        lua.create_function(|lua, (kind, obj, processed): (String, Value, bool)| {
+            let signal = if kind == "began" {
+                crate::bindings::SignalKind::InputBegan
+            } else {
+                crate::bindings::SignalKind::InputEnded
+            };
+            crate::bindings::fire(lua, signal, || {
+                Ok([obj.clone(), Value::Boolean(processed)].into_iter().collect())
+            });
+            Ok(())
+        })?,
+    )?;
     // A Motor6D's Transform, for the engine to pose its parts with.
     layer.set(
         "set_joint_transform",
@@ -322,6 +337,29 @@ pub(crate) fn fire_changed(lua: &Lua, id: InstanceId, key: &str) -> mlua::Result
 }
 
 /// Hands the pictures scripts drew since the last call to the renderer.
+/// Passes a finger's touch to the layer (see `L.touch_event`).
+pub(crate) fn touch_event(
+    lua: &Lua,
+    id: u64,
+    phase: &str,
+    x: f32,
+    y: f32,
+    processed: bool,
+    time: f64,
+) -> mlua::Result<()> {
+    // Lua numbers are doubles: keep the finger's number small enough to be exact.
+    let id = (id % (1 << 40)) as f64;
+    layer(lua)?.get::<Function>("touch_event")?.call((id, phase, x, y, processed, time))
+}
+
+pub(crate) fn touch_tick(lua: &Lua, time: f64) -> mlua::Result<()> {
+    layer(lua)?.get::<Function>("touch_tick")?.call(time)
+}
+
+pub(crate) fn touch_controls_shown(lua: &Lua) -> bool {
+    layer(lua).and_then(|l| l.get::<Function>("touch_controls_shown")?.call(())).unwrap_or(true)
+}
+
 pub(crate) fn flush_drawn(lua: &Lua) -> mlua::Result<()> {
     layer(lua)?.get::<Function>("flush_editables")?.call(())
 }
@@ -341,6 +379,21 @@ pub(crate) fn fire_service_signal(
     all.push_back(Value::String(lua.create_string(signal)?));
     all.extend(args);
     layer(lua)?.get::<Function>("fire_service_signal")?.call::<()>(all)
+}
+
+/// Fires event `key` of a service made in Rust (such as the input
+/// service), whose events the layer keeps, if a script asked for it.
+pub(crate) fn fire_service_event(
+    lua: &Lua,
+    service: &str,
+    key: &str,
+    args: impl mlua::IntoLuaMulti,
+) -> mlua::Result<()> {
+    let mut all = MultiValue::new();
+    all.push_back(Value::String(lua.create_string(format!("service:{service}"))?));
+    all.push_back(Value::String(lua.create_string(key)?));
+    all.extend(args.into_lua_multi(lua)?);
+    layer(lua)?.get::<Function>("fire_event")?.call::<()>(all)
 }
 
 pub(crate) fn fire_mouse(lua: &Lua, id: InstanceId, key: &str) -> mlua::Result<()> {

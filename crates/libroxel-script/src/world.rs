@@ -537,7 +537,17 @@ pub(crate) fn focused_text_box(lua: &Lua) -> Option<InstanceId> {
 }
 
 pub(crate) fn set_devices(lua: &Lua, devices: crate::Devices) {
-    host(lua).world.borrow_mut().devices = devices;
+    let before = std::mem::replace(&mut host(lua).world.borrow_mut().devices, devices);
+    if before.last != devices.last {
+        let item = crate::bindings::LuaEnumItem(libroxel_instance::EnumValue::UserInputType(devices.last));
+        let result = crate::lenient::fire_service_event(
+            lua,
+            crate::names::services::USER_INPUT_SERVICE,
+            "LastInputTypeChanged",
+            item,
+        );
+        crate::services::report(lua, result);
+    }
 }
 
 pub(crate) fn set_gui_rects(lua: &Lua, rects: Vec<(InstanceId, [f32; 4])>) {

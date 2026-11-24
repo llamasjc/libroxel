@@ -1122,7 +1122,25 @@ impl PlaySession {
 
     /// Tells scripts what the player plays with (touch, a controller).
     pub fn set_devices(&mut self, devices: libroxel_script::Devices) {
-        self.runtime.set_devices(devices);
+        let errors = self.runtime.set_devices(devices);
+        self.collect(errors);
+    }
+
+    /// Passes a finger on the screen to scripts (see [`libroxel_script::Runtime::touch`]).
+    pub fn touch(&mut self, touch: crate::devices::ScreenTouch, time: f64) {
+        let errors = self.runtime.touch(touch.id, touch.phase, touch.x, touch.y, touch.processed, time);
+        self.collect(errors);
+    }
+
+    /// Lets scripts' long presses see time pass.
+    pub fn touch_tick(&mut self, time: f64) {
+        let errors = self.runtime.touch_tick(time);
+        self.collect(errors);
+    }
+
+    /// Whether the game wants the on-screen stick and jump button.
+    pub fn touch_controls_shown(&self) -> bool {
+        self.runtime.touch_controls_shown()
     }
 
     /// Tells scripts where each screen GUI object was drawn: its top left

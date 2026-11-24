@@ -64,6 +64,12 @@ impl UserData for UserInputService {
         fields.add_field_method_get(user_input::GAMEPAD_ENABLED, |lua, _| {
             Ok(host(lua).world.borrow().devices.gamepad)
         });
+        fields.add_field_method_get(user_input::KEYBOARD_ENABLED, |lua, _| {
+            Ok(host(lua).world.borrow().devices.keyboard)
+        });
+        fields.add_field_method_get(user_input::MOUSE_ENABLED, |lua, _| {
+            Ok(host(lua).world.borrow().devices.mouse)
+        });
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
@@ -85,6 +91,16 @@ impl UserData for UserInputService {
             Ok(LuaEnumItem(EnumValue::UserInputType(host(lua).world.borrow().devices.last)))
         });
         crate::lenient::add_service_members(methods, services::USER_INPUT_SERVICE);
+    }
+}
+
+/// Keeps an error the lenient layer raised, for the input service.
+pub(crate) fn report(lua: &Lua, result: mlua::Result<()>) {
+    if let Err(err) = result {
+        host(lua)
+            .errors
+            .borrow_mut()
+            .push(ScriptError { script: services::USER_INPUT_SERVICE.to_owned(), message: err.to_string() });
     }
 }
 
