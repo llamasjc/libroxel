@@ -1962,22 +1962,24 @@ pub(crate) struct Signal(pub(crate) SignalKind);
 
 impl UserData for Signal {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method(names::signal::CONNECT, |lua, this, handler: Function| {
-            let handler = lua.create_registry_value(handler)?;
-            let host = host(lua);
-            let id = host.next_connection.get();
-            host.next_connection.set(id + 1);
-            let script = host.current_script.borrow().clone();
-            host.connections.borrow_mut().push(Connection {
-                id,
-                signal: this.0,
-                script,
-                owner: host.current_owner.get(),
-                handler,
-                once: false,
+        for name in [names::signal::CONNECT, names::signal::CONNECT_PARALLEL] {
+            methods.add_method(name, |lua, this, handler: Function| {
+                let handler = lua.create_registry_value(handler)?;
+                let host = host(lua);
+                let id = host.next_connection.get();
+                host.next_connection.set(id + 1);
+                let script = host.current_script.borrow().clone();
+                host.connections.borrow_mut().push(Connection {
+                    id,
+                    signal: this.0,
+                    script,
+                    owner: host.current_owner.get(),
+                    handler,
+                    once: false,
+                });
+                Ok(ConnectionHandle(id))
             });
-            Ok(ConnectionHandle(id))
-        });
+        }
         methods.add_method(names::signal::ONCE, |lua, this, handler: Function| {
             let handler = lua.create_registry_value(handler)?;
             let host = host(lua);

@@ -549,7 +549,10 @@ fn connected(lua: &Lua, part: InstanceId) -> Vec<InstanceId> {
     let tree = host.tree.borrow();
     let ws = tree.workspace();
     let mut links = Vec::new();
-    for weld in tree.descendants_of_class(ws, ClassKind::WeldConstraint) {
+    let welds = [ClassKind::WeldConstraint, ClassKind::Weld, ClassKind::Motor6D]
+        .into_iter()
+        .flat_map(|c| tree.descendants_of_class(ws, c));
+    for weld in welds {
         if tree.get_bool(weld, Property::Enabled) == Some(false) {
             continue;
         }
@@ -583,8 +586,9 @@ fn connected(lua: &Lua, part: InstanceId) -> Vec<InstanceId> {
 fn joints_of(lua: &Lua, part: InstanceId) -> Vec<InstanceId> {
     let host = host(lua);
     let tree = host.tree.borrow();
-    tree.descendants_of_class(tree.workspace(), ClassKind::WeldConstraint)
+    [ClassKind::WeldConstraint, ClassKind::Weld, ClassKind::Motor6D]
         .into_iter()
+        .flat_map(|c| tree.descendants_of_class(tree.workspace(), c))
         .filter(|w| {
             tree.get_ref(*w, Property::Part0) == Some(part) || tree.get_ref(*w, Property::Part1) == Some(part)
         })
@@ -1099,6 +1103,7 @@ fn physics_service(lua: &Lua, t: &Table) -> mlua::Result<()> {
         let list = lua.create_table()?;
         for name in names {
             let entry = lua.create_table()?;
+            entry.set("name", name.as_str())?;
             entry.set(NAME, name)?;
             list.raw_push(entry)?;
         }

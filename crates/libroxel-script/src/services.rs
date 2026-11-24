@@ -279,6 +279,8 @@ impl UserData for DataStore {
                 .unwrap_or_default();
             crate::lenient::pages(lua, keys)
         });
+        methods
+            .add_method("ListVersionsAsync", |lua, _, _: MultiValue| crate::lenient::pages(lua, Vec::new()));
         methods.add_method("GetVersionAsync", |lua, this, key: String| {
             this.get(lua, &key).map(|v| from_json(lua, &v)).transpose().map(|v| v.unwrap_or(Value::Nil))
         });
@@ -590,6 +592,7 @@ fn overlap_params(params: Option<Value>, member: &str) -> mlua::Result<OverlapPa
 /// The parts overlapping `region` that `params` lets through, leaving out `skip`.
 fn query(
     lua: &Lua,
+    scope: Option<InstanceId>,
     region: geometry::Region,
     params: &OverlapParams,
     skip: Option<InstanceId>,
@@ -601,14 +604,31 @@ fn query(
             params.filter.iter().any(|f| *f == part || tree.is_descendant_of(part, *f).unwrap_or(false))
         };
         let limit = if params.max_parts == 0 { usize::MAX } else { params.max_parts };
-        geometry::parts_in_indexed(&tree, &crate::bindings::part_index(&host, &tree), region, limit, |part| {
+        let keep = |part: InstanceId| {
             Some(part) != skip
                 && tree.get_bool(part, Property::CanQuery) != Some(false)
                 && match params.filter_type {
                     RaycastFilterType::Exclude => !listed(part),
                     RaycastFilterType::Include => listed(part),
                 }
-        })
+        };
+        match scope {
+            None => geometry::parts_in_indexed(
+                &tree,
+                &crate::bindings::part_index(&host, &tree),
+                region,
+                limit,
+                keep,
+            ),
+            Some(scope) => tree
+                .descendants_of_class(scope, ClassKind::Part)
+                .into_iter()
+                .filter(|p| {
+                    keep(*p) && geometry::Region::of_part(&tree, *p).is_some_and(|r| r.overlaps(region))
+                })
+                .take(limit)
+                .collect(),
+        }
     };
     found.into_iter().map(|id| push_instance(lua, id)).collect()
 }
@@ -632,8 +652,22 @@ impl UserData for RaycastResult {
     }
 }
 
+fn query_scope(lua: &Lua, id: InstanceId, member: &str) -> mlua::Result<Option<InstanceId>> {
+    let class = crate::bindings::class_of(lua, id)?;
+    if class.is_a(ClassKind::Workspace) {
+        return Ok(None);
+    }
+    if class == ClassKind::Model
+        && crate::lenient::stand_in_class(&host(lua).tree.borrow(), id).as_deref() == Some("WorldModel")
+    {
+        return Ok(Some(id));
+    }
+    Err(crate::bindings::not_a_member(lua, id, member))
+}
+
 fn workspace_raycast(
     lua: &Lua,
+    scope: Option<InstanceId>,
     origin: Value,
     direction: Value,
     params: Option<Value>,
@@ -654,21 +688,41 @@ fn workspace_raycast(
         let listed = |part: InstanceId| {
             params.filter.iter().any(|f| *f == part || tree.is_descendant_of(part, *f).unwrap_or(false))
         };
-        let hit = geometry::raycast_indexed(
-            &tree,
-            &crate::bindings::part_index(&host, &tree),
-            origin,
-            direction,
-            |part| {
-                tree.get_bool(part, Property::CanQuery) != Some(false)
-                    && (!params.more.respect_can_collide
-                        || tree.get_bool(part, Property::CanCollide) != Some(false))
-                    && match params.filter_type {
-                        RaycastFilterType::Exclude => !listed(part),
-                        RaycastFilterType::Include => listed(part),
-                    }
-            },
-        );
+        let keep = |part: InstanceId| {
+            tree.get_bool(part, Property::CanQuery) != Some(false)
+                && (!params.more.respect_can_collide
+                    || tree.get_bool(part, Property::CanCollide) != Some(false))
+                && match params.filter_type {
+                    RaycastFilterType::Exclude => !listed(part),
+                    RaycastFilterType::Include => listed(part),
+                }
+        };
+        let hit = match scope {
+            None => geometry::raycast_indexed(
+                &tree,
+                &crate::bindings::part_index(&host, &tree),
+                origin,
+                direction,
+                keep,
+            ),
+            Some(scope) => {
+                let reach = direction.length();
+                let dir = if reach > 0.0 { direction / reach } else { direction };
+                tree.descendants_of_class(scope, ClassKind::Part)
+                    .into_iter()
+                    .filter(|p| reach > 0.0 && keep(*p))
+                    .filter_map(|p| {
+                        let (t, normal) = geometry::ray_part(&tree, p, origin, dir)?;
+                        (t >= 0.0 && t <= reach).then_some(geometry::RayHit {
+                            part: p,
+                            position: origin + dir * t,
+                            normal,
+                            distance: t,
+                        })
+                    })
+                    .min_by(|a, b| a.distance.total_cmp(&b.distance))
+            }
+        };
         hit.map(|hit| {
             let material = match tree.voxels(hit.part) {
                 // Terrain: the material of the cell the ray went into.
@@ -722,47 +776,47 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
     m.add_method(
         methods::RAYCAST,
         |lua, this, (origin, direction, params): (Value, Value, Option<Value>)| {
-            require_class(lua, this.0, ClassKind::Workspace, methods::RAYCAST)?;
-            workspace_raycast(lua, origin, direction, params)
+            let scope = query_scope(lua, this.0, methods::RAYCAST)?;
+            workspace_raycast(lua, scope, origin, direction, params)
         },
     );
     m.add_method(
         methods::GET_PART_BOUNDS_IN_BOX,
         |lua, this, (cframe, size, params): (Value, Value, Option<Value>)| {
             let member = methods::GET_PART_BOUNDS_IN_BOX;
-            require_class(lua, this.0, ClassKind::Workspace, member)?;
+            let scope = query_scope(lua, this.0, member)?;
             let cframe = crate::types::as_cframe(&cframe)
                 .ok_or_else(|| runtime_err(format!("{member} expects a CFrame")))?;
             let size =
                 as_vector3(&size).ok_or_else(|| runtime_err(format!("{member} expects a Vector3 size")))?;
             let region = geometry::Region::Box { center: cframe.pos, rot: cframe.rot, half: size / 2.0 };
-            query(lua, region, &overlap_params(params, member)?, None)
+            query(lua, scope, region, &overlap_params(params, member)?, None)
         },
     );
     m.add_method(
         methods::GET_PART_BOUNDS_IN_RADIUS,
         |lua, this, (center, radius, params): (Value, f32, Option<Value>)| {
             let member = methods::GET_PART_BOUNDS_IN_RADIUS;
-            require_class(lua, this.0, ClassKind::Workspace, member)?;
+            let scope = query_scope(lua, this.0, member)?;
             let center = as_vector3(&center)
                 .ok_or_else(|| runtime_err(format!("{member} expects a Vector3 position")))?;
             let region = geometry::Region::Ball { center, radius: radius.max(0.0) };
-            query(lua, region, &overlap_params(params, member)?, None)
+            query(lua, scope, region, &overlap_params(params, member)?, None)
         },
     );
     m.add_method(methods::GET_PARTS_IN_PART, |lua, this, (part, params): (Value, Option<Value>)| {
         let member = methods::GET_PARTS_IN_PART;
-        require_class(lua, this.0, ClassKind::Workspace, member)?;
+        let scope = query_scope(lua, this.0, member)?;
         let part = as_instance(&part).ok_or_else(|| runtime_err(format!("{member} expects a part")))?;
         let region = geometry::Region::of_part(&host(lua).tree.borrow(), part)
             .ok_or_else(|| runtime_err(format!("{member} expects a part")))?;
-        query(lua, region, &overlap_params(params, member)?, Some(part))
+        query(lua, scope, region, &overlap_params(params, member)?, Some(part))
     });
     m.add_method(methods::GET_TOUCHING_PARTS, |lua, this, ()| {
         require_class(lua, this.0, ClassKind::Part, methods::GET_TOUCHING_PARTS)?;
         let region = geometry::Region::of_part(&host(lua).tree.borrow(), this.0)
             .ok_or_else(|| runtime_err("GetTouchingParts needs a part with a size"))?;
-        query(lua, region.grown(TOUCH_MARGIN), &OverlapParams::default(), Some(this.0))
+        query(lua, None, region.grown(TOUCH_MARGIN), &OverlapParams::default(), Some(this.0))
     });
     m.add_method(methods::FIRE_SERVER, |lua, this, args: MultiValue| {
         require_class(lua, this.0, ClassKind::RemoteEvent, methods::FIRE_SERVER)?;
@@ -810,9 +864,19 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
         }
         Ok(())
     });
-    m.add_method(methods::FIRE, |lua, this, args: MultiValue| {
-        require_class(lua, this.0, ClassKind::BindableEvent, methods::FIRE)?;
-        fire_args(lua, SignalKind::BindableEvent(this.0), None, args);
+    m.add_function(methods::FIRE, |lua, (obj, args): (AnyUserData, MultiValue)| {
+        let id = obj.borrow::<crate::bindings::LuaInstance>()?.0;
+        let class = crate::bindings::class_of(lua, id)?;
+        if class != ClassKind::BindableEvent {
+            let Some(Value::Function(f)) = crate::lenient::index(lua, id, class, obj.clone(), methods::FIRE)?
+            else {
+                return Err(crate::bindings::not_a_member(lua, id, methods::FIRE));
+            };
+            let mut all = args;
+            all.push_front(Value::UserData(obj));
+            return f.call::<()>(all);
+        }
+        fire_args(lua, SignalKind::BindableEvent(id), None, args);
         Ok(())
     });
 }

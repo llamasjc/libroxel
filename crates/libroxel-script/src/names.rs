@@ -1015,6 +1015,7 @@ pub mod services {
 /// Members of signals and connections.
 pub mod signal {
     pub const CONNECT: &str = "Connect";
+    pub const CONNECT_PARALLEL: &str = "ConnectParallel";
     pub const DISCONNECT: &str = "Disconnect";
     pub const CONNECTED: &str = "Connected";
     /// Like Connect, but only for the next time the signal fires.

@@ -15,6 +15,8 @@ fn err(message: impl Into<String>) -> mlua::Error {
 // CFrame
 // ---------------------------------------------------------------------------
 
+type Entry = fn(&Rotation) -> f32;
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LuaCFrame(pub CFrame);
 
@@ -35,19 +37,24 @@ impl UserData for LuaCFrame {
         fields.add_field_method_get(LOOK_VECTOR, |_, this| Ok(LuaVector3(-this.0.rot.z)));
         fields.add_field_method_get(RIGHT_VECTOR, |_, this| Ok(LuaVector3(this.0.rot.x)));
         fields.add_field_method_get(UP_VECTOR, |_, this| Ok(LuaVector3(this.0.rot.y)));
-        fields.add_field_method_get(X_VECTOR, |_, this| {
-            let r = this.0.rot;
-            Ok(LuaVector3(Vec3::new(r.x.x, r.y.x, r.z.x)))
-        });
-        fields.add_field_method_get(Y_VECTOR, |_, this| {
-            let r = this.0.rot;
-            Ok(LuaVector3(Vec3::new(r.x.y, r.y.y, r.z.y)))
-        });
-        fields.add_field_method_get(Z_VECTOR, |_, this| {
-            let r = this.0.rot;
-            Ok(LuaVector3(Vec3::new(r.x.z, r.y.z, r.z.z)))
-        });
+        fields.add_field_method_get(X_VECTOR, |_, this| Ok(LuaVector3(this.0.rot.x)));
+        fields.add_field_method_get(Y_VECTOR, |_, this| Ok(LuaVector3(this.0.rot.y)));
+        fields.add_field_method_get(Z_VECTOR, |_, this| Ok(LuaVector3(this.0.rot.z)));
         fields.add_field_method_get(ROTATION, |_, this| Ok(LuaCFrame(CFrame::new(Vec3::ZERO, this.0.rot))));
+        let entries: [(&'static str, Entry); 9] = [
+            ("R00", |r| r.x.x),
+            ("R01", |r| r.y.x),
+            ("R02", |r| r.z.x),
+            ("R10", |r| r.x.y),
+            ("R11", |r| r.y.y),
+            ("R12", |r| r.z.y),
+            ("R20", |r| r.x.z),
+            ("R21", |r| r.y.z),
+            ("R22", |r| r.z.z),
+        ];
+        for (name, get) in entries {
+            fields.add_field_method_get(name, move |_, this| Ok(get(&this.0.rot)));
+        }
         fields.add_meta_field(MetaMethod::Type, TYPE_NAME);
     }
 
@@ -116,12 +123,14 @@ impl UserData for LuaCFrame {
             let [_, _, _, w] = (this.0.rot.transpose() * o.rot).to_quat();
             Ok(2.0 * w.abs().clamp(0.0, 1.0).acos())
         });
-        methods.add_method(GET_COMPONENTS, |_, this, ()| {
-            let (p, r) = (this.0.pos, this.0.rot);
-            Ok(mlua::Variadic::from_iter([
-                p.x, p.y, p.z, r.x.x, r.y.x, r.z.x, r.x.y, r.y.y, r.z.y, r.x.z, r.y.z, r.z.z,
-            ]))
-        });
+        for name in [GET_COMPONENTS, "components"] {
+            methods.add_method(name, |_, this, ()| {
+                let (p, r) = (this.0.pos, this.0.rot);
+                Ok(mlua::Variadic::from_iter([
+                    p.x, p.y, p.z, r.x.x, r.y.x, r.z.x, r.x.y, r.y.y, r.z.y, r.x.z, r.y.z, r.z.z,
+                ]))
+            });
+        }
 
         methods.add_meta_function(MetaMethod::Mul, |lua, (a, b): (Value, Value)| {
             let a = as_cframe(&a).ok_or_else(|| err("attempt to multiply a CFrame"))?;

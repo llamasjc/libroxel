@@ -147,11 +147,13 @@ impl UserData for LuaTrack {
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method(
+        methods.add_function(
             names::PLAY,
-            |lua, this, (fade, weight, speed): (Option<f32>, Option<f32>, Option<f32>)| {
-                with_track(lua, this.0, |t, now| {
-                    if !t.playing || t.stopping {
+            |lua, (ud, fade, weight, speed): (mlua::AnyUserData, Option<f32>, Option<f32>, Option<f32>)| {
+                let id = ud.borrow::<LuaTrack>()?.0;
+                let (started, humanoid) = with_track(lua, id, |t, now| {
+                    let started = !t.playing || t.stopping;
+                    if started {
                         t.position = 0.0;
                     } else {
                         t.position = t.time(now);
@@ -165,7 +167,27 @@ impl UserData for LuaTrack {
                     if let Some(speed) = speed {
                         t.speed = speed;
                     }
-                })
+                    (started, t.humanoid)
+                })?;
+                if started {
+                    let animators: Vec<InstanceId> = {
+                        let host = host(lua);
+                        let tree = host.tree.borrow();
+                        tree.children(humanoid)
+                            .map(|c| {
+                                c.iter()
+                                    .copied()
+                                    .filter(|c| tree.class(*c) == Ok(ClassKind::Animator))
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    };
+                    for owner in std::iter::once(humanoid).chain(animators) {
+                        let args = MultiValue::from_iter([Value::UserData(ud.clone())]);
+                        crate::lenient::fire_event(lua, owner, "AnimationPlayed", args)?;
+                    }
+                }
+                Ok(())
             },
         );
         methods.add_method(names::STOP, |lua, this, fade: Option<f32>| {
