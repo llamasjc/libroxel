@@ -5,6 +5,22 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
 
 ## Unreleased
 
+- **Languages:** the home screen in Chinese (Simplified), Spanish,
+  Portuguese (Brazil) and French, picked with the 🌐 button or following
+  the computer's language. The editor is still in English.
+- **Multiplayer:** every connection is encrypted, direct joins by address
+  included. Long messages are compressed, so joining a big game sends up to
+  ten times less. The host refuses impossible moves (teleports and speed
+  hacks), limits how much a joined computer may send, and hangs up on ones
+  that never say hello. Two players on one spawn no longer push each other
+  up into the sky. Older copies can't play with this one; they're told so.
+- **Unsaved work** is copied every minute and offered back after a crash.
+- **Screen readers** (Narrator, VoiceOver, Orca) read the menus and panels
+  on Windows, macOS and Linux.
+- **ARM builds** for Windows on ARM and 64-bit ARM Linux, with their own
+  updates.
+- Hide and seek's seeker bots search spot by spot instead of at random.
+
 ## 0.1.5 (2026-11-23)
 
 - The Android app opens on 32-bit tablets and phones again. Luau's JIT is
