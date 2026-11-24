@@ -31,8 +31,11 @@ fn settings(gles_only: bool) -> WgpuSettings {
     let mut settings = WgpuSettings::default();
     if gles_only {
         settings.backends = Some(Backends::GL);
-        settings.constrained_limits =
-            Some(WgpuLimits { max_storage_buffers_per_shader_stage: 0, ..WgpuLimits::unlimited() });
+        settings.constrained_limits = Some(WgpuLimits {
+            max_storage_buffers_per_shader_stage: 0,
+            max_storage_textures_per_shader_stage: 0,
+            ..WgpuLimits::unlimited()
+        });
     }
     settings
 }
@@ -61,7 +64,15 @@ mod tests {
         let held = settings(true).constrained_limits.unwrap();
         let used = device.clone().or_worse_values_from(&held);
         assert_eq!(used.max_storage_buffers_per_shader_stage, 0);
-        assert_eq!(WgpuLimits { max_storage_buffers_per_shader_stage: 0, ..device }, used);
+        assert_eq!(used.max_storage_textures_per_shader_stage, 0);
+        assert_eq!(
+            WgpuLimits {
+                max_storage_buffers_per_shader_stage: 0,
+                max_storage_textures_per_shader_stage: 0,
+                ..device
+            },
+            used
+        );
         assert_eq!(settings(true).backends, Some(Backends::GL));
         assert!(settings(false).constrained_limits.is_none());
         assert_ne!(settings(false).backends, Some(Backends::GL));

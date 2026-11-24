@@ -1,0 +1,2 @@
+[target.'cfg(target_os = "android")']
+rustflags = ["--cfg", 'target_abi="sim"', "-A", "explicit_builtin_cfgs_in_flags"]
