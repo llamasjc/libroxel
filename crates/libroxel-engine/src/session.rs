@@ -1533,8 +1533,7 @@ impl PlaySession {
                     let _ = t.set(humanoid, Property::Health, PropertyValue::Number(0.0));
                 }
                 if t.get_bool(part, Property::Anchored) == Some(false) && pressure > 0.0 {
-                    let size = t.get_vec3(part, Property::Size).unwrap_or_default();
-                    let mass = (size.x * size.y * size.z * names::extras::DENSITY).max(0.5);
+                    let mass = libroxel_instance::physical::mass(&t, part).max(0.5);
                     let away = (pos - at).normalize_or_zero() + Vec3::new(0.0, 0.6, 0.0);
                     let speed = (pressure / 5_000.0).min(250.0) / mass.sqrt()
                         * (1.0 - distance / radius.max(0.01) * 0.5);

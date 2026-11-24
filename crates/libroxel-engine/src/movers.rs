@@ -55,8 +55,7 @@ struct End {
 }
 
 fn mass_of(tree: &InstanceTree, part: InstanceId) -> f32 {
-    let s = tree.get_vec3(part, Property::Size).unwrap_or_default();
-    (s.x * s.y * s.z * names::extras::DENSITY).max(0.01)
+    libroxel_instance::physical::mass(tree, part)
 }
 
 fn end(tree: &InstanceTree, welds: &Welds, attachment: Option<InstanceId>) -> Option<End> {

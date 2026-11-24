@@ -1505,3 +1505,35 @@ fn rich_attributes_save_and_reach_other_computers() {
         vec!["NumberRange 2 8", "NumberSequence 2 0.5", "ColorSequence 1 1", "CFrame 2"]
     );
 }
+
+#[test]
+fn parts_are_made_of_their_material_or_custom_physical_properties() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local part = Instance.new("Part")
+        part.Size = Vector3.new(2, 1, 2)
+        part.Parent = workspace
+        print(part.CustomPhysicalProperties, string.format("%.2f", part:GetMass()))
+        part.Material = Enum.Material.Metal
+        print(string.format("%.2f", part:GetMass()), part.CurrentPhysicalProperties.Density)
+        part.CustomPhysicalProperties = PhysicalProperties.new(1, 1.5, 0.9)
+        local p = part.CustomPhysicalProperties
+        print(p.Density, p.Friction, p.Elasticity, string.format("%.2f", part:GetMass()))
+        print(PhysicalProperties.new(Enum.Material.Ice).Friction)
+        part.CustomPhysicalProperties = nil
+        print(part.CustomPhysicalProperties)
+        "#,
+    );
+    assert_eq!(
+        printed(&rt),
+        vec![
+            "nil 2.80",
+            "31.40 7.849999904632568",
+            "1 1.5 0.8999999761581421 4.00",
+            "0.019999999552965164",
+            "nil"
+        ]
+    );
+}

@@ -111,6 +111,18 @@ fn links_attributes_and_tags_come_across() {
 }
 
 #[test]
+fn custom_physical_properties_come_across() {
+    let (tree, report) = libroxel_rbx::open(&file("three-unique-parts-binary.rbxm")).unwrap();
+    assert!(
+        !report.skipped_properties.contains_key("Part.CustomPhysicalProperties"),
+        "{:?}",
+        report.skipped_properties
+    );
+    let parts = tree.descendants_of_class(tree.root(), ClassKind::Part);
+    assert!(parts.iter().any(|p| libroxel_instance::physical::custom(&tree, *p).is_some()));
+}
+
+#[test]
 fn particle_lifetimes_and_speeds_come_across() {
     let (tree, report) = libroxel_rbx::open(&file("all-instances-415-binary.rbxl")).unwrap();
     let emitter = tree.descendants_of_class(tree.root(), ClassKind::ParticleEmitter)[0];

@@ -1155,6 +1155,16 @@ impl Physics {
             } else {
                 rigid::Role::Kinematic
             };
+            // What it's made of; characters keep a body that walks the same on anything.
+            let made_of = if character {
+                libroxel_instance::physical::Physical::of_material(libroxel_instance::Material::Plastic)
+            } else {
+                libroxel_instance::physical::of_part(tree, id)
+            };
+            let made_of = libroxel_instance::physical::Physical {
+                elasticity: if character { 0.1 } else { bounce(made_of.elasticity) },
+                ..made_of
+            };
             // Characters reach a little further sideways, to shove what they walk into.
             let size = if character {
                 let size = Vec3::new(size.x, body.half.y * 2.0, size.z);
@@ -1176,12 +1186,12 @@ impl Physics {
                 mesh: if character { None } else { mesh_shape(tree, id) },
                 can_collide: body.can_collide,
                 floats: body.water,
-                density: names::extras::DENSITY,
+                density: made_of.density,
                 friction: {
                     let root = self.welded.get(&id).map_or(id, |(r, _)| *r);
-                    if self.driven.contains(&root) { 0.0 } else { 0.3 }
+                    if self.driven.contains(&root) { 0.0 } else { made_of.friction }
                 },
-                elasticity: 0.1,
+                elasticity: made_of.elasticity,
             });
         }
         specs
@@ -1595,6 +1605,14 @@ impl Physics {
     }
 }
 
+/// How much a part bounces in the simulation, for Roblox's Elasticity:
+/// up to plastic's 0.5, barely (as parts in Roblox do), then more and
+/// more, to almost all the way back up at 1.
+fn bounce(elasticity: f32) -> f32 {
+    let e = elasticity.clamp(0.0, 1.0);
+    if e <= 0.5 { e * 0.2 } else { 0.1 + (e - 0.5) * 1.7 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1639,6 +1657,30 @@ mod tests {
         let y = tree.get_vec3(perched, Property::Position).unwrap().y;
         assert!((y - 11.0).abs() < 0.01, "landed on the pillar: {y}");
         assert!(touched.contains(&ordered(pillar, perched)));
+    }
+
+    /// How far a box pushed along a floor of `material` slides in two seconds.
+    fn slide_on(material: libroxel_instance::Material) -> f32 {
+        let mut tree = InstanceTree::new();
+        let floor =
+            add_part(&mut tree, "Floor", Vec3::new(0.0, -0.5, 0.0), Vec3::new(400.0, 1.0, 40.0), true);
+        tree.set(floor, Property::Material, PropertyValue::Enum(EnumValue::Material(material))).unwrap();
+        let block =
+            add_part(&mut tree, "Block", Vec3::new(-150.0, 1.0, 0.0), Vec3::new(2.0, 2.0, 2.0), false);
+        let mut physics = Physics::default();
+        physics.step(&mut tree, 1.0 / 60.0);
+        physics.set_velocity(block, Vec3::new(20.0, 0.0, 0.0));
+        for _ in 0..120 {
+            physics.step(&mut tree, 1.0 / 60.0);
+        }
+        tree.get_vec3(block, Property::Position).unwrap().x + 150.0
+    }
+
+    #[test]
+    fn ice_is_slippery_and_concrete_grips() {
+        use libroxel_instance::Material;
+        let (ice, concrete) = (slide_on(Material::Ice), slide_on(Material::Concrete));
+        assert!(ice > concrete * 2.0, "ice {ice}, concrete {concrete}");
     }
 
     #[test]

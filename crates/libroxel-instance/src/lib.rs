@@ -19,6 +19,7 @@ mod enums;
 pub mod geometry;
 mod math;
 pub mod pathfind;
+pub mod physical;
 pub mod place;
 mod property;
 mod tree;

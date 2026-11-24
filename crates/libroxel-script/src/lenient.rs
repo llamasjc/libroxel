@@ -54,6 +54,18 @@ pub(crate) fn install(lua: &Lua, enum_lib: &Table) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
+    // A part's CustomPhysicalProperties, kept in the part (so the physics
+    // uses it, and it saves and replicates).
+    layer.set(
+        "get_physical",
+        lua.create_function(|lua, part: Value| crate::compat::custom_physical(lua, &part))?,
+    )?;
+    layer.set(
+        "set_physical",
+        lua.create_function(|lua, (part, value): (Value, Value)| {
+            crate::compat::set_custom_physical(lua, &part, &value)
+        })?,
+    )?;
     // The phone's vibration motor, for HapticService.
     layer.set(
         "can_vibrate",
