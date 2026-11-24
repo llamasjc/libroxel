@@ -4,18 +4,21 @@ plugins {
 
 android {
     namespace = "com.libroxel.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.libroxel.app"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
         versionName = System.getenv("VERSION") ?: "dev"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            debugSymbolLevel = "SYMBOL_TABLE"
         }
     }
+
+    System.getenv("ANDROID_NDK_LATEST_HOME")?.let { ndkPath = it }
 
     val keystore = System.getenv("ANDROID_KEYSTORE")
 
@@ -32,7 +35,9 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (keystore != null) {
                 signingConfig = signingConfigs.getByName("release")
             }

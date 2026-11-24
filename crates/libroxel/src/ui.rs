@@ -1245,6 +1245,8 @@ fn game_menu(
                         ui.add_space(14.0);
                         graphics_picker(ui, quality);
                     }
+                    ui.add_space(10.0);
+                    crate::voice::toggle(ui);
                     if session.is_some_and(|s| s.host_address().is_some() || s.is_joined()) {
                         ui.add_space(12.0);
                         ui.horizontal_wrapped(|ui| session_status(ui, editor, session, actions));

@@ -116,6 +116,7 @@
  "Go-kart": "Kart",
  "Goes off as soon as it is in the workspace while playing: parts within BlastRadius are hit, characters die and loose parts are thrown.": "Explota en cuanto está en el workspace al jugar: las piezas dentro de BlastRadius reciben el golpe, los personajes mueren y las piezas sueltas salen despedidas.",
  "Graphics": "Gráficos",
+ "Voice chat": "Chat de voz",
  "Grid": "Cuadrícula",
  "Ground made of one-stud cubes. Pick the Terrain tool (5) to add, dig or paint it by dragging in the view, or to make a hill. Scripts use workspace.Terrain:FillBlock, FillBall and FillCylinder (Enum.Material.Air digs) and Clear.": "Suelo hecho de cubos de un stud. Elige la herramienta de terreno (5) para añadir, excavar o pintar arrastrando en la vista, o para hacer una colina. Los scripts usan workspace.Terrain:FillBlock, FillBall y FillCylinder (Enum.Material.Air excava) y Clear.",
  "Group": "Agrupar",
