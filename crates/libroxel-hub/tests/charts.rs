@@ -91,3 +91,29 @@ fn charts_continue_and_recommended() {
     let time = bo.tick();
     assert!(hub.for_you(&ana.id, time, &sign(&bo.key, &for_you_message(&ana.id, time))).is_err());
 }
+
+#[test]
+fn starter_games_are_in_top_playing() {
+    let dir = std::env::temp_dir().join(format!("libroxel-charts-{}", new_secret()));
+    let path = dir.join("hub.sqlite");
+    let db = libroxel_hub::open_db(Some(&path)).unwrap();
+    let starter = |name: &str| libroxel_hub::StarterPlace {
+        name: name.into(),
+        about: String::new(),
+        symbol: String::new(),
+        place: r#"{"format":"libroxel-place","children":[]}"#.into(),
+    };
+    libroxel_hub::set_official(&db, &[starter("Kart race"), starter("Chess")]).unwrap();
+    drop(db);
+    let running = start("127.0.0.1:0".parse().unwrap(), Some(&path)).unwrap();
+    let hub = HubClient::new(&running.url());
+    publish(&hub, "Quiet Game", "Nobody plays this");
+    let ana = Player::new(1);
+    ana.play(&hub, "starter:Chess", "Chess");
+    let charts = hub.charts().unwrap();
+    let top = &charts.charts.iter().find(|c| c.id == "top-playing").unwrap().game_ids;
+    assert_eq!(top[0], "starter:Chess");
+    assert!(top.contains(&"starter:Kart race".to_owned()));
+    drop(running);
+    let _ = std::fs::remove_dir_all(dir);
+}
