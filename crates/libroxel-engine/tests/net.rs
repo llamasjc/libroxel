@@ -694,3 +694,36 @@ fn a_game_that_works_is_not_a_different_version() {
     until(&mut host, &mut guest, CharacterInput::default(), |_, g| g.character().is_some());
     assert!(!guest.wrong_version());
 }
+
+#[test]
+fn a_joined_player_gets_the_lighting_the_host_has() {
+    let mut world = game();
+    let lighting = world.service(ClassKind::Lighting).unwrap();
+    let bright = libroxel_instance::Color3::new(0.8, 0.8, 0.8);
+    world.set_extra(lighting, "OutdoorAmbient", Some(PropertyValue::Color3(bright))).unwrap();
+    world.set_extra(lighting, "ExposureCompensation", Some(PropertyValue::Number(0.5))).unwrap();
+    let sss = world.service(ClassKind::ServerScriptService).unwrap();
+    code(
+        &mut world,
+        ClassKind::Script,
+        sss,
+        "Dusk",
+        "game.Players.PlayerAdded:Connect(function() task.wait(0.2) game.Lighting.ExposureCompensation = 1 end)",
+    );
+    let tree = Rc::new(RefCell::new(world));
+    let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Sam")
+            .unwrap();
+    let extra = |s: &PlaySession, name: &str| {
+        let t = s.runtime().tree().borrow();
+        t.service(ClassKind::Lighting).and_then(|l| t.get_extra(l, name).ok().flatten())
+    };
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| {
+        extra(g, "OutdoorAmbient") == Some(PropertyValue::Color3(bright))
+    });
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| {
+        extra(g, "ExposureCompensation") == Some(PropertyValue::Number(1.0))
+    });
+}
