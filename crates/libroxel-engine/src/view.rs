@@ -45,6 +45,7 @@ impl EngineState {
 pub struct InputCapture {
     pub pointer: bool,
     pub keyboard: bool,
+    pub confine: bool,
 }
 
 /// This frame's character input, filled from the keyboard.
@@ -2135,14 +2136,19 @@ fn lock_cursor(
         if !turning && let Some(at) = held_at.take() {
             window.set_cursor_position(Some(at));
         }
-        let lock = first || turning;
-        let mode =
-            if lock { bevy::window::CursorGrabMode::Locked } else { bevy::window::CursorGrabMode::None };
+        let lock = window.focused && (first || turning);
+        let mode = if lock {
+            bevy::window::CursorGrabMode::Locked
+        } else if window.focused && playing && capture.confine {
+            bevy::window::CursorGrabMode::Confined
+        } else {
+            bevy::window::CursorGrabMode::None
+        };
         if cursor.grab_mode != mode {
             cursor.grab_mode = mode;
             cursor.visible = !lock;
         }
-        if lock && window.focused {
+        if lock {
             let keep = held_at.unwrap_or(Vec2::new(window.width(), window.height()) / 2.0);
             if window.cursor_position().is_some_and(|at| at.distance(keep) > 1.0) {
                 window.set_cursor_position(Some(keep));
