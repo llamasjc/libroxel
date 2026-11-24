@@ -56,17 +56,17 @@
 - **CFrames.** Parts store `Position` and `Orientation` (degrees, applied Y,
   then X, then Z). `CFrame` is built from and written back to those two, so
   saved games stay readable.
-- **Physics.** Unanchored parts collide as the axis-aligned box around them
-  (characters' root parts as their own size, whichever way they face). They
-  can spin: physics keeps an angular velocity for each, turns its
-  `Orientation` by it each step, and slows it on the ground. They fall, are moved one
-  axis at a time and pushed out of anything with `CanCollide`, and step up
-  ledges up to 0.6 studs. Anchored parts can be rotated and shaped: boxes
-  turned by right angles stay on the fast axis-aligned path, tilted boxes and
-  wedges are resolved with a separating-axis test, and balls with a sphere
-  test, pushing out along the shortest direction (straight up on gentle
-  slopes, so characters don't slide). Touches are pairs that start
-  overlapping, where at least one part can move.
+- **Physics.** Loose (unanchored) parts are rigid bodies in
+  [Rapier](https://rapier.rs) (`rigid.rs`): they collide as their true,
+  turned shape, tumble, roll, stack and rub on what they rest on. Anchored
+  parts and terrain are fixed bodies, and parts something else moves
+  (characters, hinge arms) are kinematic bodies that shove loose things.
+  Parts welded to a loose root are extra shapes on the root's body, so a
+  welded model moves as one. Hinges, ropes, springs, sliders and ball
+  sockets are Rapier joints. Characters keep their own snappier movement
+  (`character.rs`): they fall, are pushed out of anything with
+  `CanCollide`, and step up ledges up to 0.6 studs. Touches are pairs that
+  start overlapping, where at least one part can move.
 - **Input and prompts.** The Bevy side passes key presses and releases to
   the session, and the editor passes mouse buttons (marked as used when they
   land on a GUI). The session forwards them to `UserInputService` and keeps
@@ -251,10 +251,15 @@
   seat and respawn timer. Every step drives each character from its own
   input, so the same code serves one player or many; NPC code leaves all
   players' characters alone.
-- **Networking** lives in `libroxel-engine/src/net.rs` and only uses the
-  standard library and `serde_json`. A hosted session is an ordinary
-  session (scripts, physics, the host's own player) that also accepts TCP
-  connections. Messages are one JSON object per line. A joining computer
+- **Networking** lives in `libroxel-engine/src/net.rs`. A hosted session
+  is an ordinary session (scripts, physics, the host's own player) that
+  also accepts TCP connections. Each connection starts with a Noise key
+  exchange (`Noise_NN_25519_ChaChaPoly_BLAKE2s`, with the `snow` crate):
+  the joining side sends `LRXE` and the first message, the host answers,
+  and from then on everything goes in frames of a two-byte length and an
+  encrypted Noise message. A host that gets plain JSON instead (an older
+  copy) answers with a plain `refused` and hangs up. Inside, messages are
+  one JSON object per line. A joining computer
   says hello with a name and gets a player of its own (its input arrives
   in `input` messages and drives its character on the host). After each
   step, the `Replicator` walks the shared services (Workspace, Players,
@@ -281,6 +286,23 @@
   it, and ignores moves numbered before it until the joined computer
   catches up. A sitting or dead character is moved by the host, and its
   computer shows where the host puts it.
+- **What the host doesn't take from joined computers.** A changed copy
+  of the app could send anything, so the host checks:
+  - **Moves:** each joined character has an allowance of distance
+    (sideways and up; falling is free) that refills at four times the
+    faster of its `WalkSpeed` and half its `JumpPower`, plus 100 studs a
+    second, and can save up two seconds of that. A move beyond it is
+    refused: the character stays, and a `teleport` puts it back on its own
+    computer. Reported velocities are capped the same way.
+  - **Messages:** one message may be at most 4 MB, and a computer may
+    send 600 a second (1200 at once), of which 120 a second (240 at once)
+    may run scripts (`fire`, `invoke`, clicks, prompts, tools). The rest
+    is dropped and the host's Output says so once.
+  - **Connections:** at most 16 computers may be connected without having
+    said hello, for at most 10 seconds each.
+  On a joined computer, its character passes through other players'
+  characters; the host alone sorts out who stands where, so two players
+  on one spot no longer push each other up into the sky.
 - **Remote events across computers.** The script runtime knows its role
   (`Solo`, `Server` or `Client`) and the local player. Remote calls aimed
   at the other side become `NetMessage`s with their arguments as JSON
@@ -306,10 +328,13 @@
 
 - The ECS sync still lists the workspace's parts each frame, though it
   only copies the ones whose revision changed.
-- Loose parts never rotate, and cylinders collide as boxes.
-- A welded assembly collides with the world through its root part only;
-  its carried parts stop other things but don't stop the assembly.
+- Characters treat cylinders that aren't wheels as boxes, and walk on
+  smooth terrain's slopes as one-stud steps.
+- Water doesn't flow.
 - The host sends everyone the whole shared world, every step something
-  changes; there is no interest management or compression.
+  changes; there is no interest management (sending each player only
+  what's near them). Messages over 4 KB go compressed (deflate, as base64
+  in a `z` message, unpacked to at most the receiver's message limit),
+  which makes a newcomer's copy of the world 3 to 10 times smaller.
 - `ParticleEmitter:Emit` bursts and velocities aren't sent to joined
   computers.

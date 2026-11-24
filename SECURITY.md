@@ -38,8 +38,10 @@ described publicly, with credit to you if you'd like it.
 
 Some things are known and don't need a report:
 
-- Direct joins by address (not by join code) aren't encrypted; join codes
-  are.
+- Every game and edit-together connection is encrypted, but a direct join
+  by address doesn't check who the host is, so someone on the same network
+  could pretend to be the host. Join codes do check: the code names the
+  host's key.
 - A host runs every server script and sees everything its players send.
 - A script can use up to 5 seconds without waiting and 512 MB of memory
   before it is stopped.

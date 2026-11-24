@@ -7,7 +7,8 @@
 //! movement keys, clicks, prompts, tools and `FireServer`), and show the
 //! world the host sends them.
 //!
-//! The connection is TCP, carrying one JSON message per line. After every
+//! The connection is TCP, encrypted (see [`Conn`]), carrying one JSON
+//! message per line. After every
 //! step the host compares each instance it shares (everything under
 //! Workspace, Players, ReplicatedStorage, StarterGui, Lighting and Teams,
 //! except cameras and players' GUIs) with what it last sent, using the
@@ -23,7 +24,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use libroxel_instance::serde_json::{self, Map, Value as Json, json};
 use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property, PropertyValue, Vec3, place};
@@ -35,14 +36,35 @@ use crate::session::{Avatar, Blast, PlaySession};
 /// The port a hosted game listens on unless told otherwise.
 pub const DEFAULT_PORT: u16 = 7420;
 /// The version of the messages. Computers with different versions can't play together.
-pub const PROTOCOL: u64 = 1;
-/// How much unsent data a connection may build up before it is dropped.
+/// 2: long messages are compressed (see [`Conn::send`]).
+/// 3: everything is encrypted (see [`Conn`]).
+pub const PROTOCOL: u64 = 3;
+/// Messages longer than this many bytes are sent compressed.
+const COMPRESS_OVER: usize = 4096;
+/// How much unsent data a connection may build up before it is dropped,
+/// and the longest message it takes in.
 const MAX_BACKLOG: usize = 64 * 1024 * 1024;
 const MAX_QUEUED: usize = 100_000;
 const SEND_AHEAD: usize = 2 * 1024 * 1024;
 const READ_BUDGET: usize = 1024 * 1024;
 const CHUNK: usize = 500;
 const APPLY_BUDGET: Duration = Duration::from_millis(8);
+/// The longest message a host takes from a joined computer. What players
+/// send (their moves, clicks and `FireServer` arguments) is small; anything
+/// longer is someone trying to fill the host's memory.
+pub(crate) const MAX_FROM_GUEST: usize = 4 * 1024 * 1024;
+/// How many messages a second a joined computer may send, and how many it
+/// may save up for a burst. A player's computer sends a few each frame.
+const GUEST_MESSAGES_PER_SECOND: f32 = 600.0;
+const GUEST_MESSAGE_BURST: f32 = 1200.0;
+/// How many of those may be events, invokes, clicks, prompts and tool use,
+/// which run the game's scripts.
+const GUEST_ACTIONS_PER_SECOND: f32 = 120.0;
+const GUEST_ACTION_BURST: f32 = 240.0;
+/// How many computers may be connected without having said hello yet.
+const MAX_WAITING: usize = 16;
+/// How long a computer may stay connected without saying hello.
+const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The services whose contents every computer sees.
 const SHARED: [ClassKind; 6] = [
@@ -64,93 +86,424 @@ fn unshared(class: ClassKind) -> bool {
 // Connections
 // ---------------------------------------------------------------------------
 
-/// A connection that never blocks, carrying one JSON message per line.
+/// Which end of a connection this is: the joining computer starts the
+/// key exchange, the host answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Side {
+    Joining,
+    Hosting,
+}
+
+/// The Noise handshake every connection starts with: fresh keys on both
+/// sides, nothing known in advance. It keeps what's sent private and
+/// unchanged on the way, but doesn't prove who the host is.
+const NOISE: &str = "Noise_NN_25519_ChaChaPoly_BLAKE2s";
+/// The first bytes a joining computer sends, so a host can tell an
+/// encrypted connection from an older copy of Libroxel talking plain JSON.
+const MAGIC: &[u8; 4] = b"LRXE";
+/// The most a Noise message may carry, and so each frame's plain part.
+const NOISE_MAX: usize = 65535;
+const FRAME_PLAIN: usize = NOISE_MAX - 16;
+/// How long the key exchange may take before giving up.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+enum Noise {
+    /// Exchanging keys; whatever is sent meanwhile waits.
+    Handshake(Box<snow::HandshakeState>),
+    Ready(Box<snow::TransportState>),
+    Failed,
+}
+
+/// A connection that never blocks, carrying one JSON message per line,
+/// encrypted. On the wire: [`MAGIC`] from the joining side, then frames of a
+/// two-byte length and a Noise message, the first two of them the key
+/// exchange.
 pub(crate) struct Conn {
     stream: TcpStream,
+    side: Side,
+    noise: Noise,
+    since: Instant,
+    /// Whether the joining side's [`MAGIC`] has arrived (on the host).
+    magic_seen: bool,
+    /// Bytes from the wire not yet decrypted.
+    wire_in: Vec<u8>,
+    /// Decrypted bytes not yet split into messages.
     received: Vec<u8>,
-    scanned: usize,
+    /// Messages waiting to be encrypted (until the keys are agreed).
+    plain_out: Vec<u8>,
+    /// Encrypted bytes waiting to go out.
     unsent: Vec<u8>,
     pub(crate) closed: bool,
+    /// The longest message taken in; a longer one closes the connection.
+    max_message: usize,
 }
 
 impl Conn {
-    pub(crate) fn new(stream: TcpStream) -> std::io::Result<Self> {
-        stream.set_nonblocking(true)?;
-        stream.set_nodelay(true)?;
-        Ok(Self { stream, received: Vec::new(), scanned: 0, unsent: Vec::new(), closed: false })
+    pub(crate) fn new(stream: TcpStream, side: Side) -> std::io::Result<Self> {
+        Self::with_limit(stream, side, MAX_BACKLOG)
     }
 
+    /// A connection that closes when the other side sends a message longer
+    /// than `max_message` bytes.
+    pub(crate) fn with_limit(stream: TcpStream, side: Side, max_message: usize) -> std::io::Result<Self> {
+        stream.set_nonblocking(true)?;
+        stream.set_nodelay(true)?;
+        let params = NOISE.parse().expect("a valid Noise pattern");
+        let builder = snow::Builder::new(params);
+        let handshake = match side {
+            Side::Joining => builder.build_initiator(),
+            Side::Hosting => builder.build_responder(),
+        }
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let mut conn = Self {
+            stream,
+            side,
+            noise: Noise::Handshake(Box::new(handshake)),
+            since: Instant::now(),
+            magic_seen: false,
+            wire_in: Vec::new(),
+            received: Vec::new(),
+            plain_out: Vec::new(),
+            unsent: Vec::new(),
+            closed: false,
+            max_message,
+        };
+        if side == Side::Joining {
+            conn.unsent.extend_from_slice(MAGIC);
+            conn.handshake_step(None);
+        }
+        Ok(conn)
+    }
+
+    /// Whether the keys are agreed and messages flow.
+    pub(crate) fn ready(&self) -> bool {
+        matches!(self.noise, Noise::Ready(_))
+    }
+
+    /// Queues `message` to go out. A long one goes compressed, as
+    /// `{"t":"z","d":<base64 of the deflated message>}`: a newcomer's copy
+    /// of the world is several times smaller that way.
     pub(crate) fn send(&mut self, message: &Json) {
         if self.closed {
             return;
         }
-        if serde_json::to_writer(&mut self.unsent, message).is_err() {
+        let Ok(line) = serde_json::to_vec(message) else { return };
+        match (line.len() > COMPRESS_OVER).then(|| pack(&line)).flatten() {
+            Some(packed) => self.plain_out.extend_from_slice(&packed),
+            None => self.plain_out.extend_from_slice(&line),
+        }
+        self.plain_out.push(b'\n');
+        self.seal();
+    }
+
+    /// A message already written out as a line (ending in a newline), as
+    /// a newcomer's world is: compressed like any other, then encrypted.
+    fn send_line(&mut self, line: &[u8]) {
+        if self.closed {
             return;
         }
-        self.unsent.push(b'\n');
-        if self.unsent.len() > MAX_BACKLOG {
+        let body = line.strip_suffix(b"\n").unwrap_or(line);
+        match (body.len() > COMPRESS_OVER).then(|| pack(body)).flatten() {
+            Some(packed) => self.plain_out.extend_from_slice(&packed),
+            None => self.plain_out.extend_from_slice(body),
+        }
+        self.plain_out.push(b'\n');
+        self.seal();
+    }
+
+    /// How much is waiting to go out, so a newcomer's world can be paced.
+    fn unsent_len(&self) -> usize {
+        self.plain_out.len() + self.unsent.len()
+    }
+
+    /// Plain bytes straight into the outgoing stream, for tests that need
+    /// to send what a well-behaved computer wouldn't.
+    #[cfg(test)]
+    pub(crate) fn send_raw(&mut self, bytes: &[u8]) {
+        self.plain_out.extend_from_slice(bytes);
+        self.seal();
+    }
+
+    /// Encrypts what's waiting, once the keys are agreed.
+    fn seal(&mut self) {
+        if let Noise::Ready(transport) = &mut self.noise {
+            let mut frame = vec![0u8; NOISE_MAX];
+            for chunk in self.plain_out.chunks(FRAME_PLAIN) {
+                match transport.write_message(chunk, &mut frame) {
+                    Ok(n) => {
+                        self.unsent.extend_from_slice(&(n as u16).to_be_bytes());
+                        self.unsent.extend_from_slice(&frame[..n]);
+                    }
+                    Err(_) => {
+                        self.closed = true;
+                        break;
+                    }
+                }
+            }
+            self.plain_out.clear();
+        }
+        if self.unsent.len() + self.plain_out.len() > MAX_BACKLOG {
             self.closed = true;
         }
     }
 
-    pub(crate) fn flush(&mut self) {
-        let mut sent = 0;
-        while !self.closed && sent < self.unsent.len() {
-            match self.stream.write(&self.unsent[sent..]) {
-                Ok(0) => self.closed = true,
-                Ok(n) => sent += n,
-                Err(e) if e.kind() == ErrorKind::WouldBlock => break,
-                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+    /// One step of the key exchange: takes in the other side's message, if
+    /// there is one, and sends ours when it's our turn.
+    fn handshake_step(&mut self, incoming: Option<&[u8]>) {
+        let Noise::Handshake(handshake) = &mut self.noise else { return };
+        let mut buf = vec![0u8; NOISE_MAX];
+        if let Some(message) = incoming
+            && handshake.read_message(message, &mut buf).is_err()
+        {
+            self.noise = Noise::Failed;
+            self.closed = true;
+            return;
+        }
+        if !handshake.is_handshake_finished() && handshake.is_my_turn() {
+            match handshake.write_message(&[], &mut buf) {
+                Ok(n) => {
+                    self.unsent.extend_from_slice(&(n as u16).to_be_bytes());
+                    self.unsent.extend_from_slice(&buf[..n]);
+                }
+                Err(_) => {
+                    self.noise = Noise::Failed;
+                    self.closed = true;
+                    return;
+                }
+            }
+        }
+        if handshake.is_handshake_finished() {
+            let Noise::Handshake(handshake) = std::mem::replace(&mut self.noise, Noise::Failed) else {
+                unreachable!()
+            };
+            match handshake.into_transport_mode() {
+                Ok(transport) => {
+                    self.noise = Noise::Ready(Box::new(transport));
+                    self.seal();
+                }
                 Err(_) => self.closed = true,
             }
         }
-        self.unsent.drain(..sent);
     }
 
-    /// Every whole message that has arrived.
-    pub(crate) fn receive(&mut self) -> Vec<Json> {
-        let mut buf = vec![0u8; 256 * 1024];
-        let mut read = 0;
-        while !self.closed && read < READ_BUDGET {
-            match self.stream.read(&mut buf) {
+    pub(crate) fn flush(&mut self) {
+        self.seal();
+        while !self.closed && !self.unsent.is_empty() {
+            match self.stream.write(&self.unsent) {
                 Ok(0) => self.closed = true,
                 Ok(n) => {
-                    self.received.extend_from_slice(&buf[..n]);
-                    read += n;
+                    self.unsent.drain(..n);
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => break,
                 Err(e) if e.kind() == ErrorKind::Interrupted => {}
                 Err(_) => self.closed = true,
             }
         }
-        let mut messages = Vec::new();
-        let mut start = 0;
-        let mut from = self.scanned;
-        while let Some(at) = self.received[from..].iter().position(|b| *b == b'\n') {
-            let end = from + at;
-            if let Ok(message) = serde_json::from_slice::<Json>(&self.received[start..end]) {
-                messages.push(message);
-            }
-            start = end + 1;
-            from = start;
-        }
-        self.received.drain(..start);
-        self.scanned = self.received.len();
-        messages
     }
 
-    fn send_line(&mut self, line: &[u8]) {
-        if self.closed {
-            return;
+    /// Takes the frames that have arrived off the wire: the key exchange,
+    /// then decrypted messages into `received`.
+    fn open_frames(&mut self) {
+        if self.side == Side::Hosting && !self.magic_seen {
+            if self.wire_in.first() == Some(&b'{') {
+                // An older copy of Libroxel, talking plain JSON: say why,
+                // in a way it understands, and hang up.
+                let refusal = json!({ "t": "refused", "why": "a different version of Libroxel" });
+                if let Ok(mut line) = serde_json::to_vec(&refusal) {
+                    line.push(b'\n');
+                    let _ = self.stream.write(&line);
+                }
+                self.closed = true;
+                return;
+            }
+            if self.wire_in.len() < MAGIC.len() {
+                return;
+            }
+            if &self.wire_in[..MAGIC.len()] != MAGIC {
+                self.closed = true;
+                return;
+            }
+            self.wire_in.drain(..MAGIC.len());
+            self.magic_seen = true;
         }
-        self.unsent.extend_from_slice(line);
-        if self.unsent.len() > MAX_BACKLOG {
+        let mut start = 0;
+        let mut plain = vec![0u8; NOISE_MAX];
+        // What arrived before the other side hung up still counts (a
+        // host's last words when it removes a player, say); a frame that
+        // fails to open stops it.
+        let closed_before = self.closed;
+        while self.wire_in.len() >= start + 2 && (closed_before || !self.closed) {
+            let length = usize::from(u16::from_be_bytes([self.wire_in[start], self.wire_in[start + 1]]));
+            if self.wire_in.len() < start + 2 + length {
+                break;
+            }
+            let frame = self.wire_in[start + 2..start + 2 + length].to_vec();
+            start += 2 + length;
+            match &mut self.noise {
+                Noise::Handshake(_) => self.handshake_step(Some(&frame)),
+                Noise::Ready(transport) => match transport.read_message(&frame, &mut plain) {
+                    Ok(n) => self.received.extend_from_slice(&plain[..n]),
+                    // Changed or out of order on the way: nothing after it can be trusted.
+                    Err(_) => {
+                        self.closed = true;
+                        break;
+                    }
+                },
+                Noise::Failed => {
+                    self.closed = true;
+                    break;
+                }
+            }
+        }
+        self.wire_in.drain(..start);
+    }
+
+    /// Every whole message that has arrived.
+    ///
+    /// Takes in at most about one longest message's worth of bytes a call,
+    /// so a computer sending without end can't hold up the frame, and closes
+    /// the connection when a message runs longer than the limit, so it can't
+    /// fill this computer's memory either.
+    pub(crate) fn receive(&mut self) -> Vec<Json> {
+        let mut buf = vec![0u8; 256 * 1024];
+        let mut taken = 0;
+        // Messages still waiting from last time come first: no more is read
+        // until they're down to one step's worth.
+        while !self.closed && taken < READ_BUDGET && self.received.len() < READ_BUDGET {
+            match self.stream.read(&mut buf) {
+                Ok(0) => self.closed = true,
+                Ok(n) => {
+                    taken += n;
+                    self.wire_in.extend_from_slice(&buf[..n]);
+                }
+                Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(_) => self.closed = true,
+            }
+        }
+        self.open_frames();
+        if !self.ready() && self.since.elapsed() > HANDSHAKE_TIMEOUT {
+            // Not Libroxel, or an older or newer one that can't agree keys.
             self.closed = true;
         }
+        // Our side of the key exchange (and anything it let out) goes now.
+        if !self.unsent.is_empty() {
+            self.flush();
+        }
+        let mut messages = Vec::new();
+        let mut start = 0;
+        let limit = self.max_message;
+        // A step takes in about READ_BUDGET bytes of messages, counted
+        // unpacked, so a compressed world can't make one step take long.
+        let mut parsed = 0;
+        while parsed < READ_BUDGET
+            && let Some(offset) = self.received[start..].iter().position(|b| *b == b'\n')
+        {
+            let line = &self.received[start..start + offset];
+            start += offset + 1;
+            parsed += line.len();
+            if line.len() > limit {
+                self.closed = true;
+                break;
+            }
+            let Ok(message) = serde_json::from_slice::<Json>(line) else { continue };
+            if message.get("t").and_then(Json::as_str) != Some("z") {
+                messages.push(message);
+                continue;
+            }
+            // A compressed message: it mustn't unpack to more than one
+            // message may be, so a small one can't fill this computer's memory.
+            match unpack(&message, limit) {
+                Unpacked::Message(inner, size) => {
+                    parsed += size;
+                    messages.push(inner);
+                }
+                Unpacked::TooBig => {
+                    self.closed = true;
+                    break;
+                }
+                Unpacked::Broken => {}
+            }
+        }
+        self.received.drain(..start);
+        if self.received.len() > self.max_message {
+            self.closed = true;
+        }
+        if self.closed {
+            self.received = Vec::new();
+            self.wire_in = Vec::new();
+        }
+        messages
+    }
+}
+
+/// `line` deflated and wrapped in a `z` message, if that's shorter.
+fn pack(line: &[u8]) -> Option<Vec<u8>> {
+    use flate2::{Compression, write::DeflateEncoder};
+    let mut encoder = DeflateEncoder::new(Vec::with_capacity(line.len() / 4), Compression::fast());
+    encoder.write_all(line).ok()?;
+    let deflated = encoder.finish().ok()?;
+    let packed =
+        serde_json::to_vec(&json!({ "t": "z", "d": data_encoding::BASE64.encode(&deflated) })).ok()?;
+    (packed.len() < line.len()).then_some(packed)
+}
+
+enum Unpacked {
+    /// The message, and how long it was unpacked.
+    Message(Json, usize),
+    TooBig,
+    Broken,
+}
+
+/// The message inside a `z` message, unless it would unpack to more than `limit` bytes.
+fn unpack(message: &Json, limit: usize) -> Unpacked {
+    use flate2::read::DeflateDecoder;
+    let Some(deflated) =
+        message.get("d").and_then(Json::as_str).and_then(|d| data_encoding::BASE64.decode(d.as_bytes()).ok())
+    else {
+        return Unpacked::Broken;
+    };
+    let mut line = Vec::new();
+    if DeflateDecoder::new(deflated.as_slice()).take(limit as u64 + 1).read_to_end(&mut line).is_err() {
+        return Unpacked::Broken;
+    }
+    if line.len() > limit {
+        return Unpacked::TooBig;
+    }
+    match serde_json::from_slice::<Json>(&line) {
+        // No compressed messages inside compressed messages.
+        Ok(inner) if inner.get("t").and_then(Json::as_str) != Some("z") => {
+            Unpacked::Message(inner, line.len())
+        }
+        _ => Unpacked::Broken,
+    }
+}
+
+/// Lets through so many things a second, with room saved up for a burst.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Allowance {
+    per_second: f32,
+    most: f32,
+    left: f32,
+    at: Instant,
+}
+
+impl Allowance {
+    pub(crate) fn new(per_second: f32, most: f32, now: Instant) -> Self {
+        Self { per_second, most, left: most, at: now }
     }
 
-    fn unsent_len(&self) -> usize {
-        self.unsent.len()
+    /// Spends `amount` if that much is left at `now`.
+    pub(crate) fn spend(&mut self, amount: f32, now: Instant) -> bool {
+        let seconds = now.saturating_duration_since(self.at).as_secs_f32();
+        self.at = now;
+        self.left = (self.left + seconds * self.per_second).min(self.most);
+        if amount <= self.left {
+            self.left -= amount;
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -186,6 +539,13 @@ struct Peer {
     asked: String,
     queue: VecDeque<Out>,
     world: Option<Receiver<Vec<Vec<u8>>>>,
+    /// When they connected.
+    since: Instant,
+    /// How many more messages, and script-running actions, they may send.
+    messages: Allowance,
+    actions: Allowance,
+    /// Whether the host has been told they are sending too much.
+    warned: bool,
 }
 
 enum Out {
@@ -195,6 +555,21 @@ enum Out {
 }
 
 impl Peer {
+    fn new(conn: Conn, now: Instant) -> Self {
+        Self {
+            conn,
+            player: None,
+            fresh: true,
+            asked: String::new(),
+            queue: VecDeque::new(),
+            world: None,
+            since: now,
+            messages: Allowance::new(GUEST_MESSAGES_PER_SECOND, GUEST_MESSAGE_BURST, now),
+            actions: Allowance::new(GUEST_ACTIONS_PER_SECOND, GUEST_ACTION_BURST, now),
+            warned: false,
+        }
+    }
+
     fn send(&mut self, message: Json) {
         if self.queue.is_empty() && self.conn.unsent_len() < SEND_AHEAD {
             self.conn.send(&message);
@@ -719,6 +1094,46 @@ fn move_json(input: CharacterInput) -> Json {
     })
 }
 
+/// How far a joined computer may say its character went. Generous, so
+/// lag, knocks and launch pads still get through, but nowhere near what a
+/// teleport or a speed hack needs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct MoveLimits {
+    /// Studs a second, sideways and up, kept up for as long as they like.
+    pub(crate) speed: f32,
+    /// Studs that may be saved up, for a burst after a lag spike.
+    pub(crate) burst: f32,
+}
+
+impl MoveLimits {
+    pub(crate) fn for_character(walk_speed: f32, jump_power: f32) -> Self {
+        let fastest = walk_speed.max(16.0).max(jump_power.max(50.0) * 0.5);
+        let speed = fastest * 4.0 + 100.0;
+        Self { speed, burst: speed * 2.0 + 20.0 }
+    }
+
+    pub(crate) fn allowance(self, now: Instant) -> Allowance {
+        Allowance::new(self.speed, self.burst, now)
+    }
+
+    /// How much of the allowance a move uses: falling is free, so a
+    /// long fall never counts against anyone.
+    pub(crate) fn distance(self, from: Vec3, to: Vec3) -> f32 {
+        let sideways = Vec3::new(to.x - from.x, 0.0, to.z - from.z).length();
+        let up = (to.y - from.y).max(0.0);
+        let d = sideways + up;
+        if d.is_finite() { d } else { f32::INFINITY }
+    }
+
+    /// A reported velocity, no faster than allowed (falling as fast as anything falls).
+    pub(crate) fn clamp_velocity(self, v: Vec3) -> Vec3 {
+        let sideways = Vec3::new(v.x, 0.0, v.z);
+        let sideways =
+            if sideways.length() > self.speed { sideways.normalize_or_zero() * self.speed } else { sideways };
+        Vec3::new(sideways.x, v.y.clamp(-1000.0, self.speed), sideways.z)
+    }
+}
+
 fn vec3_from(json: Option<&Json>) -> Option<Vec3> {
     let items = json?.as_array().filter(|a| a.len() == 3)?;
     let f = |i: usize| items[i].as_f64().map(|v| v as f32).filter(|v| v.is_finite());
@@ -791,7 +1206,7 @@ impl PlaySession {
             .ok_or_else(|| "could not find that address".to_owned())?;
         let stream = TcpStream::connect_timeout(&target, Duration::from_secs(5))
             .map_err(|e| format!("could not reach the host: {e}"))?;
-        let mut conn = Conn::new(stream).map_err(|e| e.to_string())?;
+        let mut conn = Conn::new(stream, Side::Joining).map_err(|e| e.to_string())?;
         conn.send(&json!({ "t": "hello", "name": name, "version": PROTOCOL }));
         conn.flush();
         *tree.borrow_mut() = InstanceTree::new();
@@ -918,18 +1333,24 @@ impl PlaySession {
         // Something may have moved a character since the last step (a
         // command, say); catch it before the player's moves overwrite it.
         host.teleports.extend(self.find_teleports());
+        let now = Instant::now();
         while let Ok((stream, _)) = host.listener.accept() {
-            if let Ok(conn) = Conn::new(stream) {
-                host.peers.push(Peer {
-                    conn,
-                    player: None,
-                    fresh: true,
-                    asked: String::new(),
-                    queue: VecDeque::new(),
-                    world: None,
-                });
+            // Computers that connect and never say hello are hung up on, and
+            // only a few may wait at once, so they can't pile up.
+            let waiting = host.peers.iter().filter(|p| p.player.is_none() && !p.conn.closed).count();
+            if waiting >= MAX_WAITING {
+                continue;
+            }
+            if let Ok(conn) = Conn::with_limit(stream, Side::Hosting, MAX_FROM_GUEST) {
+                host.peers.push(Peer::new(conn, now));
             }
         }
+        for peer in &mut host.peers {
+            if peer.player.is_none() && now.saturating_duration_since(peer.since) > HELLO_TIMEOUT {
+                peer.conn.closed = true;
+            }
+        }
+        let mut too_much = Vec::new();
         let tree = self.runtime.tree().clone();
         let live = |id: InstanceId| {
             let t = tree.borrow();
@@ -941,6 +1362,15 @@ impl PlaySession {
         for peer in &mut host.peers {
             for message in peer.conn.receive() {
                 let kind = message.get("t").and_then(Json::as_str).unwrap_or("");
+                let action = matches!(kind, "fire" | "invoke" | "click" | "prompt" | "tool" | "activate");
+                if !peer.messages.spend(1.0, now) || (action && !peer.actions.spend(1.0, now)) {
+                    // Too much at once: the rest is dropped, and the host told once.
+                    if !peer.warned {
+                        peer.warned = true;
+                        too_much.push(peer.player);
+                    }
+                    continue;
+                }
                 let Some(player) = peer.player else {
                     if kind == "hello" {
                         if message.get("version").and_then(Json::as_u64) != Some(PROTOCOL) {
@@ -990,7 +1420,11 @@ impl PlaySession {
                         );
                         self.set_look(player, look);
                     }
-                    "move" => self.remote_move(index, &message),
+                    "move" => {
+                        if let Some(back) = self.remote_move(index, &message, now) {
+                            host.teleports.push(back);
+                        }
+                    }
                     "fire" => {
                         if let Some(remote) = id_in(&message, "r") {
                             let args = message.get("a").cloned().unwrap_or(Json::Array(Vec::new()));
@@ -1036,6 +1470,12 @@ impl PlaySession {
                     _ => {}
                 }
             }
+        }
+        for player in too_much {
+            let shown = player
+                .and_then(|p| tree.borrow().name(p).ok().map(str::to_owned))
+                .unwrap_or_else(|| "A computer that hasn't joined".to_owned());
+            self.info(format!("{shown} is sending too much; some of it was ignored"));
         }
         // Players whose computers went away leave the game.
         let (gone, kept): (Vec<Peer>, Vec<Peer>) =
@@ -1295,24 +1735,52 @@ impl PlaySession {
     }
 
     /// On the host: a joined player's computer says where its character is.
-    fn remote_move(&mut self, index: usize, message: &Json) {
+    /// A joined computer saying where its character went. A move further
+    /// than the character could have gone is refused: the character stays,
+    /// and the teleport returned puts it back on that computer too.
+    fn remote_move(
+        &mut self,
+        index: usize,
+        message: &Json,
+        now: Instant,
+    ) -> Option<(InstanceId, u64, Vec3, f32)> {
         let tree = self.runtime.tree().clone();
         let avatar = &self.avatars[index];
-        let Some(c) = avatar.character else { return };
+        let c = avatar.character?;
         let current = message.get("m").and_then(Json::as_u64) == Some(c.model.to_bits());
         let seq = message.get("seq").and_then(Json::as_u64).unwrap_or(0);
         if !current || seq != avatar.teleports || !avatar.moves_itself(&tree.borrow()) {
-            return;
+            return None;
         }
-        let (Some(pos), vel) = (vec3_from(message.get("pos")), vec3_from(message.get("vel"))) else { return };
+        let pos = vec3_from(message.get("pos"))?;
+        let vel = vec3_from(message.get("vel"));
         let yaw = message.get("yaw").and_then(Json::as_f64).filter(|y| y.is_finite()).unwrap_or(0.0) as f32;
+        let (from, limits) = {
+            let t = tree.borrow();
+            let from = t.get_vec3(c.root, Property::Position).unwrap_or(pos);
+            let walk = t.get_number(c.humanoid, Property::WalkSpeed).unwrap_or(16.0) as f32;
+            let jump = t.get_number(c.humanoid, Property::JumpPower).unwrap_or(50.0) as f32;
+            (from, MoveLimits::for_character(walk, jump))
+        };
+        let avatar = &mut self.avatars[index];
+        let travel = avatar.travel.get_or_insert_with(|| limits.allowance(now));
+        travel.per_second = limits.speed;
+        travel.most = limits.burst;
+        if !travel.spend(limits.distance(from, pos), now) {
+            avatar.teleports += 1;
+            avatar.moved_to = Some(from);
+            let facing = tree.borrow().get_vec3(c.root, Property::Orientation).unwrap_or_default().y;
+            self.physics.set_velocity(c.root, Vec3::ZERO);
+            return Some((avatar.player, avatar.teleports, from, facing));
+        }
         {
             let mut t = tree.borrow_mut();
             let _ = t.set(c.root, Property::Position, PropertyValue::Vec3(pos));
             let _ = t.set(c.root, Property::Orientation, PropertyValue::Vec3(Vec3::new(0.0, yaw, 0.0)));
         }
-        self.physics.set_velocity(c.root, vel.unwrap_or_default());
+        self.physics.set_velocity(c.root, limits.clamp_velocity(vel.unwrap_or_default()));
         self.avatars[index].moved_to = Some(pos);
+        None
     }
 
     /// On the host: joined players' characters that something here moved
@@ -1368,7 +1836,22 @@ impl PlaySession {
                     .into_iter()
                     .filter(|p| *p != c.root && t.get_bool(*p, Property::Anchored) == Some(false))
                     .collect();
-                self.physics.set_assemblies(others, std::iter::empty());
+                // Other players' characters are where the host last put
+                // them. Bumping into them here as well as on the host made
+                // two players on one spot push each other up into the sky,
+                // so here our character passes through them and the host
+                // alone sorts out who stands where.
+                let players = t.service(ClassKind::Players);
+                let theirs: Vec<(InstanceId, InstanceId)> = players
+                    .map(|players| t.children(players).unwrap_or_default().to_vec())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|player| t.get_ref(player, Property::Character))
+                    .filter(|model| *model != c.model)
+                    .flat_map(|model| t.descendants_of_class(model, ClassKind::Part))
+                    .map(|part| (c.root, part))
+                    .collect();
+                self.physics.set_assemblies(others, theirs);
                 c.drive(&t, &mut self.physics, input, dt);
                 self.physics.step(&mut t, dt);
                 c.follow(&mut t);
@@ -1453,5 +1936,239 @@ impl PlaySession {
                 self.collect(errors);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A host's end of a connection on this machine, taking messages up to
+    /// `limit` long, and the joining end, plain.
+    fn raw_pair(limit: usize) -> (Conn, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let other = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        (Conn::with_limit(stream, Side::Hosting, limit).unwrap(), other)
+    }
+
+    /// A host's end and a joining end, both encrypted.
+    fn pair(limit: usize) -> (Conn, Conn) {
+        let (host, other) = raw_pair(limit);
+        (host, Conn::new(other, Side::Joining).unwrap())
+    }
+
+    /// Steps both ends until their keys are agreed.
+    fn connect(host: &mut Conn, guest: &mut Conn) {
+        let start = Instant::now();
+        while !(host.ready() && guest.ready()) && start.elapsed() < Duration::from_secs(1) {
+            guest.flush();
+            let _ = host.receive();
+            let _ = guest.receive();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(host.ready() && guest.ready(), "keys agreed");
+    }
+
+    /// Lets `guest` send and `host` take in until `done` says so, or a
+    /// second has gone by.
+    fn deliver(host: &mut Conn, guest: &mut Conn, done: impl Fn(&Conn, &[Json]) -> bool) -> Vec<Json> {
+        let mut all = Vec::new();
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(1) {
+            guest.flush();
+            let _ = guest.receive();
+            all.extend(host.receive());
+            if done(host, &all) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        all
+    }
+
+    #[test]
+    fn messages_within_the_limit_arrive() {
+        let (mut host, mut guest) = pair(1024);
+        guest.send_raw(b"{\"t\":\"a\"}\n{\"t\":\"b\"}\nnot json\n{\"t\":");
+        let got = deliver(&mut host, &mut guest, |_, m| m.len() >= 2);
+        assert_eq!(got, vec![json!({"t": "a"}), json!({"t": "b"})]);
+        guest.send_raw(b"\"c\"}\n");
+        let got = deliver(&mut host, &mut guest, |_, m| !m.is_empty());
+        assert_eq!(got, vec![json!({"t": "c"})]);
+        assert!(host.ready() && guest.ready() && !host.closed);
+        // Back the other way too.
+        host.send(&json!({ "t": "welcome" }));
+        host.flush();
+        let mut back = Vec::new();
+        let start = Instant::now();
+        while back.is_empty() && start.elapsed() < Duration::from_secs(1) {
+            back = guest.receive();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(back, vec![json!({ "t": "welcome" })]);
+    }
+
+    #[test]
+    fn nothing_readable_goes_over_the_wire() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut host =
+            Conn::new(TcpStream::connect(listener.local_addr().unwrap()).unwrap(), Side::Hosting).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        // Listen in on what the joining side sends.
+        let mut guest = Conn::new(stream, Side::Joining).unwrap();
+        guest.send(&json!({ "t": "hello", "name": "SecretName", "password": "hunter2" }));
+        connect(&mut host, &mut guest);
+        guest.send(&json!({ "t": "fire", "a": ["SecretName says hunter2"] }));
+        guest.seal();
+        let wire = String::from_utf8_lossy(&guest.unsent).into_owned();
+        assert!(
+            !wire.contains("SecretName") && !wire.contains("hunter2") && !wire.contains("fire"),
+            "{wire}"
+        );
+        let got = deliver(&mut host, &mut guest, |_, m| m.len() >= 2);
+        assert_eq!(got[1]["a"][0], "SecretName says hunter2");
+    }
+
+    #[test]
+    fn a_changed_byte_on_the_way_closes_the_connection() {
+        let (mut host, mut guest) = pair(1024);
+        connect(&mut host, &mut guest);
+        guest.send(&json!({ "t": "input" }));
+        guest.seal();
+        let last = guest.unsent.len() - 1;
+        guest.unsent[last] ^= 1;
+        let got = deliver(&mut host, &mut guest, |c, _| c.closed);
+        assert!(got.is_empty() && host.closed);
+    }
+
+    #[test]
+    fn an_older_copy_talking_plain_json_is_told_why_it_cant_join() {
+        let (mut host, mut old) = raw_pair(1024);
+        old.write_all(b"{\"t\":\"hello\",\"version\":2,\"name\":\"Bea\"}\n").unwrap();
+        let start = Instant::now();
+        while !host.closed && start.elapsed() < Duration::from_secs(1) {
+            let _ = host.receive();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(host.closed);
+        old.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        let mut answer = String::new();
+        let _ = old.read_to_string(&mut answer);
+        assert!(answer.contains("refused") && answer.contains("a different version"), "{answer}");
+    }
+
+    #[test]
+    fn a_message_longer_than_the_limit_closes_the_connection() {
+        let (mut host, mut guest) = pair(1024);
+        // No newline ever comes: before, this grew without end.
+        guest.send_raw(&[b'x'; 4096]);
+        deliver(&mut host, &mut guest, |c, _| c.closed);
+        assert!(host.closed);
+        assert!(host.received.is_empty(), "what came in is let go");
+
+        let (mut host, mut guest) = pair(1024);
+        let mut long = vec![b'"'; 1];
+        long.extend([b'y'; 2000]);
+        long.extend(b"\"\n");
+        guest.send_raw(&long);
+        let got = deliver(&mut host, &mut guest, |c, _| c.closed);
+        assert!(got.is_empty() && host.closed);
+    }
+
+    #[test]
+    fn long_messages_travel_compressed_and_arrive_whole() {
+        let (mut host, mut guest) = pair(MAX_FROM_GUEST);
+        connect(&mut host, &mut guest);
+        // A world's worth of parts: long, and much the same over and over.
+        let parts: Vec<Json> = (0..2000)
+            .map(|i| json!({ "class": "Part", "name": format!("Brick{i}"), "size": [4, 1, 2], "anchored": true }))
+            .collect();
+        let big = json!({ "t": "rep", "ops": parts });
+        let small = json!({ "t": "input", "move": [1.0, 0.0] });
+        let plain_length = serde_json::to_vec(&big).unwrap().len();
+        guest.send(&big);
+        guest.send(&small);
+        assert!(guest.unsent.len() * 4 < plain_length, "{} vs {plain_length}", guest.unsent.len());
+        let got = deliver(&mut host, &mut guest, |_, m| m.len() >= 2);
+        assert_eq!(got, vec![big, small]);
+        assert!(!host.closed);
+    }
+
+    #[test]
+    fn a_compressed_message_that_unpacks_too_big_closes_the_connection() {
+        let (mut host, mut guest) = pair(64 * 1024);
+        // A few kilobytes that unpack to megabytes.
+        let bomb = format!("\"{}\"", "a".repeat(8 * 1024 * 1024));
+        let mut packed = pack(bomb.as_bytes()).unwrap();
+        assert!(packed.len() < 64 * 1024);
+        packed.push(b'\n');
+        guest.send_raw(&packed);
+        let got = deliver(&mut host, &mut guest, |c, _| c.closed);
+        assert!(got.is_empty() && host.closed);
+        // Rubbish inside a z message is skipped, not taken in.
+        let (mut host, mut guest) = pair(64 * 1024);
+        guest.send_raw(b"{\"t\":\"z\",\"d\":\"not base64!\"}\n{\"t\":\"ok\"}\n");
+        let got = deliver(&mut host, &mut guest, |_, m| !m.is_empty());
+        assert_eq!(got, vec![json!({ "t": "ok" })]);
+    }
+
+    #[test]
+    fn an_allowance_refills_over_time_up_to_its_most() {
+        let start = Instant::now();
+        let mut a = Allowance::new(10.0, 20.0, start);
+        assert!(a.spend(20.0, start));
+        assert!(!a.spend(1.0, start));
+        assert!(a.spend(5.0, start + Duration::from_millis(500)));
+        assert!(!a.spend(1.0, start + Duration::from_millis(500)));
+        // Waiting a long time saves up no more than the most.
+        assert!(!a.spend(21.0, start + Duration::from_secs(60)));
+        assert!(a.spend(20.0, start + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn walking_and_falling_are_fine_but_teleports_and_speed_hacks_are_not() {
+        let limits = MoveLimits::for_character(16.0, 50.0);
+        let start = Instant::now();
+        let mut travel = limits.allowance(start);
+        let mut at = Vec3::new(0.0, 3.0, 0.0);
+        // A minute of running at full speed, 60 moves a second.
+        for frame in 1..=3600 {
+            let next = at + Vec3::new(16.0 / 60.0, 0.0, 0.0);
+            let now = start + Duration::from_secs_f32(frame as f32 / 60.0);
+            assert!(travel.spend(limits.distance(at, next), now), "frame {frame}");
+            at = next;
+        }
+        // A long fall costs nothing.
+        assert_eq!(limits.distance(at, at - Vec3::new(0.0, 500.0, 0.0)), 0.0);
+        // Half a second of lag, then everything at once, still gets through.
+        let later = start + Duration::from_secs_f32(60.5);
+        assert!(travel.spend(limits.distance(at, at + Vec3::new(8.0, 0.0, 0.0)), later));
+
+        // A jump across the map is refused.
+        let mut travel = limits.allowance(start);
+        assert!(!travel.spend(limits.distance(at, at + Vec3::new(2000.0, 0.0, 0.0)), start));
+        // So is running ten times too fast for long.
+        let mut travel = limits.allowance(start);
+        let mut refused = false;
+        for frame in 1..=600 {
+            let now = start + Duration::from_secs_f32(frame as f32 / 60.0);
+            if !travel.spend(160.0 * 10.0 / 60.0, now) {
+                refused = true;
+                break;
+            }
+        }
+        assert!(refused);
+        // Numbers that aren't numbers never pass.
+        assert!(!limits.allowance(start).spend(limits.distance(at, Vec3::new(f32::NAN, 0.0, 0.0)), start));
+    }
+
+    #[test]
+    fn faster_characters_may_move_faster() {
+        let slow = MoveLimits::for_character(16.0, 50.0);
+        let fast = MoveLimits::for_character(100.0, 50.0);
+        assert!(fast.speed > slow.speed && fast.speed >= 400.0);
+        let v = slow.clamp_velocity(Vec3::new(1e6, -1e6, 0.0));
+        assert!((v.x - slow.speed).abs() < 0.01 && v.y == -1000.0);
     }
 }

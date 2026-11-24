@@ -27,13 +27,15 @@ use std::time::Duration;
 use libroxel_instance::serde_json::{Map, Value as Json, json};
 use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property, PropertyValue};
 
-use crate::net::{Conn, Replicator, bits, set_fields, with_port};
+use crate::net::{Conn, Replicator, Side as End, bits, set_fields, with_port};
 
 /// The port a shared game listens on unless told otherwise (one above
 /// [`crate::net::DEFAULT_PORT`], so a game can be shared and played at once).
 pub const EDIT_PORT: u16 = 7421;
 /// The version of the messages. Computers with different versions can't edit together.
-pub const EDIT_PROTOCOL: u64 = 1;
+/// 2: long messages are compressed, as in a played game.
+/// 3: everything is encrypted, as in a played game.
+pub const EDIT_PROTOCOL: u64 = 3;
 
 /// A game being edited together.
 pub struct CoEdit {
@@ -109,7 +111,7 @@ impl CoEdit {
             .ok_or_else(|| "could not find that address".to_owned())?;
         let stream = TcpStream::connect_timeout(&target, Duration::from_secs(5))
             .map_err(|e| format!("could not reach the host: {e}"))?;
-        let mut conn = Conn::new(stream).map_err(|e| e.to_string())?;
+        let mut conn = Conn::new(stream, End::Joining).map_err(|e| e.to_string())?;
         conn.send(&json!({ "t": "hello", "name": name, "version": EDIT_PROTOCOL }));
         conn.flush();
         Ok(Self {
@@ -203,7 +205,7 @@ impl Sharing {
     fn step(&mut self, tree: &mut InstanceTree, log: &mut Vec<String>) -> bool {
         let mut changed = false;
         while let Ok((stream, _)) = self.listener.accept() {
-            if let Ok(conn) = Conn::new(stream) {
+            if let Ok(conn) = Conn::new(stream, End::Hosting) {
                 self.peers.push(Peer {
                     conn,
                     name: None,

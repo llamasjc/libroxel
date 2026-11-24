@@ -154,7 +154,9 @@ The first build compiles Bevy and takes a while. After that it is quick.
   directly over [iroh](https://www.iroh.computer), going through a relay
   only when home routers block a direct path, and is encrypted either way.
   On your own network, Join also takes the host's address (and a port, if
-  not 7420). The host runs every `Script` and all the physics; each joined
+  not 7420). That's encrypted too, but it can't check who's answering at
+  that address the way a join code does, so use a code on networks you
+  don't trust. The host runs every `Script` and all the physics; each joined
   computer runs its own player's `LocalScript`s, moves its own character
   straight away (telling the host where it went), and shows the rest of the
   world as the host sends it. The bar along the top shows how many have joined. To
