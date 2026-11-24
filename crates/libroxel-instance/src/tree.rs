@@ -637,6 +637,8 @@ impl InstanceTree {
                     | Property::BlastPressure
                     | Property::RespawnTime
                     | Property::Gravity
+                    | Property::StreamingTargetRadius
+                    | Property::StreamingMinRadius
                     | Property::MaxSpeed
                     | Property::Torque
                     | Property::TurnSpeed

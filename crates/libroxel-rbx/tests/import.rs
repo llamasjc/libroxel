@@ -403,3 +403,72 @@ fn unions_saved_as_their_parts_are_rebuilt() {
     assert!(tops.iter().all(|y| (-2.0..=2.0).contains(y)), "{tops:?}");
     assert!(tops.contains(&1.0), "the hole's floor is at y = 1");
 }
+
+/// A place saved with streaming on keeps its settings, and scripts written
+/// for it run: the same names, enums and values as in Studio.
+#[test]
+fn streaming_settings_come_across_and_scripts_use_them() {
+    let dom = WeakDom::new(
+        InstanceBuilder::new("DataModel")
+            .with_child(
+                InstanceBuilder::new("Workspace")
+                    .with_property("StreamingEnabled", true)
+                    .with_property("StreamingTargetRadius", 256i32)
+                    .with_property("StreamingMinRadius", 32i32)
+                    .with_property("StreamOutBehavior", Enum::from_u32(2)) // Opportunistic
+                    .with_child(
+                        InstanceBuilder::new("Model")
+                            .with_name("Castle")
+                            .with_property("ModelStreamingMode", Enum::from_u32(1)) // Atomic
+                            .with_child(
+                                InstanceBuilder::new("Part")
+                                    .with_name("Gate")
+                                    .with_property("CFrame", CFrame::new(Vector3::new(0.0, 4.0, 0.0), turned_y(0.0)))
+                                    .with_property("Anchored", true),
+                            ),
+                    ),
+            )
+            .with_child(InstanceBuilder::new("ServerScriptService").with_child(
+                InstanceBuilder::new("Script").with_name("Main").with_property(
+                    "Source",
+                    "print('streaming', workspace.StreamingEnabled, workspace.StreamingTargetRadius, workspace.StreamingMinRadius)\n\
+                     print('out', workspace.StreamOutBehavior == Enum.StreamOutBehavior.Opportunistic)\n\
+                     print('castle', workspace.Castle.ModelStreamingMode == Enum.ModelStreamingMode.Atomic)\n\
+                     game.Players.PlayerAdded:Connect(function(player)\n\
+                       player.ReplicationFocus = workspace.Castle.Gate\n\
+                       player:RequestStreamAroundAsync(Vector3.new(0, 4, 0), 5)\n\
+                       print('focus', player.ReplicationFocus.Name)\n\
+                     end)",
+                ),
+            )),
+    );
+    for binary in [true, false] {
+        let mut bytes = Vec::new();
+        let roots = dom.root().children().to_vec();
+        if binary {
+            rbx_binary::to_writer(&mut bytes, &dom, &roots).unwrap();
+        } else {
+            rbx_xml::to_writer_default(&mut bytes, &dom, &roots).unwrap();
+        }
+        let read = libroxel_rbx::read_dom(&bytes).unwrap();
+        let mut tree = InstanceTree::new();
+        let report = libroxel_rbx::import_place(&mut tree, &read);
+        let skipped = format!("{:?}", report.summary());
+        assert!(!skipped.contains("Streaming") && !skipped.contains("ModelStreamingMode"), "{skipped}");
+        let ws = tree.workspace();
+        assert_eq!(tree.get_bool(ws, Property::StreamingEnabled), Some(true));
+        assert_eq!(tree.get_number(ws, Property::StreamingTargetRadius), Some(256.0));
+
+        let shared = std::rc::Rc::new(std::cell::RefCell::new(tree));
+        let mut session = PlaySession::start(shared, true).unwrap();
+        for _ in 0..60 {
+            session.step(1.0 / 60.0, CharacterInput::default());
+        }
+        let log = session.take_log();
+        assert!(log.iter().all(|l| l.level != LogLevel::Error), "{log:?}");
+        let text: Vec<String> = log.into_iter().map(|l| l.text).collect();
+        for line in ["streaming true 256 32", "out true", "castle true", "focus Gate"] {
+            assert!(text.iter().any(|t| t == line), "missing {line:?} in {text:?}");
+        }
+    }
+}

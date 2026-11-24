@@ -331,9 +331,11 @@
 - Characters treat cylinders that aren't wheels as boxes, and walk on
   smooth terrain's slopes as one-stud steps.
 - Water doesn't flow.
-- The host sends everyone the whole shared world, every step something
-  changes; there is no interest management (sending each player only
-  what's near them). Messages over 4 KB go compressed (deflate, as base64
+- Unless the workspace streams, the host sends everyone the whole shared
+  world, every step something changes. With `StreamingEnabled`, each
+  joined computer has its own `Replicator`, and `Focus::wanted` picks the
+  workspace's instances near it (see the README for the rules); others are
+  sent as removed and come back as new. Messages over 4 KB go compressed (deflate, as base64
   in a `z` message, unpacked to at most the receiver's message limit),
   which makes a newcomer's copy of the world 3 to 10 times smaller.
 - `ParticleEmitter:Emit` bursts and velocities aren't sent to joined

@@ -47,6 +47,9 @@ pub(crate) struct WorldState {
     loads: Vec<InstanceId>,
     /// Players `Kick` removed, and why.
     kicks: Vec<(InstanceId, String)>,
+    /// Places `RequestStreamAroundAsync` asked to send players the parts
+    /// around, and for how many seconds.
+    stream_requests: Vec<(InstanceId, Vec3, f32)>,
     /// Seats scripts asked to sit humanoids in, with `Seat:Sit`.
     sits: Vec<(InstanceId, InstanceId)>,
     /// Particle emitters asked to send out particles at once, and how many.
@@ -264,6 +267,17 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
         host(lua).world.borrow_mut().kicks.push((this.0, why.chars().take(300).collect()));
         Ok(())
     });
+    m.add_method(methods::REQUEST_STREAM_AROUND_ASYNC, |lua, this, (at, timeout): (Value, Option<f32>)| {
+        require_class(lua, this.0, ClassKind::Player, methods::REQUEST_STREAM_AROUND_ASYNC)?;
+        let at = as_vector3(&at).ok_or_else(|| {
+            mlua::Error::RuntimeError(format!("{} expects a Vector3", methods::REQUEST_STREAM_AROUND_ASYNC))
+        })?;
+        // The area stays sent for a while; the request returns at once, the
+        // parts arriving with the next step.
+        let keep = timeout.filter(|t| t.is_finite() && *t > 0.0).unwrap_or(30.0).min(600.0);
+        host(lua).world.borrow_mut().stream_requests.push((this.0, at, keep));
+        Ok(())
+    });
     m.add_method(methods::GET_TEAMS, |lua, this, ()| {
         require_class(lua, this.0, ClassKind::Teams, methods::GET_TEAMS)?;
         let teams: Vec<InstanceId> = {
@@ -468,6 +482,10 @@ pub(crate) fn seated(lua: &Lua, humanoid: InstanceId, seat: Option<InstanceId>) 
         Ok(args)
     });
     take_errors(lua)
+}
+
+pub(crate) fn take_stream_requests(lua: &Lua) -> Vec<(InstanceId, Vec3, f32)> {
+    std::mem::take(&mut host(lua).world.borrow_mut().stream_requests)
 }
 
 pub(crate) fn take_kicks(lua: &Lua) -> Vec<(InstanceId, String)> {

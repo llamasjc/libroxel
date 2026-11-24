@@ -12,8 +12,9 @@
 
 use libroxel_instance::{
     ActuatorType, CameraType, ClassKind, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection,
-    KeyCode, Material, NormalId, PartShape, PathStatus, PathWaypointAction, Property, RaycastFilterType,
-    ScaleType, TextXAlignment, TextYAlignment, UserInputState, UserInputType,
+    KeyCode, Material, ModelStreamingMode, NormalId, PartShape, PathStatus, PathWaypointAction, Property,
+    RaycastFilterType, ScaleType, StreamOutBehavior, TextXAlignment, TextYAlignment, UserInputState,
+    UserInputType,
 };
 
 /// A weld's or motor's two offsets, as CFrames.
@@ -346,6 +347,9 @@ pub mod methods {
     pub const LOAD_CHARACTER: &str = "LoadCharacter";
     /// Player: removes them from the game, telling them why.
     pub const KICK: &str = "Kick";
+    /// Player: sends their computer the parts around a place, when the
+    /// workspace streams.
+    pub const REQUEST_STREAM_AROUND_ASYNC: &str = "RequestStreamAroundAsync";
     /// Seat: sits a humanoid in it.
     pub const SIT: &str = "Sit";
     /// Text box: start or stop typing into it, and whether the player is.
@@ -674,6 +678,8 @@ pub fn enum_name(kind: EnumKind) -> &'static str {
         EnumKind::UserInputType => "UserInputType",
         EnumKind::RaycastFilterType => "RaycastFilterType",
         EnumKind::CameraType => "CameraType",
+        EnumKind::StreamOutBehavior => "StreamOutBehavior",
+        EnumKind::ModelStreamingMode => "ModelStreamingMode",
         EnumKind::FillDirection => "FillDirection",
         EnumKind::UserInputState => "UserInputState",
         EnumKind::TextXAlignment => "TextXAlignment",
@@ -834,6 +840,18 @@ pub fn enum_item_name(value: EnumValue) -> &'static str {
         EnumValue::CameraType(t) => match t {
             CameraType::Custom => "Custom",
             CameraType::Scriptable => "Scriptable",
+        },
+        EnumValue::StreamOutBehavior(b) => match b {
+            StreamOutBehavior::Default => "Default",
+            StreamOutBehavior::LowMemory => "LowMemory",
+            StreamOutBehavior::Opportunistic => "Opportunistic",
+        },
+        EnumValue::ModelStreamingMode(m) => match m {
+            ModelStreamingMode::Default => "Default",
+            ModelStreamingMode::Atomic => "Atomic",
+            ModelStreamingMode::Persistent => "Persistent",
+            ModelStreamingMode::PersistentPerPlayer => "PersistentPerPlayer",
+            ModelStreamingMode::Nonatomic => "Nonatomic",
         },
         EnumValue::TextXAlignment(a) => match a {
             TextXAlignment::Left => "Left",
@@ -1194,6 +1212,12 @@ pub fn property_name(property: Property) -> &'static str {
         Property::ClearTextOnFocus => "ClearTextOnFocus",
         Property::FieldOfView => "FieldOfView",
         Property::CameraType => "CameraType",
+        Property::StreamingEnabled => "StreamingEnabled",
+        Property::StreamingTargetRadius => "StreamingTargetRadius",
+        Property::StreamingMinRadius => "StreamingMinRadius",
+        Property::StreamOutBehavior => "StreamOutBehavior",
+        Property::ModelStreamingMode => "ModelStreamingMode",
+        Property::ReplicationFocus => "ReplicationFocus",
         Property::Range => "Range",
         Property::Angle => "Angle",
         Property::CornerRadius => "CornerRadius",

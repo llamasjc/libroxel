@@ -41,7 +41,7 @@ mod world;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use libroxel_instance::{InstanceId, InstanceTree, KeyCode};
+use libroxel_instance::{InstanceId, InstanceTree, KeyCode, Vec3};
 use mlua::Lua;
 
 pub use mlua;
@@ -246,6 +246,12 @@ impl ScriptRuntime {
     /// Fires `humanoid.Seated(seat ~= nil, seat)`.
     pub fn seated(&self, humanoid: InstanceId, seat: Option<InstanceId>) -> Vec<ScriptError> {
         world::seated(&self.lua, humanoid, seat)
+    }
+
+    /// Takes the places `RequestStreamAroundAsync` asked to stream to
+    /// players: player, where, and for how many seconds.
+    pub fn take_stream_requests(&self) -> Vec<(InstanceId, Vec3, f32)> {
+        world::take_stream_requests(&self.lua)
     }
 
     /// Takes the players `Kick` removed, with why.

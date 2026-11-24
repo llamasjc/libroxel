@@ -27,7 +27,10 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use libroxel_instance::serde_json::{self, Map, Value as Json, json};
-use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property, PropertyValue, Vec3, place};
+use libroxel_instance::{
+    ClassKind, InstanceId, InstanceTree, ModelStreamingMode, Property, PropertyValue, StreamOutBehavior,
+    Vec3, place,
+};
 use libroxel_script::{NetMessage, NetRole, SharedTree, map_instances};
 
 use crate::character::{Character, CharacterInput};
@@ -521,6 +524,9 @@ pub(crate) enum Link {
 pub(crate) struct Hosting {
     listener: TcpListener,
     peers: Vec<Peer>,
+    /// `Workspace.StreamingEnabled` when hosting began (it can't change
+    /// while the game runs): each player is sent only what's near them.
+    streaming: bool,
     replicator: Option<Replicator>,
     priming: Option<Receiver<Replicator>>,
     /// Teleports found but not sent yet: player, number, where, facing.
@@ -546,6 +552,10 @@ struct Peer {
     actions: Allowance,
     /// Whether the host has been told they are sending too much.
     warned: bool,
+    /// What their computer has been sent, when the game streams.
+    stream: Replicator,
+    /// Areas `RequestStreamAroundAsync` asked to send them, until when.
+    stream_requests: Vec<(Vec3, Instant)>,
 }
 
 enum Out {
@@ -567,6 +577,8 @@ impl Peer {
             messages: Allowance::new(GUEST_MESSAGES_PER_SECOND, GUEST_MESSAGE_BURST, now),
             actions: Allowance::new(GUEST_ACTIONS_PER_SECOND, GUEST_ACTION_BURST, now),
             warned: false,
+            stream: Replicator::default(),
+            stream_requests: Vec::new(),
         }
     }
 
@@ -693,7 +705,7 @@ pub(crate) enum ClientSays {
 
 /// What was last sent about one instance.
 #[derive(Debug, Clone)]
-struct Sent {
+pub(crate) struct Sent {
     revision: u64,
     parent: Option<InstanceId>,
     name: String,
@@ -766,12 +778,30 @@ impl Replicator {
 
     /// What changed since the last call, as operations; updates the record.
     pub(crate) fn delta(&mut self, tree: &InstanceTree) -> Vec<Json> {
+        self.delta_within(tree, None)
+    }
+
+    /// [`delta`](Self::delta) for a player whose computer is streamed to:
+    /// only the parts of the workspace `focus` says are near enough.
+    /// Parts that stop being near are sent as removed (streamed out), and
+    /// come back as new ones when near again.
+    pub(crate) fn delta_streamed(&mut self, tree: &InstanceTree, focus: &Focus) -> Vec<Json> {
+        let wanted = focus.wanted(tree, &self.sent);
+        self.delta_within(tree, Some(&wanted))
+    }
+
+    fn delta_within(
+        &mut self,
+        tree: &InstanceTree,
+        workspace_filter: Option<&HashSet<InstanceId>>,
+    ) -> Vec<Json> {
         let mut ops = Vec::new();
         let mut seen = HashSet::new();
         let services: &[ClassKind] = if self.edits { ClassKind::SERVICES } else { &SHARED };
         for &class in services {
             if let Some(service) = tree.service(class) {
-                self.visit(tree, service, true, &mut ops, &mut seen);
+                let filter = if class == ClassKind::Workspace { workspace_filter } else { None };
+                self.visit(tree, service, true, filter, &mut ops, &mut seen);
             }
         }
         let gone: Vec<InstanceId> = self.sent.keys().copied().filter(|id| !seen.contains(id)).collect();
@@ -787,11 +817,15 @@ impl Replicator {
         tree: &InstanceTree,
         id: InstanceId,
         service: bool,
+        filter: Option<&HashSet<InstanceId>>,
         ops: &mut Vec<Json>,
         seen: &mut HashSet<InstanceId>,
     ) {
         let Ok(class) = tree.class(id) else { return };
         if unshared(class) || tree.is_destroyed(id).unwrap_or(true) {
+            return;
+        }
+        if !service && filter.is_some_and(|wanted| !wanted.contains(&id)) {
             return;
         }
         seen.insert(id);
@@ -809,7 +843,7 @@ impl Replicator {
             self.sent.insert(id, now);
         }
         for child in tree.children(id).unwrap_or_default() {
-            self.visit(tree, *child, false, ops, seen);
+            self.visit(tree, *child, false, filter, ops, seen);
         }
     }
 
@@ -873,6 +907,107 @@ impl Replicator {
         }
         // An update that changes nothing isn't worth sending.
         (op.len() > 1 || op.contains_key("c")).then_some(Json::Object(op))
+    }
+}
+
+/// Where a streamed player's computer wants parts, and how far out, as
+/// `Workspace.StreamingEnabled` games do it.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Focus {
+    /// The places parts are sent around: their `ReplicationFocus` or
+    /// character (or the spawn, before it), and any
+    /// `RequestStreamAroundAsync` areas.
+    pub(crate) points: Vec<Vec3>,
+    /// `StreamingTargetRadius`: parts this near are sent.
+    pub(crate) radius: f32,
+    /// How far parts already sent may go before they're let go:
+    /// `StreamOutBehavior.Opportunistic` lets go of them a little past the
+    /// radius; otherwise they stay (they'd only go when memory ran low).
+    pub(crate) keep: f32,
+    /// Characters, always sent.
+    pub(crate) always: HashSet<InstanceId>,
+}
+
+impl Focus {
+    /// The workspace's descendants to send. Models, folders and anything
+    /// not inside a part always go (as `ModelStreamingMode.Default` and
+    /// `Nonatomic`); a part goes, with everything in it, when it's near;
+    /// an `Atomic` model goes whole when any of its parts is near; a
+    /// `Persistent` model, terrain and characters always go whole.
+    pub(crate) fn wanted(
+        &self,
+        tree: &InstanceTree,
+        sent: &HashMap<InstanceId, Sent>,
+    ) -> HashSet<InstanceId> {
+        let mut wanted = HashSet::new();
+        self.walk(tree, tree.workspace(), sent, &mut wanted);
+        wanted
+    }
+
+    fn near(&self, tree: &InstanceTree, part: InstanceId, sent: &HashMap<InstanceId, Sent>) -> bool {
+        let (Some(at), size) = (
+            tree.get_vec3(part, Property::Position),
+            tree.get_vec3(part, Property::Size).unwrap_or_default(),
+        ) else {
+            return true;
+        };
+        let reach = if sent.contains_key(&part) { self.keep } else { self.radius };
+        let half = size.length() * 0.5;
+        self.points.iter().any(|p| ((at - *p).length() - half) <= reach)
+    }
+
+    fn all(tree: &InstanceTree, id: InstanceId, wanted: &mut HashSet<InstanceId>) {
+        wanted.insert(id);
+        for child in tree.children(id).unwrap_or_default() {
+            Self::all(tree, *child, wanted);
+        }
+    }
+
+    fn any_part_near(&self, tree: &InstanceTree, id: InstanceId, sent: &HashMap<InstanceId, Sent>) -> bool {
+        tree.children(id).unwrap_or_default().iter().any(|&child| {
+            let physical = tree.class(child).is_ok_and(ClassKind::is_physical);
+            (physical && self.near(tree, child, sent)) || self.any_part_near(tree, child, sent)
+        })
+    }
+
+    fn walk(
+        &self,
+        tree: &InstanceTree,
+        id: InstanceId,
+        sent: &HashMap<InstanceId, Sent>,
+        wanted: &mut HashSet<InstanceId>,
+    ) {
+        for &child in tree.children(id).unwrap_or_default() {
+            let Ok(class) = tree.class(child) else { continue };
+            if class.is_physical() {
+                if self.near(tree, child, sent) {
+                    Self::all(tree, child, wanted);
+                }
+            } else if class == ClassKind::Terrain || self.always.contains(&child) {
+                Self::all(tree, child, wanted);
+            } else if class == ClassKind::Model {
+                let mode = match tree.get_enum(child, Property::ModelStreamingMode) {
+                    Some(libroxel_instance::EnumValue::ModelStreamingMode(m)) => m,
+                    _ => ModelStreamingMode::Default,
+                };
+                match mode {
+                    ModelStreamingMode::Persistent => Self::all(tree, child, wanted),
+                    ModelStreamingMode::Atomic => {
+                        if self.any_part_near(tree, child, sent) {
+                            Self::all(tree, child, wanted);
+                        }
+                    }
+                    // PersistentPerPlayer goes like Default until players are added to it.
+                    _ => {
+                        wanted.insert(child);
+                        self.walk(tree, child, sent, wanted);
+                    }
+                }
+            } else {
+                wanted.insert(child);
+                self.walk(tree, child, sent, wanted);
+            }
+        }
     }
 }
 
@@ -1183,9 +1318,14 @@ impl PlaySession {
             .map_err(|e| format!("could not host on port {port}: {e}"))?;
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let mut session = Self::start_inner(tree, play_here, saved_data, NetRole::Server)?;
+        let streaming = {
+            let t = session.runtime.tree().borrow();
+            t.get_bool(t.workspace(), Property::StreamingEnabled).unwrap_or(false)
+        };
         session.link = Link::Host(Box::new(Hosting {
             listener,
             peers: Vec::new(),
+            streaming,
             replicator: None,
             priming: None,
             teleports: Vec::new(),
@@ -1509,6 +1649,11 @@ impl PlaySession {
         }
         let mut teleports = std::mem::take(&mut host.teleports);
         teleports.extend(self.find_teleports());
+        if host.streaming {
+            self.serve_streamed(&mut host, teleports, messages);
+            self.link = Link::Host(host);
+            return;
+        }
         let fresh = host.peers.iter().any(|p| p.fresh && p.player.is_some());
         let mut primed = None;
         if fresh && host.replicator.is_none() && host.priming.is_none() {
@@ -1575,6 +1720,101 @@ impl PlaySession {
             peer.pump();
         }
         self.link = Link::Host(host);
+    }
+
+    /// [`serve_outgoing`](Self::serve_outgoing) for a game whose workspace
+    /// streams: each player's computer gets its own share of the workspace.
+    fn serve_streamed(
+        &mut self,
+        host: &mut Hosting,
+        teleports: Vec<(InstanceId, u64, Vec3, f32)>,
+        messages: Vec<NetMessage>,
+    ) {
+        let tree = self.runtime.tree().clone();
+        let now = Instant::now();
+        for (player, at, seconds) in self.runtime.take_stream_requests() {
+            if let Some(peer) = host.peers.iter_mut().find(|p| p.player == Some(player)) {
+                peer.stream_requests.push((at, now + Duration::from_secs_f32(seconds)));
+            }
+        }
+        let t = tree.borrow();
+        let ws = t.workspace();
+        let radius = t
+            .get_number(ws, Property::StreamingTargetRadius)
+            .unwrap_or(1024.0)
+            .max(t.get_number(ws, Property::StreamingMinRadius).unwrap_or(64.0)) as f32;
+        let opportunistic = t.get_enum(ws, Property::StreamOutBehavior)
+            == Some(libroxel_instance::EnumValue::StreamOutBehavior(StreamOutBehavior::Opportunistic));
+        let keep = if opportunistic { radius * 1.5 } else { f32::INFINITY };
+        let players = t
+            .service(ClassKind::Players)
+            .map(|p| t.children(p).unwrap_or_default().to_vec())
+            .unwrap_or_default();
+        let always: HashSet<InstanceId> =
+            players.iter().filter_map(|p| t.get_ref(*p, Property::Character)).collect();
+        let spawn = t
+            .descendants_of_class(ws, ClassKind::SpawnLocation)
+            .first()
+            .and_then(|s| t.get_vec3(*s, Property::Position))
+            .unwrap_or_default();
+        let position_of = |id: InstanceId| -> Option<Vec3> {
+            if let Some(at) = t.get_vec3(id, Property::Position) {
+                return Some(at);
+            }
+            // A model: its primary part, or its first part.
+            let part = t.get_ref(id, Property::PrimaryPart).or_else(|| {
+                t.descendants(id).ok()?.into_iter().find(|d| t.class(*d).is_ok_and(ClassKind::is_physical))
+            })?;
+            t.get_vec3(part, Property::Position)
+        };
+        for peer in &mut host.peers {
+            let Some(player) = peer.player else { continue };
+            peer.stream_requests.retain(|(_, until)| *until > now);
+            let mut points: Vec<Vec3> = peer.stream_requests.iter().map(|(at, _)| *at).collect();
+            let centre = t
+                .get_ref(player, Property::ReplicationFocus)
+                .and_then(position_of)
+                .or_else(|| t.get_ref(player, Property::Character).and_then(position_of))
+                .unwrap_or(spawn);
+            points.push(centre);
+            let focus = Focus { points, radius, keep, always: always.clone() };
+            for (who, seq, pos, yaw) in &teleports {
+                if *who == player {
+                    peer.send(
+                        json!({ "t": "teleport", "seq": seq, "pos": [pos.x, pos.y, pos.z], "yaw": yaw }),
+                    );
+                }
+            }
+            let ops = peer.stream.delta_streamed(&t, &focus);
+            if peer.fresh {
+                let services: Map<String, Json> = SHARED
+                    .iter()
+                    .filter_map(|c| Some((c.file_name().to_owned(), bits(t.service(*c)?))))
+                    .collect();
+                peer.send(json!({ "t": "welcome", "services": services, "total": ops.len() }));
+                for line in world_lines(&ops) {
+                    peer.queue.push_back(Out::Line(line));
+                }
+                peer.send(json!({ "t": "you", "player": bits(player) }));
+                peer.fresh = false;
+            } else if !ops.is_empty() {
+                peer.send(json!({ "t": "rep", "ops": ops }));
+            }
+            for message in &messages {
+                match message {
+                    NetMessage::ClientEvent { remote, player: to, args }
+                        if to.is_none_or(|p| p == player) =>
+                    {
+                        peer.send(json!({ "t": "event", "r": bits(*remote), "a": args }));
+                    }
+                    NetMessage::InvokeResult { call, player: to, ok, values } if *to == player => {
+                        peer.send(json!({ "t": "result", "call": call, "ok": ok, "a": values }));
+                    }
+                    _ => {}
+                }
+            }
+            peer.pump();
+        }
     }
 
     // --- Joined ------------------------------------------------------------

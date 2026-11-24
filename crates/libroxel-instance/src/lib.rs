@@ -26,8 +26,8 @@ pub mod voxels;
 
 pub use enums::{
     ActuatorType, CameraType, EasingDirection, EasingStyle, EnumKind, EnumValue, FillDirection, KeyCode,
-    Material, NormalId, PartShape, PathStatus, PathWaypointAction, RaycastFilterType, ScaleType,
-    TextXAlignment, TextYAlignment, UserInputState, UserInputType,
+    Material, ModelStreamingMode, NormalId, PartShape, PathStatus, PathWaypointAction, RaycastFilterType,
+    ScaleType, StreamOutBehavior, TextXAlignment, TextYAlignment, UserInputState, UserInputType,
 };
 /// The collision group parts are in unless put in another.
 pub const DEFAULT_COLLISION_GROUP: &str = "Default";
@@ -546,8 +546,14 @@ impl ClassKind {
         ];
         const SCRIPT: &[Property] = &[Property::Name, Property::Disabled, Property::Source];
         const MODULE: &[Property] = &[Property::Name, Property::Source];
-        const PLAYER: &[Property] =
-            &[Property::Name, Property::UserId, Property::Character, Property::Team, Property::Neutral];
+        const PLAYER: &[Property] = &[
+            Property::Name,
+            Property::UserId,
+            Property::Character,
+            Property::Team,
+            Property::Neutral,
+            Property::ReplicationFocus,
+        ];
         const SPAWN: &[Property] = &[
             Property::Name,
             Property::Position,
@@ -572,8 +578,15 @@ impl ClassKind {
         ];
         const FORCE_FIELD: &[Property] = &[Property::Name, Property::Visible];
         const OTHER: &[Property] = &[Property::Name, Property::OtherClass];
-        const WORKSPACE: &[Property] =
-            &[Property::Name, Property::Gravity, Property::FallenPartsDestroyHeight];
+        const WORKSPACE: &[Property] = &[
+            Property::Name,
+            Property::Gravity,
+            Property::FallenPartsDestroyHeight,
+            Property::StreamingEnabled,
+            Property::StreamingTargetRadius,
+            Property::StreamingMinRadius,
+            Property::StreamOutBehavior,
+        ];
         const OBJECT: &[Property] = &[Property::Name, Property::ObjectValue];
         const VECTOR3: &[Property] = &[Property::Name, Property::Vector3Value];
         const COLOR3: &[Property] = &[Property::Name, Property::Color3Value];
@@ -863,7 +876,7 @@ impl ClassKind {
             &[Property::Name, Property::CellSize, Property::CellPadding, Property::FillDirection];
         const ASPECT: &[Property] = &[Property::Name, Property::AspectRatio];
         const SCALE: &[Property] = &[Property::Name, Property::Scale];
-        const MODEL: &[Property] = &[Property::Name, Property::PrimaryPart];
+        const MODEL: &[Property] = &[Property::Name, Property::PrimaryPart, Property::ModelStreamingMode];
         const ATMOSPHERE: &[Property] = &[Property::Name, Property::Density, Property::Haze, Property::Color];
         const BLOOM: &[Property] = &[
             Property::Name,
@@ -1322,6 +1335,16 @@ impl ClassKind {
             }),
             Property::AutoAssignable | Property::CharacterAutoLoads => PropertyValue::Bool(true),
             Property::Gravity => PropertyValue::Number(196.2),
+            Property::StreamingEnabled => PropertyValue::Bool(false),
+            Property::StreamingTargetRadius => PropertyValue::Number(1024.0),
+            Property::StreamingMinRadius => PropertyValue::Number(64.0),
+            Property::StreamOutBehavior => {
+                PropertyValue::Enum(EnumValue::StreamOutBehavior(StreamOutBehavior::Default))
+            }
+            Property::ModelStreamingMode => {
+                PropertyValue::Enum(EnumValue::ModelStreamingMode(ModelStreamingMode::Default))
+            }
+            Property::ReplicationFocus => PropertyValue::Ref(None),
             Property::RespawnTime => PropertyValue::Number(5.0),
             Property::Part0 | Property::Part1 | Property::Occupant | Property::SeatPart => {
                 PropertyValue::Ref(None)

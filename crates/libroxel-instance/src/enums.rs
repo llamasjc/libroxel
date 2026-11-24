@@ -188,6 +188,35 @@ pub enum RaycastFilterType {
     Include,
 }
 
+/// When parts streamed to a player's computer are let go again
+/// (`Workspace.StreamOutBehavior`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum StreamOutBehavior {
+    /// As `LowMemory`.
+    #[default]
+    Default,
+    /// Only when the computer runs low on memory.
+    LowMemory,
+    /// Also when they're far from the player.
+    Opportunistic,
+}
+
+/// How a model streams to players' computers (`Model.ModelStreamingMode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ModelStreamingMode {
+    /// As `Nonatomic`, but the model itself always arrives.
+    #[default]
+    Default,
+    /// The model and everything in it come and go together.
+    Atomic,
+    /// Always sent to everyone, whatever the distance.
+    Persistent,
+    /// Always sent to the players added with `AddPersistentPlayer`.
+    PersistentPerPlayer,
+    /// Each part comes and goes on its own.
+    Nonatomic,
+}
+
 /// Whether the camera follows the character or is left to scripts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum CameraType {
@@ -413,6 +442,8 @@ pub enum EnumKind {
     UserInputType,
     RaycastFilterType,
     CameraType,
+    StreamOutBehavior,
+    ModelStreamingMode,
     FillDirection,
     TextXAlignment,
     TextYAlignment,
@@ -435,6 +466,8 @@ pub enum EnumValue {
     UserInputType(UserInputType),
     RaycastFilterType(RaycastFilterType),
     CameraType(CameraType),
+    StreamOutBehavior(StreamOutBehavior),
+    ModelStreamingMode(ModelStreamingMode),
     FillDirection(FillDirection),
     TextXAlignment(TextXAlignment),
     TextYAlignment(TextYAlignment),
@@ -512,6 +545,8 @@ impl EnumKind {
         EnumKind::UserInputType,
         EnumKind::RaycastFilterType,
         EnumKind::CameraType,
+        EnumKind::StreamOutBehavior,
+        EnumKind::ModelStreamingMode,
         EnumKind::FillDirection,
         EnumKind::TextXAlignment,
         EnumKind::TextYAlignment,
@@ -610,6 +645,18 @@ impl EnumKind {
             EnumKind::CameraType => {
                 &[E::CameraType(CameraType::Custom), E::CameraType(CameraType::Scriptable)]
             }
+            EnumKind::StreamOutBehavior => &[
+                E::StreamOutBehavior(StreamOutBehavior::Default),
+                E::StreamOutBehavior(StreamOutBehavior::LowMemory),
+                E::StreamOutBehavior(StreamOutBehavior::Opportunistic),
+            ],
+            EnumKind::ModelStreamingMode => &[
+                E::ModelStreamingMode(ModelStreamingMode::Default),
+                E::ModelStreamingMode(ModelStreamingMode::Atomic),
+                E::ModelStreamingMode(ModelStreamingMode::Persistent),
+                E::ModelStreamingMode(ModelStreamingMode::PersistentPerPlayer),
+                E::ModelStreamingMode(ModelStreamingMode::Nonatomic),
+            ],
             EnumKind::FillDirection => {
                 &[E::FillDirection(FillDirection::Vertical), E::FillDirection(FillDirection::Horizontal)]
             }
@@ -662,6 +709,8 @@ impl EnumKind {
             EnumKind::UserInputType => "enum:user_input_type",
             EnumKind::RaycastFilterType => "enum:raycast_filter_type",
             EnumKind::CameraType => "enum:camera_type",
+            EnumKind::StreamOutBehavior => "enum:stream_out_behavior",
+            EnumKind::ModelStreamingMode => "enum:model_streaming_mode",
             EnumKind::FillDirection => "enum:fill_direction",
             EnumKind::TextXAlignment => "enum:text_x_alignment",
             EnumKind::TextYAlignment => "enum:text_y_alignment",
@@ -691,6 +740,8 @@ impl EnumValue {
             EnumValue::UserInputType(_) => EnumKind::UserInputType,
             EnumValue::RaycastFilterType(_) => EnumKind::RaycastFilterType,
             EnumValue::CameraType(_) => EnumKind::CameraType,
+            EnumValue::StreamOutBehavior(_) => EnumKind::StreamOutBehavior,
+            EnumValue::ModelStreamingMode(_) => EnumKind::ModelStreamingMode,
             EnumValue::FillDirection(_) => EnumKind::FillDirection,
             EnumValue::UserInputState(_) => EnumKind::UserInputState,
             EnumValue::TextXAlignment(_) => EnumKind::TextXAlignment,
@@ -851,6 +902,18 @@ impl EnumValue {
             EnumValue::CameraType(t) => match t {
                 CameraType::Custom => "custom",
                 CameraType::Scriptable => "scriptable",
+            },
+            EnumValue::StreamOutBehavior(b) => match b {
+                StreamOutBehavior::Default => "default",
+                StreamOutBehavior::LowMemory => "low_memory",
+                StreamOutBehavior::Opportunistic => "opportunistic",
+            },
+            EnumValue::ModelStreamingMode(m) => match m {
+                ModelStreamingMode::Default => "default",
+                ModelStreamingMode::Atomic => "atomic",
+                ModelStreamingMode::Persistent => "persistent",
+                ModelStreamingMode::PersistentPerPlayer => "persistent_per_player",
+                ModelStreamingMode::Nonatomic => "nonatomic",
             },
             EnumValue::FillDirection(d) => match d {
                 FillDirection::Vertical => "vertical",
