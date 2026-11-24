@@ -1,2 +1,6 @@
 -keep class com.google.androidgamesdk.** { *; }
--keep class com.libroxel.app.** { *; }
+-repackageclasses
+-allowaccessmodification
+-keepclassmembers class com.libroxel.app.MainActivity {
+    public void setMotor(float);
+}

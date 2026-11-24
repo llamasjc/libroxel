@@ -1090,6 +1090,9 @@ impl GraphicsQuality {
 
     /// Shadow cascades, and the size of each one's map.
     pub fn shadow_detail(&self) -> (usize, usize) {
+        if self.phone {
+            return if self.level >= 8 { (2, 2048) } else { (1, 1024) };
+        }
         match self.level {
             0..=5 => (1, 1024),
             6 => (2, 1024),
@@ -2688,6 +2691,7 @@ mod tests {
         // Picking a level by hand still reaches the top.
         q.set(false, 10);
         assert!(q.smoothing() && q.bloom() && q.shadows());
+        assert_eq!(q.shadow_detail(), (2, 2048));
         // And back on automatic, it still stops at the middle.
         q.set(true, 3);
         for _ in 0..(200 * 60) {

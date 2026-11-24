@@ -1,0 +1,14 @@
+HSPLcom/libroxel/app/MainActivity;->**(**)**
+Lcom/libroxel/app/MainActivity;
+HSPLcom/google/androidgamesdk/**;->**(**)**
+Lcom/google/androidgamesdk/**;
+HSPLandroidx/core/view/WindowCompat**;->**(**)**
+HSPLandroidx/core/view/WindowInsetsControllerCompat**;->**(**)**
+HSPLandroidx/core/view/WindowInsetsCompat**;->**(**)**
+HSPLandroidx/appcompat/app/AppCompatActivity;->**(**)**
+HSPLandroidx/appcompat/app/AppCompatDelegate**;->**(**)**
+Landroidx/core/view/WindowCompat**;
+Landroidx/core/view/WindowInsetsControllerCompat**;
+Landroidx/core/view/WindowInsetsCompat**;
+Landroidx/appcompat/app/AppCompatActivity;
+Landroidx/appcompat/app/AppCompatDelegate**;
