@@ -529,7 +529,7 @@ fn update_title(editor: NonSend<Editor>, engine: NonSend<EngineState>, mut windo
         name,
         if editor.dirty { " *" } else { "" },
         if engine.is_playing() { " (playing)" } else { "" },
-        update::VERSION
+        update::tag()
     );
     for mut window in &mut windows {
         if window.title != title {
