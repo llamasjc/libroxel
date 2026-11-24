@@ -895,23 +895,6 @@ pub fn charts_tab(
     pick
 }
 
-/// The Games tab: every game, as on Home.
-pub fn games_tab(
-    state: &mut HomeState,
-    ui: &mut egui::Ui,
-    platform: &mut Platform,
-    name: &str,
-) -> Option<Pick> {
-    let (list, pick) = match start(state, ui, platform, name) {
-        Ok(list) => list,
-        Err(pick) => return pick,
-    };
-    let friends = platform.social.friends.friends.clone();
-    games(state, ui, &list, &friends);
-    getting(ui, platform);
-    pick
-}
-
 /// What Home and Games do first: Play, links and an open game's page.
 fn start(
     state: &mut HomeState,

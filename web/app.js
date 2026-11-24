@@ -831,7 +831,8 @@ function parseRoute() {
     case 'user': return { name: 'user', id: parts[1] };
     case 'creator': return { name: 'creator', id: parts[1], tab: parts[2] };
     case 'messages': return { name: 'messages', id: parts[1] };
-    case 'games': case 'charts': case 'profile': case 'search': case 'friends': case 'groups': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': case 'donate': case 'moderation': case 'stats': return { name: parts[0] };
+    case 'games': return { name: 'charts' };
+    case 'charts': case 'profile': case 'search': case 'friends': case 'groups': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': case 'donate': case 'moderation': case 'stats': return { name: parts[0] };
     case 'group': return { name: 'group', id: parts[1] };
     default: return { name: 'home' };
   }
@@ -841,7 +842,6 @@ function tabs() {
   const tab = (name, glyph, label, href) =>
     el('a', { class: `tab${route.name === name ? ' active' : ''}`, href }, icon(glyph), label);
   document.getElementById('tabs').replaceChildren(
-    tab('games', ICON.games, 'Games', '/games'),
     tab('charts', ICON.chart, 'Charts', '/charts'),
     tab('groups', ICON.shield, 'Groups', '/groups'),
     tab('avatar', ICON.shirt, 'Avatar', '/avatar'),
@@ -957,7 +957,7 @@ window.addEventListener('unhandledrejection', (e) => crashed(e.reason));
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, games: gamesPage, charts: chartsPage, profile, creator: creatorPage, search: searchPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, stats: statsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy, donate: donatePage };
+  const views = { home, game, charts: chartsPage, profile, creator: creatorPage, search: searchPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, stats: statsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy, donate: donatePage };
   // An account that signed in with an easy password sees nothing else until it sets a new one.
   loadFamily();
   const needsBirthday = session && familyInfo && !familyInfo.loading && !familyInfo.error && !familyInfo.has_birthday;
@@ -1101,8 +1101,6 @@ function gamesList() {
     el('div', { class: 'games' }, entries().map(gameCard)),
   ];
 }
-
-const gamesPage = () => gamesList();
 
 function gameCard(entry) {
   const inside = friends().filter((f) => entry.servers.some((s) => s.server_id === f.server?.server_id));
