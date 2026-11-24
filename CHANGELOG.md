@@ -32,6 +32,13 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
   `LastInputTypeChanged`, and InputBegan/InputChanged/InputEnded for
   fingers. Games can hide the stick and jump button with `ModalEnabled`,
   `GuiService.TouchControlsEnabled` or `DevTouchMovementMode` Scriptable.
+- **More of Roblox on phones:** `ContextActionService:BindAction` touch
+  buttons (with `SetTitle` and `SetPosition`), `HapticService` vibration on
+  Android, and `TouchTap` and `TouchLongPress` on GUI objects.
+- **Sharper and faster on phones:** the 3D view draws with fewer pixels
+  than the screen has while menus and text stay sharp, and Libroxel's logo
+  shows on its blue while it starts. On iPhones and iPads the home bar
+  fades away while playing and swipes from an edge reach the game first.
 - **Voice chat** in multiplayer games, for players 13 and up whose parent
   settings allow chat. The 🎤 button turns the mic on; click a name to mute.
 - **Languages:** the home screen and the editor in Chinese (Simplified),
