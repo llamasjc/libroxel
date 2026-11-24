@@ -1679,6 +1679,17 @@ enum TweenPhase {
     Playing,
     Paused,
     Done,
+    /// Stopped with Cancel.
+    Cancelled,
+}
+
+/// `Enum.PlaybackState[name]`, from the enumerations the lenient layer adds.
+fn playback_state(lua: &Lua, name: &str) -> mlua::Result<Value> {
+    let lookup: Function = lua
+        .load("local name = ... return Enum.PlaybackState[name]")
+        .set_name("=playback_state")
+        .into_function()?;
+    lookup.call(name)
 }
 
 struct TweenState {
@@ -1850,6 +1861,23 @@ impl UserData for LuaTween {
         fields.add_field_method_get(names::events::COMPLETED, |_, this| {
             Ok(Signal(SignalKind::TweenCompleted(this.0)))
         });
+        // Where it is: Begin, Delayed, Playing, Paused, Completed or Cancelled.
+        fields.add_field_method_get("PlaybackState", |lua, this| {
+            let state = this
+                .with(lua, |t| match t.phase {
+                    TweenPhase::Idle => "Begin",
+                    TweenPhase::Playing if t.elapsed < t.info.delay => "Delayed",
+                    TweenPhase::Playing => "Playing",
+                    TweenPhase::Paused => "Paused",
+                    TweenPhase::Done => "Completed",
+                    TweenPhase::Cancelled => "Cancelled",
+                })
+                .unwrap_or("Completed");
+            playback_state(lua, state)
+        });
+        fields.add_field_method_get("Instance", |lua, this| {
+            Ok(this.with(lua, |t| t.instance).map(LuaInstance))
+        });
         fields.add_meta_field(MetaMethod::Type, names::tween::TYPE_NAME);
     }
 
@@ -1898,10 +1926,17 @@ impl UserData for LuaTween {
             Ok(())
         });
         methods.add_method(names::tween::CANCEL, |lua, this, ()| {
-            this.with(lua, |t| {
-                t.phase = TweenPhase::Idle;
+            let was = this.with(lua, |t| {
+                let was = t.phase;
+                t.phase = TweenPhase::Cancelled;
                 t.elapsed = 0.0;
+                was
             });
+            // As in Roblox, Completed fires with Cancelled for a tween that was going.
+            if matches!(was, Some(TweenPhase::Playing | TweenPhase::Paused)) {
+                let state = playback_state(lua, "Cancelled")?;
+                fire(lua, SignalKind::TweenCompleted(this.0), || Ok(MultiValue::from_iter([state.clone()])));
+            }
             Ok(())
         });
     }
@@ -1950,7 +1985,9 @@ fn step_tweens(lua: &Lua, dt: f64) {
         write_tween_value(lua, id, target, value);
     }
     for tween in finished {
-        fire(lua, SignalKind::TweenCompleted(tween), || Ok(MultiValue::new()));
+        fire(lua, SignalKind::TweenCompleted(tween), || {
+            Ok(MultiValue::from_iter([playback_state(lua, "Completed")?]))
+        });
     }
     if !host(lua).tween_drops.borrow().is_empty() {
         forget_tweens(lua);

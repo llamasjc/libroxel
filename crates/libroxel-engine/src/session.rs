@@ -208,6 +208,8 @@ pub struct PlaySession {
     pub(crate) log: Vec<LogEntry>,
     /// Explosions that have already gone off.
     pub(crate) exploded: std::collections::HashSet<InstanceId>,
+    /// Humanoids whose Died event has fired (it fires once).
+    pub(crate) died: std::collections::HashSet<InstanceId>,
     /// Explosions still being drawn: where, how big, and how long ago.
     pub(crate) blasts: Vec<Blast>,
     /// Particle bursts scripts asked for, for the renderer to send out.
@@ -261,6 +263,7 @@ impl PlaySession {
             avatars: Vec::new(),
             log: Vec::new(),
             exploded: Default::default(),
+            died: Default::default(),
             blasts: Vec::new(),
             emits: Vec::new(),
             sound_restarts: Vec::new(),
@@ -1250,6 +1253,39 @@ impl PlaySession {
             }
             let errors = self.runtime.fire_changes(&changes);
             self.collect(errors);
+            self.notice_deaths(&changes);
+        }
+    }
+
+    /// Fires Died for humanoids whose health a change took to 0, whatever
+    /// they belong to (as Roblox does): players' characters and walking
+    /// characters are noticed as they move too, but a humanoid with no
+    /// body to move only through this.
+    fn notice_deaths(&mut self, changes: &[libroxel_instance::Change]) {
+        let fallen: Vec<InstanceId> = {
+            let tree = self.runtime.tree().borrow();
+            changes
+                .iter()
+                .filter_map(|c| match c {
+                    libroxel_instance::Change::PropertyChanged { id, property: Property::Health } => {
+                        Some(*id)
+                    }
+                    _ => None,
+                })
+                .filter(|id| tree.class(*id) == Ok(ClassKind::Humanoid))
+                .filter(|id| tree.get_number(*id, Property::Health).is_some_and(|h| h <= 0.0))
+                .collect()
+        };
+        for humanoid in fallen {
+            self.fire_died(humanoid);
+        }
+    }
+
+    /// Fires `humanoid`'s Died event, the first time only.
+    pub(crate) fn fire_died(&mut self, humanoid: InstanceId) {
+        if self.died.insert(humanoid) {
+            let errors = self.runtime.humanoid_died(humanoid);
+            self.collect(errors);
         }
     }
 
@@ -1259,6 +1295,7 @@ impl PlaySession {
         let changes = self.runtime.tree().borrow_mut().drain_changes();
         let errors = self.runtime.fire_changes(&changes);
         self.collect(errors);
+        self.notice_deaths(&changes);
         let changed = began.elapsed().as_secs_f64();
         let errors = self.runtime.step(dt as f64);
         self.collect(errors);
@@ -1423,8 +1460,7 @@ impl PlaySession {
                     crate::character::fall_apart(&mut t, &mut self.physics, model);
                 }
             }
-            let errors = self.runtime.humanoid_died(humanoid);
-            self.collect(errors);
+            self.fire_died(humanoid);
         }
         self.runtime.set_velocities(self.physics.velocities().clone());
         self.runtime.set_angular_velocities(self.physics.angular_velocities().clone());
@@ -1579,8 +1615,7 @@ impl PlaySession {
                 self.info("Your character died");
             }
             crate::character::fall_apart(&mut tree.borrow_mut(), &mut self.physics, character.model);
-            let errors = self.runtime.humanoid_died(character.humanoid);
-            self.collect(errors);
+            self.fire_died(character.humanoid);
             // Without auto-loading, a script brings the character back with LoadCharacter.
             if self.auto_loads(&tree) {
                 let delay = {
