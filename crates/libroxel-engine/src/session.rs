@@ -1198,6 +1198,21 @@ impl PlaySession {
         }
     }
 
+    /// Fires the Changed events of what scripts changed this frame, and of
+    /// what those handlers change in turn, before the frame is drawn (as
+    /// Roblox does): a screen that a handler turns straight back on never
+    /// shows off for a frame.
+    pub(crate) fn settle_changes(&mut self) {
+        for _ in 0..4 {
+            let changes = self.runtime.tree().borrow_mut().drain_changes();
+            if changes.is_empty() {
+                break;
+            }
+            let errors = self.runtime.fire_changes(&changes);
+            self.collect(errors);
+        }
+    }
+
     fn simulate(&mut self, dt: f32, input: CharacterInput) {
         let began = std::time::Instant::now();
         // Everything that changed since last frame, for Changed events.
@@ -1207,6 +1222,7 @@ impl PlaySession {
         let changed = began.elapsed().as_secs_f64();
         let errors = self.runtime.step(dt as f64);
         self.collect(errors);
+        self.settle_changes();
         let scripted = began.elapsed().as_secs_f64();
         let physics_time;
         for index in 0..self.avatars.len() {

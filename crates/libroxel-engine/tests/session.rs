@@ -713,6 +713,37 @@ fn starter_player_sets_speeds_and_the_fall_height_is_the_workspaces() {
 }
 
 #[test]
+fn a_screen_turned_back_on_by_its_own_changed_event_never_shows_off() {
+    let mut tree = world();
+    let starter = tree.service(ClassKind::StarterGui).unwrap();
+    let local = tree.create(ClassKind::LocalScript, "Keep").unwrap();
+    tree.set_parent(local, Some(starter)).unwrap();
+    let source = r#"
+        local pg = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "Hud"
+        gui.ResetOnSpawn = false
+        gui.Parent = pg
+        gui:GetPropertyChangedSignal("Enabled"):Connect(function()
+            if not gui.Enabled then gui.Enabled = true end
+        end)
+        game:GetService("RunService").RenderStepped:Connect(function()
+            gui.Enabled = false
+        end)
+    "#;
+    tree.set(local, Property::Source, PropertyValue::String(source.into())).unwrap();
+    let mut session = start_on(tree, true).unwrap();
+    let gui = session.player_gui().unwrap();
+    for _ in 0..10 {
+        session.step(DT, CharacterInput::default());
+        let t = session.runtime().tree().clone();
+        let t = t.borrow();
+        let hud = t.find_first_child(gui, "Hud").unwrap().unwrap();
+        assert_eq!(t.get_bool(hud, Property::Enabled), Some(true));
+    }
+}
+
+#[test]
 fn the_pointer_entering_and_leaving_gui_objects_fires_events() {
     let mut tree = world();
     let starter = tree.service(ClassKind::StarterGui).unwrap();
