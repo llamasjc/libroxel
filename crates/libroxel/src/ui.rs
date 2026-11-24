@@ -1536,7 +1536,74 @@ fn properties(
     }
     attributes_and_tags(ui, editor, tree, id, now, playing, actions);
 
-    let hint = match class {
+    let hint = class_hint(class);
+    if let Some(hint) = hint {
+        ui.add_space(8.0);
+        ui.label(t(hint));
+    }
+}
+
+/// The kinds of value a new attribute can start as, with their first value.
+/// Studio's property categories, in the order it shows them.
+const CATEGORY_ORDER: &[&str] =
+    &["Appearance", "Data", "Text", "Image", "Behavior", "Collision", "Part", "Transform", "Pivot", "Other"];
+
+/// Which of Studio's categories a property is listed under.
+fn property_category(class: ClassKind, property: Property) -> &'static str {
+    let name = names::property_name(property);
+    let gui = class.is_a(ClassKind::GuiObject);
+    match name {
+        "Name" | "Source" | "Value" | "ClassName" | "Parent" | "Archivable" => "Data",
+        "Color"
+        | "BrickColor"
+        | "Material"
+        | "Transparency"
+        | "Reflectance"
+        | "CastShadow"
+        | "BackgroundColor3"
+        | "BackgroundTransparency"
+        | "BorderColor3"
+        | "BorderSizePixel"
+        | "Visible"
+        | "ZIndex"
+        | "Brightness"
+        | "Range"
+        | "Shadows"
+        | "Texture"
+        | "Face"
+        | "LightEmission"
+        | "LightInfluence"
+        | "TextureID"
+        | "TextureId" => "Appearance",
+        "CanCollide" | "CanTouch" | "CanQuery" | "CollisionGroup" => "Collision",
+        "Anchored" | "Massless" | "Shape" | "CustomPhysicalProperties" | "RootPriority" => "Part",
+        "Position" | "Orientation" | "Rotation" | "AnchorPoint" | "CFrame" => "Transform",
+        "Size" if gui || class.is_physical() => "Transform",
+        "PivotOffset" | "WorldPivot" => "Pivot",
+        "Disabled" | "Enabled" | "Locked" | "Active" | "Selectable" | "Interactable" | "AutoButtonColor"
+        | "Modal" | "ResetOnSpawn" | "RunContext" => "Behavior",
+        n if n.starts_with("Text") || n.starts_with("Font") || n == "RichText" || n == "LineHeight" => "Text",
+        n if n.starts_with("Image") || n == "ScaleType" || n == "SliceCenter" || n == "TileSize" => "Image",
+        n if n.ends_with("Color") || n.ends_with("Color3") || n.ends_with("Transparency") => "Appearance",
+        _ => "Data",
+    }
+}
+
+fn attribute_kinds() -> [(&'static str, PropertyValue); 5] {
+    [
+        ("number", PropertyValue::Number(0.0)),
+        ("string", PropertyValue::String(String::new())),
+        ("boolean", PropertyValue::Bool(false)),
+        ("Vector3", PropertyValue::Vec3(libroxel_instance::Vec3::ZERO)),
+        ("Color3", PropertyValue::Color3(libroxel_instance::Color3::WHITE)),
+    ]
+}
+
+/// Attribute and tag editing below an instance's properties.
+/// What the Properties panel says about a class, in English (shown through
+/// the language files).
+pub(crate) fn class_hint(class: ClassKind) -> Option<&'static str> {
+    match class {
         ClassKind::Script => Some(
             "Scripts start when you press Play. `script` is this Script; `script.Parent` is what it's inside.",
         ),
@@ -1694,7 +1761,7 @@ fn properties(
              Damping how quickly the bouncing stops.",
         ),
         ClassKind::HingeConstraint => Some(
-            "Joins Attachment1's part to Attachment0's so it can only turn about Attachment0's X axis              (turn the attachment to aim it). ActuatorType None swings freely, Motor turns at              AngularVelocity radians a second, Servo turns to TargetAngle degrees at AngularSpeed.",
+            "Joins Attachment1's part to Attachment0's so it can only turn about Attachment0's X axis (turn the attachment to aim it). ActuatorType None swings freely, Motor turns at AngularVelocity radians a second, Servo turns to TargetAngle degrees at AngularSpeed.",
         ),
         ClassKind::PrismaticConstraint => Some(
             "Joins Attachment1's part to Attachment0's so it can only slide along Attachment0's X \
@@ -1706,10 +1773,10 @@ fn properties(
              or a chain link.",
         ),
         ClassKind::AngularVelocity => Some(
-            "While playing, spins Attachment0's part at AngularVelocity (radians a second about X, Y              and Z), with up to MaxTorque. Unanchor the part first.",
+            "While playing, spins Attachment0's part at AngularVelocity (radians a second about X, Y and Z), with up to MaxTorque. Unanchor the part first.",
         ),
         ClassKind::Terrain => Some(
-            "Ground made of one-stud cubes. Pick the Terrain tool (5) to add, dig or paint it by              dragging in the view, or to make a hill. Scripts use workspace.Terrain:FillBlock,              FillBall and FillCylinder (Enum.Material.Air digs) and Clear.",
+            "Ground made of one-stud cubes. Pick the Terrain tool (5) to add, dig or paint it by dragging in the view, or to make a hill. Scripts use workspace.Terrain:FillBlock, FillBall and FillCylinder (Enum.Material.Air digs) and Clear.",
         ),
         ClassKind::Decal | ClassKind::Texture => Some(
             "Put one inside a part to show a PNG picture on one Face of it. A Decal stretches the \
@@ -1734,7 +1801,7 @@ fn properties(
              gets quieter further from the camera.",
         ),
         ClassKind::BodyAngularVelocity => Some(
-            "The older spinner: put one inside a loose part to spin it at AngularVelocity, with up to              MaxTorque about each axis.",
+            "The older spinner: put one inside a loose part to spin it at AngularVelocity, with up to MaxTorque about each axis.",
         ),
         ClassKind::BodyVelocity | ClassKind::BodyPosition | ClassKind::BodyForce => Some(
             "The older movers: put one inside a loose part. BodyVelocity pushes it at Velocity, \
@@ -1831,70 +1898,9 @@ fn properties(
              characters die and loose parts are thrown.",
         ),
         _ => None,
-    };
-    if let Some(hint) = hint {
-        ui.add_space(8.0);
-        ui.label(hint);
     }
 }
 
-/// The kinds of value a new attribute can start as, with their first value.
-/// Studio's property categories, in the order it shows them.
-const CATEGORY_ORDER: &[&str] =
-    &["Appearance", "Data", "Text", "Image", "Behavior", "Collision", "Part", "Transform", "Pivot", "Other"];
-
-/// Which of Studio's categories a property is listed under.
-fn property_category(class: ClassKind, property: Property) -> &'static str {
-    let name = names::property_name(property);
-    let gui = class.is_a(ClassKind::GuiObject);
-    match name {
-        "Name" | "Source" | "Value" | "ClassName" | "Parent" | "Archivable" => "Data",
-        "Color"
-        | "BrickColor"
-        | "Material"
-        | "Transparency"
-        | "Reflectance"
-        | "CastShadow"
-        | "BackgroundColor3"
-        | "BackgroundTransparency"
-        | "BorderColor3"
-        | "BorderSizePixel"
-        | "Visible"
-        | "ZIndex"
-        | "Brightness"
-        | "Range"
-        | "Shadows"
-        | "Texture"
-        | "Face"
-        | "LightEmission"
-        | "LightInfluence"
-        | "TextureID"
-        | "TextureId" => "Appearance",
-        "CanCollide" | "CanTouch" | "CanQuery" | "CollisionGroup" => "Collision",
-        "Anchored" | "Massless" | "Shape" | "CustomPhysicalProperties" | "RootPriority" => "Part",
-        "Position" | "Orientation" | "Rotation" | "AnchorPoint" | "CFrame" => "Transform",
-        "Size" if gui || class.is_physical() => "Transform",
-        "PivotOffset" | "WorldPivot" => "Pivot",
-        "Disabled" | "Enabled" | "Locked" | "Active" | "Selectable" | "Interactable" | "AutoButtonColor"
-        | "Modal" | "ResetOnSpawn" | "RunContext" => "Behavior",
-        n if n.starts_with("Text") || n.starts_with("Font") || n == "RichText" || n == "LineHeight" => "Text",
-        n if n.starts_with("Image") || n == "ScaleType" || n == "SliceCenter" || n == "TileSize" => "Image",
-        n if n.ends_with("Color") || n.ends_with("Color3") || n.ends_with("Transparency") => "Appearance",
-        _ => "Data",
-    }
-}
-
-fn attribute_kinds() -> [(&'static str, PropertyValue); 5] {
-    [
-        ("number", PropertyValue::Number(0.0)),
-        ("string", PropertyValue::String(String::new())),
-        ("boolean", PropertyValue::Bool(false)),
-        ("Vector3", PropertyValue::Vec3(libroxel_instance::Vec3::ZERO)),
-        ("Color3", PropertyValue::Color3(libroxel_instance::Color3::WHITE)),
-    ]
-}
-
-/// Attribute and tag editing below an instance's properties.
 fn attributes_and_tags(
     ui: &mut egui::Ui,
     editor: &mut Editor,
