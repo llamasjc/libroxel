@@ -64,7 +64,6 @@ pub enum Pick {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Home,
-    Games,
     Search,
     Friends,
     Groups,
@@ -403,7 +402,6 @@ impl Menu {
                     Tab::Home => {
                         crate::hub_home::home_tab(&mut self.home, ui, platform, &name, &mut self.tab)
                     }
-                    Tab::Games => crate::hub_home::games_tab(&mut self.home, ui, platform, &name),
                     Tab::Charts => crate::hub_home::charts_tab(&mut self.home, ui, platform, &name),
                     Tab::Search => {
                         crate::hub_home::search_tab(&mut self.home, ui, platform, &mut self.tab);
@@ -460,7 +458,7 @@ impl Menu {
     fn go(&mut self, tab: Tab) {
         self.tab = tab;
         self.error = None;
-        if matches!(tab, Tab::Home | Tab::Games | Tab::Charts) {
+        if matches!(tab, Tab::Home | Tab::Charts) {
             self.home.view = crate::hub_home::View::Home;
         }
     }
@@ -734,8 +732,7 @@ impl Menu {
 }
 
 /// The tabs along the top bar, after the mark (which is Home).
-const TOP_TABS: [(Tab, &str, &str); 6] = [
-    (Tab::Games, theme::icon::GAME_CONTROLLER, "Games"),
+const TOP_TABS: [(Tab, &str, &str); 5] = [
     (Tab::Charts, theme::icon::CHART_BAR, "Charts"),
     (Tab::Groups, theme::icon::SHIELD, "Groups"),
     (Tab::Avatar, theme::icon::T_SHIRT, "Avatar"),
