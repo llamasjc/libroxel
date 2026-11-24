@@ -1,18 +1,35 @@
 //! On-screen controls for touch screens, shown while playing once the
-//! screen has been touched (or View → Touch controls is on): a stick in the bottom left walks, a button in
-//! the bottom right jumps, dragging anywhere else looks round, pinching
-//! zooms, and tapping clicks (as the mouse does).
+//! screen has been touched (or View → Touch controls is on), laid out as
+//! phone games usually are: a thumb put down anywhere in the bottom left
+//! brings up a stick there and walks, a big button in the bottom right
+//! jumps, dragging anywhere else looks round, pinching zooms, and tapping
+//! clicks (as the mouse does). Everything grows with the screen, so a
+//! thumb reaches it on a phone and a tablet alike. The game's own buttons
+//! keep their taps, even inside the stick's corner.
 
 use std::collections::HashMap;
 
 use bevy_egui::egui::{self, Color32, Pos2, Rect, Stroke, TouchPhase, Vec2};
 
+/// How big the controls are for a view: 1 on a screen 450 points high.
+fn scale(view: Rect) -> f32 {
+    (view.width().min(view.height()) / 450.0).clamp(0.85, 1.4)
+}
+
 /// How far the stick's knob goes from the middle, in points.
-pub const STICK_RADIUS: f32 = 56.0;
+pub fn stick_radius(view: Rect) -> f32 {
+    56.0 * scale(view)
+}
+
 /// The jump button's radius, in points.
-pub const JUMP_RADIUS: f32 = 44.0;
-/// How far in from the corner the stick and jump button sit.
-const MARGIN: f32 = 36.0;
+pub fn jump_radius(view: Rect) -> f32 {
+    46.0 * scale(view)
+}
+
+/// How far in from the corner the stick rests and the jump button sits.
+fn margin(view: Rect) -> f32 {
+    30.0 * scale(view)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Finger {
@@ -25,6 +42,8 @@ enum Finger {
     Look {
         at: Pos2,
     },
+    /// On one of the game's buttons: the button has it.
+    Gui,
 }
 
 /// The fingers on the screen and what each is doing.
@@ -35,32 +54,52 @@ pub struct TouchPad {
     pub seen: bool,
     look: Vec2,
     zoom: f32,
+    /// A finger on the stick or the jump button came up this frame, so
+    /// its tap isn't also a click on the world.
+    released: bool,
 }
 
-/// Where the controls sit in `view`.
+/// Where the stick rests in `view` when no thumb is on it.
 pub fn stick_home(view: Rect) -> Pos2 {
-    Pos2::new(view.min.x + MARGIN + STICK_RADIUS, view.max.y - MARGIN - STICK_RADIUS)
+    let r = stick_radius(view);
+    Pos2::new(view.min.x + margin(view) + r, view.max.y - margin(view) - r)
 }
 
 pub fn jump_center(view: Rect) -> Pos2 {
-    Pos2::new(view.max.x - MARGIN - JUMP_RADIUS, view.max.y - MARGIN - JUMP_RADIUS)
+    let r = jump_radius(view);
+    Pos2::new(view.max.x - margin(view) - r * 1.2, view.max.y - margin(view) - r * 1.2)
 }
 
-/// Where a finger going down starts the stick: round its home in the
-/// bottom left, kept small so the game's own buttons nearby still work.
+/// Where a thumb going down brings up the stick: the bottom left, two
+/// fifths of the way across and the lower two thirds of the way up.
 pub fn stick_zone(view: Rect) -> Rect {
-    Rect::from_center_size(stick_home(view), Vec2::splat(STICK_RADIUS * 3.2))
+    Rect::from_min_max(
+        Pos2::new(view.min.x, view.min.y + view.height() / 3.0),
+        Pos2::new(view.min.x + view.width() * 0.4, view.max.y),
+    )
 }
 
 impl TouchPad {
-    /// Takes one touch event in a view of `view`.
-    pub fn touch(&mut self, id: u64, phase: TouchPhase, pos: Pos2, view: Rect) {
+    /// Takes one touch event in a view of `view`. `on_gui` says whether a
+    /// point is on one of the game's buttons or text boxes.
+    pub fn touch(
+        &mut self,
+        id: u64,
+        phase: TouchPhase,
+        pos: Pos2,
+        view: Rect,
+        on_gui: impl Fn(Pos2) -> bool,
+    ) {
         match phase {
             TouchPhase::Start => {
                 self.seen = true;
-                let finger = if pos.distance(jump_center(view)) <= JUMP_RADIUS * 1.3 {
+                let finger = if pos.distance(jump_center(view)) <= jump_radius(view) * 1.35 {
                     Finger::Jump
-                } else if stick_zone(view).contains(pos) {
+                } else if on_gui(pos) {
+                    Finger::Gui
+                } else if stick_zone(view).contains(pos)
+                    && !self.fingers.values().any(|f| matches!(f, Finger::Stick { .. }))
+                {
                     Finger::Stick { origin: pos, at: pos }
                 } else {
                     Finger::Look { at: pos }
@@ -70,8 +109,15 @@ impl TouchPad {
             TouchPhase::Move => {
                 let pinch_before = self.pinch_width();
                 let moved = match self.fingers.get_mut(&id) {
-                    Some(Finger::Stick { at, .. }) => {
+                    Some(Finger::Stick { origin, at }) => {
                         *at = pos;
+                        // Past the edge, the stick follows the thumb, so
+                        // turning back doesn't need the whole way.
+                        let r = stick_radius(view);
+                        let d = *at - *origin;
+                        if d.length() > r {
+                            *origin = *at - d.normalized() * r;
+                        }
                         return;
                     }
                     Some(Finger::Look { at }) => {
@@ -87,7 +133,9 @@ impl TouchPad {
                 }
             }
             TouchPhase::End | TouchPhase::Cancel => {
-                self.fingers.remove(&id);
+                if matches!(self.fingers.remove(&id), Some(Finger::Stick { .. } | Finger::Jump)) {
+                    self.released = true;
+                }
             }
         }
     }
@@ -102,13 +150,14 @@ impl TouchPad {
         looking.next().is_none().then(|| a.distance(b))
     }
 
-    /// The stick's push: x to the right, y forwards (up the screen), at most 1 long.
-    pub fn stick(&self) -> Vec2 {
+    /// The stick's push in `view`: x to the right, y forwards (up the
+    /// screen), at most 1 long.
+    pub fn stick(&self, view: Rect) -> Vec2 {
         self.fingers
             .values()
             .find_map(|f| match f {
                 Finger::Stick { origin, at } => {
-                    let d = (*at - *origin) / STICK_RADIUS;
+                    let d = (*at - *origin) / stick_radius(view);
                     let d = if d.length() > 1.0 { d.normalized() } else { d };
                     Some(Vec2::new(d.x, -d.y))
                 }
@@ -120,6 +169,12 @@ impl TouchPad {
     /// The jump button is held.
     pub fn jump(&self) -> bool {
         self.fingers.values().any(|f| *f == Finger::Jump)
+    }
+
+    /// Whether a finger is on the stick or jump button (or just left it),
+    /// so the press isn't a click on the world as well.
+    pub fn has_pointer(&self) -> bool {
+        self.released || self.fingers.values().any(|f| matches!(f, Finger::Stick { .. } | Finger::Jump))
     }
 
     /// How far fingers dragged to look since last asked, in points.
@@ -137,12 +192,14 @@ impl TouchPad {
         self.fingers.clear();
         self.look = Vec2::ZERO;
         self.zoom = 0.0;
+        self.released = false;
     }
 
     /// Reads this frame's touches, then draws the controls over `view`.
-    /// The stick and jump button take the pointer, so a finger there
-    /// doesn't also click the world.
-    pub fn show(&mut self, ctx: &egui::Context, view: Rect) {
+    /// `gui` holds where the game's buttons and text boxes are, which keep
+    /// their taps.
+    pub fn show(&mut self, ctx: &egui::Context, view: Rect, gui: &[Rect]) {
+        self.released = false;
         let touches: Vec<(u64, TouchPhase, Pos2)> = ctx.input(|i| {
             i.events
                 .iter()
@@ -153,46 +210,52 @@ impl TouchPad {
                 .collect()
         });
         for (id, phase, pos) in touches {
-            self.touch(id, phase, pos, view);
+            self.touch(id, phase, pos, view, |p| gui.iter().any(|r| r.contains(p)));
         }
         if !self.seen {
             return;
         }
+        let (r, jr) = (stick_radius(view), jump_radius(view));
         let home = stick_home(view);
-        let (base, knob) = match self.fingers.values().find(|f| matches!(f, Finger::Stick { .. })) {
+        let (base, knob, held) = match self.fingers.values().find(|f| matches!(f, Finger::Stick { .. })) {
             Some(Finger::Stick { origin, at }) => {
                 let d = *at - *origin;
-                (*origin, *origin + if d.length() > STICK_RADIUS { d.normalized() * STICK_RADIUS } else { d })
+                (*origin, *origin + if d.length() > r { d.normalized() * r } else { d }, true)
             }
-            _ => (home, home),
+            _ => (home, home, false),
         };
         let jump = jump_center(view);
-        let zone = stick_zone(view);
-        let jump_rect = Rect::from_center_size(jump, Vec2::splat(JUMP_RADIUS * 2.6));
-        for (name, rect) in [("touch stick", zone), ("touch jump", jump_rect)] {
-            egui::Area::new(egui::Id::new(name)).order(egui::Order::Foreground).fixed_pos(rect.min).show(
-                ctx,
-                |ui| {
-                    ui.allocate_rect(
-                        Rect::from_min_size(rect.min, rect.size()),
-                        egui::Sense::click_and_drag(),
-                    );
-                },
-            );
-        }
+        // The jump button takes its taps from the world and the game alike.
+        let jump_rect = Rect::from_center_size(jump, Vec2::splat(jr * 2.7));
+        egui::Area::new(egui::Id::new("touch jump"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(jump_rect.min)
+            .show(ctx, |ui| {
+                ui.allocate_rect(jump_rect, egui::Sense::click_and_drag());
+            });
         let painter =
             ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("touch controls")));
-        let faint = Color32::from_white_alpha(40);
-        let line = Stroke::new(2.0, Color32::from_white_alpha(120));
-        painter.circle(base, STICK_RADIUS, faint, line);
-        painter.circle_filled(knob, STICK_RADIUS * 0.45, Color32::from_white_alpha(150));
-        let held = if self.jump() { Color32::from_white_alpha(110) } else { faint };
-        painter.circle(jump, JUMP_RADIUS, held, line);
+        // Faint while resting, clearer under a thumb.
+        let (ring, fill) = if held { (150, 50) } else { (90, 25) };
+        painter.circle(
+            base,
+            r,
+            Color32::from_white_alpha(fill),
+            Stroke::new(2.5, Color32::from_white_alpha(ring)),
+        );
+        painter.circle_filled(knob, r * 0.45, Color32::from_white_alpha(if held { 190 } else { 120 }));
+        let pressed = self.jump();
+        painter.circle(
+            jump,
+            jr,
+            Color32::from_white_alpha(if pressed { 120 } else { 35 }),
+            Stroke::new(2.5, Color32::from_white_alpha(140)),
+        );
         painter.text(
             jump,
             egui::Align2::CENTER_CENTER,
             crate::theme::icon::ARROW_FAT_UP,
-            egui::FontId::proportional(30.0),
+            egui::FontId::proportional(jr * 0.75),
             Color32::WHITE,
         );
     }
@@ -211,18 +274,18 @@ mod tests {
         let mut pad = TouchPad::default();
         let v = view();
         assert!(!pad.seen);
-        pad.touch(1, TouchPhase::Start, Pos2::new(120.0, 480.0), v);
+        pad.touch(1, TouchPhase::Start, Pos2::new(120.0, 480.0), v, |_| false);
         assert!(pad.seen);
-        assert_eq!(pad.stick(), Vec2::ZERO);
+        assert_eq!(pad.stick(v), Vec2::ZERO);
         // Up the screen is forwards; past the edge it stays at full push.
-        pad.touch(1, TouchPhase::Move, Pos2::new(120.0, 480.0 - STICK_RADIUS * 3.0), v);
-        assert!((pad.stick() - Vec2::new(0.0, 1.0)).length() < 1e-5, "{:?}", pad.stick());
-        pad.touch(2, TouchPhase::Start, jump_center(v), v);
+        pad.touch(1, TouchPhase::Move, Pos2::new(120.0, 480.0 - stick_radius(v) * 3.0), v, |_| false);
+        assert!((pad.stick(v) - Vec2::new(0.0, 1.0)).length() < 1e-5, "{:?}", pad.stick(v));
+        pad.touch(2, TouchPhase::Start, jump_center(v), v, |_| false);
         assert!(pad.jump());
-        pad.touch(2, TouchPhase::End, jump_center(v), v);
+        pad.touch(2, TouchPhase::End, jump_center(v), v, |_| false);
         assert!(!pad.jump());
-        pad.touch(1, TouchPhase::End, Pos2::new(120.0, 300.0), v);
-        assert_eq!(pad.stick(), Vec2::ZERO);
+        pad.touch(1, TouchPhase::End, Pos2::new(120.0, 300.0), v, |_| false);
+        assert_eq!(pad.stick(v), Vec2::ZERO);
         assert_eq!(pad.take_look(), Vec2::ZERO, "walking doesn't look round");
     }
 
@@ -230,16 +293,56 @@ mod tests {
     fn dragging_elsewhere_looks_and_pinching_zooms() {
         let mut pad = TouchPad::default();
         let v = view();
-        pad.touch(7, TouchPhase::Start, Pos2::new(600.0, 200.0), v);
-        pad.touch(7, TouchPhase::Move, Pos2::new(650.0, 190.0), v);
+        pad.touch(7, TouchPhase::Start, Pos2::new(600.0, 200.0), v, |_| false);
+        pad.touch(7, TouchPhase::Move, Pos2::new(650.0, 190.0), v, |_| false);
         assert_eq!(pad.take_look(), Vec2::new(50.0, -10.0));
         assert_eq!(pad.take_look(), Vec2::ZERO);
         // A second finger: spreading them apart zooms in, without looking.
-        pad.touch(8, TouchPhase::Start, Pos2::new(750.0, 190.0), v);
-        pad.touch(8, TouchPhase::Move, Pos2::new(830.0, 190.0), v);
+        pad.touch(8, TouchPhase::Start, Pos2::new(750.0, 190.0), v, |_| false);
+        pad.touch(8, TouchPhase::Move, Pos2::new(830.0, 190.0), v, |_| false);
         assert_eq!(pad.take_look(), Vec2::ZERO);
         assert!((pad.take_zoom() - 2.0).abs() < 1e-5);
-        assert_eq!(pad.stick(), Vec2::ZERO);
+        assert_eq!(pad.stick(v), Vec2::ZERO);
         assert!(!pad.jump());
+    }
+
+    #[test]
+    fn the_stick_comes_up_under_the_thumb_and_follows_it() {
+        let mut pad = TouchPad::default();
+        let v = view();
+        // Well away from where the stick rests, but still in its corner.
+        let down = Pos2::new(300.0, 350.0);
+        assert!(stick_zone(v).contains(down));
+        pad.touch(1, TouchPhase::Start, down, v, |_| false);
+        assert!(pad.has_pointer(), "the stick's tap isn't a click on the world");
+        // Far to the right, then back: the stick turned round straight away.
+        pad.touch(1, TouchPhase::Move, down + Vec2::new(stick_radius(v) * 4.0, 0.0), v, |_| false);
+        assert!((pad.stick(v) - Vec2::new(1.0, 0.0)).length() < 1e-5);
+        pad.touch(1, TouchPhase::Move, down + Vec2::new(stick_radius(v) * 2.0, 0.0), v, |_| false);
+        assert!(pad.stick(v).x < -0.99, "{:?}", pad.stick(v));
+    }
+
+    #[test]
+    fn the_games_buttons_keep_their_taps() {
+        let mut pad = TouchPad::default();
+        let v = view();
+        let button = Rect::from_min_size(Pos2::new(100.0, 400.0), Vec2::splat(80.0));
+        pad.touch(1, TouchPhase::Start, Pos2::new(140.0, 440.0), v, |p| button.contains(p));
+        pad.touch(1, TouchPhase::Move, Pos2::new(180.0, 440.0), v, |p| button.contains(p));
+        assert_eq!(pad.stick(v), Vec2::ZERO);
+        assert_eq!(pad.take_look(), Vec2::ZERO);
+        assert!(!pad.has_pointer());
+    }
+
+    #[test]
+    fn controls_grow_with_the_screen() {
+        let phone = Rect::from_min_size(Pos2::ZERO, Vec2::new(740.0, 360.0));
+        let tablet = Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 800.0));
+        assert!(jump_radius(tablet) > jump_radius(phone));
+        // A thumb reaches the jump button on a phone: no smaller than a fingertip.
+        assert!(jump_radius(phone) * 2.0 >= 72.0);
+        for v in [phone, tablet] {
+            assert!(v.contains(jump_center(v)) && !stick_zone(v).contains(jump_center(v)));
+        }
     }
 }
