@@ -5,6 +5,25 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
 
 ## Unreleased
 
+- **Android tablets without Vulkan** (Mali and similar) open instead of
+  closing on the first frame.
+- **Phones and tablets:** the game fills the screen with the status and
+  navigation bars hidden (a swipe in from the edge shows them), and the
+  screen stays on while playing. The on-screen keyboard types into text
+  boxes, and the back button opens and closes the game's menu.
+- **Touch controls** are laid out as in phone games: the stick comes up
+  wherever the left thumb lands, the stick and jump button grow with the
+  screen, and the game's own buttons keep their taps. The loading screen
+  has an X to stop waiting.
+- **Faster on phones:** automatic graphics starts low and stays in the
+  middle, without the effects that cost phones most, and 32-bit Android
+  uses the chip's vector maths.
+- **Touch input for scripts,** as in Roblox: `TouchStarted`, `TouchMoved`,
+  `TouchEnded`, `TouchTap`, `TouchTapInWorld`, `TouchLongPress`,
+  `TouchPan`, `TouchPinch`, `TouchRotate`, `TouchSwipe`,
+  `LastInputTypeChanged`, and InputBegan/InputChanged/InputEnded for
+  fingers. Games can hide the stick and jump button with `ModalEnabled`,
+  `GuiService.TouchControlsEnabled` or `DevTouchMovementMode` Scriptable.
 - **Voice chat** in multiplayer games, for players 13 and up whose parent
   settings allow chat. The 🎤 button turns the mic on; click a name to mute.
 - **Languages:** the home screen and the editor in Chinese (Simplified),
