@@ -457,6 +457,15 @@ pub fn run() {
     .add_systems(EguiPrimaryContextPass, ui::editor_ui)
     .add_systems(Update, (viewport::draw_selection, viewport::draw_grid).after(EngineSet::Sync))
     .add_systems(Update, (update_title, toggle_fullscreen));
+    if MOBILE {
+        app.insert_resource(bevy::winit::WinitSettings {
+            focused_mode: bevy::winit::UpdateMode::Continuous,
+            unfocused_mode: bevy::winit::UpdateMode::reactive_low_power(std::time::Duration::from_millis(
+                100,
+            )),
+        })
+        .add_systems(Last, cap_frame_rate);
+    }
     #[cfg(target_os = "android")]
     app.add_systems(First, graphics::match_android_window)
         .add_systems(
@@ -473,6 +482,18 @@ pub fn run() {
                 .before(bevy_egui::EguiPreUpdateSet::BeginPass),
         );
     report::run(&mut app);
+}
+
+fn cap_frame_rate(
+    monitors: Query<&bevy::window::Monitor, With<bevy::window::PrimaryMonitor>>,
+    mut last: Local<Option<std::time::Instant>>,
+) {
+    const FRAME: std::time::Duration = std::time::Duration::from_micros(16_000);
+    let fast = monitors.iter().next().and_then(|m| m.refresh_rate_millihertz).is_some_and(|hz| hz >= 110_000);
+    if fast && let Some(rest) = last.and_then(|at| FRAME.checked_sub(at.elapsed())) {
+        std::thread::sleep(rest);
+    }
+    *last = Some(std::time::Instant::now());
 }
 
 fn graphics_file() -> std::path::PathBuf {
