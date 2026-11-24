@@ -6,9 +6,13 @@
 //! builds vertex layouts the driver refuses, and quits on the first frame.
 //! On those devices Bevy is told there are no storage buffers, so it uses
 //! the uniform buffer path it has for WebGL2 instead.
+//!
+//! Those devices also draw with OpenGL ES only. Android's Vulkan library
+//! is there even without a Vulkan driver, and a Vulkan surface takes the
+//! window for itself, so OpenGL ES could no longer draw to it.
 
 use bevy::render::RenderPlugin;
-use bevy::render::settings::{RenderCreation, WgpuLimits, WgpuSettings};
+use bevy::render::settings::{Backends, RenderCreation, WgpuLimits, WgpuSettings};
 
 /// Bevy's renderer, set up for this device.
 pub fn render_plugin() -> RenderPlugin {
@@ -20,11 +24,13 @@ pub fn render_plugin() -> RenderPlugin {
     }
 }
 
-/// The renderer's settings. `no_vertex_storage` keeps storage buffers out
-/// of Bevy's hands; every other limit stays as the device has it.
-fn settings(no_vertex_storage: bool) -> WgpuSettings {
+/// The renderer's settings. `gles_only` draws with OpenGL ES alone and
+/// keeps storage buffers out of Bevy's hands; every other limit stays as
+/// the device has it.
+fn settings(gles_only: bool) -> WgpuSettings {
     let mut settings = WgpuSettings::default();
-    if no_vertex_storage {
+    if gles_only {
+        settings.backends = Some(Backends::GL);
         settings.constrained_limits =
             Some(WgpuLimits { max_storage_buffers_per_shader_stage: 0, ..WgpuLimits::unlimited() });
     }
@@ -46,8 +52,8 @@ fn has_vulkan() -> bool {
 mod tests {
     use super::*;
 
-    /// Without vertex storage, Bevy sees no storage buffers, and nothing
-    /// else about the device changes.
+    /// Without Vulkan, Bevy draws with OpenGL ES alone and sees no storage
+    /// buffers, and nothing else about the device changes.
     #[test]
     fn only_storage_buffers_are_held_back() {
         let device = WgpuLimits::downlevel_defaults();
@@ -56,6 +62,8 @@ mod tests {
         let used = device.clone().or_worse_values_from(&held);
         assert_eq!(used.max_storage_buffers_per_shader_stage, 0);
         assert_eq!(WgpuLimits { max_storage_buffers_per_shader_stage: 0, ..device }, used);
+        assert_eq!(settings(true).backends, Some(Backends::GL));
         assert!(settings(false).constrained_limits.is_none());
+        assert_ne!(settings(false).backends, Some(Backends::GL));
     }
 }
