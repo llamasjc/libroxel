@@ -1467,3 +1467,41 @@ fn tapping_a_gui_object_fires_its_touch_tap() {
     rt.touch(3, Ended, 50.0, 25.0, true, 2.7);
     assert_eq!(printed(&rt), vec!["tapped 10 20", "held Begin", "held End"]);
 }
+
+#[test]
+fn rich_attributes_save_and_reach_other_computers() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local part = Instance.new("Part")
+        part.Name = "Holder"
+        part.Parent = workspace
+        part:SetAttribute("Range", NumberRange.new(2, 8))
+        part:SetAttribute("Fade", NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 0.5) }))
+        part:SetAttribute("Tint", ColorSequence.new(Color3.new(1, 0, 0), Color3.new(0, 0, 1)))
+        part:SetAttribute("Where", CFrame.new(1, 2, 3))
+        "#,
+    );
+    // Another computer, with only the saved place: no memory of the values.
+    let text = libroxel_instance::place::save(&rt.tree().borrow()).unwrap();
+    let (tree, _) = libroxel_instance::place::load(&text).unwrap();
+    let other = libroxel_script::ScriptRuntime::new_with_tree(tree).unwrap();
+    run(
+        &other,
+        r#"
+        local part = workspace.Holder
+        local r = part:GetAttribute("Range")
+        print(typeof(r), r.Min, r.Max)
+        local f = part:GetAttribute("Fade")
+        print(typeof(f), #f.Keypoints, f.Keypoints[2].Value)
+        local t = part:GetAttribute("Tint")
+        print(typeof(t), t.Keypoints[1].Value.R, t.Keypoints[2].Value.B)
+        print(typeof(part:GetAttribute("Where")), part:GetAttribute("Where").Position.Y)
+        "#,
+    );
+    assert_eq!(
+        printed(&other),
+        vec!["NumberRange 2 8", "NumberSequence 2 0.5", "ColorSequence 1 1", "CFrame 2"]
+    );
+}
