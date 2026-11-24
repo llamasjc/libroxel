@@ -185,6 +185,12 @@ fn a_joined_player_sees_the_world_and_plays_in_it() {
         s.runtime().tree().borrow().get_vec3(c.root, Property::Position).unwrap()
     };
     let mine = guest.character().unwrap();
+    // Let them land first.
+    for _ in 0..60 {
+        host.step(DT, CharacterInput::default());
+        guest.step(DT, CharacterInput::default());
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
     let start = root_at(&guest, mine);
     let walk = CharacterInput { move_dir: Vec3::new(1.0, 0.0, 0.0), ..Default::default() };
     guest.step(DT, walk);
@@ -393,4 +399,77 @@ fn eyes_stay_on_the_head_of_someone_turning() {
         }
     }
     assert!(worst < 0.01, "an eye came off the head by {worst}");
+}
+
+/// Where the host has the guest's character.
+fn host_sees(host: &PlaySession) -> Option<Vec3> {
+    let t = host.runtime().tree().borrow();
+    let m = t.get_ref(*host.players().get(1)?, Property::Character)?;
+    let r = t.find_first_child(m, "HumanoidRootPart").ok()??;
+    t.get_vec3(r, Property::Position)
+}
+
+#[test]
+fn a_joined_computer_cannot_teleport_its_character_across_the_map() {
+    let tree = Rc::new(RefCell::new(game()));
+    let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |h, g| {
+        g.character().is_some() && host_sees(h).is_some()
+    });
+    // Let the character land.
+    for _ in 0..60 {
+        host.step(DT, CharacterInput::default());
+        guest.step(DT, CharacterInput::default());
+    }
+    let start = host_sees(&host).unwrap();
+
+    // A changed copy of the app moves its character 5000 studs in one go.
+    let root = guest.character().unwrap().root;
+    let far = Vec3::new(start.x + 5000.0, start.y, start.z);
+    guest.runtime().tree().borrow_mut().set(root, Property::Position, PropertyValue::Vec3(far)).unwrap();
+    for _ in 0..30 {
+        host.step(DT, CharacterInput::default());
+        guest.step(DT, CharacterInput::default());
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let on_host = host_sees(&host).unwrap();
+    assert!((on_host - start).length() < 20.0, "the host kept them where they were: {on_host:?}");
+    // And their own computer is put back too.
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| {
+        let at = g.runtime().tree().borrow().get_vec3(root, Property::Position).unwrap();
+        (at - start).length() < 20.0
+    });
+
+    // Walking normally still works afterwards.
+    let walk = CharacterInput { move_dir: Vec3::new(1.0, 0.0, 0.0), ..CharacterInput::default() };
+    until(&mut host, &mut guest, walk, |h, _| host_sees(h).is_some_and(|p| p.x > start.x + 5.0));
+}
+
+#[test]
+fn two_players_on_one_spawn_stay_on_the_ground() {
+    // Before, the joined player stood on the host's player, the host's
+    // player was pushed up out of them, and the two climbed into the sky.
+    let tree = Rc::new(RefCell::new(game()));
+    let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |h, g| {
+        g.character().is_some() && host_sees(h).is_some()
+    });
+    for _ in 0..180 {
+        host.step(DT, CharacterInput::default());
+        guest.step(DT, CharacterInput::default());
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let root = guest.character().unwrap().root;
+    let guest_at = guest.runtime().tree().borrow().get_vec3(root, Property::Position).unwrap();
+    let host_at = host_sees(&host).unwrap();
+    assert!(guest_at.y < 12.0, "the joined player stayed down: {guest_at:?}");
+    assert!(host_at.y < 12.0, "and the host has them down too: {host_at:?}");
 }

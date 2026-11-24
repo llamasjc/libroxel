@@ -143,6 +143,9 @@ pub(crate) struct Avatar {
     pub(crate) teleports: u64,
     /// How they chose to look; without one they get the usual look.
     pub(crate) look: Option<crate::character::Look>,
+    /// For a player on another computer: how much further it may say its
+    /// character went.
+    pub(crate) travel: Option<crate::net::Allowance>,
 }
 
 impl Avatar {
@@ -168,6 +171,7 @@ impl Avatar {
             shield: None,
             teleports: 0,
             look: None,
+            travel: None,
         }
     }
 
