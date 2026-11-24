@@ -2,5 +2,7 @@
 <resources>
     <style name="Libroxel" parent="Theme.AppCompat.NoActionBar">
         <item name="android:windowFullscreen">true</item>
+        <!-- Shown while Libroxel starts: the logo on Libroxel's blue. -->
+        <item name="android:windowBackground">@drawable/splash</item>
     </style>
 </resources>
