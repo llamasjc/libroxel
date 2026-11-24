@@ -5,6 +5,7 @@
  "1 friend request waiting": "1 条好友请求待处理",
  "1 joined": "1 人已加入",
  "1 player": "1 名玩家",
+ "A different version of Libroxel": "Libroxel 版本不同",
  "A flat strip between Attachment0 and Attachment1 that always faces the camera: lasers, light shafts, ropes of light. Width0 and Width1 set how wide, LightEmission makes it glow.": "Attachment0 和 Attachment1 之间始终面向摄像机的扁平条带：激光、光束、光绳。Width0 和 Width1 设置宽度，LightEmission 让它发光。",
  "A folder for a model's settings: put value objects inside it.": "存放模型设置的文件夹：在里面放入数值对象。",
  "A frame you can scroll with the mouse wheel while playing. CanvasSize is how big its inside is (2 in Y scale is twice as tall as the frame); CanvasPosition is how far it's scrolled.": "游玩时可以用鼠标滚轮滚动的框架。CanvasSize 是内部的大小（Y 比例为 2 表示高度是框架的两倍）；CanvasPosition 是已滚动的距离。",
@@ -335,6 +336,7 @@
  "Start from an empty baseplate": "从空白底板开始",
  "Stats": "统计",
  "Stop": "停止",
+ "Stop loading": "停止加载",
  "Stop sharing": "停止共享",
  "Tag": "捉人游戏",
  "Tags": "标签",
@@ -364,6 +366,7 @@
  "Ungroup": "取消组合",
  "Unsaved work": "未保存的工作",
  "Update": "更新",
+ "Updating…": "正在更新…",
  "Version": "版本",
  "View": "视图",
  "Visits": "访问量",
@@ -442,7 +445,5 @@
  "{n}% liked": "{n}% 好评",
  "{part} colour {colour}": "{part}颜色：{colour}",
  "{shape} part": "{shape}零件",
- "{why} You can also host it yourself.": "{why} 你也可以自己开服。",
- "Updating…": "正在更新…",
- "A different version of Libroxel": "Libroxel 版本不同"
+ "{why} You can also host it yourself.": "{why} 你也可以自己开服。"
 }

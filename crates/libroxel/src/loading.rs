@@ -1,6 +1,7 @@
 use bevy_egui::egui::{self, Color32, Pos2, Rect, Shape, Stroke, Vec2, pos2, vec2};
 
-use crate::theme;
+use crate::i18n::t;
+use crate::theme::{self, icon};
 
 const FADE: f64 = 0.4;
 const SHORTEST: f64 = 0.9;
@@ -26,8 +27,18 @@ impl Loading {
         self.began.is_some()
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, view: Rect, now: f64, progress: Option<f32>, filling: bool) {
-        let Some(began) = self.began else { return };
+    /// Draws the loading screen over `view`. Returns true when the player
+    /// taps its X to give up waiting (phones and tablets have no window to
+    /// close).
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        view: Rect,
+        now: f64,
+        progress: Option<f32>,
+        filling: bool,
+    ) -> bool {
+        let Some(began) = self.began else { return false };
         if self.done.is_none() {
             if progress.is_some() {
                 self.came = None;
@@ -42,19 +53,37 @@ impl Loading {
         let fade = self.done.map_or(1.0, |d| 1.0 - ((now - d) / FADE) as f32);
         if fade <= 0.0 {
             self.stop();
-            return;
+            return false;
         }
         ctx.request_repaint();
         let t = (now - began) as f32;
         let shown = progress.unwrap_or(if self.came.is_some() { 1.0 } else { 0.0 });
-        egui::Area::new("loading".into()).fixed_pos(view.min).order(egui::Order::Foreground).show(
-            ctx,
-            |ui| {
+        let alpha = fade.clamp(0.0, 1.0);
+        egui::Area::new("loading".into())
+            .fixed_pos(view.min)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
                 let (rect, _) = ui.allocate_exact_size(view.size(), egui::Sense::click_and_drag());
-                draw(ui.painter(), rect, t, shown, fade.clamp(0.0, 1.0));
-            },
-        );
+                draw(ui.painter(), rect, t, shown, alpha);
+                // Only while it is still loading, not as it fades away.
+                self.done.is_none() && close_button(ui, rect)
+            })
+            .inner
     }
+}
+
+/// The X in the top right corner, big enough for a finger.
+fn close_button(ui: &mut egui::Ui, view: Rect) -> bool {
+    const SIZE: f32 = 44.0;
+    const MARGIN: f32 = 16.0;
+    let at = Rect::from_min_size(pos2(view.max.x - MARGIN - SIZE, view.min.y + MARGIN), Vec2::splat(SIZE));
+    let label = t("Stop loading");
+    let button = egui::Button::new(egui::RichText::new(icon::X).size(22.0).color(Color32::WHITE))
+        .fill(Color32::from_black_alpha(110))
+        .corner_radius(SIZE / 2.0);
+    let response = ui.put(at, button).on_hover_text(label);
+    theme::name_for_screen_readers(ui, &response, egui::WidgetType::Button, label, None);
+    response.clicked()
 }
 
 fn fade_color(c: Color32, a: f32) -> Color32 {
