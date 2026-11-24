@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What shows from the moment Libroxel is opened until its first frame:
+     the logo on Libroxel's blue, rather than an empty screen. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/libroxel_blue" />
+    <item>
+        <bitmap android:gravity="center" android:src="@mipmap/ic_launcher" />
+    </item>
+</layer-list>
