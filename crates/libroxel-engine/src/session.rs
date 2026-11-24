@@ -88,6 +88,15 @@ pub struct Blast {
 /// How long an explosion's flash lasts, in seconds.
 pub const BLAST_TIME: f32 = 0.6;
 
+/// Seconds after a jump sound before another jump makes one.
+const JUMP_QUIET: f32 = 0.35;
+
+/// How fast the `n`th jump sound plays: a little higher or lower each time.
+fn jump_pitch(n: u32) -> f64 {
+    let h = n.wrapping_mul(0x9e37_79b9).rotate_left(13).wrapping_mul(0x85eb_ca6b);
+    0.92 + 0.16 * (h >> 8) as f64 / (1u32 << 24) as f64
+}
+
 /// The number keys that pick hotbar slots 1 to 9.
 const SLOT_KEYS: [KeyCode; 9] = [
     KeyCode::One,
@@ -127,6 +136,10 @@ pub(crate) struct Avatar {
     /// Whether their character stood on something, and was in water, last step.
     pub(crate) was_grounded: bool,
     pub(crate) was_wet: bool,
+    /// Seconds before a jump makes a sound again.
+    pub(crate) jump_quiet: f32,
+    /// How many jumps have made a sound.
+    pub(crate) jumps: u32,
     /// Whether they play on another computer, so their input comes over
     /// the network and their GUIs and local scripts run there.
     pub(crate) remote: bool,
@@ -165,6 +178,8 @@ impl Avatar {
             slash: 0.0,
             was_grounded: false,
             was_wet: false,
+            jump_quiet: 0.0,
+            jumps: 0,
             remote,
             input: CharacterInput::default(),
             moved_to: None,
@@ -738,17 +753,23 @@ impl PlaySession {
             (self.physics.is_grounded(character.root), self.physics.is_in_water(character.root));
         let rising = self.physics.velocity(character.root).y > 10.0;
         let mut sounds = Vec::new();
-        if avatar.was_grounded && !grounded && rising {
-            sounds.push("Jumping");
+        avatar.jump_quiet = (avatar.jump_quiet - dt).max(0.0);
+        if avatar.was_grounded && !grounded && rising && avatar.jump_quiet <= 0.0 {
+            avatar.jump_quiet = JUMP_QUIET;
+            avatar.jumps = avatar.jumps.wrapping_add(1);
+            sounds.push(("Jumping", Some(jump_pitch(avatar.jumps))));
         }
         if wet && !avatar.was_wet {
-            sounds.push("Splash");
+            sounds.push(("Splash", None));
         }
         (avatar.was_grounded, avatar.was_wet) = (grounded, wet);
-        for name in sounds {
+        for (name, pitch) in sounds {
             if let Ok(Some(sound)) = tree.find_first_child(character.root, name)
                 && tree.class(sound) == Ok(ClassKind::Sound)
             {
+                if let Some(pitch) = pitch {
+                    let _ = tree.set(sound, Property::PlaybackSpeed, PropertyValue::Number(pitch));
+                }
                 let _ = tree.set(sound, Property::Playing, PropertyValue::Bool(true));
                 self.sound_restarts.push(sound);
             }

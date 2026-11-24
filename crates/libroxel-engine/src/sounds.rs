@@ -164,14 +164,17 @@ pub fn synth(name: &str) -> Option<Vec<f32>> {
                 tone * (-(t - start) * 9.0).exp()
             })
             .collect(),
-        // A quick rising sweep.
+        // A soft, short lift.
         "jump" => {
             let mut phase = 0.0f32;
-            (0..len(0.22))
+            let mut soft = 0.0f32;
+            (0..len(0.12))
                 .map(|i| {
                     let t = t(i);
-                    phase += TAU * (260.0 + 2200.0 * t) / rate;
-                    phase.sin() * 0.5 * (1.0 - t / 0.22)
+                    phase += TAU * (300.0 + 1100.0 * t) / rate;
+                    soft += (noise.next() - soft) * 0.08;
+                    let tone = phase.sin() + 0.15 * (2.0 * phase).sin();
+                    (tone * 0.28 + soft * 0.25) * (t * 250.0).min(1.0) * (-t * 30.0).exp()
                 })
                 .collect()
         }

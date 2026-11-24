@@ -944,6 +944,29 @@ fn characters_sound_when_they_jump() {
 }
 
 #[test]
+fn holding_jump_does_not_spam_the_sound() {
+    let mut session = start_on(world(), true).unwrap();
+    for _ in 0..60 {
+        session.step(DT, CharacterInput::default());
+    }
+    session.take_sound_restarts();
+    let (mut heard, mut speeds) = (0, Vec::new());
+    let root = session.character().unwrap().root;
+    let shared = session.runtime().tree().clone();
+    let jumping = shared.borrow().find_first_child(root, "Jumping").unwrap().unwrap();
+    let steps = (3.0 / DT) as usize;
+    for _ in 0..steps {
+        session.step(DT, CharacterInput { jump: true, ..Default::default() });
+        if !session.take_sound_restarts().is_empty() {
+            heard += 1;
+            speeds.push(shared.borrow().get_number(jumping, Property::PlaybackSpeed).unwrap());
+        }
+    }
+    assert!((1..=(3.0 / 0.35) as usize).contains(&heard), "{heard}");
+    assert!(speeds.iter().all(|s| (0.9..=1.1).contains(s)), "{speeds:?}");
+}
+
+#[test]
 fn characters_have_r6_joints_that_scripts_can_turn() {
     let mut tree = world();
     script(
