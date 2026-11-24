@@ -204,7 +204,10 @@ jobs:
   mac-half:
     name: Build (${{ matrix.name }})
     needs: wait-for-main
-    runs-on: macos-latest
+    # macos-15, not macos-latest: the newest image has few Macs, and jobs
+    # waiting for one were cancelled after 15 minutes. iOS stays on the
+    # newest, as App Store uploads need the latest SDK.
+    runs-on: macos-15
     strategy:
       fail-fast: false
       matrix:
@@ -239,7 +242,7 @@ jobs:
   mac:
     name: Package (macOS universal)
     needs: mac-half
-    runs-on: macos-latest
+    runs-on: macos-15
     env:
       NOTARIZE: ${{ github.ref_type == 'tag' && secrets.MACOS_CERTIFICATE != '' }}
     steps:
