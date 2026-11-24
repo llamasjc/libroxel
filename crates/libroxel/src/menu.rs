@@ -438,6 +438,8 @@ impl Menu {
                         theme::heading(ui, t("Profile"));
                         ui.add_space(8.0);
                         platform.account_ui(ui, look);
+                        ui.add_space(8.0);
+                        crate::voice::toggle(ui);
                         None
                     }
                 };

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use bevy_egui::egui;
@@ -11,6 +11,7 @@ use libroxel_engine::voice::{FRAME, RATE};
 use libroxel_hub::{Chat, HubClient};
 use libroxel_instance::{InstanceId, InstanceTree};
 
+use crate::i18n::t;
 use crate::theme::{self, icon};
 
 const MOST_BUFFERED: usize = RATE as usize / 2;
@@ -18,6 +19,30 @@ const PRIMED: usize = FRAME * 2;
 const GATE: f32 = 400.0;
 const HANG: Duration = Duration::from_millis(400);
 const SPEAKING: Duration = Duration::from_millis(300);
+
+static ON: LazyLock<AtomicBool> =
+    LazyLock::new(|| AtomicBool::new(std::fs::read_to_string(file()).is_ok_and(|t| t.trim() == "on")));
+
+fn file() -> std::path::PathBuf {
+    crate::server::data_dir().join("voice")
+}
+
+pub fn on() -> bool {
+    ON.load(Ordering::Relaxed)
+}
+
+pub fn toggle(ui: &mut egui::Ui) {
+    let mut on = on();
+    if ui.checkbox(&mut on, t("Voice chat")).changed() {
+        ON.store(on, Ordering::Relaxed);
+        let _ = std::fs::create_dir_all(crate::server::data_dir());
+        let _ = std::fs::write(file(), if on { "on" } else { "off" });
+        #[cfg(target_os = "android")]
+        if on {
+            ask_for_mic();
+        }
+    }
+}
 
 #[derive(Default)]
 struct Mix {
@@ -86,6 +111,12 @@ impl Voice {
             }
             return;
         };
+        if !on() {
+            session.take_heard();
+            self.stop();
+            self.mic_on = false;
+            return;
+        }
         if !self.asked {
             self.asked = true;
             let (out, client) = (self.allowed.clone(), client());

@@ -363,10 +363,12 @@ jobs:
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.14.3"
+          gradle-version: "9.1.0"
       - name: Build
         shell: bash
         env:
+          CARGO_PROFILE_DIST_STRIP: "false"
+          CARGO_PROFILE_DIST_LTO: fat
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -411,6 +413,8 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT }}
           packageName: com.libroxel.app
           releaseFiles: dist/*.aab
+          mappingFile: packaging/android/app/build/outputs/mapping/release/mapping.txt
+          debugSymbols: packaging/android/app/build/outputs/native-debug-symbols/release/native-debug-symbols.zip
           track: internal
       - uses: actions/upload-artifact@v4
         with:

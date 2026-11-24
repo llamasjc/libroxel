@@ -116,6 +116,7 @@
  "Go-kart": "卡丁车",
  "Goes off as soon as it is in the workspace while playing: parts within BlastRadius are hit, characters die and loose parts are thrown.": "在游玩时一进入 workspace 就会爆炸：BlastRadius 内的零件会被击中，角色会死亡，松散的零件会被炸飞。",
  "Graphics": "画质",
+ "Voice chat": "语音聊天",
  "Grid": "网格",
  "Ground made of one-stud cubes. Pick the Terrain tool (5) to add, dig or paint it by dragging in the view, or to make a hill. Scripts use workspace.Terrain:FillBlock, FillBall and FillCylinder (Enum.Material.Air digs) and Clear.": "由一格大小的方块组成的地面。选择地形工具（5），在视图中拖动来添加、挖掘或涂色，或者生成山丘。脚本使用 workspace.Terrain:FillBlock、FillBall 和 FillCylinder（Enum.Material.Air 用于挖掘）以及 Clear。",
  "Group": "组合",
