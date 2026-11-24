@@ -21,12 +21,13 @@ local INK = Color3.fromRGB(77, 77, 77)
 local SOFT = Color3.fromRGB(120, 120, 120)
 local STRIPE = Color3.fromRGB(247, 246, 245)
 
-local PIECES = {
-	[1] = "libroxel://draughts-black",
-	[2] = "libroxel://draughts-white",
-	[3] = "libroxel://draughts-black-king",
-	[4] = "libroxel://draughts-white-king",
-}
+-- The plain pieces, or the ones carved in wood.
+local PIECE_SETS = { "", "wood-" }
+local pieceSet = 1
+local function pieceImage(piece)
+	local name = ({ "black", "white", "black-king", "white-king" })[piece]
+	return "libroxel://draughts-" .. PIECE_SETS[pieceSet] .. name
+end
 
 local ui = Screen.new(script.Parent, folder, {
 	title = "Checkers",
@@ -54,7 +55,7 @@ local ui = Screen.new(script.Parent, folder, {
 		radius = 3,
 	},
 	pictureOf = function(seat)
-		return PIECES[seat]
+		return pieceImage(seat)
 	end,
 	seatNote = function(v, seat)
 		local men, kings = 0, 0
@@ -70,13 +71,13 @@ local ui = Screen.new(script.Parent, folder, {
 		return (if seat == 1 then "Black" else "White") .. " · " .. men + kings .. (if kings > 0 then " (" .. kings .. " kings)" else "")
 	end,
 	sounds = {
-		move = "libroxel://lidraughts/move",
-		capture = "libroxel://lidraughts/capture",
-		start = "libroxel://lidraughts/notify",
-		win = "libroxel://lidraughts/victory",
-		lose = "libroxel://lidraughts/defeat",
-		draw = "libroxel://lidraughts/draw",
-		challenge = "libroxel://lidraughts/challenge",
+		move = "libroxel://glass/move",
+		capture = "libroxel://glass/capture",
+		start = "libroxel://glass/notify",
+		win = "libroxel://glass/victory",
+		lose = "libroxel://glass/defeat",
+		draw = "libroxel://glass/draw",
+		challenge = "libroxel://glass/challenge",
 	},
 	rules = {
 		"Black goes first. Pieces move one square diagonally forward.",
@@ -147,9 +148,20 @@ end
 -- The move list, numbered in pairs the way Lidraughts shows it.
 local extra = ui.extra
 extra.Size = UDim2.new(1, -24, 1, -(150 + 2 * 54 + 116))
+local piecesButton = make("TextButton", {
+	Name = "Pieces",
+	Size = UDim2.new(0, 120, 0, 26),
+	BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+	TextColor3 = INK,
+	TextSize = 13,
+	Text = "Pieces: plain",
+	AutoButtonColor = true,
+}, extra)
+round(piecesButton, 4)
 local movesBox = make("ScrollingFrame", {
 	Name = "Moves",
-	Size = UDim2.fromScale(1, 1),
+	Position = UDim2.fromOffset(0, 34),
+	Size = UDim2.new(1, 0, 1, -34),
 	BackgroundColor3 = Color3.fromRGB(255, 255, 255),
 	BorderSizePixel = 0,
 	ScrollBarThickness = 5,
@@ -273,7 +285,7 @@ local function draw()
 		end
 		s.piece.Visible = piece ~= 0
 		if piece ~= 0 then
-			s.piece.Image = PIECES[piece]
+			s.piece.Image = pieceImage(piece)
 		end
 		s.dot.Visible = targets[sq] == true
 	end
@@ -373,6 +385,12 @@ for sq, s in squares do
 		draw()
 	end)
 end
+
+piecesButton.MouseButton1Click:Connect(function()
+	pieceSet = pieceSet % #PIECE_SETS + 1
+	piecesButton.Text = if PIECE_SETS[pieceSet] == "" then "Pieces: plain" else "Pieces: wood"
+	draw()
+end)
 
 pcall(function()
 	board:GetPropertyChangedSignal("AbsoluteSize"):Connect(draw)

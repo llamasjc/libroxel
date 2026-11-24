@@ -493,7 +493,10 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   and `Activated` like a text button) show the PNG named by `Image`. A plain
   name is looked for beside the game file, in an `images` folder beside it,
   and in `~/Projects/libroxel-games/images`. Built in are `libroxel://coin`,
-  `smile`, `star`, `arrow` and `checker`.
+  `smile`, `star`, `arrow` and `checker`, and the table games' pictures:
+  chess pieces (`chess-wk` and so on, and wooden ones, `chess-wood-wk`),
+  draughts pieces (`draughts-white`, `draughts-wood-white-king` and so on),
+  cards (`card-qh`, `card-back`, `baize`) and Connect 4 tiles (`c4-red`).
   `ImageColor3` tints it, `ImageTransparency` fades it, and `ScaleType` is
   `Stretch`, `Fit` or `Crop`. Joined computers need the same files.
 - **Terrain:** `workspace.Terrain` is ground made of one-stud cells, each
@@ -521,7 +524,11 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   starting over when it ends if `Looped`. `Play` and `Stop` go back to the
   start, `Pause` and `Resume` don't, and `Ended` fires when it finishes.
   `libroxel://coin`, `jump`, `boom`, `click`, `splash`, `chime` and `hum`
-  are made by Libroxel. A sound inside a part gets quieter further from the
+  are made by Libroxel, and so are four sets of game sounds, `wood`, `glass`,
+  `retro` and `digital`, each with `move`, `capture`, `check`, `notify`,
+  `victory`, `defeat`, `draw`, `lowtime`, `confirm`, `challenge` and
+  `message` (`libroxel://glass/victory`), and `libroxel://table/drop`, `bad`,
+  `win`, `lose` and `libroxel://cards/click`, `slide`, `win`, `lose`. A sound inside a part gets quieter further from the
   camera. Characters carry `Jumping` and `Splash` sounds in their root part,
   played when they jump and fall into water. In the sample, coins ding, the
   TNT booms and the finish chimes.
@@ -904,13 +911,7 @@ included with the program:
   `crates/libroxel/assets/fonts/` and `web/fonts/`).
 - [Phosphor](https://phosphoricons.com) icons, under the MIT License, through the
   `egui-phosphor` crate.
-- The chess pieces are Colin M.L. Burnett's "cburnett" set, as used by
-  [Lichess](https://github.com/lichess-org/lila), under the GNU GPL v2 or
-  later (see `crates/libroxel-engine/assets/CHESS-PIECES.md`).
-- The chess and checkers sounds are Lichess's and Lidraughts's sound sets by
-  Enigmahack, and the draughts pieces are Lidraughts's "wide_crown" set, under
-  the GNU AGPL v3 or later (see `SOUNDS.md` and `DRAUGHTS.md` in
-  `crates/libroxel-engine/assets/`).
-- The Connect 4 tiles and sounds are from GNOME Four-in-a-row, and the cards,
-  table cloth and card sounds from GNOME AisleRiot, under the GNU GPL v3 or
-  later (see `CONNECT4.md`, `CARDS.md` and `SOUNDS.md` there).
+- Everything else is Libroxel's own, under the same MIT or Apache 2.0
+  license: the chess, checkers and Connect 4 pieces, the cards and table
+  cloth are drawn by `packaging/art/game_art.py`, and every game sound is
+  made in code (`crates/libroxel-engine/src/sounds.rs`).

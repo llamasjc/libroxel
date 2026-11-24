@@ -590,9 +590,8 @@ round(toastBox, 6)
 
 local heard = { offer = -1, chat = nil, lowTime = false, challenges = 0 }
 
--- Lichess's sound sets.
-local SOUND_SETS = { "wood", "sfx", "piano", "nes", "futuristic" }
-local WOOD = { move = "move", capture = "capture", notify = "notify", victory = "notify", defeat = "notify", draw = "notify", lowtime = "lowtime", confirm = "confirm", challenge = "social", message = "social" }
+-- Libroxel's sound sets, made by the engine: each has every one of SOUND_NAMES.
+local SOUND_SETS = { "wood", "glass", "retro", "digital" }
 local SOUND_NAMES = { "move", "capture", "check", "notify", "victory", "defeat", "draw", "lowtime", "confirm", "challenge", "message" }
 local soundSet = 1
 local sounds = {}
@@ -603,9 +602,7 @@ local function useSoundSet(i)
 	soundSet = i
 	for name, sound in sounds do
 		local set = SOUND_SETS[i]
-		sound.SoundId = if set == "wood" then (if WOOD[name] then "libroxel://wood/" .. WOOD[name] else "")
-			elseif set then "libroxel://lichess/" .. set .. "/" .. name
-			else ""
+		sound.SoundId = if set then "libroxel://" .. set .. "/" .. name else ""
 	end
 end
 useSoundSet(1)
@@ -614,6 +611,10 @@ local function play(name)
 		sounds[name]:Play()
 	end
 end
+
+-- The plain pieces, or the ones carved in wood.
+local PIECE_SETS = { "", "wood-" }
+local pieceSet = 1
 
 local soundButton = make("TextButton", {
 	Name = "Sound",
@@ -717,7 +718,7 @@ local function drawBoard()
 		end
 		s.button.BackgroundColor3 = colour
 		local name = position and position:pieceName(sq)
-		s.piece.Image = if name then "libroxel://chess-" .. name else ""
+		s.piece.Image = if name then "libroxel://chess-" .. PIECE_SETS[pieceSet] .. name else ""
 		local target = targets[sq]
 		s.dot.Visible = target ~= nil and (position == nil or position.board[sq] == 0)
 		s.ring.Visible = target ~= nil and position ~= nil and position.board[sq] ~= 0
@@ -1248,7 +1249,7 @@ for sq, s in squares do
 				pending = moves
 				local colour = if mySide() == 0 then "w" else "b"
 				for letter, choice in promotionChoices do
-					choice.Image = "libroxel://chess-" .. colour .. letter
+					choice.Image = "libroxel://chess-" .. PIECE_SETS[pieceSet] .. colour .. letter
 				end
 				promotionCard.Visible = true
 				return
@@ -1405,6 +1406,24 @@ end)
 showLobbyTab(currentTab)
 showPage()
 send("hello")
+
+local piecesButton = make("TextButton", {
+	Name = "Pieces",
+	AnchorPoint = Vector2.new(1, 0),
+	Position = UDim2.new(1, -120, 0, 16),
+	Size = UDim2.fromOffset(96, 26),
+	BackgroundColor3 = CARD,
+	TextColor3 = MUTED,
+	TextSize = 13,
+	Text = "♞ plain",
+	AutoButtonColor = true,
+}, panel)
+round(piecesButton, 4)
+piecesButton.MouseButton1Click:Connect(function()
+	pieceSet = pieceSet % #PIECE_SETS + 1
+	piecesButton.Text = if PIECE_SETS[pieceSet] == "" then "♞ plain" else "♞ wood"
+	drawBoard()
+end)
 
 while true do
 	task.wait(0.1)

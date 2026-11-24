@@ -3,10 +3,12 @@
 //! A sound name is a WAV or OGG file, looked for in the same folders as
 //! pictures (see [`crate::pictures::set_folders`]). Names starting with
 //! `libroxel://` are sounds made by Libroxel itself: `coin`, `jump`, `boom`,
-//! `click`, `splash`, `chime` and `hum` (which loops smoothly), the `wood/`
-//! chess sounds (`move`, `capture`, `notify`, `lowtime`, `confirm` and
-//! `social`), and the
-//! files in [`FILES`] (`lichess/sfx/move`, `aisleriot/click` and so on).
+//! `click`, `splash`, `chime` and `hum` (which loops smoothly); game sounds
+//! in four sets, `wood/`, `glass/`, `retro/` and `digital/`, each with
+//! [`EVENTS`] (`move`, `capture`, `check` and so on); `table/` sounds
+//! (`drop`, `bad`, `win`, `lose`) and `cards/` sounds (`click`, `slide`,
+//! `win`, `lose`). All are made here, as sound waves; older names some
+//! games used are kept (see [`renamed`]).
 //!
 //! A sound inside a part sounds quieter the further the camera is from it:
 //! full volume within 10 studs, then falling off until it can't be heard at
@@ -24,7 +26,7 @@ use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property};
 use crate::pictures::BUILT_IN;
 use crate::view::{EngineState, to_bevy};
 
-/// Built-in sounds, by name after [`BUILT_IN`].
+/// Built-in sounds that aren't in a set, by name after [`BUILT_IN`].
 pub const SOUNDS: &[&str] = &[
     "coin",
     "jump",
@@ -33,78 +35,65 @@ pub const SOUNDS: &[&str] = &[
     "splash",
     "chime",
     "hum",
-    "wood/move",
-    "wood/capture",
-    "wood/notify",
-    "wood/lowtime",
-    "wood/confirm",
     "wood/social",
+    "table/drop",
+    "table/bad",
+    "table/win",
+    "table/lose",
+    "cards/click",
+    "cards/slide",
+    "cards/win",
+    "cards/lose",
 ];
 
-/// Sound files built in, by name after [`BUILT_IN`]. See `assets/SOUNDS.md`.
-pub const FILES: &[(&str, &[u8])] = &[
-    ("aisleriot/click", include_bytes!("../assets/sounds/aisleriot/click.ogg")),
-    ("aisleriot/slide", include_bytes!("../assets/sounds/aisleriot/slide.ogg")),
-    ("aisleriot/splat", include_bytes!("../assets/sounds/aisleriot/splat.ogg")),
-    ("aisleriot/victory", include_bytes!("../assets/sounds/aisleriot/victory.ogg")),
-    ("four-in-a-row/bad", include_bytes!("../assets/sounds/four-in-a-row/bad.ogg")),
-    ("four-in-a-row/bonus", include_bytes!("../assets/sounds/four-in-a-row/bonus.ogg")),
-    ("four-in-a-row/reverse", include_bytes!("../assets/sounds/four-in-a-row/reverse.ogg")),
-    ("four-in-a-row/slide", include_bytes!("../assets/sounds/four-in-a-row/slide.ogg")),
-    ("lichess/futuristic/capture", include_bytes!("../assets/sounds/lichess/futuristic/capture.ogg")),
-    ("lichess/futuristic/challenge", include_bytes!("../assets/sounds/lichess/futuristic/challenge.ogg")),
-    ("lichess/futuristic/check", include_bytes!("../assets/sounds/lichess/futuristic/check.ogg")),
-    ("lichess/futuristic/confirm", include_bytes!("../assets/sounds/lichess/futuristic/confirm.ogg")),
-    ("lichess/futuristic/defeat", include_bytes!("../assets/sounds/lichess/futuristic/defeat.ogg")),
-    ("lichess/futuristic/draw", include_bytes!("../assets/sounds/lichess/futuristic/draw.ogg")),
-    ("lichess/futuristic/lowtime", include_bytes!("../assets/sounds/lichess/futuristic/lowtime.ogg")),
-    ("lichess/futuristic/message", include_bytes!("../assets/sounds/lichess/futuristic/message.ogg")),
-    ("lichess/futuristic/move", include_bytes!("../assets/sounds/lichess/futuristic/move.ogg")),
-    ("lichess/futuristic/notify", include_bytes!("../assets/sounds/lichess/futuristic/notify.ogg")),
-    ("lichess/futuristic/victory", include_bytes!("../assets/sounds/lichess/futuristic/victory.ogg")),
-    ("lichess/nes/capture", include_bytes!("../assets/sounds/lichess/nes/capture.ogg")),
-    ("lichess/nes/challenge", include_bytes!("../assets/sounds/lichess/nes/challenge.ogg")),
-    ("lichess/nes/check", include_bytes!("../assets/sounds/lichess/nes/check.ogg")),
-    ("lichess/nes/confirm", include_bytes!("../assets/sounds/lichess/nes/confirm.ogg")),
-    ("lichess/nes/defeat", include_bytes!("../assets/sounds/lichess/nes/defeat.ogg")),
-    ("lichess/nes/draw", include_bytes!("../assets/sounds/lichess/nes/draw.ogg")),
-    ("lichess/nes/lowtime", include_bytes!("../assets/sounds/lichess/nes/lowtime.ogg")),
-    ("lichess/nes/message", include_bytes!("../assets/sounds/lichess/nes/message.ogg")),
-    ("lichess/nes/move", include_bytes!("../assets/sounds/lichess/nes/move.ogg")),
-    ("lichess/nes/notify", include_bytes!("../assets/sounds/lichess/nes/notify.ogg")),
-    ("lichess/nes/victory", include_bytes!("../assets/sounds/lichess/nes/victory.ogg")),
-    ("lichess/piano/capture", include_bytes!("../assets/sounds/lichess/piano/capture.ogg")),
-    ("lichess/piano/challenge", include_bytes!("../assets/sounds/lichess/piano/challenge.ogg")),
-    ("lichess/piano/check", include_bytes!("../assets/sounds/lichess/piano/check.ogg")),
-    ("lichess/piano/confirm", include_bytes!("../assets/sounds/lichess/piano/confirm.ogg")),
-    ("lichess/piano/defeat", include_bytes!("../assets/sounds/lichess/piano/defeat.ogg")),
-    ("lichess/piano/draw", include_bytes!("../assets/sounds/lichess/piano/draw.ogg")),
-    ("lichess/piano/lowtime", include_bytes!("../assets/sounds/lichess/piano/lowtime.ogg")),
-    ("lichess/piano/message", include_bytes!("../assets/sounds/lichess/piano/message.ogg")),
-    ("lichess/piano/move", include_bytes!("../assets/sounds/lichess/piano/move.ogg")),
-    ("lichess/piano/notify", include_bytes!("../assets/sounds/lichess/piano/notify.ogg")),
-    ("lichess/piano/victory", include_bytes!("../assets/sounds/lichess/piano/victory.ogg")),
-    ("lichess/sfx/capture", include_bytes!("../assets/sounds/lichess/sfx/capture.ogg")),
-    ("lichess/sfx/challenge", include_bytes!("../assets/sounds/lichess/sfx/challenge.ogg")),
-    ("lichess/sfx/check", include_bytes!("../assets/sounds/lichess/sfx/check.ogg")),
-    ("lichess/sfx/confirm", include_bytes!("../assets/sounds/lichess/sfx/confirm.ogg")),
-    ("lichess/sfx/defeat", include_bytes!("../assets/sounds/lichess/sfx/defeat.ogg")),
-    ("lichess/sfx/draw", include_bytes!("../assets/sounds/lichess/sfx/draw.ogg")),
-    ("lichess/sfx/lowtime", include_bytes!("../assets/sounds/lichess/sfx/lowtime.ogg")),
-    ("lichess/sfx/message", include_bytes!("../assets/sounds/lichess/sfx/message.ogg")),
-    ("lichess/sfx/move", include_bytes!("../assets/sounds/lichess/sfx/move.ogg")),
-    ("lichess/sfx/notify", include_bytes!("../assets/sounds/lichess/sfx/notify.ogg")),
-    ("lichess/sfx/victory", include_bytes!("../assets/sounds/lichess/sfx/victory.ogg")),
-    ("lidraughts/capture", include_bytes!("../assets/sounds/lidraughts/capture.ogg")),
-    ("lidraughts/challenge", include_bytes!("../assets/sounds/lidraughts/challenge.ogg")),
-    ("lidraughts/confirm", include_bytes!("../assets/sounds/lidraughts/confirm.ogg")),
-    ("lidraughts/defeat", include_bytes!("../assets/sounds/lidraughts/defeat.ogg")),
-    ("lidraughts/draw", include_bytes!("../assets/sounds/lidraughts/draw.ogg")),
-    ("lidraughts/message", include_bytes!("../assets/sounds/lidraughts/message.ogg")),
-    ("lidraughts/move", include_bytes!("../assets/sounds/lidraughts/move.ogg")),
-    ("lidraughts/notify", include_bytes!("../assets/sounds/lidraughts/notify.ogg")),
-    ("lidraughts/victory", include_bytes!("../assets/sounds/lidraughts/victory.ogg")),
+/// The game sound sets: each has every one of [`EVENTS`].
+pub const SETS: &[&str] = &["wood", "glass", "retro", "digital"];
+
+/// What happens in a game that a set has a sound for.
+pub const EVENTS: &[&str] = &[
+    "move",
+    "capture",
+    "check",
+    "notify",
+    "victory",
+    "defeat",
+    "draw",
+    "lowtime",
+    "confirm",
+    "challenge",
+    "message",
 ];
+
+/// The sound an older name stands for. Games once used sound files from
+/// other projects under these names; they're made here now.
+pub fn renamed(name: &str) -> Option<String> {
+    if let Some(rest) = name.strip_prefix("lichess/") {
+        let (set, event) = rest.split_once('/')?;
+        let ours = match set {
+            "sfx" => "wood",
+            "piano" => "glass",
+            "nes" => "retro",
+            "futuristic" => "digital",
+            _ => return None,
+        };
+        return Some(format!("{ours}/{event}"));
+    }
+    if let Some(event) = name.strip_prefix("lidraughts/") {
+        return Some(format!("glass/{event}"));
+    }
+    let new = match name {
+        "four-in-a-row/slide" => "table/drop",
+        "four-in-a-row/bad" => "table/bad",
+        "four-in-a-row/bonus" => "table/win",
+        "four-in-a-row/reverse" => "table/lose",
+        "aisleriot/click" => "cards/click",
+        "aisleriot/slide" => "cards/slide",
+        "aisleriot/victory" => "cards/win",
+        "aisleriot/splat" => "cards/lose",
+        _ => return None,
+    };
+    Some(new.to_owned())
+}
 
 /// Samples per second of the built-in sounds.
 const RATE: u32 = 22_050;
@@ -119,10 +108,8 @@ pub const HEARING_DISTANCE: f32 = 200.0;
 pub fn bytes_for(name: &str) -> Option<Vec<u8>> {
     let name = name.trim();
     if let Some(built_in) = name.strip_prefix(BUILT_IN) {
-        if let Some((_, bytes)) = FILES.iter().find(|(n, _)| *n == built_in) {
-            return Some(bytes.to_vec());
-        }
-        return synth(built_in).map(|samples| wav(&samples));
+        let name = renamed(built_in).unwrap_or_else(|| built_in.to_owned());
+        return synth(&name).map(|samples| wav(&samples));
     }
     crate::pictures::bytes_for_kind(name, &["ogg", "wav", "mp3"])
 }
@@ -229,6 +216,40 @@ pub fn synth(name: &str) -> Option<Vec<f32>> {
                     + (TAU * 220.0 * t).sin() * 0.08
             })
             .collect(),
+        // Wood's other events: the bell for an ending, the pluck for people.
+        "wood/victory" | "wood/defeat" | "wood/draw" => return synth("wood/notify"),
+        "wood/challenge" | "wood/message" => return synth("wood/social"),
+        "wood/check" => (0..len(0.6)).map(|i| bell(t(i), 988.0, 0.0) + bell(t(i), 1319.0, 0.1)).collect(),
+        // Table games.
+        "table/drop" => (0..len(0.3))
+            .map(|i| {
+                let t = t(i);
+                knock(t, 180.0, 0.0, &mut noise)
+                    + knock(t, 150.0, 0.07, &mut noise) * 0.5
+                    + knock(t, 130.0, 0.12, &mut noise) * 0.3
+            })
+            .collect(),
+        "table/bad" => (0..len(0.28))
+            .map(|i| {
+                let t = t(i);
+                (TAU * 110.0 * t).sin().signum() * 0.25 * (1.0 - t / 0.28) + (TAU * 117.0 * t).sin() * 0.15
+            })
+            .collect(),
+        "table/win" => return synth("glass/victory"),
+        "table/lose" => return synth("glass/defeat"),
+        "cards/click" => (0..len(0.06)).map(|i| knock(t(i), 900.0, 0.0, &mut noise) * 0.8).collect(),
+        "cards/slide" => {
+            let mut soft = 0.0f32;
+            (0..len(0.2))
+                .map(|i| {
+                    let t = t(i);
+                    soft += (noise.next() - soft) * 0.5;
+                    soft * 0.6 * (t * 60.0).min(1.0) * (1.0 - t / 0.2)
+                })
+                .collect()
+        }
+        "cards/win" => return synth("digital/victory"),
+        "cards/lose" => return synth("digital/defeat"),
         "wood/move" => (0..len(0.1)).map(|i| knock(t(i), 240.0, 0.0, &mut noise)).collect(),
         "wood/capture" => (0..len(0.16))
             .map(|i| {
@@ -277,7 +298,25 @@ pub fn synth(name: &str) -> Option<Vec<f32>> {
                 pluck(1047.0, 0.0) + pluck(1319.0, 0.09)
             })
             .collect(),
-        _ => return None,
+        name => {
+            let (set, event) = name.split_once('/')?;
+            if !["glass", "retro", "digital"].contains(&set) {
+                return None;
+            }
+            let notes = motif(event)?;
+            let tail = match set {
+                "glass" => 0.8,
+                "retro" => 0.03,
+                _ => 0.35,
+            };
+            let end = notes.iter().map(|(_, at, long)| at + long).fold(0.0f32, f32::max) + tail;
+            (0..len(end))
+                .map(|i| {
+                    let t = t(i);
+                    notes.iter().map(|&(freq, at, long)| voice(set, freq, t - at, long)).sum::<f32>()
+                })
+                .collect()
+        }
     };
     Some(samples)
 }
@@ -296,6 +335,53 @@ fn knock(t: f32, freq: f32, at: f32, noise: &mut Noise) -> f32 {
 }
 
 /// A bell note starting `at` seconds in.
+/// Each event's tune: notes as (frequency, when, how long), in seconds.
+fn motif(event: &str) -> Option<&'static [(f32, f32, f32)]> {
+    Some(match event {
+        "move" => &[(880.0, 0.0, 0.08)],
+        "capture" => &[(660.0, 0.0, 0.07), (440.0, 0.05, 0.1)],
+        "check" => &[(988.0, 0.0, 0.09), (1319.0, 0.1, 0.14)],
+        "confirm" => &[(784.0, 0.0, 0.06), (1175.0, 0.05, 0.08)],
+        "notify" => &[(784.0, 0.0, 0.2), (587.0, 0.17, 0.3)],
+        "message" => &[(1047.0, 0.0, 0.12), (1319.0, 0.09, 0.2)],
+        "challenge" => &[(523.0, 0.0, 0.1), (659.0, 0.1, 0.1), (784.0, 0.2, 0.25)],
+        "lowtime" => &[(988.0, 0.0, 0.05), (988.0, 0.14, 0.05), (988.0, 0.28, 0.05)],
+        "victory" => &[(523.0, 0.0, 0.11), (659.0, 0.11, 0.11), (784.0, 0.22, 0.11), (1047.0, 0.33, 0.45)],
+        "defeat" => &[(523.0, 0.0, 0.16), (440.0, 0.16, 0.16), (349.0, 0.32, 0.16), (262.0, 0.48, 0.45)],
+        "draw" => &[(587.0, 0.0, 0.18), (587.0, 0.22, 0.3)],
+        _ => return None,
+    })
+}
+
+/// One note of a set's instrument, `u` seconds after it starts.
+fn voice(set: &str, freq: f32, u: f32, long: f32) -> f32 {
+    if u < 0.0 {
+        return 0.0;
+    }
+    let attack = (u * 400.0).min(1.0);
+    match set {
+        // A struck glass: the note and a high overtone, ringing out.
+        "glass" => {
+            ((TAU * freq * u).sin()
+                + 0.3 * (TAU * 2.76 * freq * u).sin()
+                + 0.08 * (TAU * 5.4 * freq * u).sin())
+                * 0.22
+                * attack
+                * (-u * 4.5).exp()
+        }
+        // An old game console: a square wave held for the note.
+        "retro" => {
+            let held = if u < long { 1.0 } else { (1.0 - (u - long) / 0.03).max(0.0) };
+            (TAU * freq * u).sin().signum() * 0.16 * held * attack
+        }
+        // A bright synth: one wave bending another.
+        _ => {
+            let bend = 1.6 * (-u * 8.0).exp();
+            (TAU * freq * u + bend * (TAU * 2.0 * freq * u).sin()).sin() * 0.28 * attack * (-u * 7.0).exp()
+        }
+    }
+}
+
 fn bell(t: f32, freq: f32, at: f32) -> f32 {
     if t < at {
         return 0.0;
@@ -513,14 +599,46 @@ mod tests {
     }
 
     #[test]
-    fn sound_files_are_ogg() {
-        for (name, bytes) in FILES {
-            assert_eq!(&bytes[0..4], b"OggS", "{name}");
-            assert_eq!(bytes_for(&format!("{BUILT_IN}{name}")).as_deref(), Some(*bytes));
+    fn every_set_has_every_event() {
+        for set in SETS {
+            for event in EVENTS {
+                let name = format!("{set}/{event}");
+                let s = synth(&name).unwrap_or_else(|| panic!("no {name}"));
+                let peak = s.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+                assert!(
+                    s.len() > 500 && peak > 0.05 && peak <= 1.0,
+                    "{name}: {} samples, peak {peak}",
+                    s.len()
+                );
+                assert_eq!(&bytes_for(&format!("{BUILT_IN}{name}")).unwrap()[0..4], b"RIFF");
+            }
         }
-        for set in ["sfx", "piano", "nes", "futuristic"] {
-            assert!(bytes_for(&format!("{BUILT_IN}lichess/{set}/move")).is_some());
+    }
+
+    /// Games saved with the older sound names still make sounds.
+    #[test]
+    fn older_names_still_sound() {
+        for old in [
+            "lichess/sfx/move",
+            "lichess/piano/victory",
+            "lichess/nes/check",
+            "lichess/futuristic/capture",
+            "lidraughts/move",
+            "four-in-a-row/slide",
+            "four-in-a-row/bonus",
+            "aisleriot/click",
+            "aisleriot/splat",
+        ] {
+            let new = renamed(old).unwrap();
+            assert_eq!(
+                bytes_for(&format!("{BUILT_IN}{old}")),
+                bytes_for(&format!("{BUILT_IN}{new}")),
+                "{old}"
+            );
+            assert!(bytes_for(&format!("{BUILT_IN}{old}")).is_some(), "{old}");
         }
+        assert_eq!(renamed("lichess/sfx/move").as_deref(), Some("wood/move"));
+        assert!(bytes_for("libroxel://lichess/other/move").is_none());
     }
 
     #[test]

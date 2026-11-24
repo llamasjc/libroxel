@@ -265,6 +265,52 @@ mod tests {
         assert!(errors(&mut session).is_empty(), "{:?}", errors(&mut session));
     }
 
+    /// The button named `name` somewhere in `screen` of Player1's GUI.
+    fn gui_button(session: &libroxel_engine::session::PlaySession, screen: &str, name: &str) -> InstanceId {
+        let tree = session.runtime().tree().borrow();
+        let players = tree.service(libroxel_instance::ClassKind::Players).unwrap();
+        let player = tree.find_first_child(players, "Player1").unwrap().unwrap();
+        let gui = tree.find_first_child(player, "PlayerGui").unwrap().unwrap();
+        let screen = tree.find_first_child(gui, screen).unwrap().unwrap();
+        tree.descendants(screen)
+            .unwrap()
+            .into_iter()
+            .find(|d| tree.name(*d) == Ok(name))
+            .unwrap_or_else(|| panic!("no {name} button"))
+    }
+
+    #[test]
+    fn chess_and_checkers_have_wooden_pieces() {
+        let mut session = start_on(chess(), true).unwrap();
+        steps(&mut session, 10);
+        session
+            .runtime()
+            .run("act", r#"game.ReplicatedStorage.Chess.Action:FireServer("playBot", { level = 1, control = "none", colour = "white" })"#)
+            .unwrap();
+        steps(&mut session, 5);
+        let e2 = "game.Players.Player1.PlayerGui.ChessScreen.BoardColumn.Board.e2.Piece.Image";
+        assert_eq!(value(&session, e2), "libroxel://chess-wp");
+        let button = gui_button(&session, "ChessScreen", "Pieces");
+        session.click_button(button);
+        steps(&mut session, 2);
+        assert_eq!(value(&session, e2), "libroxel://chess-wood-wp");
+        session.click_button(button);
+        steps(&mut session, 2);
+        assert_eq!(value(&session, e2), "libroxel://chess-wp");
+
+        let mut session = start_on(checkers(), true).unwrap();
+        steps(&mut session, 10);
+        fire(&session, r#""playBot", { level = 1, opponents = 1 }"#);
+        steps(&mut session, 5);
+        let pieces = r#"(function() local n = 0 for _, d in game.Players.Player1.PlayerGui.CheckersScreen:GetDescendants() do
+            if d:IsA("ImageLabel") and d.Visible and string.find(d.Image, "draughts%-wood%-") then n += 1 end end return n end)()"#;
+        assert_eq!(value(&session, pieces), "0");
+        session.click_button(gui_button(&session, "CheckersScreen", "Pieces"));
+        steps(&mut session, 2);
+        assert!(value(&session, pieces).parse::<u32>().unwrap() >= 24, "{}", value(&session, pieces));
+        assert!(errors(&mut session).is_empty());
+    }
+
     #[test]
     fn chess_against_the_computer() {
         let mut session = start_on(chess(), true).unwrap();
