@@ -107,6 +107,7 @@ mod seal;
 mod security;
 mod social;
 mod stats;
+mod wallet;
 use limits::{Caller, Limit, Limits, too_many};
 pub use owner::{AccountRow, accounts, add_owner, ban, ban_until, owners, remove_owner, rename, unban};
 pub use password::{
@@ -126,6 +127,10 @@ pub use social::{
     friends_list_message, presence_message, web_presence_message,
 };
 pub use stats::{Crash, CrashGroup, PING_EVERY_SECS, Ping, Share, Usage, UsageDay, admin_message};
+pub use wallet::{
+    Buy, CURRENCY, DAILY, Daily, Entry, MAX_PRICE, Refused, Sale, SetPrice, Wallet, balance, buy,
+    buy_message, credit, daily_message, debit, owns, price_message, spent, top_up, wallet_message,
+};
 
 /// The port a Hub listens on unless told otherwise.
 pub const DEFAULT_PORT: u16 = 7430;
@@ -484,6 +489,8 @@ pub struct Item {
     pub data: serde_json::Value,
     /// How many times someone has put it on.
     pub wears: u32,
+    #[serde(default)]
+    pub price: u32,
 }
 
 /// Reporting a published game or a catalog item as not OK.
@@ -851,6 +858,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     manage::create_tables(&db)?;
     copies::create_tables(&db)?;
     pictures::create_tables(&db)?;
+    wallet::create_tables(&db)?;
     seal::install(&db, path)?;
     closed_games(&db, false).map_err(|e| format!("could not set up the Hub database: {e}"))?;
     Ok(db)
@@ -970,6 +978,10 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/catalog", get(list_items).post(share_item))
         .route("/catalog/{id}", delete(unlist_item))
         .route("/catalog/{id}/wear", post(wear_item))
+        .route("/catalog/{id}/price", post(wallet::set_price))
+        .route("/shop/buy", post(wallet::buy_item))
+        .route("/wallet/daily", post(wallet::claim_daily))
+        .route("/wallet/{id}", get(wallet::get_wallet))
         .route("/reports", post(report))
         .route("/moderation", post(moderate::moderate))
         .route("/moderation/{id}", get(moderate::get_dashboard))
@@ -1354,6 +1366,9 @@ fn save_account(
     if recovery::was_moved(&db, &account.player_id) {
         return Err((StatusCode::GONE, SIGNED_OUT.into()));
     }
+    if !wallet::may_wear(&db, &account.player_id, &account.look) {
+        return Err((StatusCode::PAYMENT_REQUIRED, "buy that hat in the shop first".into()));
+    }
     let internal = |e: rusqlite::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     let last: Option<(i64, String)> = db
         .query_row(
@@ -1479,6 +1494,7 @@ async fn share_item(
         creator_id: item.creator_id,
         data: item.data,
         wears: 0,
+        price: 0,
     }))
 }
 
@@ -1487,10 +1503,12 @@ async fn list_items(State(db): State<Db>, Query(query): Query<ListQuery>) -> Jso
     let pattern = format!("%{}%", query.q.unwrap_or_default().trim().replace(['%', '_'], ""));
     let mut statement = db
         .prepare(&format!(
-            "SELECT i.item_id, i.name, i.kind, COALESCE(a.name, 'Someone'), i.creator_id, i.data, i.wears
+            "SELECT i.item_id, i.name, i.kind,
+                    COALESCE(a.name, CASE i.creator_id WHEN 'libroxel' THEN 'Libroxel' ELSE 'Someone' END),
+                    i.creator_id, i.data, i.wears, i.price
              FROM items i LEFT JOIN accounts a ON a.player_id = i.creator_id
              WHERE (i.name LIKE ?1 OR COALESCE(a.name, '') LIKE ?1) AND NOT {} AND NOT {}
-             ORDER BY i.wears DESC, i.created DESC LIMIT 200",
+             ORDER BY i.price > 0 DESC, i.wears DESC, i.created DESC LIMIT 200",
             hidden_sql("item", "i.item_id"),
             owner::banned_sql("i.creator_id")
         ))
@@ -1506,6 +1524,7 @@ async fn list_items(State(db): State<Db>, Query(query): Query<ListQuery>) -> Jso
                 creator_id: r.get(4)?,
                 data: serde_json::from_str(&data).unwrap_or(serde_json::Value::Null),
                 wears: r.get::<_, i64>(6)? as u32,
+                price: r.get::<_, i64>(7)? as u32,
             })
         })
         .map(|rows| rows.filter_map(Result::ok).collect())
@@ -2627,6 +2646,31 @@ impl HubClient {
             .call()
             .and_then(|mut r| r.body_mut().read_json())
             .map_err(|e| format!("could not reach the Hub: {e}"))
+    }
+
+    pub fn wallet(&self, player_id: &str, time: i64, signature: &str) -> Result<Wallet, String> {
+        let request = self
+            .agent
+            .get(format!("{}/wallet/{player_id}", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call();
+        self.answer(request)
+    }
+
+    pub fn claim_daily(&self, daily: &Daily) -> Result<Wallet, String> {
+        self.post_signed("/wallet/daily", daily)
+    }
+
+    pub fn buy_item(&self, buy: &Buy) -> Result<Wallet, String> {
+        self.post_signed("/shop/buy", buy)
+    }
+
+    pub fn set_price(&self, item_id: &str, price: &SetPrice) -> Result<(), String> {
+        self.post_raw(&format!("/catalog/{item_id}/price"), price).map(|_| ())
     }
 
     /// Counts someone putting an item on.
