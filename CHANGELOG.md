@@ -5,6 +5,14 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
 
 ## Unreleased
 
+- **Your games** on the Create page, in the app and on the site: change a
+  game's name and description, who can play, and max players, remove it,
+  or put an older version back live.
+- **More of the scripting API:** joints (`GetJoints`,
+  `GetConnectedParts`, `AssemblyRootPart`, `IsGrounded`), `Part:Resize`,
+  collision group renames and checks, `WorldModel` raycasts and part
+  queries, terrain `CopyRegion`, `PasteRegion`, `ReadVoxels` and
+  `ReadVoxelChannels`, and older lowercase names like `findFirstChild`.
 - **Android tablets without Vulkan** (Mali and similar) open instead of
   closing on the first frame.
 - **Phones and tablets:** the game fills the screen with the status and
