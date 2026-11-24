@@ -72,8 +72,7 @@ fn runtime_err(message: impl Into<String>) -> mlua::Error {
 
 /// A part's mass: its volume times the density.
 fn mass(lua: &Lua, id: InstanceId) -> f32 {
-    let size = host(lua).tree.borrow().get_vec3(id, Property::Size).unwrap_or_default();
-    (size.x * size.y * size.z * extras::DENSITY).max(0.01)
+    libroxel_instance::physical::mass(&host(lua).tree.borrow(), id)
 }
 
 fn velocity(lua: &Lua, id: InstanceId) -> Vec3 {

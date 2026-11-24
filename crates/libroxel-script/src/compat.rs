@@ -18,7 +18,7 @@ use crate::bindings::{
     LuaColor3, LuaEnumItem, LuaInstance, LuaVector3, as_enum, as_instance, as_number, as_vector3, class_of,
     clock, host, model_pivot_part, part_cframe, push_instance, require_class, set_part_cframe, tree_err,
 };
-use crate::names::{self, compat::*, extras};
+use crate::names::{self, compat::*};
 use crate::types::{LuaCFrame, LuaVector2, as_cframe};
 
 fn runtime_err(message: impl Into<String>) -> mlua::Error {
@@ -454,10 +454,32 @@ fn date_lib(lua: &Lua) -> mlua::Result<Table> {
 // PhysicalProperties
 // ---------------------------------------------------------------------------
 
-/// A part's custom physical make-up. Kept for scripts to read back; the
-/// physics doesn't use it yet.
+/// What a part is made of (see [`libroxel_instance::physical`]).
 #[derive(Debug, Clone, Copy)]
-struct LuaPhysicalProperties([f32; 5]);
+pub(crate) struct LuaPhysicalProperties([f32; 5]);
+
+/// A part's `CustomPhysicalProperties`, or nil.
+pub(crate) fn custom_physical(lua: &Lua, part: &Value) -> mlua::Result<Option<LuaPhysicalProperties>> {
+    let Some(id) = crate::bindings::as_instance(part) else { return Ok(None) };
+    let host = host(lua);
+    let custom = libroxel_instance::physical::custom(&host.tree.borrow(), id);
+    Ok(custom.map(|p| LuaPhysicalProperties(p.to_array())))
+}
+
+/// Sets a part's `CustomPhysicalProperties` (nil goes back to its material's).
+pub(crate) fn set_custom_physical(lua: &Lua, part: &Value, value: &Value) -> mlua::Result<()> {
+    let Some(id) = crate::bindings::as_instance(part) else { return Ok(()) };
+    let physical = match value {
+        Value::Nil => None,
+        Value::UserData(ud) => match ud.borrow::<LuaPhysicalProperties>() {
+            Ok(p) => Some(libroxel_instance::physical::Physical::from_array(p.0)),
+            Err(_) => return Err(runtime_err("CustomPhysicalProperties expects PhysicalProperties or nil")),
+        },
+        _ => return Err(runtime_err("CustomPhysicalProperties expects PhysicalProperties or nil")),
+    };
+    libroxel_instance::physical::set_custom(&mut host(lua).tree.borrow_mut(), id, physical)
+        .map_err(|e| runtime_err(e.to_string()))
+}
 
 impl UserData for LuaPhysicalProperties {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
@@ -475,6 +497,16 @@ fn physical_lib(lua: &Lua) -> mlua::Result<Table> {
     lib.set(
         names::constructors::NEW,
         lua.create_function(|_, args: mlua::Variadic<Value>| {
+            // A material's own, as PhysicalProperties.new(Enum.Material.Ice) asks.
+            if let Some(EnumValue::Material(m)) = args
+                .first()
+                .filter(|v| matches!(v, Value::UserData(_)))
+                .and_then(|v| as_enum(EnumKind::Material, v))
+            {
+                return Ok(LuaPhysicalProperties(
+                    libroxel_instance::physical::Physical::of_material(m).to_array(),
+                ));
+            }
             // Plastic, unless given.
             let mut values = [0.7, 0.3, 0.5, 1.0, 1.0];
             for (slot, v) in values.iter_mut().zip(args.iter()) {
@@ -539,8 +571,7 @@ pub(crate) fn input_state(began: bool) -> LuaEnumItem {
 // ---------------------------------------------------------------------------
 
 fn part_mass(lua: &Lua, id: InstanceId) -> f32 {
-    let size = host(lua).tree.borrow().get_vec3(id, Property::Size).unwrap_or_default();
-    (size.x * size.y * size.z * extras::DENSITY).max(0.01)
+    libroxel_instance::physical::mass(&host(lua).tree.borrow(), id)
 }
 
 /// The parts welded to `part` (and to them), with `part` itself.

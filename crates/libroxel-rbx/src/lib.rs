@@ -699,6 +699,24 @@ impl<'a> Importer<'a> {
                 }
                 true
             }
+            // What the part is made of, when not its material's.
+            ("CustomPhysicalProperties", Variant::PhysicalProperties(p)) => {
+                if let rbx_dom_weak::types::PhysicalProperties::Custom(c) = p
+                    && class.has_property(Property::Material)
+                {
+                    let custom = libroxel_instance::physical::Physical::from_array([
+                        c.density(),
+                        c.friction(),
+                        c.elasticity(),
+                        c.friction_weight(),
+                        c.elasticity_weight(),
+                    ]);
+                    if libroxel_instance::physical::set_custom(tree, id, Some(custom)).is_ok() {
+                        self.report.properties += 1;
+                    }
+                }
+                true
+            }
             ("Tags", Variant::Tags(tags)) => {
                 for tag in tags.iter() {
                     let _ = tree.add_tag(id, tag);

@@ -614,7 +614,6 @@ add(props, "BasePart", {
 	Massless = false,
 	LocalTransparencyModifier = 0,
 	RootPriority = 0,
-	CustomPhysicalProperties = NIL,
 	CollisionGroupId = 0,
 	Elasticity = 0.5,
 	Friction = 0.3,
@@ -629,6 +628,9 @@ add(props, "BasePart", {
 	FormFactor = NIL,
 })
 add(getters, "BasePart", {
+	CustomPhysicalProperties = function(self)
+		return L.get_physical(self)
+	end,
 	Velocity = function(self)
 		return velocity(self)
 	end,
@@ -658,6 +660,9 @@ add(getters, "BasePart", {
 	end,
 })
 add(setters, "BasePart", {
+	CustomPhysicalProperties = function(self, v)
+		L.set_physical(self, v)
+	end,
 	Velocity = function(self, v)
 		self.AssemblyLinearVelocity = v
 	end,
