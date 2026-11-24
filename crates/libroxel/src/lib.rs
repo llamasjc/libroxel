@@ -21,6 +21,7 @@ mod command;
 mod debugging;
 mod file_picker;
 mod game_ratings;
+mod graphics;
 mod groups;
 mod gui;
 mod history;
@@ -394,22 +395,28 @@ pub fn run() {
     };
 
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "Libroxel".into(),
-            // The window's app id (WM_CLASS), so Linux docks match it to
-            // the menu entry and show the Libroxel icon.
-            name: Some("libroxel".into()),
-            resolution: (1440, 900).into(),
-            mode: if MOBILE {
-                bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary)
-            } else {
-                bevy::window::WindowMode::Windowed
-            },
-            ..default()
-        }),
-        ..default()
-    }))
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Libroxel".into(),
+                    // The window's app id (WM_CLASS), so Linux docks match it to
+                    // the menu entry and show the Libroxel icon.
+                    name: Some("libroxel".into()),
+                    resolution: (1440, 900).into(),
+                    mode: if MOBILE {
+                        bevy::window::WindowMode::BorderlessFullscreen(
+                            bevy::window::MonitorSelection::Primary,
+                        )
+                    } else {
+                        bevy::window::WindowMode::Windowed
+                    },
+                    ..default()
+                }),
+                ..default()
+            })
+            .set(graphics::render_plugin()),
+    )
     .add_plugins(EguiPlugin::default())
     .configure_sets(
         PostUpdate,
