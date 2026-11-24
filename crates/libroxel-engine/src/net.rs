@@ -41,7 +41,8 @@ pub const DEFAULT_PORT: u16 = 7420;
 /// The version of the messages. Computers with different versions can't play together.
 /// 2: long messages are compressed (see [`Conn::send`]).
 /// 3: everything is encrypted (see [`Conn`]).
-pub const PROTOCOL: u64 = 3;
+/// 4: streamed terrain comes in chunks (`xs`).
+pub const PROTOCOL: u64 = 4;
 /// Messages longer than this many bytes are sent compressed.
 const COMPRESS_OVER: usize = 4096;
 /// How much unsent data a connection may build up before it is dropped,
@@ -52,6 +53,17 @@ const SEND_AHEAD: usize = 2 * 1024 * 1024;
 const READ_BUDGET: usize = 1024 * 1024;
 const CHUNK: usize = 500;
 const APPLY_BUDGET: Duration = Duration::from_millis(8);
+/// How many instances a streamed player gets when joining, and then each
+/// step at most, nearest first.
+const STREAM_FIRST: usize = 5_000;
+const STREAM_STEP: usize = 2_000;
+/// How many terrain chunks go each step at most, and how many steps apart
+/// a streamed player's terrain is looked at when it hasn't changed.
+const TERRAIN_STEP: usize = 256;
+const TERRAIN_LOOK: u64 = 15;
+/// A game with more parts than this streams, even without `StreamingEnabled`,
+/// letting go of parts a little past the radius.
+const BIG_MAP: usize = 5_000;
 /// The longest message a host takes from a joined computer. What players
 /// send (their moves, clicks and `FireServer` arguments) is small; anything
 /// longer is someone trying to fill the host's memory.
@@ -524,9 +536,12 @@ pub(crate) enum Link {
 pub(crate) struct Hosting {
     listener: TcpListener,
     peers: Vec<Peer>,
-    /// `Workspace.StreamingEnabled` when hosting began (it can't change
-    /// while the game runs): each player is sent only what's near them.
+    /// `Workspace.StreamingEnabled`, or a big map, when hosting began (it
+    /// can't change while the game runs): each player is sent only what's
+    /// near them.
     streaming: bool,
+    /// Whether it streams because the map is big.
+    big: bool,
     replicator: Option<Replicator>,
     priming: Option<Receiver<Replicator>>,
     /// Teleports found but not sent yet: player, number, where, facing.
@@ -774,12 +789,32 @@ pub(crate) struct Replicator {
     /// Whether this shares a game being edited: every service, and the
     /// code of server scripts too.
     edits: bool,
+    /// Steps sent, for parts further away to be updated less often.
+    tick: u64,
+    /// Terrain chunks sent, when streamed, and their fingerprints.
+    chunks: HashMap<(i32, i32, i32), u64>,
+    /// The terrain's version when its chunks were last looked at, and
+    /// whether some near ones are still to come.
+    chunks_version: u64,
+    chunks_waiting: bool,
+    /// What the last full look found to send, and whether some was left
+    /// for later; between full looks only what changed is looked at.
+    wanted: Option<HashMap<InstanceId, u64>>,
+    waiting: bool,
+    /// Where the tree's touched log was read up to, and its structure then.
+    touched: (u64, usize),
+    structure: u64,
+    /// Changes held back until their turn.
+    later: HashSet<InstanceId>,
 }
+
+/// How many steps apart a streamed player's whole share is looked at again.
+const FULL_LOOK: u64 = 6;
 
 impl Replicator {
     /// A replicator for a game being edited together.
     pub(crate) fn edits() -> Self {
-        Self { sent: HashMap::new(), edits: true }
+        Self { edits: true, ..Self::default() }
     }
 
     /// What changed since the last call, as operations; updates the record.
@@ -792,14 +827,117 @@ impl Replicator {
     /// Parts that stop being near are sent as removed (streamed out), and
     /// come back as new ones when near again.
     pub(crate) fn delta_streamed(&mut self, tree: &InstanceTree, focus: &Focus) -> Vec<Json> {
-        let wanted = focus.wanted(tree, &self.sent);
-        self.delta_within(tree, Some(&wanted))
+        self.tick += 1;
+        let (epoch, touched) = tree.touched_since(self.touched.1);
+        let full = self.wanted.is_none()
+            || self.waiting
+            || epoch != self.touched.0
+            || tree.game_structure() != self.structure
+            || self.tick.is_multiple_of(FULL_LOOK);
+        let mut ops = if full {
+            let (wanted, waiting) = focus.wanted(tree, &self.sent);
+            self.waiting = waiting;
+            let ops = self.delta_within(tree, Some(&wanted));
+            self.wanted = Some(wanted);
+            ops
+        } else {
+            let mut ids: Vec<InstanceId> = touched.to_vec();
+            ids.extend(self.later.drain());
+            let mut done = HashSet::new();
+            let mut ops = Vec::new();
+            for id in ids {
+                if done.insert(id) {
+                    self.changed(tree, id, &mut ops);
+                }
+            }
+            ops
+        };
+        self.touched = (epoch, tree.touched_len());
+        self.structure = tree.game_structure();
+        if let Some(terrain) = tree.terrain().filter(|t| self.sent.contains_key(t))
+            && let Some(op) = self.terrain_chunks(tree, terrain, focus)
+        {
+            ops.push(op);
+        }
+        ops
+    }
+
+    /// The terrain chunks near enough that are new or changed, nearest
+    /// first, and those gone or too far now, as air.
+    fn terrain_chunks(&mut self, tree: &InstanceTree, terrain: InstanceId, focus: &Focus) -> Option<Json> {
+        let voxels = tree.voxels(terrain).ok()?;
+        if voxels.version() == self.chunks_version
+            && !self.chunks_waiting
+            && !self.tick.is_multiple_of(TERRAIN_LOOK)
+        {
+            return None;
+        }
+        self.chunks_version = voxels.version();
+        let size = libroxel_instance::voxels::CHUNK as f32;
+        let half = size * 0.75f32.sqrt();
+        let distance = |(x, y, z): (i32, i32, i32)| {
+            let centre = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5) * size;
+            focus.points.iter().map(|p| (centre - *p).length() - half).fold(f32::INFINITY, f32::min)
+        };
+        let mut send: Vec<(f32, (i32, i32, i32), u64)> = Vec::new();
+        let mut gone = Vec::new();
+        for chunk in voxels.chunks() {
+            let print = voxels.chunk_fingerprint(chunk);
+            let d = distance(chunk);
+            match self.chunks.get(&chunk) {
+                Some(_) if d > focus.keep => gone.push(chunk),
+                Some(old) if *old == print => {}
+                Some(_) => send.push((d, chunk, print)),
+                None if d <= focus.radius => send.push((d, chunk, print)),
+                None => {}
+            }
+        }
+        gone.extend(self.chunks.keys().copied().filter(|c| voxels.chunk_fingerprint(*c) == 0));
+        send.sort_by(|a, b| a.0.total_cmp(&b.0));
+        self.chunks_waiting = send.len() > TERRAIN_STEP;
+        send.truncate(TERRAIN_STEP);
+        for chunk in &gone {
+            self.chunks.remove(chunk);
+        }
+        for (_, chunk, print) in &send {
+            self.chunks.insert(*chunk, *print);
+        }
+        if gone.is_empty() && send.is_empty() {
+            return None;
+        }
+        let air = libroxel_instance::voxels::Voxels::new().encode_chunks(gone);
+        let near = voxels.encode_chunks(send.into_iter().map(|(_, c, _)| c));
+        let text = [air, near].into_iter().filter(|t| !t.is_empty()).collect::<Vec<_>>().join(";");
+        Some(json!({ "u": bits(terrain), "xs": text }))
+    }
+
+    /// The update for one instance already sent, between full looks.
+    fn changed(&mut self, tree: &InstanceTree, id: InstanceId, ops: &mut Vec<Json>) {
+        let Some(old) = self.sent.get(&id) else { return };
+        let Ok(class) = tree.class(id) else { return };
+        if tree.is_destroyed(id).unwrap_or(true) || tree.parent(id).ok().flatten() != old.parent {
+            return;
+        }
+        let every = self.wanted.as_ref().and_then(|w| w.get(&id)).copied().unwrap_or(1);
+        if every > 1 && !self.tick.wrapping_add(id.to_bits()).is_multiple_of(every) {
+            self.later.insert(id);
+            return;
+        }
+        if tree.revision(id).unwrap_or(0) == old.revision {
+            return;
+        }
+        let Some(now) = snapshot(tree, id) else { return };
+        let service = SHARED.iter().any(|c| tree.service(*c) == Some(id));
+        if let Some(op) = Self::op(class, id, Some(old), &now, service, None, self.edits) {
+            ops.push(op);
+        }
+        self.sent.insert(id, now);
     }
 
     fn delta_within(
         &mut self,
         tree: &InstanceTree,
-        workspace_filter: Option<&HashSet<InstanceId>>,
+        workspace_filter: Option<&HashMap<InstanceId, u64>>,
     ) -> Vec<Json> {
         let mut ops = Vec::new();
         let mut seen = HashSet::new();
@@ -823,7 +961,7 @@ impl Replicator {
         tree: &InstanceTree,
         id: InstanceId,
         service: bool,
-        filter: Option<&HashSet<InstanceId>>,
+        filter: Option<&HashMap<InstanceId, u64>>,
         ops: &mut Vec<Json>,
         seen: &mut HashSet<InstanceId>,
     ) {
@@ -831,17 +969,23 @@ impl Replicator {
         if unshared(class) || tree.is_destroyed(id).unwrap_or(true) {
             return;
         }
-        if !service && filter.is_some_and(|wanted| !wanted.contains(&id)) {
-            return;
-        }
+        let every = match filter {
+            Some(wanted) if !service => match wanted.get(&id) {
+                Some(every) => *every,
+                None => return,
+            },
+            _ => 1,
+        };
         seen.insert(id);
         let revision = tree.revision(id).unwrap_or(0);
         let parent = tree.parent(id).ok().flatten();
         let old = self.sent.get(&id);
-        if old.is_none_or(|old| old.revision != revision || old.parent != parent)
-            && let Some(now) = snapshot(tree, id)
-        {
-            let voxels = (class == ClassKind::Terrain)
+        let due = old.is_none() || every <= 1 || self.tick.wrapping_add(id.to_bits()).is_multiple_of(every);
+        let stale = old.is_none_or(|old| old.revision != revision || old.parent != parent);
+        if stale && !due {
+            self.later.insert(id);
+        } else if stale && let Some(now) = snapshot(tree, id) {
+            let voxels = (class == ClassKind::Terrain && filter.is_none())
                 .then(|| tree.voxels(id).map(|v| v.encode()).unwrap_or_default());
             if let Some(op) = Self::op(class, id, old, &now, service, voxels, self.edits) {
                 ops.push(op);
@@ -948,48 +1092,113 @@ pub(crate) struct Focus {
     pub(crate) always: HashSet<InstanceId>,
     /// `PersistentPerPlayer` models this player was added to, always sent too.
     pub(crate) persistent: HashSet<InstanceId>,
+    /// How many instances not sent yet may go this step, nearest first.
+    pub(crate) budget: usize,
 }
 
 impl Focus {
-    /// The workspace's descendants to send. Models, folders and anything
-    /// not inside a part always go (as `ModelStreamingMode.Default` and
-    /// `Nonatomic`); a part goes, with everything in it, when it's near;
-    /// an `Atomic` model goes whole when any of its parts is near; a
-    /// `Persistent` model, terrain and characters always go whole.
+    /// The workspace's descendants to send, each with how many steps apart
+    /// its changes go: every step near, less often further out. Models,
+    /// folders and anything not inside a part always go (as
+    /// `ModelStreamingMode.Default` and `Nonatomic`); a part goes, with
+    /// everything in it, when it's near; an `Atomic` model goes whole when
+    /// any of its parts is near; a `Persistent` model, terrain and
+    /// characters always go whole.
+    /// Also says whether some was left for later.
     pub(crate) fn wanted(
         &self,
         tree: &InstanceTree,
         sent: &HashMap<InstanceId, Sent>,
-    ) -> HashSet<InstanceId> {
-        let mut wanted = HashSet::new();
-        self.walk(tree, tree.workspace(), sent, &mut wanted);
-        wanted
+    ) -> (HashMap<InstanceId, u64>, bool) {
+        let mut wanted = HashMap::new();
+        let mut waiting = Vec::new();
+        self.walk(tree, tree.workspace(), sent, &mut wanted, &mut waiting);
+        waiting.sort_by(|a: &(f32, InstanceId), b| a.0.total_cmp(&b.0));
+        let mut left = self.budget;
+        for (distance, id) in waiting {
+            if left == 0 {
+                return (wanted, true);
+            }
+            let before = wanted.len();
+            Self::all(tree, id, self.every(distance), &mut wanted);
+            left = left.saturating_sub(wanted.len() - before);
+        }
+        (wanted, false)
     }
 
-    fn near(&self, tree: &InstanceTree, part: InstanceId, sent: &HashMap<InstanceId, Sent>) -> bool {
+    /// How many steps apart changes go to something this far away.
+    fn every(&self, distance: f32) -> u64 {
+        if distance <= self.radius * 0.25 {
+            1
+        } else if distance <= self.radius * 0.6 {
+            3
+        } else if distance <= self.radius {
+            8
+        } else {
+            20
+        }
+    }
+
+    fn distance(&self, tree: &InstanceTree, part: InstanceId) -> f32 {
         let (Some(at), size) = (
             tree.get_vec3(part, Property::Position),
             tree.get_vec3(part, Property::Size).unwrap_or_default(),
         ) else {
-            return true;
+            return 0.0;
         };
-        let reach = if sent.contains_key(&part) { self.keep } else { self.radius };
         let half = size.length() * 0.5;
-        self.points.iter().any(|p| ((at - *p).length() - half) <= reach)
+        self.points.iter().map(|p| (at - *p).length() - half).fold(f32::INFINITY, f32::min)
     }
 
-    fn all(tree: &InstanceTree, id: InstanceId, wanted: &mut HashSet<InstanceId>) {
-        wanted.insert(id);
+    fn reach(&self, id: InstanceId, sent: &HashMap<InstanceId, Sent>) -> f32 {
+        if sent.contains_key(&id) { self.keep } else { self.radius }
+    }
+
+    fn all(tree: &InstanceTree, id: InstanceId, every: u64, wanted: &mut HashMap<InstanceId, u64>) {
+        wanted.insert(id, every);
         for child in tree.children(id).unwrap_or_default() {
-            Self::all(tree, *child, wanted);
+            Self::all(tree, *child, every, wanted);
         }
     }
 
-    fn any_part_near(&self, tree: &InstanceTree, id: InstanceId, sent: &HashMap<InstanceId, Sent>) -> bool {
-        tree.children(id).unwrap_or_default().iter().any(|&child| {
-            let physical = tree.class(child).is_ok_and(ClassKind::is_physical);
-            (physical && self.near(tree, child, sent)) || self.any_part_near(tree, child, sent)
-        })
+    /// How near the nearest part in a model is, and how near one that may
+    /// be sent is.
+    fn nearest_part(
+        &self,
+        tree: &InstanceTree,
+        id: InstanceId,
+        sent: &HashMap<InstanceId, Sent>,
+    ) -> (f32, f32) {
+        let mut nearest = (f32::INFINITY, f32::INFINITY);
+        for &child in tree.children(id).unwrap_or_default() {
+            let (d, ok) = if tree.class(child).is_ok_and(ClassKind::is_physical) {
+                let d = self.distance(tree, child);
+                (d, if d <= self.reach(child, sent) { d } else { f32::INFINITY })
+            } else {
+                (f32::INFINITY, f32::INFINITY)
+            };
+            let inner = self.nearest_part(tree, child, sent);
+            nearest = (nearest.0.min(d).min(inner.0), nearest.1.min(ok).min(inner.1));
+        }
+        nearest
+    }
+
+    /// Sends `id` with everything in it: now, when it's been sent before,
+    /// or else in turn, nearest first.
+    fn whole(
+        &self,
+        tree: &InstanceTree,
+        id: InstanceId,
+        distance: f32,
+        sent: &HashMap<InstanceId, Sent>,
+        wanted: &mut HashMap<InstanceId, u64>,
+        waiting: &mut Vec<(f32, InstanceId)>,
+    ) {
+        if sent.contains_key(&id) {
+            Self::all(tree, id, self.every(distance), wanted);
+        } else {
+            waiting.push((distance, id));
+        }
     }
 
     fn walk(
@@ -997,40 +1206,47 @@ impl Focus {
         tree: &InstanceTree,
         id: InstanceId,
         sent: &HashMap<InstanceId, Sent>,
-        wanted: &mut HashSet<InstanceId>,
+        wanted: &mut HashMap<InstanceId, u64>,
+        waiting: &mut Vec<(f32, InstanceId)>,
     ) {
         for &child in tree.children(id).unwrap_or_default() {
             let Ok(class) = tree.class(child) else { continue };
             if class.is_physical() {
-                if self.near(tree, child, sent) {
-                    Self::all(tree, child, wanted);
+                let d = self.distance(tree, child);
+                if d <= self.reach(child, sent) {
+                    self.whole(tree, child, d, sent, wanted, waiting);
                 }
-            } else if class == ClassKind::Terrain || self.always.contains(&child) {
-                Self::all(tree, child, wanted);
+            } else if class == ClassKind::Terrain {
+                Self::all(tree, child, 1, wanted);
+            } else if self.always.contains(&child) {
+                Self::all(tree, child, self.every(self.nearest_part(tree, child, sent).0), wanted);
             } else if class == ClassKind::Model {
                 let mode = match tree.get_enum(child, Property::ModelStreamingMode) {
                     Some(libroxel_instance::EnumValue::ModelStreamingMode(m)) => m,
                     _ => ModelStreamingMode::Default,
                 };
                 match mode {
-                    ModelStreamingMode::Persistent => Self::all(tree, child, wanted),
+                    ModelStreamingMode::Persistent => {
+                        Self::all(tree, child, self.every(self.nearest_part(tree, child, sent).0), wanted)
+                    }
                     ModelStreamingMode::PersistentPerPlayer if self.persistent.contains(&child) => {
-                        Self::all(tree, child, wanted)
+                        Self::all(tree, child, self.every(self.nearest_part(tree, child, sent).0), wanted)
                     }
                     ModelStreamingMode::Atomic => {
-                        if self.any_part_near(tree, child, sent) {
-                            Self::all(tree, child, wanted);
+                        let (_, near) = self.nearest_part(tree, child, sent);
+                        if near.is_finite() {
+                            self.whole(tree, child, near, sent, wanted, waiting);
                         }
                     }
                     // PersistentPerPlayer, for players not added to it, goes like Default.
                     _ => {
-                        wanted.insert(child);
-                        self.walk(tree, child, sent, wanted);
+                        wanted.insert(child, 1);
+                        self.walk(tree, child, sent, wanted, waiting);
                     }
                 }
             } else {
-                wanted.insert(child);
-                self.walk(tree, child, sent, wanted);
+                wanted.insert(child, 1);
+                self.walk(tree, child, sent, wanted, waiting);
             }
         }
     }
@@ -1237,6 +1453,9 @@ pub(crate) fn set_fields(
     if let Some(text) = op.get("x").and_then(Json::as_str) {
         let _ = tree.edit_voxels(id, |v| *v = libroxel_instance::voxels::Voxels::decode(text));
     }
+    if let Some(text) = op.get("xs").and_then(Json::as_str) {
+        let _ = tree.edit_voxels(id, |v| v.patch(text));
+    }
     if let Some(tags) = op.get("g").and_then(Json::as_array) {
         let want: Vec<&str> = tags.iter().filter_map(Json::as_str).collect();
         let have: Vec<String> = tree.tags(id).map(|t| t.to_vec()).unwrap_or_default();
@@ -1348,14 +1567,20 @@ impl PlaySession {
             .map_err(|e| format!("could not host on port {port}: {e}"))?;
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let mut session = Self::start_inner(tree, play_here, saved_data, NetRole::Server)?;
-        let streaming = {
+        let (streaming, big) = {
             let t = session.runtime.tree().borrow();
-            t.get_bool(t.workspace(), Property::StreamingEnabled).unwrap_or(false)
+            let ws = t.workspace();
+            let parts = t
+                .descendants(ws)
+                .map_or(0, |d| d.iter().filter(|i| t.class(**i).is_ok_and(ClassKind::is_physical)).count());
+            let big = parts > BIG_MAP;
+            (big || t.get_bool(ws, Property::StreamingEnabled).unwrap_or(false), big)
         };
         session.link = Link::Host(Box::new(Hosting {
             listener,
             peers: Vec::new(),
             streaming,
+            big,
             replicator: None,
             priming: None,
             teleports: Vec::new(),
@@ -1834,7 +2059,7 @@ impl PlaySession {
             .max(t.get_number(ws, Property::StreamingMinRadius).unwrap_or(64.0)) as f32;
         let opportunistic = t.get_enum(ws, Property::StreamOutBehavior)
             == Some(libroxel_instance::EnumValue::StreamOutBehavior(StreamOutBehavior::Opportunistic));
-        let keep = if opportunistic { radius * 1.5 } else { f32::INFINITY };
+        let keep = if opportunistic || host.big { radius * 1.5 } else { f32::INFINITY };
         let players = t
             .service(ClassKind::Players)
             .map(|p| t.children(p).unwrap_or_default().to_vec())
@@ -1866,8 +2091,14 @@ impl PlaySession {
                 .or_else(|| t.get_ref(player, Property::Character).and_then(position_of))
                 .unwrap_or(spawn);
             points.push(centre);
-            let focus =
-                Focus { points, radius, keep, always: always.clone(), persistent: peer.persistent.clone() };
+            let focus = Focus {
+                points,
+                radius,
+                keep,
+                always: always.clone(),
+                persistent: peer.persistent.clone(),
+                budget: if peer.fresh { STREAM_FIRST } else { STREAM_STEP },
+            };
             for (who, seq, pos, yaw) in &teleports {
                 if *who == player {
                     peer.send(
@@ -2517,5 +2748,38 @@ mod tests {
         assert!(fast.speed > slow.speed && fast.speed >= 400.0);
         let v = slow.clamp_velocity(Vec3::new(1e6, -1e6, 0.0));
         assert!((v.x - slow.speed).abs() < 0.01 && v.y == -1000.0);
+    }
+
+    #[test]
+    fn nearer_parts_stream_in_first_and_update_more_often() {
+        let mut tree = InstanceTree::new();
+        let ws = tree.workspace();
+        let part = |tree: &mut InstanceTree, x: f32| {
+            let id = tree.create(ClassKind::Part, "P").unwrap();
+            tree.set_parent(id, Some(ws)).unwrap();
+            tree.set(id, Property::Position, PropertyValue::Vec3(Vec3::new(x, 0.0, 0.0))).unwrap();
+            tree.set(id, Property::Size, PropertyValue::Vec3(Vec3::new(1.0, 1.0, 1.0))).unwrap();
+            id
+        };
+        let (near, mid, far, gone) =
+            (part(&mut tree, 10.0), part(&mut tree, 500.0), part(&mut tree, 900.0), part(&mut tree, 5000.0));
+        let mut focus = Focus {
+            points: vec![Vec3::new(0.0, 0.0, 0.0)],
+            radius: 1024.0,
+            keep: 1536.0,
+            always: HashSet::new(),
+            persistent: HashSet::new(),
+            budget: 2,
+        };
+        let mut replicator = Replicator::default();
+        let (first, more) = focus.wanted(&tree, &replicator.sent);
+        assert!(more);
+        assert!(first.contains_key(&near) && first.contains_key(&mid));
+        assert!(!first.contains_key(&far) && !first.contains_key(&gone));
+        replicator.delta_streamed(&tree, &focus);
+        focus.budget = 100;
+        let (next, _) = focus.wanted(&tree, &replicator.sent);
+        assert_eq!((next[&near], next[&mid], next[&far]), (1, 3, 8));
+        assert!(!next.contains_key(&gone));
     }
 }

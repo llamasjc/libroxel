@@ -11,6 +11,7 @@ use libroxel_instance::{
 };
 
 const DT: f32 = 1.0 / 60.0;
+const AXES: [Vec3; 3] = [Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)];
 
 fn add(tree: &mut InstanceTree, class: ClassKind, parent: InstanceId, name: &str) -> InstanceId {
     let id = tree.create(class, name).unwrap();
@@ -606,6 +607,84 @@ fn a_game_without_streaming_still_sends_everything() {
             .unwrap();
     until(&mut host, &mut guest, CharacterInput::default(), |_, g| {
         g.character().is_some() && has(g, &["Far"])
+    });
+}
+
+#[test]
+fn a_big_map_streams_even_without_streaming_on() {
+    let tree = Rc::new(RefCell::new(game()));
+    {
+        let mut t = tree.borrow_mut();
+        let ws = t.workspace();
+        let field = add(&mut t, ClassKind::Folder, ws, "Field");
+        for i in 0..5_100 {
+            let at = Vec3::new(2000.0 + (i % 100) as f32 * 4.0, 2.0, (i / 100) as f32 * 4.0);
+            let id = block(&mut t, "Rock", at, Vec3::new(2.0, 2.0, 2.0));
+            t.set_parent(id, Some(field)).unwrap();
+        }
+    }
+    let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| {
+        g.character().is_some() && has(g, &["Lamp"])
+    });
+    assert!(
+        has(&guest, &["Field"]) && !has(&guest, &["Field", "Rock"]),
+        "far parts of a big map aren't sent"
+    );
+}
+
+#[test]
+fn streamed_terrain_comes_only_near_the_player() {
+    let mut tree = InstanceTree::new();
+    let ws = tree.workspace();
+    tree.set(ws, Property::StreamingEnabled, PropertyValue::Bool(true)).unwrap();
+    tree.set(ws, Property::StreamingTargetRadius, PropertyValue::Number(128.0)).unwrap();
+    tree.set(
+        ws,
+        Property::StreamOutBehavior,
+        PropertyValue::Enum(EnumValue::StreamOutBehavior(StreamOutBehavior::Opportunistic)),
+    )
+    .unwrap();
+    let spawn = add(&mut tree, ClassKind::SpawnLocation, ws, "Spawn");
+    tree.set(spawn, Property::Size, PropertyValue::Vec3(Vec3::new(6.0, 1.0, 6.0))).unwrap();
+    tree.set(spawn, Property::Position, PropertyValue::Vec3(Vec3::new(0.0, 0.5, 0.0))).unwrap();
+    let terrain = tree.terrain_or_make().unwrap();
+    tree.edit_voxels(terrain, |v| {
+        v.fill_block(
+            Vec3::new(0.0, -4.0, 0.0),
+            AXES,
+            Vec3::new(64.0, 8.0, 64.0),
+            Some(libroxel_instance::Material::Grass),
+        );
+        v.fill_block(
+            Vec3::new(900.0, -4.0, 0.0),
+            AXES,
+            Vec3::new(16.0, 8.0, 16.0),
+            Some(libroxel_instance::Material::Rock),
+        );
+    })
+    .unwrap();
+    let mut host = PlaySession::host(Rc::new(RefCell::new(tree)), 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    let cell = |s: &PlaySession, x: i32| {
+        let t = s.runtime().tree().borrow();
+        t.terrain().and_then(|id| t.voxels(id).ok()?.get(x, -1, 0))
+    };
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| {
+        g.character().is_some() && cell(g, 0).is_some()
+    });
+    assert!(cell(&guest, 900).is_none(), "far terrain isn't sent");
+    assert!(cell(&host, 900).is_some());
+    host.runtime().run("tp", "workspace.Bea.HumanoidRootPart.Position = Vector3.new(900, 10, 0)").unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| {
+        cell(g, 900).is_some() && cell(g, 0).is_none()
     });
 }
 

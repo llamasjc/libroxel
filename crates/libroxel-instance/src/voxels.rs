@@ -491,8 +491,16 @@ impl Voxels {
 
     /// As text, for saving and sending.
     pub fn encode(&self) -> String {
+        self.encode_chunks(self.chunks.keys().copied())
+    }
+
+    /// [`encode`](Self::encode) for only some chunks; an empty one is sent
+    /// as all air.
+    pub fn encode_chunks(&self, chunks: impl IntoIterator<Item = (i32, i32, i32)>) -> String {
+        const AIR: [u8; CHUNK_CELLS] = [0; CHUNK_CELLS];
         let mut out = String::new();
-        for (&(cx, cy, cz), cells) in &self.chunks {
+        for (cx, cy, cz) in chunks {
+            let cells = self.chunks.get(&(cx, cy, cz)).map_or(&AIR, |c| &**c);
             if !out.is_empty() {
                 out.push(';');
             }
@@ -518,6 +526,31 @@ impl Voxels {
             }
         }
         out
+    }
+
+    /// Replaces the chunks in [`encode_chunks`](Self::encode_chunks)'s text,
+    /// leaving the rest.
+    pub fn patch(&mut self, text: &str) {
+        let mut parts = Self::decode(text);
+        let named = text.split(';').filter_map(|chunk| {
+            let at: Vec<i32> =
+                chunk.split_once(':')?.0.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+            let [cx, cy, cz] = at[..] else { return None };
+            Some((cx, cy, cz))
+        });
+        for key in named {
+            match parts.chunks.remove(&key) {
+                Some(cells) => {
+                    self.prints.insert(key, print_of(&cells));
+                    self.chunks.insert(key, cells);
+                }
+                None => {
+                    self.chunks.remove(&key);
+                    self.prints.remove(&key);
+                }
+            }
+        }
+        self.version += 1;
     }
 
     /// Reads [`encode`](Self::encode)'s text. Anything malformed is skipped.
@@ -555,6 +588,22 @@ mod tests {
     use super::*;
 
     const AXES: [Vec3; 3] = [Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)];
+
+    #[test]
+    fn a_patch_replaces_only_its_chunks() {
+        let mut host = Voxels::new();
+        host.set(1, 1, 1, Some(Material::Grass));
+        host.set(40, 1, 1, Some(Material::Rock));
+        let mut copy = Voxels::new();
+        copy.patch(&host.encode_chunks([(0, 0, 0)]));
+        assert_eq!(copy.get(1, 1, 1), Some(Material::Grass));
+        assert_eq!(copy.get(40, 1, 1), None);
+        copy.patch(&host.encode_chunks([(2, 0, 0)]));
+        assert_eq!(copy.get(40, 1, 1), Some(Material::Rock));
+        copy.patch(&Voxels::new().encode_chunks([(0, 0, 0)]));
+        assert_eq!(copy.get(1, 1, 1), None);
+        assert_eq!(copy.get(40, 1, 1), Some(Material::Rock));
+    }
 
     #[test]
     fn blocks_and_balls_fill_cells_and_air_empties_them() {
