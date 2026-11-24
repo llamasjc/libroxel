@@ -939,7 +939,7 @@ pub(crate) async fn group_page(
         .unwrap_or_default();
     let games = db
         .prepare(&format!(
-            "SELECT {GAME_COLUMNS} FROM {GAMES} WHERE gg.group_id = ?1 AND NOT {}
+            "SELECT {GAME_COLUMNS} FROM {GAMES} WHERE gg.group_id = ?1 AND g.private = 0 AND NOT {}
              ORDER BY g.plays DESC, g.updated DESC",
             hidden_sql("game", "g.game_id")
         ))

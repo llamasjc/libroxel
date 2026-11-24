@@ -194,7 +194,7 @@ fn games(db: &Connection) -> Result<Vec<Game>, rusqlite::Error> {
     let mut list = Vec::new();
     let mut statement = db.prepare(&format!(
         "SELECT g.game_id, g.title, g.description, g.created FROM games g
-         WHERE NOT {} AND NOT {}",
+         WHERE g.private = 0 AND NOT {} AND NOT {}",
         hidden_sql("game", "g.game_id"),
         crate::owner::banned_sql("g.author_id")
     ))?;

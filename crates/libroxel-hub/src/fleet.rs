@@ -166,7 +166,10 @@ fn runnable(db: &Connection, game_id: &str) -> bool {
         return !name.is_empty() && name.len() <= 64 && name.chars().all(|c| c.is_alphanumeric() || c == ' ');
     }
     db.query_row(
-        &format!("SELECT 1 FROM games WHERE game_id = ?1 AND NOT {}", crate::hidden_sql("game", "game_id")),
+        &format!(
+            "SELECT 1 FROM games WHERE game_id = ?1 AND private = 0 AND NOT {}",
+            crate::hidden_sql("game", "game_id")
+        ),
         params![game_id],
         |_| Ok(()),
     )

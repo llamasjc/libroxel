@@ -829,7 +829,7 @@ function parseRoute() {
   switch (parts[0]) {
     case 'game': return { name: 'game', key: parts.slice(1).join('/') };
     case 'user': return { name: 'user', id: parts[1] };
-    case 'creator': return { name: 'creator', id: parts[1] };
+    case 'creator': return { name: 'creator', id: parts[1], tab: parts[2] };
     case 'messages': return { name: 'messages', id: parts[1] };
     case 'games': case 'charts': case 'profile': case 'search': case 'friends': case 'groups': case 'avatar': case 'sign-in': case 'create': case 'download': case 'password': case 'privacy': case 'donate': case 'moderation': case 'stats': return { name: parts[0] };
     case 'group': return { name: 'group', id: parts[1] };
@@ -2432,6 +2432,103 @@ function loadCreator() {
     .finally(() => { creator.loading = false; creator.for = key; if (route.name === 'creator') render(); });
 }
 
+const mine = { list: null, loading: false, error: null, for: null, versions: {}, busy: false };
+
+function loadMine(again) {
+  if (again) mine.for = null;
+  if (mine.loading || mine.for === session.playerId) return;
+  mine.loading = true;
+  const time = Date.now();
+  const signature = signText(secretKey(), `libroxel creator\n${session.playerId}\n${time}`);
+  api(`/creator/${session.playerId}/games`, { query: { time, signature } })
+    .then((r) => { mine.list = r; mine.error = null; })
+    .catch((e) => { mine.error = e.message; })
+    .finally(() => { mine.loading = false; mine.for = session.playerId; if (route.name === 'creator') render(); });
+}
+
+function loadVersions(id, again) {
+  if (!again && mine.versions[id]) return;
+  mine.versions[id] = { loading: true };
+  const time = Date.now();
+  const signature = signText(secretKey(), `libroxel creator\n${session.playerId}\n${time}`);
+  api(`/games/${encodeURIComponent(id)}/versions`, { query: { player_id: session.playerId, time, signature } })
+    .then((list) => { mine.versions[id] = { list }; })
+    .catch((e) => { mine.versions[id] = { error: e.message }; })
+    .finally(() => { if (route.name === 'creator') render(); });
+}
+
+async function manageGame(id, change, said, then) {
+  if (mine.busy) return;
+  mine.busy = true;
+  render();
+  const time = Date.now();
+  const what = change.do === 'settings'
+    ? `settings\n${change.private ? 1 : 0}\n${change.max_players}\n${change.title}\n${change.description}`
+    : change.do === 'restore' ? `restore\n${change.version}` : 'remove';
+  const signature = signText(secretKey(), `libroxel manage\n${session.playerId}\n${id}\n${time}\n${what}`);
+  try {
+    await api(`/games/${encodeURIComponent(id)}/manage`, { method: 'POST', body: { player_id: session.playerId, time, signature, change } });
+    flash = { text: said };
+    loadMine(true);
+    creator.for = null;
+    delete mine.versions[id];
+    if (then) then();
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  } finally {
+    mine.busy = false;
+    render();
+  }
+}
+
+function settingsTab(g) {
+  const title = el('input', { type: 'text', value: g.title, maxlength: 120 });
+  const about = el('textarea', { rows: 4, maxlength: 2000 }, g.description);
+  const privacy = pickFrom({ public: 'Public', private: 'Private' }, g.private ? 'private' : 'public');
+  const most = el('input', { type: 'number', min: 0, max: 100, value: g.max_players || '', placeholder: 'Any' });
+  const save = () => manageGame(g.game_id, {
+    do: 'settings', title: title.value.trim(), description: about.value.trim(), private: privacy.value === 'private',
+    max_players: Math.max(0, Math.min(100, Math.floor(Number(most.value) || 0))),
+  }, 'Saved.');
+  const remove = el('button', { class: 'chip', disabled: mine.busy, onclick: (e) => {
+    const b = e.currentTarget;
+    if (b.dataset.sure) manageGame(g.game_id, { do: 'remove' }, `Removed ${g.title}.`, () => goTo('/creator'));
+    else { b.dataset.sure = '1'; b.replaceChildren(icon(ICON.trash), ' Remove?'); }
+  } }, icon(ICON.trash), 'Remove');
+  return el('div', { class: 'form manage' },
+    el('label', { class: 'field' }, el('span', {}, 'Name'), title),
+    el('label', { class: 'field' }, el('span', {}, 'Description'), about),
+    el('label', { class: 'field' }, el('span', {}, 'Who can play'), privacy),
+    el('label', { class: 'field' }, el('span', {}, 'Max players'), most),
+    el('div', { class: 'form-actions' },
+      el('button', { class: 'btn go small', disabled: mine.busy, onclick: save }, icon(ICON.check), 'Save'),
+      remove));
+}
+
+function versionsTab(g) {
+  loadVersions(g.game_id);
+  const v = mine.versions[g.game_id];
+  if (!v || v.loading) return el('p', { class: 'soft' }, 'Loading…');
+  if (v.error) return status(v.error, 'error');
+  return el('div', { class: 'versions' }, v.list.map((x) => el('div', { class: 'person' },
+    el('div', { class: 'what' }, el('b', {}, `Version ${x.version}`), el('small', { class: 'soft' }, `${ago(x.published_secs_ago)} · ${size(x.size)}`)),
+    el('div', { class: 'buttons' }, x.version === g.version
+      ? el('span', { class: 'soft' }, 'Live')
+      : el('button', { class: 'chip', disabled: mine.busy, onclick: () => manageGame(g.game_id, { do: 'restore', version: x.version }, `Version ${x.version} is live again.`) }, icon(ICON.refresh), 'Restore')))));
+}
+
+const size = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+
+function myGameCard(g) {
+  const bits = [g.private ? 'Private' : 'Public', `v${g.version}`];
+  if (g.playing) bits.push(`${count(g.playing)} playing`);
+  return el('a', { class: 'game', href: `/creator/${encodeURIComponent(g.game_id)}` },
+    el('div', { class: 'pic' }, gamePicture(188, 150, g.game_id),
+      g.private && el('span', { class: 'badge', style: `background:${rgb(pictureColour(g.game_id))}` }, icon(ICON.lock))),
+    el('h3', {}, g.title),
+    el('div', { class: `meta${g.playing ? ' live' : ' idle'}` }, bits.join(' · ')));
+}
+
 const minutes = (secs) => (secs < 60 ? `${secs}s` : secs < 3600 ? `${Math.round(secs / 60)} min` : `${(secs / 3600).toFixed(1)} h`);
 const percent = (r) => (r === null || r === undefined ? '–' : `${Math.round(r * 100)}%`);
 const dayName = (day) => new Date(day * 86400000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
@@ -2493,14 +2590,31 @@ function creatorPage() {
     el('button', { class: `chip${creator.days === d ? ' on' : ''}`, onclick: () => { creator.days = d; creator.for = null; render(); } }, d === 1 ? 'Today' : `${d} days`)));
   const games = creator.result?.games || [];
   const out = [];
+  loadMine();
   if (route.id) {
     const g = games.find((x) => x.game_id === route.id);
+    const info = mine.list?.find((x) => x.game_id === route.id);
     out.push(el('a', { class: 'back', href: '/creator' }, icon(ICON.left), 'Create'));
-    if (!g) {
-      out.push(creator.result ? el('div', { class: 'empty' }, "That isn't one of your games.") : el('p', { class: 'soft' }, 'Loading…'));
+    if (!info) {
+      out.push(mine.list ? el('div', { class: 'empty' }, "That isn't one of your games.") : el('p', { class: 'soft' }, 'Loading…'));
       return out;
     }
-    out.push(el('h1', { class: 'title' }, g.title), range);
+    const base = `/creator/${encodeURIComponent(info.game_id)}`;
+    const tab = ['settings', 'versions'].includes(route.tab) ? route.tab : '';
+    out.push(el('div', { class: 'manage-head' },
+      el('div', { class: 'mini' }, gamePicture(64, 64, info.game_id)),
+      el('div', {}, el('h1', { class: 'title' }, info.title),
+        el('div', { class: 'soft' }, `${info.private ? 'Private' : 'Public'} · version ${info.version} · ${ago(info.updated_secs_ago)}`)),
+      !info.private && el('a', { class: 'chip', href: `/game/${encodeURIComponent(info.game_id)}` }, icon(ICON.play), 'View')));
+    out.push(el('div', { class: 'hats' }, [['', 'Numbers'], ['settings', 'Settings'], ['versions', 'Versions']].map(([t, label]) =>
+      el('a', { class: `chip${tab === t ? ' on' : ''}`, href: t ? `${base}/${t}` : base }, label))));
+    if (tab === 'settings') { out.push(settingsTab(info)); return out; }
+    if (tab === 'versions') { out.push(versionsTab(info)); return out; }
+    out.push(range);
+    if (!g) {
+      out.push(creator.error ? status(creator.error, 'error') : el('p', { class: 'soft' }, 'Loading…'));
+      return out;
+    }
     const tiles = [
       [count(g.visits), 'Visits'], [count(g.players), 'Players'], [count(g.playing), 'Playing now'], [count(g.peak), 'Most at once'],
       [minutes(g.average_playtime_secs), 'Average playtime'], [percent(g.day1_retention), 'Day 1 back'], [percent(g.day7_retention), 'Day 7 back'],
@@ -2520,11 +2634,16 @@ function creatorPage() {
     }
     return out;
   }
-  out.push(el('h1', { class: 'title' }, 'Create'), range);
+  out.push(el('h1', { class: 'title' }, 'Create'));
+  if (mine.error) out.push(status(mine.error, 'error'));
+  if (!mine.list) out.push(el('p', { class: 'soft' }, 'Loading…'));
+  else if (!mine.list.length) out.push(el('div', { class: 'empty' }, 'No published games yet.'));
+  else out.push(el('div', { class: 'games' }, mine.list.map(myGameCard)));
+  if (!mine.list?.length) return out;
+  out.push(el('h2', { class: 'section' }, 'Numbers'), range);
   if (creator.error) out.push(status(creator.error, 'error'));
   if (!creator.result) out.push(el('p', { class: 'soft' }, 'Loading…'));
-  else if (!games.length) out.push(el('div', { class: 'empty' }, 'No published games yet.'));
-  else {
+  else if (games.length) {
     const head = ['Game', 'Visits', 'Players', 'Playtime', 'Day 1', 'Day 7', 'Likes', 'Favorites'];
     out.push(el('div', { class: 'table-wrap' }, el('table', { class: 'numbers' },
       el('thead', {}, el('tr', {}, head.map((h) => el('th', {}, h)))),

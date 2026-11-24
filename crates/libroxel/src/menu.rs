@@ -95,6 +95,7 @@ pub struct Menu {
     /// What the Home and Friends tabs remember.
     pub home: crate::hub_home::HomeState,
     pub groups: crate::groups::Groups,
+    my_games: crate::my_games::MyGames,
 }
 
 impl Default for Menu {
@@ -112,6 +113,7 @@ impl Default for Menu {
             picker: crate::file_picker::Picker::default(),
             home: crate::hub_home::HomeState::default(),
             groups: crate::groups::Groups::default(),
+            my_games: crate::my_games::MyGames::default(),
         }
     }
 }
@@ -420,7 +422,7 @@ impl Menu {
                         );
                         None
                     }
-                    Tab::Create => self.create_tab(ui),
+                    Tab::Create => self.create_tab(ui, platform),
                     Tab::Messages => {
                         crate::messages::messages_tab(ui, platform);
                         None
@@ -670,7 +672,7 @@ impl Menu {
         chosen
     }
 
-    fn create_tab(&mut self, ui: &mut egui::Ui) -> Option<Pick> {
+    fn create_tab(&mut self, ui: &mut egui::Ui, platform: &Platform) -> Option<Pick> {
         let mut pick = None;
         if self.picker.is_open() {
             // Keep looking for the choice while the window is up.
@@ -722,6 +724,9 @@ impl Menu {
                 self.scanned = false;
             }
         });
+        if let Some(game) = crate::my_games::my_games(&mut self.my_games, ui, platform) {
+            pick = Some(Pick::Edit(game));
+        }
         pick
     }
 }

@@ -34,6 +34,7 @@ mod loading;
 mod menu;
 mod mesh_import;
 mod messages;
+mod my_games;
 mod open;
 mod party_games;
 mod report;

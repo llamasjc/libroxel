@@ -420,3 +420,11 @@ footer a { color: var(--heading); text-decoration: underline; }
   .who .btn.small { padding: 0 9px; gap: 5px; }
   .who .chip { padding: 4px 7px; }
 }
+
+.manage-head { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; flex-wrap: wrap; }
+.manage-head > div:nth-child(2) { flex: 1; min-width: 0; }
+.manage-head .title { margin: 0; }
+.manage-head .mini { width: 64px; height: 64px; flex: none; background: var(--sky-pic); border-radius: 8px; border: 1px solid rgb(130, 176, 222); overflow: hidden; }
+.manage { max-width: 560px; }
+.manage input[type=number] { width: 120px; padding: 7px 9px; background: #fff; border: 1px solid rgb(171, 173, 179); border-radius: 3px; }
+.versions { max-width: 560px; display: flex; flex-direction: column; gap: 8px; }
