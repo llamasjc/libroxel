@@ -442,6 +442,8 @@ pub fn run() {
     .add_systems(EguiPrimaryContextPass, ui::editor_ui)
     .add_systems(Update, (viewport::draw_selection, viewport::draw_grid).after(EngineSet::Sync))
     .add_systems(Update, (update_title, toggle_fullscreen));
+    #[cfg(target_os = "android")]
+    app.add_systems(First, graphics::match_android_window);
     report::run(&mut app);
 }
 
