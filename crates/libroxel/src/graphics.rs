@@ -51,6 +51,25 @@ fn has_vulkan() -> bool {
     })
 }
 
+/// Keeps Bevy's idea of the window's size to the size Android drew it.
+/// Android can hand over the window after Bevy has sized it from the
+/// settings, and without this the menus are laid out for a window of the
+/// wrong size, off to one side.
+#[cfg(target_os = "android")]
+pub fn match_android_window(
+    mut windows: bevy::prelude::Query<
+        &mut bevy::window::Window,
+        bevy::prelude::With<bevy::window::PrimaryWindow>,
+    >,
+) {
+    let Some(native) = bevy::android::ANDROID_APP.get().and_then(|app| app.native_window()) else { return };
+    let (width, height) = (native.width().max(0) as u32, native.height().max(0) as u32);
+    let Ok(mut window) = windows.single_mut() else { return };
+    if width > 0 && height > 0 && (window.physical_width() != width || window.physical_height() != height) {
+        window.resolution.set_physical_resolution(width, height);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
