@@ -5,6 +5,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.view.DisplayCutout;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 
 import androidx.core.view.WindowCompat;
@@ -62,6 +64,26 @@ public class MainActivity extends GameActivity {
         // A motor runs until it is set back to 0; ten seconds at most, so a
         // game that forgets doesn't buzz on and on.
         vibrator.vibrate(VibrationEffect.createOneShot(10_000L, amplitude));
+    }
+
+    /**
+     * How far in from each edge (left, top, right, bottom, in pixels) the
+     * screen is clear of a notch or camera cut-out, so Libroxel keeps its
+     * menus and buttons out from under it. Called from native code.
+     */
+    public int[] getSafeInsets() {
+        int[] insets = new int[4];
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            WindowInsets window = getWindow().getDecorView().getRootWindowInsets();
+            DisplayCutout cutout = window == null ? null : window.getDisplayCutout();
+            if (cutout != null) {
+                insets[0] = cutout.getSafeInsetLeft();
+                insets[1] = cutout.getSafeInsetTop();
+                insets[2] = cutout.getSafeInsetRight();
+                insets[3] = cutout.getSafeInsetBottom();
+            }
+        }
+        return insets;
     }
 
     private void hideSystemBars() {

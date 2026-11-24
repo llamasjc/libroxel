@@ -52,7 +52,10 @@ pub fn apply(
         ((window.physical_width() as f32 * share).ceil() as u32).max(1),
         ((window.physical_height() as f32 * share).ceil() as u32).max(1),
     );
-    let scaled = share < 0.99 && window.physical_width() > 0;
+    // Phones always draw through the picture, even at every pixel: it is
+    // what clears the strip beside a notch, outside the 3D view.
+    let phone = quality.as_ref().is_some_and(|q| q.render_density().is_some());
+    let scaled = (share < 0.99 || phone) && window.physical_width() > 0;
     let changed = if scaled {
         let fits = scale.image.as_ref().and_then(|h| images.get(h)).is_some_and(|i| {
             i.texture_descriptor.size.width == size.x && i.texture_descriptor.size.height == size.y

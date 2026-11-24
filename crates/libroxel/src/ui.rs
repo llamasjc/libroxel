@@ -346,7 +346,8 @@ pub fn editor_ui(
     let mut root = egui::Ui::new(
         ctx.clone(),
         "libroxel-root".into(),
-        egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(ctx.viewport_rect()),
+        // Inside the safe area: clear of a phone's notch (the whole window elsewhere).
+        egui::UiBuilder::new().layer_id(egui::LayerId::background()).max_rect(ctx.content_rect()),
     );
 
     if !editor.player_mode {
@@ -476,7 +477,7 @@ pub fn editor_ui(
     let central = egui::CentralPanel::no_frame()
         .show(&mut root, |ui| {
             if let Some(picture) = world_picture {
-                let whole = ctx.content_rect();
+                let whole = ctx.viewport_rect();
                 let rect = ui.max_rect();
                 let uv = egui::Rect::from_min_max(
                     egui::pos2(rect.min.x / whole.width(), rect.min.y / whole.height()),

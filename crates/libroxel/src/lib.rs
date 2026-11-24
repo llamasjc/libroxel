@@ -465,7 +465,13 @@ pub fn run() {
                 .after(bevy_egui::EguiPreUpdateSet::ProcessInput)
                 .before(bevy_egui::EguiPreUpdateSet::BeginPass),
         )
-        .add_systems(Last, android_input::vibrate);
+        .add_systems(Last, android_input::vibrate)
+        .add_systems(
+            PreUpdate,
+            android_input::safe_area
+                .after(bevy_egui::EguiPreUpdateSet::ProcessInput)
+                .before(bevy_egui::EguiPreUpdateSet::BeginPass),
+        );
     report::run(&mut app);
 }
 
