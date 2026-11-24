@@ -506,6 +506,7 @@ fn host_streamed(behavior: StreamOutBehavior) -> PlaySession {
     };
     model(&mut tree, "Statue", ModelStreamingMode::Persistent, &[("Stone", -900.0)]);
     model(&mut tree, "Bridge", ModelStreamingMode::Atomic, &[("Plank1", 30.0), ("Plank2", 700.0)]);
+    model(&mut tree, "Vault", ModelStreamingMode::PersistentPerPlayer, &[("Gold", -600.0)]);
     let settings = add(&mut tree, ClassKind::Folder, ws, "Settings");
     add(&mut tree, ClassKind::NumberValue, settings, "Speed");
     PlaySession::host(Rc::new(RefCell::new(tree)), 0, None, true).unwrap()
@@ -606,4 +607,25 @@ fn a_game_without_streaming_still_sends_everything() {
     until(&mut host, &mut guest, CharacterInput::default(), |_, g| {
         g.character().is_some() && has(g, &["Far"])
     });
+}
+
+#[test]
+fn a_per_player_persistent_model_goes_to_the_players_added_to_it() {
+    let mut host = host_streamed(StreamOutBehavior::Opportunistic);
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| {
+        g.character().is_some() && has(g, &["Near"])
+    });
+    // The model itself comes (as Default), but not its far part.
+    assert!(has(&guest, &["Vault"]) && !has(&guest, &["Vault", "Gold"]));
+    host.runtime().run("add", "workspace.Vault:AddPersistentPlayer(game.Players.Bea)").unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| has(g, &["Vault", "Gold"]));
+    host.runtime().run("remove", "workspace.Vault:RemovePersistentPlayer(game.Players.Bea)").unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| !has(g, &["Vault", "Gold"]));
+    // Only a Model takes players, and only players.
+    assert!(host.runtime().run("bad", "workspace.Near:AddPersistentPlayer(game.Players.Bea)").is_err());
+    assert!(host.runtime().run("bad", "workspace.Vault:AddPersistentPlayer(workspace.Near)").is_err());
 }

@@ -792,8 +792,10 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   `Player.ReplicationFocus` when set. Everything outside the workspace,
   models, folders and what isn't inside a part are always sent. A model's
   `ModelStreamingMode` can be `Atomic` (all of it comes and goes together)
-  or `Persistent` (always sent); `Default`, `Nonatomic` and
-  `PersistentPerPlayer` stream part by part. With `workspace.StreamOutBehavior`
+  or `Persistent` (always sent), or `PersistentPerPlayer` (always sent to
+  the players a server script adds with `model:AddPersistentPlayer(player)`,
+  until `RemovePersistentPlayer`); `Default` and `Nonatomic` stream part by
+  part. With `workspace.StreamOutBehavior`
   set to `Opportunistic`, parts more than half the radius past it are let
   go; otherwise what was sent stays. A server script's
   `player:RequestStreamAroundAsync(position, timeOut?)` sends the parts

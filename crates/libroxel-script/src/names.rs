@@ -350,6 +350,11 @@ pub mod methods {
     /// Player: sends their computer the parts around a place, when the
     /// workspace streams.
     pub const REQUEST_STREAM_AROUND_ASYNC: &str = "RequestStreamAroundAsync";
+    /// Model: always sends it to a player's computer, when it streams as
+    /// `PersistentPerPlayer`.
+    pub const ADD_PERSISTENT_PLAYER: &str = "AddPersistentPlayer";
+    /// Model: stops [`ADD_PERSISTENT_PLAYER`] for a player.
+    pub const REMOVE_PERSISTENT_PLAYER: &str = "RemovePersistentPlayer";
     /// Seat: sits a humanoid in it.
     pub const SIT: &str = "Sit";
     /// Text box: start or stop typing into it, and whether the player is.
