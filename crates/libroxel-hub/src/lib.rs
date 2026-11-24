@@ -74,6 +74,8 @@ pub use groups::{
     group_view_message, valid_group_name, valid_group_tag,
 };
 mod limits;
+mod manage;
+pub use manage::{Change, KEEP_VERSIONS, MOST_PLAYERS, ManageGame, Version, manage_message};
 mod messages;
 mod moderate;
 pub use cli::{HUB_HELP, cli};
@@ -573,6 +575,10 @@ pub struct GameInfo {
     pub favorites: u32,
     #[serde(default)]
     pub group: Option<GroupBadge>,
+    #[serde(default)]
+    pub private: bool,
+    #[serde(default)]
+    pub max_players: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -741,6 +747,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     charts::create_tables(&db)?;
     moderate::create_tables(&db)?;
     recovery::create_tables(&db)?;
+    manage::create_tables(&db)?;
     seal::install(&db, path)?;
     Ok(db)
 }
@@ -840,6 +847,9 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/presence", post(social::update_presence))
         .route("/presence/web", post(social::update_web_presence))
         .route("/creator/{id}", get(analytics::creator))
+        .route("/creator/{id}/games", get(manage::my_games))
+        .route("/games/{id}/versions", get(manage::versions))
+        .route("/games/{id}/manage", post(manage::manage))
         .route("/stats/ping", post(stats::ping))
         .route("/stats/crash", post(stats::crash))
         .route("/admin/{id}", get(stats::admin))
@@ -903,7 +913,7 @@ const GAME_COLUMNS: &str = concat!(
     (SELECT COUNT(*) FROM game_votes v WHERE v.game_id = g.game_id AND v.vote = 1),
     (SELECT COUNT(*) FROM game_votes v WHERE v.game_id = g.game_id AND v.vote = -1),
     (SELECT COUNT(*) FROM game_favorites f WHERE f.game_id = g.game_id),
-    gr.group_id, gr.name, gr.tag, gr.color"
+    gr.group_id, gr.name, gr.tag, gr.color, g.private, g.max_players"
 );
 const GAMES: &str = "games g LEFT JOIN accounts a ON a.player_id = g.author_id
     LEFT JOIN group_games gg ON gg.game_id = g.game_id LEFT JOIN groups gr ON gr.group_id = gg.group_id";
@@ -939,6 +949,8 @@ fn game_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<GameInfo> {
             }
             None => None,
         },
+        private: r.get(18)?,
+        max_players: r.get::<_, i64>(19)? as u32,
     })
 }
 
@@ -950,7 +962,7 @@ async fn list_games(State(db): State<Db>, Query(query): Query<ListQuery>) -> Jso
         .prepare(&format!(
             "SELECT {GAME_COLUMNS} FROM {GAMES}
              WHERE (g.title LIKE ?1 OR COALESCE(a.name, g.author) LIKE ?1 OR g.description LIKE ?1)
-                AND NOT {hidden} AND NOT {banned}
+                AND g.private = 0 AND NOT {hidden} AND NOT {banned}
              ORDER BY g.plays DESC, g.updated DESC LIMIT 200",
             hidden = hidden_sql("game", "g.game_id"),
             banned = owner::banned_sql("g.author_id")
@@ -979,7 +991,10 @@ async fn download(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<
     let db = db.lock().unwrap();
     let place: Option<String> = db
         .query_row(
-            &format!("SELECT place FROM games WHERE game_id = ?1 AND NOT {}", hidden_sql("game", "game_id")),
+            &format!(
+                "SELECT place FROM games WHERE game_id = ?1 AND private = 0 AND NOT {}",
+                hidden_sql("game", "game_id")
+            ),
             params![id],
             |r| r.get(0),
         )
@@ -1051,6 +1066,7 @@ async fn publish(
                 params![id, title, author, description, game.place, version + 1, now, author_id],
             )
             .map_err(internal)?;
+            manage::keep_version(&db, id, version + 1, &title, &game.place, now).map_err(internal)?;
             Ok(Json(Published { game_id: id.to_owned(), version: version as u32 + 1 }))
         }
         None => {
@@ -1062,6 +1078,7 @@ async fn publish(
                 params![id, game.secret, title, author, description, game.place, now, author_id],
             )
             .map_err(internal)?;
+            manage::keep_version(&db, &id, 1, &title, &game.place, now).map_err(internal)?;
             Ok(Json(Published { game_id: id, version: 1 }))
         }
     }
@@ -1420,7 +1437,7 @@ pub fn take_down(db: &Connection, kind: &str, target: &str) -> Result<(), String
         return Err(format!("there is no {kind} {target}"));
     }
     if kind == "game" {
-        analytics::forget_game(db, target);
+        manage::forget(db, target);
     }
     Ok(())
 }
@@ -1471,7 +1488,8 @@ async fn profile(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<J
     };
     let mut statement = db
         .prepare(&format!(
-            "SELECT {GAME_COLUMNS} FROM {GAMES} WHERE g.author_id = ?1 ORDER BY g.plays DESC, g.updated DESC"
+            "SELECT {GAME_COLUMNS} FROM {GAMES} WHERE g.author_id = ?1 AND g.private = 0
+             ORDER BY g.plays DESC, g.updated DESC"
         ))
         .expect("the profile query is valid");
     let games = statement
@@ -1509,7 +1527,7 @@ async fn unpublish(
     {
         Ok(0) => StatusCode::NOT_FOUND,
         Ok(_) => {
-            analytics::forget_game(&db, &id);
+            manage::forget(&db, &id);
             StatusCode::NO_CONTENT
         }
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -1618,7 +1636,7 @@ async fn heartbeat(
             game,
             clip(&beat.code),
             beat.players,
-            beat.max_players,
+            manage::most_players(&db, beat.game_id.as_deref().map(str::trim), beat.max_players),
             kind.rank(),
             now,
             beat.game_id.as_deref().map(str::trim).filter(|g| !g.is_empty()).map(clip),
@@ -2670,6 +2688,55 @@ impl HubClient {
             .send_json(serde_json::json!({ "secret": secret }))
             .map(|_| ())
             .map_err(|e| e.to_string())
+    }
+
+    pub fn my_games(&self, player_id: &str, time: i64, signature: &str) -> Result<Vec<GameInfo>, String> {
+        let request = self
+            .agent
+            .get(format!("{}/creator/{}/games", self.base, assets::encode(player_id)))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call();
+        self.answer(request)
+    }
+
+    pub fn versions(
+        &self,
+        game_id: &str,
+        player_id: &str,
+        time: i64,
+        signature: &str,
+    ) -> Result<Vec<Version>, String> {
+        let request = self
+            .agent
+            .get(format!("{}/games/{}/versions", self.base, assets::encode(game_id)))
+            .query("player_id", player_id)
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call();
+        self.answer(request)
+    }
+
+    pub fn manage(&self, game_id: &str, ask: &ManageGame) -> Result<(), String> {
+        let mut r = self
+            .agent
+            .post(format!("{}/games/{}/manage", self.base, assets::encode(game_id)))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(ask)
+            .map_err(|e| format!("could not reach the Hub: {e}"))?;
+        if r.status().is_success() {
+            Ok(())
+        } else {
+            Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+        }
     }
 }
 

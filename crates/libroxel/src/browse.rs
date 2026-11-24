@@ -2035,6 +2035,14 @@ fn read_published() -> serde_json::Map<String, Json> {
         .unwrap_or_default()
 }
 
+pub(crate) fn published_files(hub: &str) -> std::collections::HashMap<String, std::path::PathBuf> {
+    read_published()
+        .into_iter()
+        .filter(|(key, m)| m["hub"] == hub && !key.starts_with("untitled:"))
+        .filter_map(|(key, m)| Some((m["game_id"].as_str()?.to_owned(), std::path::PathBuf::from(key))))
+        .collect()
+}
+
 /// The reasons a game or hat can be reported for.
 const REPORT_REASONS: [&str; 4] = [
     "Rude, hateful or bullying",
