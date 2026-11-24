@@ -453,10 +453,11 @@ fn graphics_file() -> std::path::PathBuf {
 
 fn load_graphics() -> libroxel_engine::view::GraphicsQuality {
     let text = std::fs::read_to_string(graphics_file()).unwrap_or_default();
-    match text.trim().parse::<u8>() {
+    let quality = match text.trim().parse::<u8>() {
         Ok(level) => libroxel_engine::view::GraphicsQuality::new(false, level),
         Err(_) => libroxel_engine::view::GraphicsQuality::default(),
-    }
+    };
+    if MOBILE { quality.phone() } else { quality }
 }
 
 pub(crate) fn save_graphics(auto: bool, level: u8) {
