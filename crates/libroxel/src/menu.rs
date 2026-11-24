@@ -380,8 +380,8 @@ impl Menu {
         ui.painter().text(
             screen.right_bottom() - egui::vec2(10.0, 3.0),
             egui::Align2::RIGHT_BOTTOM,
-            crate::update::VERSION,
-            egui::FontId::proportional(11.0),
+            crate::update::tag(),
+            egui::FontId::proportional(12.0),
             theme::MUTED,
         );
         let page = pane.shrink2(egui::vec2(22.0, 18.0));
@@ -465,7 +465,10 @@ impl Menu {
     /// and who you play as. When the window is too narrow for every tab's
     /// name, the tabs show only their icons (with the name on hover).
     fn top_bar(&mut self, ui: &mut egui::Ui, platform: &mut Platform) {
-        if theme::logo_button(ui, self.tab == Tab::Home).clicked() {
+        if theme::logo_button(ui, self.tab == Tab::Home)
+            .on_hover_text(format!("Libroxel {}", crate::update::tag()))
+            .clicked()
+        {
             self.go(Tab::Home);
         }
         ui.add_space(10.0);
