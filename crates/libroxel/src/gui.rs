@@ -27,6 +27,9 @@ pub struct TextBoxes {
     /// a button, a text box or an Active object. Labels and frames let the
     /// press through to what's under them, as in Roblox.
     pub input: GuiHit,
+    /// Where every object that takes input while playing shows, so a
+    /// finger on one isn't taken for the touch controls.
+    pub inputs: Vec<Rect>,
 }
 
 fn color(c: Color3, alpha: f32) -> Color32 {
@@ -628,12 +631,15 @@ fn draw_children(
         let round = rounding(tree, child, r, k);
         // Only what shows (inside any clipping frame) can be pointed at.
         let hovered = pointer.is_some_and(|p| r.contains(p) && painter.clip_rect().contains(p));
+        let takes_input = class.is_button()
+            || class == ClassKind::TextBox
+            || matches!(tree.get_extra(child, "Active"), Ok(Some(PropertyValue::Bool(true))));
+        if takes_input {
+            boxes.inputs.push(r.intersect(painter.clip_rect()));
+        }
         if hovered {
             *hit = Some((child, class));
-            if class.is_button()
-                || class == ClassKind::TextBox
-                || matches!(tree.get_extra(child, "Active"), Ok(Some(PropertyValue::Bool(true))))
-            {
+            if takes_input {
                 boxes.input = Some((child, class));
             }
         }

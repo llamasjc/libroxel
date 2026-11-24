@@ -626,8 +626,8 @@ pub fn editor_ui(
 
     // Touch screens get on-screen controls while playing.
     if playing && !editor.menu.open && !editor.paused {
-        editor.touch.show(&ctx, central);
-        let stick = editor.touch.stick();
+        editor.touch.show(&ctx, central, &boxes.inputs);
+        let stick = editor.touch.stick(central);
         touch_input.stick = Vec2::new(stick.x, stick.y);
         touch_input.jump = editor.touch.jump();
         // Dragging up looks up, as the right stick does.
@@ -773,7 +773,9 @@ pub fn editor_ui(
     }
 
     // Click to select (the terrain tool uses clicks for itself).
-    let clicked = ctx.input(|i| i.pointer.primary_clicked()) && editor.tool != Tool::Terrain;
+    let clicked = ctx.input(|i| i.pointer.primary_clicked())
+        && editor.tool != Tool::Terrain
+        && !(playing && editor.touch.has_pointer());
     let on_prompt = prompt_hits.iter().copied().find(|(_, r)| pointer.is_some_and(|p| r.contains(p)));
     if clicked
         && over_view
