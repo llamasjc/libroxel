@@ -599,6 +599,27 @@ pub fn editor_ui(
         Some(_) => {}
         None => editor.loading.stop(),
     }
+    if engine.session.as_ref().is_some_and(PlaySession::wrong_version) {
+        crate::update::now();
+        if !editor.dirty
+            && let Err(why) = crate::update::apply(true)
+        {
+            log(engine, LogLevel::Warn, format!("Could not update: {why}"));
+        }
+        let text = if crate::update::checking() || crate::update::ready().is_some() {
+            t("Updating…")
+        } else {
+            t("A different version of Libroxel")
+        };
+        egui::Area::new("version".into())
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .order(egui::Order::Foreground)
+            .show(&ctx, |ui| {
+                ui.label(RichText::new(text).size(22.0).color(Color32::WHITE));
+            });
+    } else if editor.menu.open && engine.session.is_none() && !editor.dirty {
+        let _ = crate::update::apply(false);
+    }
 
     // Touch screens get on-screen controls while playing.
     if playing && !editor.menu.open && !editor.paused {

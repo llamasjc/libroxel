@@ -442,5 +442,7 @@
  "{n}% liked": "{n}% 好评",
  "{part} colour {colour}": "{part}颜色：{colour}",
  "{shape} part": "{shape}零件",
- "{why} You can also host it yourself.": "{why} 你也可以自己开服。"
+ "{why} You can also host it yourself.": "{why} 你也可以自己开服。",
+ "Updating…": "正在更新…",
+ "A different version of Libroxel": "Libroxel 版本不同"
 }

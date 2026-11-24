@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use data_encoding::{BASE64, HEXLOWER};
 use ed25519_dalek::{Signature, VerifyingKey};
@@ -21,6 +23,9 @@ const RELEASES: &str = "https://github.com/llamasjc/libroxel/releases";
 const KEY: &str = "eZLyPH2I3vxefEog220wBtSrI3CxSLCMkgKWyRKv0xY=";
 
 static READY: Mutex<Option<Staged>> = Mutex::new(None);
+static CHECKING: AtomicBool = AtomicBool::new(false);
+static ASKED: AtomicBool = AtomicBool::new(false);
+static TRIED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -106,6 +111,10 @@ fn enabled() -> bool {
         && std::env::var_os("LIBROXEL_NO_UPDATE").is_none()
 }
 
+fn skipped() -> PathBuf {
+    crate::server::data_dir().join("update-skipped")
+}
+
 fn staged() -> Option<Staged> {
     let text = std::fs::read_to_string(dir().join("ready")).ok()?;
     let (version, name) = text.trim().split_once('\n')?;
@@ -119,11 +128,17 @@ pub fn on_start(args: &[String]) {
     }
     match staged() {
         Some(s) if newer(&s.version, VERSION) => {
-            if args.is_empty()
-                && kind().is_some_and(|k| k != Kind::Deb)
-                && let Err(why) = install(&s)
-            {
-                eprintln!("note: could not install the update: {why}");
+            let tried = dir().join("tried");
+            if std::fs::read_to_string(&tried).is_ok_and(|v| v.trim() == s.version) {
+                let _ = std::fs::write(skipped(), &s.version);
+                let _ = std::fs::remove_dir_all(dir());
+                return;
+            }
+            if args.is_empty() && kind().is_some_and(|k| k != Kind::Deb) {
+                let _ = std::fs::write(&tried, &s.version);
+                if let Err(why) = install(&s) {
+                    eprintln!("note: could not install the update: {why}");
+                }
             }
             *READY.lock().unwrap() = Some(s);
         }
@@ -137,11 +152,42 @@ pub fn start() {
     if !enabled() || kind().is_none() {
         return;
     }
-    std::thread::spawn(|| match check() {
+    std::thread::spawn(|| {
+        loop {
+            fetch();
+            std::thread::sleep(Duration::from_secs(30 * 60));
+        }
+    });
+}
+
+fn fetch() {
+    if CHECKING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    match check() {
         Ok(Some(s)) => *READY.lock().unwrap() = Some(s),
         Ok(None) => {}
         Err(why) => eprintln!("note: could not check for updates: {why}"),
-    });
+    }
+    CHECKING.store(false, Ordering::SeqCst);
+}
+
+pub fn now() {
+    if !enabled() || kind().is_none() || ready().is_some() || ASKED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(fetch);
+}
+
+pub fn checking() -> bool {
+    CHECKING.load(Ordering::SeqCst)
+}
+
+pub fn apply(asked: bool) -> Result<(), String> {
+    if ready().is_none() || (!asked && kind() == Some(Kind::Deb)) || TRIED.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+    restart()
 }
 
 pub fn ready() -> Option<String> {
@@ -174,7 +220,7 @@ fn check() -> Result<Option<Staged>, String> {
     verify(&manifest, &sig)?;
     let json: serde_json::Value = serde_json::from_slice(&manifest).map_err(|e| e.to_string())?;
     let version = json["version"].as_str().ok_or("no version")?.to_owned();
-    if !newer(&version, VERSION) {
+    if !newer(&version, VERSION) || std::fs::read_to_string(skipped()).is_ok_and(|v| v.trim() == version) {
         return Ok(None);
     }
     if let Some(s) = staged().filter(|s| s.version == version) {

@@ -442,5 +442,7 @@
  "{n}% liked": "{n} % d'avis positifs",
  "{part} colour {colour}": "Couleur {part} : {colour}",
  "{shape} part": "Pièce {shape}",
- "{why} You can also host it yourself.": "{why} Tu peux aussi l'héberger toi-même."
+ "{why} You can also host it yourself.": "{why} Tu peux aussi l'héberger toi-même.",
+ "Updating…": "Mise à jour…",
+ "A different version of Libroxel": "Une autre version de Libroxel"
 }
