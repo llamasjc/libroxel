@@ -1242,6 +1242,7 @@ impl PlaySession {
         self.collect(errors);
         let errors = self.runtime.step(dt as f64);
         self.collect(errors);
+        self.settle_changes();
         if let Some(index) = self.avatars.iter().position(|a| !a.remote) {
             self.advance_hold(index, dt);
             self.move_own_character(&mut joined, index, input, dt);
