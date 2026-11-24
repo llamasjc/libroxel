@@ -145,8 +145,42 @@ pub fn run(app: &mut bevy::app::App) {
         && let Ok(exe) = std::env::current_exe()
     {
         let _ = std::process::Command::new(exe).env("LIBROXEL_CRASHED", "1").spawn();
+    } else {
+        // It crashed again straight after starting over, so the crash
+        // screen can't show: say why in the computer's own way instead of
+        // vanishing without a word.
+        let why = std::fs::read_to_string(crash_path()).unwrap_or_default();
+        tell_and_wait(&format!(
+            "Libroxel couldn't start.\n\n{}\n\nThis was saved to {}.",
+            why.lines().take(12).collect::<Vec<_>>().join("\n"),
+            crash_path().display()
+        ));
     }
     std::process::exit(101);
+}
+
+/// A message box on Windows, where the app has no terminal to print to.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn tell_and_wait(text: &str) {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn MessageBoxW(window: *mut core::ffi::c_void, text: *const u16, title: *const u16, kind: u32)
+        -> i32;
+    }
+    const ERROR_ICON: u32 = 0x10;
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let (text, title) = (wide(text), wide("Libroxel"));
+    // SAFETY: both strings are NUL-terminated UTF-16 that outlive the call,
+    // and no owner window is fine.
+    unsafe {
+        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), ERROR_ICON);
+    }
+}
+
+#[cfg(not(windows))]
+fn tell_and_wait(text: &str) {
+    eprintln!("{text}");
 }
 
 pub fn take_crash() -> Option<String> {
