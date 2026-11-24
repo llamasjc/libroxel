@@ -458,12 +458,14 @@ pub fn run() {
     .add_systems(Update, (viewport::draw_selection, viewport::draw_grid).after(EngineSet::Sync))
     .add_systems(Update, (update_title, toggle_fullscreen));
     #[cfg(target_os = "android")]
-    app.add_systems(First, graphics::match_android_window).add_systems(
-        PreUpdate,
-        android_input::keyboard
-            .after(bevy_egui::EguiPreUpdateSet::ProcessInput)
-            .before(bevy_egui::EguiPreUpdateSet::BeginPass),
-    );
+    app.add_systems(First, graphics::match_android_window)
+        .add_systems(
+            PreUpdate,
+            android_input::keyboard
+                .after(bevy_egui::EguiPreUpdateSet::ProcessInput)
+                .before(bevy_egui::EguiPreUpdateSet::BeginPass),
+        )
+        .add_systems(Last, android_input::vibrate);
     report::run(&mut app);
 }
 

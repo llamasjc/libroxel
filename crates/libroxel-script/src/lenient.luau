@@ -204,6 +204,7 @@ local ENUMS = {
 	DevComputerMovementMode = { "UserChoice", "KeyboardMouse", "ClickToMove", "Scriptable" },
 	DevTouchMovementMode = { "UserChoice", "Thumbstick", "DPad", "Thumbpad", "ClickToMove", "Scriptable", "DynamicThumbstick" },
 	SwipeDirection = { "Right", "Left", "Up", "Down", "None" },
+	VibrationMotor = { "Large", "Small", "LeftTrigger", "RightTrigger", "LeftHand", "RightHand" },
 	ComputerMovementMode = { "Default", "KeyboardMouse", "ClickToMove" },
 	DevCameraOcclusionMode = { "Zoom", "Invisicam" },
 	RollOffMode = { "Inverse", "Linear", "LinearSquare", "InverseTapered" },
@@ -2766,11 +2767,33 @@ local SERVICE_EXTRAS = {
 			RecenterUserHeadCFrame = NOOP,
 		},
 	},
+	-- On phones, the Touch motors run the phone's vibration motor (one
+	-- motor, so Large and Small are the same); controllers have none here.
 	HapticService = {
 		methods = {
-			SetMotor = NOOP,
-			IsMotorSupported = returns(false),
-			GetMotor = returns(0),
+			IsMotorSupported = function(_, kind, motor)
+				return kind == Enum.UserInputType.Touch
+					and L.can_vibrate()
+					and (motor == Enum.VibrationMotor.Large or motor == Enum.VibrationMotor.Small)
+			end,
+			SetMotor = function(_, kind, motor, value)
+				if kind ~= Enum.UserInputType.Touch then
+					return
+				end
+				L.motors = L.motors or {}
+				L.motors[motor] = math.clamp(tonumber(value) or 0, 0, 1)
+				local strongest = 0
+				for _, v in L.motors do
+					strongest = math.max(strongest, v)
+				end
+				L.set_vibration(strongest)
+			end,
+			GetMotor = function(_, kind, motor)
+				if kind ~= Enum.UserInputType.Touch or not L.motors then
+					return 0
+				end
+				return L.motors[motor] or 0
+			end,
 		},
 	},
 	TextService = {
@@ -4406,8 +4429,10 @@ function L.touch_event(id, phase, x, y, processed, t)
 	local travelled = at - f.start
 	if f.pressed then
 		uis_event("TouchLongPress", positions(), Enum.UserInputState.End, processed)
+		L.gui_touch(x, y, "TouchLongPress", positions(), Enum.UserInputState.End)
 	elseif not f.moved and #order == 1 then
 		uis_event("TouchTap", { at }, processed)
+		L.gui_touch(x, y, "TouchTap", { at })
 		uis_event("TouchTapInWorld", at, processed)
 	elseif f.moved and held <= SWIPE_TIME and travelled.Magnitude >= SWIPE_DISTANCE then
 		local direction
@@ -4445,6 +4470,7 @@ function L.touch_tick(t)
 	if not f.moved and not f.pressed and t - f.began >= LONG_PRESS then
 		f.pressed = true
 		uis_event("TouchLongPress", positions(), Enum.UserInputState.Begin, f.gui)
+		L.gui_touch(f.at.X, f.at.Y, "TouchLongPress", positions(), Enum.UserInputState.Begin)
 	end
 end
 

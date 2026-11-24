@@ -891,6 +891,14 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
 
 const SERVICES_KEY: &str = "libroxel.compat.services";
 const ACTIONS_KEY: &str = "libroxel.compat.actions";
+const ACTIONS_ORDER_KEY: &str = "libroxel.compat.actions.order";
+// Fields of a bound action besides its handler (1) and keys (2).
+const ACTION_TOUCH_BUTTON: &str = "touch_button";
+const ACTION_ORDER: &str = "order";
+const ACTION_TITLE: &str = "title";
+const ACTION_IMAGE: &str = "image";
+const ACTION_DESCRIPTION: &str = "description";
+const ACTION_POSITION: &str = "position";
 
 /// A service table (made once, so every `GetService` gets the same one).
 pub(crate) fn get_service(lua: &Lua, name: &str) -> mlua::Result<Option<Value>> {
@@ -1029,7 +1037,14 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
             t.set(VR_ENABLED, false)?;
         }
         HAPTIC_SERVICE => {
-            method(lua, &t, IS_VIBRATION_SUPPORTED, |_, _: MultiValue| Ok(false))?;
+            // Phones vibrate for the Touch input type; see the lenient layer's HapticService.
+            method(lua, &t, IS_VIBRATION_SUPPORTED, |lua, kind: Value| {
+                let touch = matches!(
+                    crate::bindings::as_enum(EnumKind::UserInputType, &kind),
+                    Some(EnumValue::UserInputType(libroxel_instance::UserInputType::Touch))
+                );
+                Ok(touch && host(lua).world.borrow().devices.vibration)
+            })?;
         }
         POLICY_SERVICE => {
             method(lua, &t, GET_POLICY_INFO_FOR_PLAYER_ASYNC, |lua, _: MultiValue| {
@@ -1171,7 +1186,7 @@ fn messaging(lua: &Lua, t: &Table) -> mlua::Result<()> {
 fn actions(lua: &Lua, t: &Table) -> mlua::Result<()> {
     let bound = lua.create_table()?;
     lua.set_named_registry_value(ACTIONS_KEY, bound)?;
-    let bind = |lua: &Lua, (name, f, _button, keys): (String, Function, Value, mlua::Variadic<Value>)| {
+    let bind = |lua: &Lua, (name, f, button, keys): (String, Function, Value, mlua::Variadic<Value>)| {
         let bound: Table = lua.named_registry_value(ACTIONS_KEY)?;
         let entry = lua.create_table()?;
         entry.set(1, f)?;
@@ -1180,6 +1195,11 @@ fn actions(lua: &Lua, t: &Table) -> mlua::Result<()> {
             list.raw_push(key.clone())?;
         }
         entry.set(2, list)?;
+        // A button on the touch screen, drawn by the app (see `touch_buttons`).
+        entry.set(ACTION_TOUCH_BUTTON, button.as_boolean().unwrap_or(false))?;
+        let order: u64 = lua.named_registry_value::<Option<u64>>(ACTIONS_ORDER_KEY)?.unwrap_or(0) + 1;
+        lua.set_named_registry_value(ACTIONS_ORDER_KEY, order)?;
+        entry.set(ACTION_ORDER, order)?;
         bound.set(name, entry)
     };
     method(lua, t, BIND_ACTION, bind)?;
@@ -1198,7 +1218,75 @@ fn actions(lua: &Lua, t: &Table) -> mlua::Result<()> {
     })?;
     method(lua, t, UNBIND_ALL_ACTIONS, |lua, ()| {
         lua.set_named_registry_value(ACTIONS_KEY, lua.create_table()?)
-    })
+    })?;
+    // How an action's touch button looks and where it sits.
+    for (member, field) in [
+        (names::compat::SET_TITLE, ACTION_TITLE),
+        (names::compat::SET_IMAGE, ACTION_IMAGE),
+        (names::compat::SET_DESCRIPTION, ACTION_DESCRIPTION),
+        (names::compat::SET_POSITION, ACTION_POSITION),
+    ] {
+        method(lua, t, member, move |lua, (name, value): (String, Value)| {
+            let bound: Table = lua.named_registry_value(ACTIONS_KEY)?;
+            if let Value::Table(entry) = bound.get::<Value>(name)? {
+                entry.set(field, value)?;
+            }
+            Ok(())
+        })?;
+    }
+    // Roblox hands back the button as a GUI object; scripts get nil, as
+    // they do in Roblox where no button was made (on a computer).
+    method(lua, t, names::compat::GET_BUTTON, |_, _name: String| Ok(Value::Nil))
+}
+
+/// The actions bound with a touch button, in the order they were bound.
+pub(crate) fn touch_buttons(lua: &Lua) -> mlua::Result<Vec<crate::TouchButton>> {
+    let Value::Table(bound) = lua.named_registry_value::<Value>(ACTIONS_KEY)? else { return Ok(Vec::new()) };
+    let mut out = Vec::new();
+    for pair in bound.pairs::<String, Table>() {
+        let (name, entry) = pair?;
+        if !entry.get::<Option<bool>>(ACTION_TOUCH_BUTTON)?.unwrap_or(false) {
+            continue;
+        }
+        let text = |field: &str| -> mlua::Result<Option<String>> {
+            Ok(match entry.get::<Value>(field)? {
+                Value::String(s) => Some(s.to_string_lossy()).filter(|s| !s.is_empty()),
+                _ => None,
+            })
+        };
+        let position = crate::types::as_udim2(&entry.get::<Value>(ACTION_POSITION)?)
+            .map(|p| [p.x_scale, p.x_offset, p.y_scale, p.y_offset]);
+        out.push((
+            entry.get::<Option<u64>>(ACTION_ORDER)?.unwrap_or(0),
+            crate::TouchButton { title: text(ACTION_TITLE)?, image: text(ACTION_IMAGE)?, position, name },
+        ));
+    }
+    out.sort_by_key(|(order, _)| *order);
+    Ok(out.into_iter().map(|(_, b)| b).collect())
+}
+
+/// A touch button went down or up: runs its action as Roblox does, with
+/// the action's name, Begin or End, and a touch input.
+pub(crate) fn press_touch_button(lua: &Lua, name: &str, pressed: bool) -> mlua::Result<()> {
+    let Value::Table(bound) = lua.named_registry_value::<Value>(ACTIONS_KEY)? else { return Ok(()) };
+    let Value::Table(entry) = bound.get::<Value>(name)? else { return Ok(()) };
+    let f: Function = entry.get(1)?;
+    let input = lua.create_table()?;
+    input.set(
+        "UserInputType",
+        LuaEnumItem(EnumValue::UserInputType(libroxel_instance::UserInputType::Touch)),
+    )?;
+    input.set("UserInputState", input_state(pressed))?;
+    input.set("KeyCode", LuaEnumItem(EnumValue::KeyCode(libroxel_instance::KeyCode::Unknown)))?;
+    input.set("Position", crate::bindings::LuaVector3(libroxel_instance::Vec3::ZERO))?;
+    input.set("Delta", crate::bindings::LuaVector3(libroxel_instance::Vec3::ZERO))?;
+    let args = MultiValue::from_iter([
+        Value::String(lua.create_string(name)?),
+        Value::UserData(lua.create_userdata(input_state(pressed))?),
+        Value::Table(input),
+    ]);
+    crate::bindings::spawn(lua, f, args, CONTEXT_ACTION_SERVICE, None)?;
+    Ok(())
 }
 
 /// Runs the bound actions for a key or button going down or up.

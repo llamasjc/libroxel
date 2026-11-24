@@ -41,6 +41,9 @@ pub(crate) struct WorldState {
     gui_rects: HashMap<InstanceId, [f32; 4]>,
     /// What the player plays with.
     pub(crate) devices: crate::Devices,
+    /// A strength `HapticService:SetMotor` set the vibration motor to,
+    /// waiting for the app to take it.
+    pub(crate) vibration: Option<f32>,
     /// Humanoids asked to walk somewhere (or to stop, with `None`).
     moves: Vec<(InstanceId, Option<Vec3>)>,
     /// Players whose character scripts asked to (re)spawn.
@@ -548,6 +551,18 @@ pub(crate) fn set_devices(lua: &Lua, devices: crate::Devices) {
         );
         crate::services::report(lua, result);
     }
+}
+
+/// The screen GUI objects drawn over a point (pixels from the view's corner).
+pub(crate) fn gui_under(lua: &Lua, x: f32, y: f32) -> Vec<InstanceId> {
+    host(lua)
+        .world
+        .borrow()
+        .gui_rects
+        .iter()
+        .filter(|(_, r)| x >= r[0] && y >= r[1] && x < r[0] + r[2] && y < r[1] + r[3])
+        .map(|(id, _)| *id)
+        .collect()
 }
 
 pub(crate) fn set_gui_rects(lua: &Lua, rects: Vec<(InstanceId, [f32; 4])>) {

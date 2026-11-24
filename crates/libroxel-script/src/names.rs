@@ -1661,6 +1661,11 @@ pub mod compat {
     pub const BIND_ACTION_AT_PRIORITY: &str = "BindActionAtPriority";
     pub const UNBIND_ACTION: &str = "UnbindAction";
     pub const UNBIND_ALL_ACTIONS: &str = "UnbindAllActions";
+    pub const SET_TITLE: &str = "SetTitle";
+    pub const SET_IMAGE: &str = "SetImage";
+    pub const SET_DESCRIPTION: &str = "SetDescription";
+    pub const SET_POSITION: &str = "SetPosition";
+    pub const GET_BUTTON: &str = "GetButton";
     /// What scripts get back when they ask about something that isn't here.
     pub const NOT_AVAILABLE: &str = "isn't available in Libroxel yet";
 }

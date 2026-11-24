@@ -1138,6 +1138,22 @@ impl PlaySession {
         self.collect(errors);
     }
 
+    /// The touch buttons the game's actions asked for.
+    pub fn touch_buttons(&self) -> Vec<libroxel_script::TouchButton> {
+        self.runtime.touch_buttons()
+    }
+
+    /// A touch button went down or up.
+    pub fn press_touch_button(&mut self, name: &str, pressed: bool) {
+        let errors = self.runtime.press_touch_button(name, pressed);
+        self.collect(errors);
+    }
+
+    /// A new strength (0 to 1) for the phone's vibration motor, if a script set one.
+    pub fn take_vibration(&self) -> Option<f32> {
+        self.runtime.take_vibration()
+    }
+
     /// Whether the game wants the on-screen stick and jump button.
     pub fn touch_controls_shown(&self) -> bool {
         self.runtime.touch_controls_shown()

@@ -101,6 +101,8 @@ pub struct Devices {
     pub keyboard: bool,
     /// There is a mouse (not on phones and tablets).
     pub mouse: bool,
+    /// The device can vibrate (phones), for `HapticService`.
+    pub vibration: bool,
 }
 
 impl Default for Devices {
@@ -111,8 +113,23 @@ impl Default for Devices {
             last: libroxel_instance::UserInputType::default(),
             keyboard: true,
             mouse: true,
+            vibration: false,
         }
     }
+}
+
+/// A button on the touch screen that a script asked for with
+/// `ContextActionService:BindAction(name, handler, true, ...)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TouchButton {
+    /// The action's name, to press it with [`Runtime::press_touch_button`].
+    pub name: String,
+    /// What `SetTitle` put on it.
+    pub title: Option<String>,
+    /// What `SetImage` put on it.
+    pub image: Option<String>,
+    /// Where `SetPosition` put it: X scale, X offset, Y scale, Y offset.
+    pub position: Option<[f32; 4]>,
 }
 
 /// Where a finger on the screen is in its touch.
@@ -438,6 +455,28 @@ impl ScriptRuntime {
         let result = lenient::touch_tick(&self.lua, time);
         services::report(&self.lua, result);
         bindings::take_errors(&self.lua)
+    }
+
+    /// The touch buttons scripts bound actions to, in the order bound.
+    pub fn touch_buttons(&self) -> Vec<TouchButton> {
+        compat::touch_buttons(&self.lua).unwrap_or_default()
+    }
+
+    /// A touch button went down (`pressed`) or up: runs its action.
+    pub fn press_touch_button(&self, name: &str, pressed: bool) -> Vec<ScriptError> {
+        if let Err(err) = compat::press_touch_button(&self.lua, name, pressed) {
+            bindings::host(&self.lua).errors.borrow_mut().push(ScriptError {
+                script: names::compat::CONTEXT_ACTION_SERVICE.to_owned(),
+                message: err.to_string(),
+            });
+        }
+        bindings::take_errors(&self.lua)
+    }
+
+    /// The strength (0 to 1) a script last set the phone's vibration motor
+    /// to with `HapticService:SetMotor`, if it changed since last asked.
+    pub fn take_vibration(&self) -> Option<f32> {
+        bindings::host(&self.lua).world.borrow_mut().vibration.take()
     }
 
     /// Whether the game wants the on-screen stick and jump button (scripts

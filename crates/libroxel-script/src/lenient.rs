@@ -42,6 +42,30 @@ pub(crate) fn install(lua: &Lua, enum_lib: &Table) -> mlua::Result<()> {
             Ok((rect.map(|r| r[0]), rect.map(|r| r[1]), rect.map(|r| r[2]), rect.map(|r| r[3])))
         })?,
     )?;
+    // A touch gesture on the GUI objects under a point: fires their event
+    // `key` (TouchTap, TouchLongPress) with the rest of the arguments.
+    layer.set(
+        "gui_touch",
+        lua.create_function(|lua, (x, y, key, args): (f32, f32, String, MultiValue)| {
+            let under: Vec<InstanceId> = crate::world::gui_under(lua, x, y);
+            for id in under {
+                fire_event(lua, id, &key, args.clone())?;
+            }
+            Ok(())
+        })?,
+    )?;
+    // The phone's vibration motor, for HapticService.
+    layer.set(
+        "can_vibrate",
+        lua.create_function(|lua, ()| Ok(crate::bindings::host(lua).world.borrow().devices.vibration))?,
+    )?;
+    layer.set(
+        "set_vibration",
+        lua.create_function(|lua, strength: f32| {
+            crate::bindings::host(lua).world.borrow_mut().vibration = Some(strength.clamp(0.0, 1.0));
+            Ok(())
+        })?,
+    )?;
     // Touches' InputBegan and InputEnded, which are the input service's own.
     layer.set(
         "fire_input",
