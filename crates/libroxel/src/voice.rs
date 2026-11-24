@@ -111,7 +111,8 @@ impl Voice {
             }
             return;
         };
-        if !on() {
+        // Off, or the app is in the background: no listening.
+        if !on() || libroxel_engine::sounds::silent() {
             session.take_heard();
             self.stop();
             self.mic_on = false;
