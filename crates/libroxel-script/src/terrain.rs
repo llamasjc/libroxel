@@ -257,6 +257,73 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
         };
         Ok(crate::bindings::LuaColor3(c))
     });
+    m.add_method("CopyRegion", |lua, this, r: Value| {
+        require_class(lua, this.0, ClassKind::Terrain, "CopyRegion")?;
+        let (lo, hi) = region(&r, "CopyRegion")?;
+        let lo = [lo.x.round() as i32 * CELL, lo.y.round() as i32 * CELL, lo.z.round() as i32 * CELL];
+        let hi = [
+            (hi.x.round() as i32 + 1) * CELL,
+            (hi.y.round() as i32 + 1) * CELL,
+            (hi.z.round() as i32 + 1) * CELL,
+        ];
+        let host = host(lua);
+        let tree = host.tree.borrow();
+        let voxels = tree.voxels(this.0).map_err(tree_err)?;
+        let inside = |(x, y, z): (i32, i32, i32)| {
+            x >= lo[0] && x < hi[0] && y >= lo[1] && y < hi[1] && z >= lo[2] && z < hi[2]
+        };
+        let cells = voxels
+            .chunks()
+            .flat_map(|c| voxels.cells_in_chunk(c))
+            .filter(|(at, _)| inside(*at))
+            .map(|((x, y, z), m)| ((x - lo[0], y - lo[1], z - lo[2]), m))
+            .collect();
+        Ok(TerrainRegion { size: [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]], cells })
+    });
+    m.add_method(
+        "PasteRegion",
+        |lua, this, (copied, corner, paste_empty): (mlua::AnyUserData, Value, Option<bool>)| {
+            require_class(lua, this.0, ClassKind::Terrain, "PasteRegion")?;
+            let copied =
+                copied.borrow::<TerrainRegion>().map_err(|_| err("PasteRegion expects a TerrainRegion"))?;
+            let corner =
+                as_vector3(&corner).ok_or_else(|| err("PasteRegion expects a Vector3int16 corner"))?;
+            let at = [
+                corner.x.round() as i32 * CELL,
+                corner.y.round() as i32 * CELL,
+                corner.z.round() as i32 * CELL,
+            ];
+            let size = copied.size;
+            let cells: Vec<_> = copied
+                .cells
+                .iter()
+                .map(|((x, y, z), m)| ((x + at[0], y + at[1], z + at[2]), Some(*m)))
+                .collect();
+            edit(lua, this.0, |v| {
+                if paste_empty.unwrap_or(true) {
+                    let inside = |(x, y, z): (i32, i32, i32)| {
+                        x >= at[0]
+                            && x < at[0] + size[0]
+                            && y >= at[1]
+                            && y < at[1] + size[1]
+                            && z >= at[2]
+                            && z < at[2] + size[2]
+                    };
+                    let chunks: Vec<_> = v.chunks().collect();
+                    let gone: Vec<_> = chunks
+                        .into_iter()
+                        .flat_map(|c| v.cells_in_chunk(c))
+                        .filter(|(p, _)| inside(*p))
+                        .map(|(p, _)| (p, None))
+                        .collect();
+                    v.set_cells(gone);
+                }
+                let n = cells.len();
+                v.set_cells(cells);
+                n
+            })
+        },
+    );
     m.add_function(terrain::CLEAR, |lua, (obj, rest): (mlua::AnyUserData, mlua::MultiValue)| {
         let id = obj.borrow::<LuaInstance>()?.0;
         let class = host(lua).tree.borrow().class(id).map_err(tree_err)?;
@@ -276,4 +343,28 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
             0
         })
     });
+}
+
+const CELL: i32 = 4;
+
+pub(crate) struct TerrainRegion {
+    size: [i32; 3],
+    cells: Vec<((i32, i32, i32), Material)>,
+}
+
+impl mlua::UserData for TerrainRegion {
+    fn add_fields<F: mlua::UserDataFields<Self>>(fields: &mut F) {
+        fields.add_field_method_get("SizeInCells", |_, this| {
+            let s = this.size.map(|v| (v / CELL) as f32);
+            Ok(crate::bindings::LuaVector3(libroxel_instance::Vec3::new(s[0], s[1], s[2])))
+        });
+        fields.add_field_method_get("IsSmooth", |_, _| Ok(true));
+        fields.add_field_method_get("ClassName", |_, _| Ok("TerrainRegion"));
+        fields.add_meta_field(mlua::MetaMethod::Type, "Instance");
+    }
+
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("ConvertToSmooth", |_, _, ()| Ok(()));
+        methods.add_method("IsA", |_, _, name: String| Ok(name == "TerrainRegion" || name == "Instance"));
+    }
 }

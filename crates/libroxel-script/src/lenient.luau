@@ -3166,23 +3166,11 @@ add(methods, "Workspace", {
 			end
 		end
 	end,
-	GetNumAwakeParts = function()
-		return 0
-	end,
-	GetRealPhysicsFPS = function()
-		return 60
-	end,
 	JoinToOutsiders = function() end,
 	UnjoinFromOutsiders = function() end,
 	SetInsertPoint = function() end,
-	IsRegion3Empty = function()
-		return true
-	end,
 })
 add(methods, "BasePart", {
-	GetNoCollisionConstraints = function()
-		return {}
-	end,
 	GetClosestPointOnSurface = function(self, point)
 		-- The nearest point of the part's box.
 		local local_point = self.CFrame:PointToObjectSpace(point)
@@ -3196,9 +3184,6 @@ add(methods, "BasePart", {
 	end,
 	IsInRadius = function(self, point, radius)
 		return (self.Position - point).Magnitude <= radius
-	end,
-	CanCollideWith = function(self, other)
-		return self.CanCollide and other.CanCollide
 	end,
 })
 plain_signals("Team", { "PlayerAdded", "PlayerRemoved" })
@@ -3308,6 +3293,467 @@ add(methods, "RunService", {
 		return game:GetService("RunService").PreSimulation:Connect(fn)
 	end,
 })
+
+local RIGID = {
+	Weld = true,
+	ManualWeld = true,
+	Snap = true,
+	Glue = true,
+	Motor = true,
+	Motor6D = true,
+	WeldConstraint = true,
+	RigidConstraint = true,
+}
+
+local function top_of(obj)
+	local at = obj
+	while at.Parent ~= nil and at.Parent ~= game do
+		at = at.Parent
+	end
+	return at
+end
+
+local function ends_of(j)
+	local ok, a, b = pcall(function()
+		if j:IsA("JointInstance") or j:IsA("WeldConstraint") or j:IsA("NoCollisionConstraint") then
+			return j.Part0, j.Part1
+		end
+		local a0, a1 = j.Attachment0, j.Attachment1
+		return a0 and a0.Parent, a1 and a1.Parent
+	end)
+	if ok then
+		return a, b
+	end
+	return nil, nil
+end
+
+local function is_joint(d)
+	return d:IsA("JointInstance") or d:IsA("WeldConstraint") or d:IsA("Constraint") or d:IsA("NoCollisionConstraint")
+		or d.ClassName == "RigidConstraint"
+end
+
+local function joints_of(part)
+	local list = {}
+	for _, d in ipairs(top_of(part):GetDescendants()) do
+		if is_joint(d) then
+			local a, b = ends_of(d)
+			if a == part or b == part then
+				table.insert(list, d)
+			end
+		end
+	end
+	return list
+end
+
+local function enabled(j)
+	local ok, on = pcall(function()
+		return j.Enabled
+	end)
+	return not ok or on ~= false
+end
+
+local function assembly(part, recursive)
+	local found, list = { [part] = true }, { part }
+	local i = 1
+	while list[i] do
+		local at = list[i]
+		for _, j in ipairs(joints_of(at)) do
+			if RIGID[j.ClassName] and enabled(j) then
+				local a, b = ends_of(j)
+				local other = a == at and b or a
+				if other and other:IsA("BasePart") and not found[other] then
+					found[other] = true
+					table.insert(list, other)
+				end
+			end
+		end
+		if not recursive then
+			break
+		end
+		i += 1
+	end
+	return list
+end
+
+local function volume(p)
+	local s = p.Size
+	return s.X * s.Y * s.Z
+end
+
+local function root_of(part)
+	local best
+	for _, p in ipairs(assembly(part, true)) do
+		if p.Anchored then
+			return p
+		end
+		if not best then
+			best = p
+		else
+			local a, b = p.RootPriority, best.RootPriority
+			local hrp = p.Name == "HumanoidRootPart" and p.Parent and p.Parent:FindFirstChildOfClass("Humanoid")
+			if hrp or a > b or (a == b and volume(p) > volume(best)) then
+				best = p
+			end
+		end
+	end
+	return best or part
+end
+
+add(methods, "BasePart", {
+	GetRootPart = function(self)
+		return root_of(self)
+	end,
+	IsGrounded = function(self)
+		for _, p in ipairs(assembly(self, true)) do
+			if p.Anchored then
+				return true
+			end
+		end
+		return false
+	end,
+	GetNoCollisionConstraints = function(self)
+		local list = {}
+		for _, j in ipairs(joints_of(self)) do
+			if j:IsA("NoCollisionConstraint") then
+				table.insert(list, j)
+			end
+		end
+		return list
+	end,
+	CanCollideWith = function(self, other)
+		if typeof(other) ~= "Instance" or not other:IsA("BasePart") then
+			error("CanCollideWith expects a part", 2)
+		end
+		if not (self.CanCollide and other.CanCollide) then
+			return false
+		end
+		for _, j in ipairs(joints_of(self)) do
+			if j:IsA("NoCollisionConstraint") and enabled(j) then
+				local a, b = ends_of(j)
+				if a == other or b == other then
+					return false
+				end
+			end
+		end
+		return game:GetService("PhysicsService"):CollisionGroupsAreCollidable(self.CollisionGroup, other.CollisionGroup)
+	end,
+	Resize = function(self, face, delta)
+		local name = typeof(face) == "EnumItem" and face.Name or tostring(face)
+		local normal = Vector3.FromNormalId(name)
+		local axis = Vector3.new(math.abs(normal.X), math.abs(normal.Y), math.abs(normal.Z))
+		local size = self.Size + axis * delta
+		if size.X < 0 or size.Y < 0 or size.Z < 0 then
+			return false
+		end
+		local cf = self.CFrame
+		self.Size = size
+		self.CFrame = cf * CFrame.new(normal * (delta / 2))
+		return true
+	end,
+})
+add(getters, "BasePart", {
+	AssemblyRootPart = function(self)
+		return root_of(self)
+	end,
+	CurrentPhysicalProperties = function(self)
+		local custom = self.CustomPhysicalProperties
+		if custom then
+			return custom
+		end
+		return PhysicalProperties.new(self.Material)
+	end,
+	ExtentsCFrame = function(self)
+		return self.CFrame
+	end,
+})
+
+add(methods, "Terrain", {
+	ReadVoxelChannels = function(self, region, resolution, ids)
+		local materials, occupancy = self:ReadVoxels(region, resolution)
+		local size = materials.Size
+		local out = { Size = size }
+		local function each(f)
+			local t = {}
+			for x = 1, size.X do
+				t[x] = {}
+				for y = 1, size.Y do
+					t[x][y] = {}
+					for z = 1, size.Z do
+						t[x][y][z] = f(materials[x][y][z], occupancy[x][y][z])
+					end
+				end
+			end
+			return t
+		end
+		for _, id in ipairs(ids or {}) do
+			if id == "SolidMaterial" then
+				out.SolidMaterial = each(function(m)
+					return m == Enum.Material.Water and Enum.Material.Air or m
+				end)
+			elseif id == "SolidOccupancy" then
+				out.SolidOccupancy = each(function(m, o)
+					return m == Enum.Material.Water and 0 or o
+				end)
+			elseif id == "LiquidOccupancy" then
+				out.LiquidOccupancy = each(function(m, o)
+					return m == Enum.Material.Water and o or 0
+				end)
+			end
+		end
+		return out
+	end,
+	WriteVoxelChannels = function(self, region, resolution, channels)
+		local solid = channels.SolidMaterial
+		local occupancy = channels.SolidOccupancy
+		local liquid = channels.LiquidOccupancy
+		local base = solid or liquid
+		if not base then
+			return
+		end
+		local materials, amounts = {}, {}
+		for x, plane in ipairs(base) do
+			materials[x], amounts[x] = {}, {}
+			for y, row in ipairs(plane) do
+				materials[x][y], amounts[x][y] = {}, {}
+				for z in ipairs(row) do
+					local m = solid and solid[x][y][z] or Enum.Material.Air
+					local o = occupancy and occupancy[x][y][z] or (m ~= Enum.Material.Air and 1 or 0)
+					local w = liquid and liquid[x][y][z] or 0
+					if (m == Enum.Material.Air or o <= 0) and w > 0 then
+						m, o = Enum.Material.Water, w
+					end
+					materials[x][y][z], amounts[x][y][z] = m, o
+				end
+			end
+		end
+		self:WriteVoxels(region, resolution, materials, amounts)
+	end,
+})
+
+add(methods, "Instance", {
+	children = function(self)
+		return self:GetChildren()
+	end,
+	getChildren = function(self)
+		return self:GetChildren()
+	end,
+	clone = function(self)
+		return self:Clone()
+	end,
+	destroy = function(self)
+		self:Destroy()
+	end,
+	Remove = function(self)
+		self.Parent = nil
+	end,
+	remove = function(self)
+		self.Parent = nil
+	end,
+	isA = function(self, name)
+		return self:IsA(name)
+	end,
+	findFirstChild = function(self, name, recursive)
+		return self:FindFirstChild(name, recursive)
+	end,
+	isDescendantOf = function(self, other)
+		return self:IsDescendantOf(other)
+	end,
+	GetActor = get_actor,
+})
+add(methods, "Model", {
+	GetModelSize = function(self)
+		return self:GetExtentsSize()
+	end,
+	move = function(self, at)
+		self:MoveTo(at)
+	end,
+	moveTo = function(self, at)
+		self:MoveTo(at)
+	end,
+})
+add(methods, "BasePart", {
+	getMass = function(self)
+		return self:GetMass()
+	end,
+})
+
+local function axis_setter(primary)
+	return function(self, v)
+		local cf = self.CFrame
+		local x, y = cf.XVector, cf.YVector
+		if primary then
+			x = v.Unit
+		else
+			y = v.Unit
+		end
+		local z = x:Cross(y)
+		if z.Magnitude < 1e-6 then
+			return
+		end
+		z = z.Unit
+		y = z:Cross(x).Unit
+		self.CFrame = CFrame.fromMatrix(cf.Position, x, y, z)
+	end
+end
+add(getters, "Attachment", {
+	Axis = function(self)
+		return self.CFrame.XVector
+	end,
+	SecondaryAxis = function(self)
+		return self.CFrame.YVector
+	end,
+	WorldAxis = function(self)
+		local cf = self.WorldCFrame
+		return cf and cf.XVector
+	end,
+	WorldSecondaryAxis = function(self)
+		local cf = self.WorldCFrame
+		return cf and cf.YVector
+	end,
+})
+add(setters, "Attachment", {
+	Axis = axis_setter(true),
+	SecondaryAxis = axis_setter(false),
+})
+add(methods, "Attachment", {
+	GetConstraints = function(self)
+		local list = {}
+		for _, d in ipairs(top_of(self):GetDescendants()) do
+			if d:IsA("Constraint") or d.ClassName == "RigidConstraint" then
+				local ok, a0, a1 = pcall(function()
+					return d.Attachment0, d.Attachment1
+				end)
+				if ok and (a0 == self or a1 == self) then
+					table.insert(list, d)
+				end
+			end
+		end
+		return list
+	end,
+})
+
+add(methods, "Humanoid", {
+	PlayEmote = function()
+		return false
+	end,
+})
+plain_signals("Animator", { "AnimationPlayed" })
+add(methods, "Animator", {
+	StepAnimations = function() end,
+	ApplyJointVelocities = function() end,
+})
+add(methods, "Player", {
+	IsInGroupAsync = function(self, id)
+		return self:IsInGroup(id)
+	end,
+	GetRankInGroupAsync = function(self, id)
+		return self:GetRankInGroup(id)
+	end,
+	GetRoleInGroupAsync = function(self, id)
+		return self:GetRoleInGroup(id)
+	end,
+})
+
+for _, class in { "DragDetector", "UIDragDetector" } do
+	plain_signals(class, { "DragStart", "DragContinue", "DragEnd" })
+	add(methods, class, {
+		SetDragStyleFunction = NOOP,
+		SetPermissionPolicyFunction = NOOP,
+		AddConstraintFunction = function()
+			return { Disconnect = NOOP, Connected = true }
+		end,
+		RemoveConstraintFunction = NOOP,
+		GetReferenceFrame = function(self)
+			local p = self.Parent
+			return p and p:IsA("BasePart") and p.CFrame or CFrame.new()
+		end,
+		RestartDrag = NOOP,
+	})
+end
+
+add(methods, "MeshPart", {
+	ApplyMesh = function(self, from)
+		if typeof(from) == "Instance" then
+			pcall(function()
+				self.MeshId = from.MeshId
+			end)
+		end
+	end,
+})
+plain_signals("RocketPropulsion", { "ReachedTarget" })
+add(methods, "RocketPropulsion", { Fire = NOOP, Abort = NOOP })
+add(methods, "WireframeHandleAdornment", {
+	AddLine = NOOP,
+	AddLines = NOOP,
+	AddPath = NOOP,
+	AddText = NOOP,
+	Clear = NOOP,
+})
+add(methods, "DataStoreSetOptions", {
+	SetMetadata = function(_, t)
+		CURRENT.values.__metadata = table.clone(t or {})
+	end,
+	GetMetadata = function()
+		return table.clone(CURRENT.values.__metadata or {})
+	end,
+})
+add(methods, "Workspace", {
+	GetPhysicsThrottling = function()
+		return 100
+	end,
+})
+add(methods, "HttpService", {
+	GetAsync = function()
+		error("Http requests are not enabled", 0)
+	end,
+	PostAsync = function()
+		error("Http requests are not enabled", 0)
+	end,
+	RequestAsync = function()
+		error("Http requests are not enabled", 0)
+	end,
+	GetSecret = function(_, key)
+		error("Can't find secret with given key: " .. tostring(key), 2)
+	end,
+})
+add(methods, "PathfindingService", {
+	FindPathAsync = function(self, from, to)
+		local path = self:CreatePath()
+		path:ComputeAsync(from, to)
+		return path
+	end,
+})
+SERVICE_EXTRAS.ContextActionService.methods.GetButton = NOOP
+SERVICE_EXTRAS.TextService.methods.GetTextBoundsAsync = function(self, params)
+	local width = params.Width
+	if not width or width <= 0 then
+		width = math.huge
+	end
+	return self:GetTextSize(params.Text or "", params.Size or 14, Enum.Font.SourceSans, Vector2.new(width, math.huge))
+end
+SERVICE_EXTRAS.PhysicsService = {
+	methods = {
+		GetMaxCollisionGroups = returns(32),
+		RenameCollisionGroup = function(self, from, to)
+			if from == "Default" or not self:IsCollisionGroupRegistered(from) then
+				error("can't rename collision group " .. tostring(from), 2)
+			end
+			local groups = self:GetRegisteredCollisionGroups()
+			self:RegisterCollisionGroup(to)
+			for _, g in ipairs(groups) do
+				local name = g.name or g.Name
+				local other = name == from and to or name
+				self:CollisionGroupSetCollidable(to, other, self:CollisionGroupsAreCollidable(from, name))
+			end
+			for _, d in ipairs(game:GetDescendants()) do
+				if d:IsA("BasePart") and d.CollisionGroup == from then
+					d.CollisionGroup = to
+				end
+			end
+			self:UnregisterCollisionGroup(from)
+		end,
+	},
+}
 
 -- (found, value) for member `key` of `obj`, whose groups are `groups`.
 function L.index(key_id, obj, key, groups)
@@ -3584,6 +4030,21 @@ function L.globals()
 	g.Vector3.FromNormalId = function(id)
 		return NORMALS[typeof(id) == "string" and id or id.Name] or Vector3.zero
 	end
+	g.Color3.toHSV = function(c)
+		return c:ToHSV()
+	end
+	g.ElapsedTime = function()
+		return elapsedTime()
+	end
+	g.PathWaypoint = table.freeze({
+		new = function(position, action, label)
+			return table.freeze({
+				Position = position or Vector3.zero,
+				Action = action or Enum.PathWaypointAction.Walk,
+				Label = label or "",
+			})
+		end,
+	})
 	g.Vector3.FromAxis = function(axis)
 		local n = typeof(axis) == "string" and axis or axis.Name
 		return n == "X" and Vector3.xAxis or n == "Y" and Vector3.yAxis or Vector3.zAxis
@@ -3652,7 +4113,7 @@ function L.globals()
 	end
 
 	local function box(min, max)
-		return { CFrame = CFrame.new((min + max) / 2), Size = max - min }
+		return { CFrame = CFrame.new((min + max) / 2), Size = max - min, Min = min, Max = max }
 	end
 	local Region3Meta = {}
 	Region3Meta.__index = Region3Meta

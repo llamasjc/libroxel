@@ -1270,3 +1270,94 @@ fn games_can_hide_the_touch_controls_and_see_what_the_player_has() {
     );
     assert_eq!(printed(&rt), vec!["true true", "now Touch", "false true"]);
 }
+
+#[test]
+fn joints_worlds_terrain_copies_and_older_names() {
+    let rt = runtime();
+    run(
+        &rt,
+        r##"
+        local cf = CFrame.new(1, 2, 3) * CFrame.Angles(0, math.pi / 2, 0)
+        local c = { cf:components() }
+        print(#c, math.round(cf.R02), math.round(cf.R20), cf.R11)
+        local a = Instance.new("Part", workspace)
+        a.Anchored = true
+        local b = Instance.new("Part", workspace)
+        b.Size = Vector3.new(4, 4, 4)
+        local d = Instance.new("Part", workspace)
+        local w = Instance.new("WeldConstraint", a)
+        w.Part0, w.Part1 = a, b
+        local m = Instance.new("Motor6D", b)
+        m.Part0, m.Part1 = b, d
+        print(#a:GetJoints(), #b:GetJoints(), #a:GetConnectedParts(true), #d:GetConnectedParts(false))
+        print(d.AssemblyRootPart == a, d:IsGrounded(), #Instance.new("Part"):GetConnectedParts(true))
+        local p = Instance.new("Part")
+        p.Size = Vector3.new(2, 2, 2)
+        print(p:Resize(Enum.NormalId.Top, 2), p.Size, p.Position)
+        local ps = game:GetService("PhysicsService")
+        ps:RegisterCollisionGroup("Ghosts")
+        ps:CollisionGroupSetCollidable("Ghosts", "Default", false)
+        b.CollisionGroup = "Ghosts"
+        print(a:CanCollideWith(d), a:CanCollideWith(b))
+        ps:RenameCollisionGroup("Ghosts", "Spirits")
+        print(b.CollisionGroup, ps:CollisionGroupsAreCollidable("Spirits", "Default"), ps:IsCollisionGroupRegistered("Ghosts"))
+
+        local world = Instance.new("WorldModel")
+        local inside = Instance.new("Part", world)
+        inside.Position = Vector3.new(50, 0, 0)
+        local hit = world:Raycast(Vector3.new(50, 10, 0), Vector3.new(0, -20, 0))
+        print(hit and hit.Instance == inside, hit and hit.Position.Y, workspace:Raycast(Vector3.new(50, 10, 0), Vector3.new(0, -20, 0)))
+        print(#world:GetPartBoundsInRadius(Vector3.new(50, 0, 0), 2))
+
+        local t = workspace.Terrain
+        t:FillBlock(CFrame.new(2, 2, 2), Vector3.new(4, 4, 4), Enum.Material.Grass)
+        local copy = t:CopyRegion(Region3int16.new(Vector3int16.new(0, 0, 0), Vector3int16.new(0, 0, 0)))
+        print(copy.SizeInCells)
+        t:PasteRegion(copy, Vector3int16.new(5, 0, 0), true)
+        local mats = t:ReadVoxels(Region3.new(Vector3.new(20, 0, 0), Vector3.new(24, 4, 4)), 4)
+        print(mats[1][1][1].Name)
+        local ch = t:ReadVoxelChannels(Region3.new(Vector3.new(20, 0, 0), Vector3.new(24, 4, 4)), 4, { "SolidMaterial", "LiquidOccupancy" })
+        print(ch.SolidMaterial[1][1][1].Name, ch.LiquidOccupancy[1][1][1])
+
+        local folder = Instance.new("Folder")
+        local kid = Instance.new("Part", folder)
+        kid.Name = "Kid"
+        print(#folder:children(), folder:findFirstChild("Kid") == kid, kid:isA("BasePart"), folder:clone().Name)
+        kid:Remove()
+        print(kid.Parent)
+        print(select("#", Color3.toHSV(Color3.new(1, 0, 0))), PathWaypoint.new(Vector3.one).Action.Name, type(ElapsedTime()))
+        print(pcall(function() return game:GetService("HttpService"):GetAsync("https://example.com") end))
+        local path = game:GetService("PathfindingService"):FindPathAsync(Vector3.new(0, 3, 0), Vector3.new(10, 3, 0))
+        print(typeof(path))
+        local fired = false
+        Instance.new("BindableEvent").Event:ConnectParallel(function() end)
+        local rocket = Instance.new("RocketPropulsion")
+        rocket:Fire()
+        local att = Instance.new("Attachment")
+        att.Axis = Vector3.new(0, 0, 1)
+        print(att.Axis, att.SecondaryAxis.Y)
+    "##,
+    );
+    assert_eq!(
+        printed(&rt),
+        vec![
+            "12 1 -1 1",
+            "1 2 2 2",
+            "true true 0",
+            "true 2, 4, 2 0, 1, 0",
+            "true false",
+            "Spirits false false",
+            "true 0.5 nil",
+            "1",
+            "1, 1, 1",
+            "Grass",
+            "Grass 0",
+            "1 true true Folder",
+            "nil",
+            "3 Walk number",
+            "false Http requests are not enabled",
+            "Path",
+            "0, 0, 1 1",
+        ]
+    );
+}
