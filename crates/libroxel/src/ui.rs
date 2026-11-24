@@ -594,7 +594,10 @@ pub fn editor_ui(
     match engine.session.as_ref() {
         Some(session) if editor.loading.active() => {
             let filling = libroxel_engine::view::VIEW_FILLING.load(std::sync::atomic::Ordering::Relaxed);
-            editor.loading.show(&ctx, central, now, session.joining(), filling);
+            if editor.loading.show(&ctx, central, now, session.joining(), filling) {
+                editor.loading.stop();
+                actions.push(Action::Stop);
+            }
         }
         Some(_) => {}
         None => editor.loading.stop(),

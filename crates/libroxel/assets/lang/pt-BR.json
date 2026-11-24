@@ -5,6 +5,7 @@
  "1 friend request waiting": "1 pedido de amizade pendente",
  "1 joined": "1 entrou",
  "1 player": "1 jogador",
+ "A different version of Libroxel": "Outra versão do Libroxel",
  "A flat strip between Attachment0 and Attachment1 that always faces the camera: lasers, light shafts, ropes of light. Width0 and Width1 set how wide, LightEmission makes it glow.": "Uma faixa plana entre Attachment0 e Attachment1 que sempre olha para a câmera: lasers, feixes de luz, cordas de luz. Width0 e Width1 definem a largura e LightEmission a faz brilhar.",
  "A folder for a model's settings: put value objects inside it.": "Uma pasta para as configurações de um modelo: coloque objetos de valor dentro.",
  "A frame you can scroll with the mouse wheel while playing. CanvasSize is how big its inside is (2 in Y scale is twice as tall as the frame); CanvasPosition is how far it's scrolled.": "Um frame que rola com a roda do mouse durante o jogo. CanvasSize é o tamanho do interior (2 na escala Y é o dobro da altura do frame); CanvasPosition é o quanto já rolou.",
@@ -335,6 +336,7 @@
  "Start from an empty baseplate": "Comece com uma base vazia",
  "Stats": "Estatísticas",
  "Stop": "Parar",
+ "Stop loading": "Parar de carregar",
  "Stop sharing": "Parar de compartilhar",
  "Tag": "Pega-pega",
  "Tags": "Tags",
@@ -364,6 +366,7 @@
  "Ungroup": "Desagrupar",
  "Unsaved work": "Trabalho não salvo",
  "Update": "Atualizar",
+ "Updating…": "Atualizando…",
  "Version": "Versão",
  "View": "Visualizar",
  "Visits": "Visitas",
@@ -442,7 +445,5 @@
  "{n}% liked": "{n}% curtiram",
  "{part} colour {colour}": "Cor de {part}: {colour}",
  "{shape} part": "Peça {shape}",
- "{why} You can also host it yourself.": "{why} Você também pode hospedar.",
- "Updating…": "Atualizando…",
- "A different version of Libroxel": "Outra versão do Libroxel"
+ "{why} You can also host it yourself.": "{why} Você também pode hospedar."
 }
