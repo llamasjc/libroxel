@@ -244,6 +244,10 @@ grep -q 'import /etc/caddy/sites/\*' /etc/caddy/Caddyfile 2>/dev/null \
 cat > /etc/caddy/sites/hub.caddy <<CADDY
 $DOMAIN {
     encode gzip
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options nosniff
+    }
     reverse_proxy 127.0.0.1:7430
 }
 CADDY

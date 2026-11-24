@@ -34,8 +34,11 @@ fn internal(e: rusqlite::Error) -> Failure {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
-fn hash(kind: &str, code: &str) -> String {
-    data_encoding::HEXLOWER.encode(&sha2::Sha256::digest(format!("libroxel {kind}\n{code}")))
+fn hash(db: &Connection, kind: &str, code: &str) -> String {
+    crate::seal::pepper(
+        db,
+        &data_encoding::HEXLOWER.encode(&sha2::Sha256::digest(format!("libroxel {kind}\n{code}"))),
+    )
 }
 
 pub(crate) fn create_tables(db: &Connection) -> Result<(), String> {
@@ -98,7 +101,7 @@ pub(crate) fn make_recovery_codes(db: &Connection, player_id: &str) -> Result<Ve
     for code in &codes {
         db.execute(
             "INSERT OR IGNORE INTO recovery_codes (player_id, hash) VALUES (?1, ?2)",
-            params![player_id, hash("recovery", &tidy_code(code))],
+            params![player_id, hash(db, "recovery", &tidy_code(code))],
         )
         .map_err(internal)?;
     }
@@ -113,7 +116,7 @@ pub(crate) fn forget_recovery_codes(db: &Connection, player_id: &str) {
 pub(crate) fn use_recovery_code(db: &Connection, player_id: &str, code: &str) -> bool {
     db.execute(
         "DELETE FROM recovery_codes WHERE player_id = ?1 AND hash = ?2",
-        params![player_id, hash("recovery", &tidy_code(code))],
+        params![player_id, hash(db, "recovery", &tidy_code(code))],
     )
     .is_ok_and(|n| n == 1)
 }
@@ -182,7 +185,7 @@ pub(crate) fn start_session(db: &Connection, player_id: &str, device: Option<&st
     let now = now();
     let _ = db.execute(
         "INSERT INTO sessions (session_id, player_id, device, from_addr, created, last_seen)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+         VALUES (pepper(?1), ?2, ?3, ?4, ?5, ?5)",
         params![id, player_id, clip_device(device), from, now],
     );
     let _ = db.execute(
@@ -208,10 +211,11 @@ pub(crate) fn sessions(db: &Connection, player_id: &str, this: Option<&str>) -> 
     let now = now();
     if let Some(this) = this {
         let _ = db.execute(
-            "UPDATE sessions SET last_seen = ?3 WHERE session_id = ?1 AND player_id = ?2",
+            "UPDATE sessions SET last_seen = ?3 WHERE session_id = pepper(?1) AND player_id = ?2",
             params![this, player_id, now],
         );
     }
+    let this = this.map(|t| crate::seal::pepper(db, t));
     db.prepare(
         "SELECT session_id, device, from_addr, created, last_seen FROM sessions
          WHERE player_id = ?1 ORDER BY last_seen DESC",
@@ -224,7 +228,7 @@ pub(crate) fn sessions(db: &Connection, player_id: &str, this: Option<&str>) -> 
                 from: r.get(2)?,
                 signed_in_secs_ago: now - r.get::<_, i64>(3)?,
                 seen_secs_ago: now - r.get::<_, i64>(4)?,
-                this: this == Some(id.as_str()),
+                this: this.as_deref() == Some(id.as_str()),
             })
         })
         .map(|rows| rows.filter_map(Result::ok).collect())
@@ -474,7 +478,7 @@ pub(crate) async fn ask_reset(
         let db = db.lock().unwrap();
         let found: Option<(String, String, bool)> = db
             .query_row(
-                "SELECT a.player_id, e.email, e.verified FROM accounts a JOIN emails e ON e.player_id = a.player_id
+                "SELECT a.player_id, unseal(e.email), e.verified FROM accounts a JOIN emails e ON e.player_id = a.player_id
                  WHERE a.name = ?1",
                 params![ask.name.trim()],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
@@ -503,7 +507,7 @@ pub(crate) async fn ask_reset(
         let code = crate::email::new_code();
         db.execute(
             "INSERT OR REPLACE INTO resets (player_id, code, until, tries, sent_at) VALUES (?1, ?2, ?3, 0, ?4)",
-            params![player_id, hash("reset", &code), now + RESET_LASTS_SECS, now],
+            params![player_id, hash(&db, "reset", &code), now + RESET_LASTS_SECS, now],
         )
         .map_err(internal)?;
         (email, code)
@@ -559,7 +563,7 @@ pub(crate) async fn finish_reset(
     if until < now() || tries >= RESET_TRIES {
         return Err((StatusCode::BAD_REQUEST, "that code has run out; ask for a new one".into()));
     }
-    if hash("reset", reset.code.trim()) != code {
+    if hash(&db, "reset", reset.code.trim()) != code {
         db.execute("UPDATE resets SET tries = tries + 1 WHERE player_id = ?1", params![old])
             .map_err(internal)?;
         return Err((StatusCode::BAD_REQUEST, "that's not the code we sent".into()));

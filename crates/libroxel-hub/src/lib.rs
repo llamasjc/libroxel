@@ -93,6 +93,7 @@ pub use recovery::{
     SessionStart, SignOutEverywhere, recovery_message, session_message, sign_out_message,
 };
 pub mod scrub;
+mod seal;
 mod security;
 mod social;
 mod stats;
@@ -740,6 +741,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     charts::create_tables(&db)?;
     moderate::create_tables(&db)?;
     recovery::create_tables(&db)?;
+    seal::install(&db, path)?;
     Ok(db)
 }
 
@@ -1040,7 +1042,7 @@ async fn publish(
             let Some((secret, version)) = owner else {
                 return Err((StatusCode::NOT_FOUND, "there is no published game with that id".into()));
             };
-            if secret != game.secret {
+            if secret != seal::pepper(&db, &game.secret) {
                 return Err((StatusCode::FORBIDDEN, "someone else published that game".into()));
             }
             db.execute(
@@ -1056,7 +1058,7 @@ async fn publish(
             db.execute(
                 "INSERT INTO games (game_id, secret, title, author, description, place, version, plays, created,
                      updated, author_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, 0, ?7, ?7, ?8)",
+                 VALUES (?1, pepper(?2), ?3, ?4, ?5, ?6, 1, 0, ?7, ?7, ?8)",
                 params![id, game.secret, title, author, description, game.place, now, author_id],
             )
             .map_err(internal)?;
@@ -1369,7 +1371,7 @@ pub fn reports(db: &Connection) -> Vec<Reported> {
                              WHEN 'comment' THEN (SELECT text FROM game_comments WHERE comment_id = r.target)
                              WHEN 'group' THEN (SELECT name FROM groups WHERE group_id = r.target)
                              WHEN 'post' THEN (SELECT text FROM group_posts WHERE post_id = r.target)
-                             ELSE (SELECT a.name || ': ' || m.text FROM messages m
+                             ELSE (SELECT a.name || ': ' || unseal(m.text) FROM messages m
                                    LEFT JOIN accounts a ON a.player_id = m.from_id WHERE m.message_id = r.target) END
              FROM reports r GROUP BY r.kind, r.target ORDER BY COUNT(*) DESC",
         )
@@ -1502,7 +1504,9 @@ async fn unpublish(
     Json(secret): Json<Secret>,
 ) -> StatusCode {
     let db = db.lock().unwrap();
-    match db.execute("DELETE FROM games WHERE game_id = ?1 AND secret = ?2", params![id, secret.secret]) {
+    match db
+        .execute("DELETE FROM games WHERE game_id = ?1 AND secret = pepper(?2)", params![id, secret.secret])
+    {
         Ok(0) => StatusCode::NOT_FOUND,
         Ok(_) => {
             analytics::forget_game(&db, &id);
@@ -1575,7 +1579,7 @@ async fn heartbeat(
         .query_row("SELECT secret FROM servers WHERE server_id = ?1", params![beat.server_id], |r| r.get(0))
         .optional()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if owner.is_some_and(|s| s != beat.secret) {
+    if owner.is_some_and(|s| s != seal::pepper(&db, &beat.secret)) {
         return Err((StatusCode::FORBIDDEN, "another host owns that server_id".into()));
     }
     let host_id = match (&beat.host_id, &beat.host_signature) {
@@ -1604,7 +1608,7 @@ async fn heartbeat(
     db.execute(
         "INSERT INTO servers (server_id, secret, name, game, code, players, max_players, kind, first_seen, last_seen,
              game_id, host_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11)
+         VALUES (?1, pepper(?2), ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11)
          ON CONFLICT(server_id) DO UPDATE SET name = ?3, game = ?4, code = ?5, players = ?6,
              max_players = ?7, kind = ?8, last_seen = ?9, game_id = ?10, host_id = ?11",
         params![
@@ -1661,7 +1665,10 @@ async fn remove_server(
     Json(secret): Json<Secret>,
 ) -> StatusCode {
     let db = db.lock().unwrap();
-    match db.execute("DELETE FROM servers WHERE server_id = ?1 AND secret = ?2", params![id, secret.secret]) {
+    match db.execute(
+        "DELETE FROM servers WHERE server_id = ?1 AND secret = pepper(?2)",
+        params![id, secret.secret],
+    ) {
         Ok(0) => StatusCode::NOT_FOUND,
         Ok(_) => StatusCode::NO_CONTENT,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,

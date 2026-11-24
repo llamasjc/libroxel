@@ -208,3 +208,7 @@ Libroxel app itself can't run or look after a Hub):
 On a server set up with the script, run these as `sudo libroxel-admin …`
 (for example `sudo libroxel-admin owner add <your name>`); elsewhere add
 `--data <file>` to say where the Hub keeps its data.
+
+Emails, two-step secrets and messages are encrypted with the key in
+`hub.key` beside the data file. Keep it with your backups: without it they
+can't be read.

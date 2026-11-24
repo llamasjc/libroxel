@@ -131,9 +131,11 @@ pub const NEEDS_CODE: &str = "this account needs the code from your authenticato
 /// it hasn't been used before. `Ok` when they don't use it.
 pub(crate) fn check_code(db: &Connection, player_id: &str, code: Option<&str>) -> Result<(), String> {
     let row: Option<(String, i64)> = db
-        .query_row("SELECT secret, last_step FROM two_step WHERE player_id = ?1", params![player_id], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
+        .query_row(
+            "SELECT unseal(secret), last_step FROM two_step WHERE player_id = ?1",
+            params![player_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .optional()
         .map_err(|e| e.to_string())?;
     let Some((secret, last_step)) = row else { return Ok(()) };
@@ -185,8 +187,8 @@ pub(crate) async fn set_two_step(
                 ));
             };
             db.execute(
-                "INSERT INTO two_step (player_id, secret, last_step) VALUES (?1, ?2, ?3)
-                 ON CONFLICT(player_id) DO UPDATE SET secret = ?2, last_step = ?3",
+                "INSERT INTO two_step (player_id, secret, last_step) VALUES (?1, seal(?2), ?3)
+                 ON CONFLICT(player_id) DO UPDATE SET secret = seal(?2), last_step = ?3",
                 params![set.player_id, secret, step],
             )
             .map_err(internal)?;

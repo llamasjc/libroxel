@@ -231,7 +231,7 @@ fn content(db: &Connection, kind: &str, target: &str) -> Option<(String, Option<
                    FROM games WHERE game_id = ?1",
         "item" => "SELECT name, creator_id, NULL FROM items WHERE item_id = ?1",
         "comment" => "SELECT text, player_id, game_id FROM game_comments WHERE comment_id = ?1",
-        "message" => "SELECT text, from_id, NULL FROM messages WHERE message_id = ?1",
+        "message" => "SELECT unseal(text), from_id, NULL FROM messages WHERE message_id = ?1",
         "group" => "SELECT name || CASE WHEN about = '' THEN '' ELSE ': ' || about END,
                     (SELECT player_id FROM group_members m WHERE m.group_id = g.group_id AND m.role = 2), group_id
                     FROM groups g WHERE group_id = ?1",
