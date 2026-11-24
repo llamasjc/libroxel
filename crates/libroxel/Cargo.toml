@@ -22,6 +22,7 @@ path = "src/main.rs"
 libroxel-instance.workspace = true
 libroxel-script.workspace = true
 libroxel-engine.workspace = true
+libroxel-avatar.workspace = true
 libroxel-net.workspace = true
 libroxel-rbx.workspace = true
 libroxel-hub.workspace = true

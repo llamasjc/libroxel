@@ -5334,6 +5334,7 @@ dependencies = [
  "ed25519-dalek",
  "egui-phosphor",
  "jni 0.21.1",
+ "libroxel-avatar",
  "libroxel-engine",
  "libroxel-hub",
  "libroxel-instance",
@@ -5351,12 +5352,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "libroxel-avatar"
+version = "0.1.5"
+dependencies = [
+ "flate2",
+ "libroxel-instance",
+]
+
+[[package]]
 name = "libroxel-engine"
 version = "0.1.5"
 dependencies = [
  "bevy",
  "data-encoding",
  "flate2",
+ "libroxel-avatar",
  "libroxel-instance",
  "libroxel-script",
  "rapier3d",
@@ -5377,6 +5387,7 @@ dependencies = [
  "hmac",
  "iroh-base",
  "lettre",
+ "libroxel-avatar",
  "rusqlite",
  "rustrict",
  "serde",

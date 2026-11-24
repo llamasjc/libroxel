@@ -34,24 +34,5 @@
       { "name": "Stick", "size": [0.12, 1.0, 0.12], "at": [0, 1.2, 0], "shape": "Block" },
       { "name": "Tip", "size": [0.45, 0.45, 0.45], "at": [0, 1.85, 0], "shape": "Ball", "glow": true, "tinted": true }
     ] }
-  ],
-  "front": {
-    "width": 220,
-    "height": 340,
-    "scale": 42,
-    "hips": 215,
-    "head": 2.55,
-    "edge": 0.82,
-    "eye": [30, 30, 40],
-    "blocks": [
-      { "at": [-0.5, -1.0], "size": [0.95, 2.0], "color": "pants" },
-      { "at": [0.5, -1.0], "size": [0.95, 2.0], "color": "pants" },
-      { "at": [-1.5, 0.85], "size": [0.8, 1.9], "color": "skin" },
-      { "at": [1.5, 0.85], "size": [0.8, 1.9], "color": "skin" },
-      { "at": [0, 0.9], "size": [2.2, 1.8], "color": "shirt" },
-      { "at": [0, 2.55], "size": [1.6, 1.4], "color": "skin" },
-      { "at": [-0.35, 2.65], "size": [0.25, 0.35], "color": "eye" },
-      { "at": [0.35, 2.65], "size": [0.25, 0.35], "color": "eye" }
-    ]
-  }
+  ]
 }

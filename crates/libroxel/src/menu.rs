@@ -12,7 +12,7 @@ use crate::browse::Platform;
 use crate::i18n::{t, tf};
 use crate::server::data_dir;
 use crate::{games_dir, theme};
-use libroxel_engine::character::{BodyColors, Hat, Look};
+use libroxel_engine::character::{Hat, Look};
 use libroxel_instance::Color3;
 
 /// Which game the menu's buttons use.
@@ -846,67 +846,18 @@ fn swatches(ui: &mut egui::Ui, color: &mut Color3, label: &str) {
     });
 }
 
-/// Draws the avatar from the front, the way the character is built.
+/// A picture of the avatar's whole body.
 fn draw_avatar(ui: &mut egui::Ui, look: &Look) {
-    let avatar = libroxel_engine::character::avatar();
-    let front = &avatar.front;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(front.width, front.height), egui::Sense::hover());
-    let painter = ui.painter_at(rect);
-    let scale = front.scale;
-    let hips = egui::pos2(rect.center().x, rect.min.y + front.hips);
-    let at = |x: f32, y: f32| egui::pos2(hips.x + x * scale, hips.y - y * scale);
-    let colour = |c: Color3| {
-        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        Color32::from_rgb(byte(c.r), byte(c.g), byte(c.b))
-    };
-    let rgb = |[r, g, b]: [u8; 3]| Color32::from_rgb(r, g, b);
-    let block = |x: f32, y: f32, w: f32, h: f32, c: Color32| {
-        let r = egui::Rect::from_center_size(at(x, y), egui::vec2(w * scale, h * scale));
-        painter.rect_filled(r, 1.0, c);
-        painter.rect_stroke(
-            r,
-            1.0,
-            egui::Stroke::new(1.5, c.gamma_multiply(front.edge)),
-            egui::StrokeKind::Inside,
-        );
-    };
-    let BodyColors { skin, shirt, pants } = look.colors;
-    for ([x, y], [w, h], part) in &front.blocks {
-        let c = match part.as_str() {
-            "skin" => colour(skin),
-            "shirt" => colour(shirt),
-            "pants" => colour(pants),
-            _ => rgb(front.eye),
-        };
-        block(*x, *y, *w, *h, c);
-    }
-    if let Some(item) = &look.item {
-        let mut parts: Vec<_> = item.parts.iter().collect();
-        parts.sort_by(|a, b| b.offset.z.total_cmp(&a.offset.z));
-        for part in parts {
-            let sideways = (part.turn.z.abs() - 90.0).abs() < 1.0;
-            let (w, h) = if sideways { (part.size.y, part.size.x) } else { (part.size.x, part.size.y) };
-            let (x, y) = (part.offset.x, front.head + part.offset.y);
-            if part.shape == libroxel_instance::PartShape::Ball {
-                painter.circle_filled(at(x, y), w * scale / 2.0, colour(part.color));
-            } else {
-                block(x, y, w, h, colour(part.color));
-            }
-        }
-    }
-    let hat = if look.item.is_some() { libroxel_engine::character::Hat::None } else { look.hat };
-    for part in hat.parts() {
-        let c = if part.tinted { colour(look.hat_color) } else { rgb(avatar.dark) };
-        let [w, h] =
-            if part.turn != 0.0 { [part.size[1], part.size[0]] } else { [part.size[0], part.size[1]] };
-        let (x, y) = (part.at[0], front.head + part.at[1]);
-        if part.shape == libroxel_instance::PartShape::Ball {
-            painter.circle_filled(at(x, y), w * scale / 2.0, c);
-        } else {
-            block(x, y, w, h, c);
-        }
-    }
-    painter.text(
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(220.0, 340.0), egui::Sense::hover());
+    let picture = egui::Rect::from_min_size(rect.min, egui::vec2(220.0, 312.0));
+    let texture = crate::hub_home::avatar_texture(ui.ctx(), look, libroxel_avatar::Shot::Body, (330, 468));
+    ui.painter().image(
+        texture.id(),
+        picture,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        Color32::WHITE,
+    );
+    ui.painter().text(
         egui::pos2(rect.center().x, rect.max.y - 14.0),
         egui::Align2::CENTER_CENTER,
         look.item.as_ref().map_or(look.hat.name(), |item| item.name.as_str()),

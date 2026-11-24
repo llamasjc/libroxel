@@ -143,61 +143,61 @@ fn entries(platform: &Platform) -> Vec<Entry> {
     list
 }
 
-fn rgb(c: libroxel_instance::Color3) -> Color32 {
-    let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    Color32::from_rgb(b(c.r), b(c.g), b(c.b))
+/// A picture of `look`, drawn once and kept.
+pub(crate) fn avatar_texture(
+    ctx: &egui::Context,
+    look: &Look,
+    shot: libroxel_avatar::Shot,
+    (w, h): (u32, u32),
+) -> egui::TextureHandle {
+    static KEPT: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<String, egui::TextureHandle>>,
+    > = std::sync::LazyLock::new(Default::default);
+    let key = format!("{shot:?}{w}x{h}{}", look.to_json());
+    let mut kept = KEPT.lock().unwrap();
+    if let Some(t) = kept.get(&key) {
+        return t.clone();
+    }
+    if kept.len() > 400 {
+        kept.clear();
+    }
+    let p = libroxel_avatar::render(look, shot, w, h);
+    let image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &p.rgba);
+    let texture = ctx.load_texture(format!("avatar:{key}"), image, egui::TextureOptions::LINEAR);
+    kept.insert(key, texture.clone());
+    texture
 }
 
-fn seed(name: &str) -> usize {
-    name.bytes().fold(7usize, |h, b| h.wrapping_mul(31).wrapping_add(b as usize))
-}
-
-/// A round portrait of someone's avatar: their head and shoulders in their
-/// own colours.
+/// A round portrait of someone's avatar: their head and shoulders.
 pub fn paint_avatar(painter: &egui::Painter, centre: egui::Pos2, r: f32, look: &Json, name: &str) {
-    let look = Look::from_json(look, Look::for_player(seed(name)));
+    let look = libroxel_avatar::look_of(look, name);
     theme::radial(painter, centre, r, Color32::from_rgb(236, 248, 255), Color32::from_rgb(160, 208, 244));
-    // Shoulders: the part of the circle below a line, in the shirt colour.
-    let cut = centre.y + r * 0.42;
-    let mut shoulders = Vec::new();
-    let steps = 24;
-    let half = ((r * r - (cut - centre.y).powi(2)).max(0.0)).sqrt();
-    let start = (cut - centre.y).atan2(half);
-    let end = std::f32::consts::PI - start;
+    let size = if r > 24.0 { 192 } else { 96 };
+    let texture = avatar_texture(painter.ctx(), &look, libroxel_avatar::Shot::Head, (size, size));
+    let mut mesh = egui::Mesh::with_texture(texture.id());
+    mesh.colored_vertex(centre, Color32::WHITE);
+    mesh.vertices[0].uv = egui::pos2(0.5, 0.5);
+    let steps = 48;
     for i in 0..=steps {
-        let a = start + (end - start) * i as f32 / steps as f32;
-        shoulders.push(egui::pos2(centre.x + r * a.cos(), centre.y + r * a.sin()));
+        let a = std::f32::consts::TAU * i as f32 / steps as f32;
+        let (c, s) = (a.cos(), a.sin());
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: centre + egui::vec2(c, s) * r,
+            uv: egui::pos2(0.5 + 0.5 * c, 0.5 + 0.5 * s),
+            color: Color32::WHITE,
+        });
+        if i > 0 {
+            mesh.add_triangle(0, i, i + 1);
+        }
     }
-    painter.add(egui::Shape::convex_polygon(shoulders, rgb(look.colors.shirt), egui::Stroke::NONE));
-    // The head: a rounded block.
-    let head =
-        egui::Rect::from_center_size(centre + egui::vec2(0.0, -r * 0.08), egui::vec2(r * 0.86, r * 0.8));
-    painter.rect_filled(head, r * 0.16, rgb(look.colors.skin));
-    let eye = r * 0.075;
-    for side in [-1.0, 1.0] {
-        painter.circle_filled(
-            head.center() + egui::vec2(side * r * 0.16, -r * 0.05),
-            eye,
-            Color32::from_rgb(30, 26, 22),
-        );
-    }
-    painter.line_segment(
-        [head.center() + egui::vec2(-r * 0.12, r * 0.17), head.center() + egui::vec2(r * 0.12, r * 0.17)],
-        egui::Stroke::new((r * 0.05).max(1.0), Color32::from_rgb(30, 26, 22)),
-    );
-    // A hat's colour as a band on top, when they wear one.
-    if look.hat != libroxel_engine::character::Hat::None || look.item.is_some() {
-        let band = egui::Rect::from_min_max(head.left_top(), head.right_top() + egui::vec2(0.0, r * 0.18));
-        painter.rect_filled(band.translate(egui::vec2(0.0, -r * 0.12)), r * 0.08, rgb(look.hat_color));
-    }
-    // Glass over the portrait: a gloss on its upper half and a bright rim.
+    painter.add(mesh);
     let gleam = egui::Rect::from_center_size(centre - egui::vec2(0.0, r * 0.5), egui::vec2(r * 1.5, r * 0.9));
     theme::gradient(
         painter,
         gleam,
         r * 0.45,
         &[
-            (0.0, Color32::from_rgba_unmultiplied(255, 255, 255, 120)),
+            (0.0, Color32::from_rgba_unmultiplied(255, 255, 255, 70)),
             (1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 0)),
         ],
     );

@@ -447,3 +447,45 @@ fn a_hub_without_mail_keeps_accounts_without_an_email() {
     claim(&hub, &[62u8; 32], "NoMail", time()).unwrap();
     claim_with_email(&hub, &[63u8; 32], "SomeMail", time(), Some("some@example.com")).unwrap();
 }
+
+#[test]
+fn avatar_pictures_are_drawn_again_when_the_look_changes() {
+    let running = start("127.0.0.1:0".parse().unwrap(), None).unwrap();
+    let hub = HubClient::new(&running.url());
+    let key = [5u8; 32];
+    let id = player_id_of(&key);
+    let now = time();
+    claim(&hub, &key, "Pic", now).unwrap();
+    let get = |path: &str| {
+        let mut r = ureq::get(format!("{}{path}", running.url())).call().unwrap();
+        assert_eq!(r.headers().get("content-type").unwrap(), "image/png");
+        r.body_mut().read_to_vec().unwrap()
+    };
+    let head = get(&format!("/accounts/{id}/pictures/head.png"));
+    let body = get("/accounts/0/pictures/body.png");
+    assert!(head.starts_with(b"\x89PNG") && body.starts_with(b"\x89PNG"));
+    assert_ne!(head, body);
+    assert_eq!(get(&format!("/accounts/{id}/pictures/head.png")), head);
+
+    let look = serde_json::json!({ "shirt": [255, 0, 0], "hat": "Crown" });
+    let message = account_message(&id, "Pic", "", &look, now + 1);
+    hub.update_account(&AccountUpdate {
+        work: None,
+        email: None,
+        player_id: id.clone(),
+        name: "Pic".into(),
+        about: String::new(),
+        look: look.clone(),
+        time: now + 1,
+        signature: sign(&key, &message),
+    })
+    .unwrap();
+    let after = get(&format!("/accounts/{id}/pictures/head.png"));
+    assert_ne!(after, head);
+    let preview = get(&format!(
+        "/avatar/head.png?name=Pic&look={}",
+        look.to_string().replace('"', "%22").replace('[', "%5B").replace(']', "%5D").replace(' ', "%20")
+    ));
+    assert_eq!(preview, after);
+    assert!(ureq::get(format!("{}/accounts/nobody/pictures/head.png", running.url())).call().is_err());
+}

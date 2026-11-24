@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 rbx_mesh.workspace = true
 libroxel-instance.workspace = true
+libroxel-avatar.workspace = true
 libroxel-script.workspace = true
 bevy.workspace = true
 rapier3d.workspace = true

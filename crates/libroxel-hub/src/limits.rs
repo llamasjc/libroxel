@@ -37,6 +37,7 @@ pub(crate) enum Limit {
     Message,
     Download,
     AssetGet,
+    Picture,
 }
 
 impl Limit {
@@ -58,6 +59,7 @@ impl Limit {
             Limit::Message => (30, MINUTE),
             Limit::Download => (200, 60 * MINUTE),
             Limit::AssetGet => (20_000, 60 * MINUTE),
+            Limit::Picture => (600, 10 * MINUTE),
         }
     }
 }

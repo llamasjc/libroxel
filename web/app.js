@@ -669,88 +669,26 @@ function lookJson(l) {
   return out;
 }
 
-let gradients = 0;
+const lookTag = (look) => (look ? `?v=${fnv(JSON.stringify(look)).toString(36)}` : '');
 
-/** A round portrait: head and shoulders in their own colours (`paint_avatar`). */
-function portrait(look, name, size) {
-  const l = readLook(look, name);
-  const r = 50;
-  const [cx, cy] = [52, 52];
-  const cut = cy + r * 0.42;
-  const half = Math.sqrt(Math.max(r * r - (cut - cy) ** 2, 0));
-  const start = Math.atan2(cut - cy, half);
-  const end = Math.PI - start;
-  const pts = [];
-  for (let i = 0; i <= 24; i++) {
-    const a = start + ((end - start) * i) / 24;
-    pts.push(`${(cx + r * Math.cos(a)).toFixed(2)},${(cy + r * Math.sin(a)).toFixed(2)}`);
-  }
-  const [hw, hh] = [r * 0.86, r * 0.8];
-  const [hx, hy] = [cx - hw / 2, cy - r * 0.08 - hh / 2];
-  const dark = 'rgb(30, 26, 22)';
-  const id = `p${gradients++}`;
-  const k = 104 / size;
-  const parts = [
-    svg('defs', {},
-      svg('radialGradient', { id: `${id}b` },
-        svg('stop', { offset: 0, 'stop-color': 'rgb(236, 248, 255)' }),
-        svg('stop', { offset: 1, 'stop-color': 'rgb(160, 208, 244)' })),
-      svg('linearGradient', { id: `${id}g`, x1: 0, y1: 0, x2: 0, y2: 1 },
-        svg('stop', { offset: 0, 'stop-color': 'rgba(255, 255, 255, 0.47)' }),
-        svg('stop', { offset: 1, 'stop-color': 'rgba(255, 255, 255, 0)' }))),
-    svg('circle', { cx, cy, r, fill: `url(#${id}b)` }),
-    svg('polygon', { points: pts.join(' '), fill: rgb(l.shirt) }),
-    svg('rect', { x: hx, y: hy, width: hw, height: hh, rx: r * 0.16, fill: rgb(l.skin) }),
-  ];
-  for (const side of [-1, 1]) parts.push(svg('circle', { cx: cx + side * r * 0.16, cy: hy + hh / 2 - r * 0.05, r: r * 0.075, fill: dark }));
-  parts.push(svg('line', { x1: cx - r * 0.12, x2: cx + r * 0.12, y1: hy + hh / 2 + r * 0.17, y2: hy + hh / 2 + r * 0.17, stroke: dark, 'stroke-width': r * 0.05 }));
-  if (l.hat !== 'No hat' || l.item) {
-    parts.push(svg('rect', { x: hx, y: hy - r * 0.12, width: hw, height: r * 0.18, rx: r * 0.08, fill: rgb(l.hat_color) }));
-  }
-  parts.push(
-    svg('rect', { x: cx - r * 0.75, y: cy - r * 0.95, width: r * 1.5, height: r * 0.9, rx: r * 0.45, fill: `url(#${id}g)` }),
-    svg('circle', { cx, cy, r, fill: 'none', stroke: '#fff', 'stroke-width': Math.min(Math.max((r / k) * 0.06, 1), 2.5) * k }),
-    svg('circle', { cx, cy, r: r + 0.5 * k, fill: 'none', stroke: 'rgba(30, 80, 140, 0.43)', 'stroke-width': k }));
-  return svg('svg', { viewBox: '0 0 104 104', width: size, height: size, 'aria-hidden': 'true' }, ...parts);
+/** A round picture of someone's avatar's head and shoulders. */
+function portrait(id, size, look) {
+  return el('span', { class: 'portrait', style: `width:${size}px;height:${size}px` },
+    el('img', { src: `${HUB}/accounts/${encodeURIComponent(id ?? '')}/pictures/head.png${lookTag(look)}`, alt: '', loading: 'lazy', onerror: (e) => e.target.remove() }));
 }
 
-/** The whole figure from the front, for the Avatar tab (`draw_avatar`). */
-function figure(l) {
-  const f = AVATAR.front;
-  const p = [];
-  const at = (x, y) => [f.width / 2 + x * f.scale, f.hips - y * f.scale];
-  const block = (x, y, w, h, c) => {
-    const [mx, my] = at(x, y);
-    const [bw, bh] = [w * f.scale, h * f.scale];
-    p.push(svg('rect', { x: mx - bw / 2, y: my - bh / 2, width: bw, height: bh, rx: 1, fill: rgb(c) }));
-    p.push(svg('rect', { x: mx - bw / 2 + 0.75, y: my - bh / 2 + 0.75, width: Math.max(bw - 1.5, 0), height: Math.max(bh - 1.5, 0), rx: 0.25, fill: 'none', stroke: `rgba(${shade(c, f.edge).join(', ')}, ${f.edge})`, 'stroke-width': 1.5 }));
-  };
-  const ball = (x, y, w, c) => {
-    const [mx, my] = at(x, y);
-    p.push(svg('circle', { cx: mx, cy: my, r: (w * f.scale) / 2, fill: rgb(c) }));
-  };
-  const colours = { skin: l.skin, shirt: l.shirt, pants: l.pants, eye: f.eye };
-  for (const b of f.blocks) block(b.at[0], b.at[1], b.size[0], b.size[1], colours[b.color]);
-  if (l.item) {
-    const parts = [...l.item.parts].sort((a, b) => b.at[2] - a.at[2]);
-    for (const part of parts) {
-      const sideways = Math.abs(Math.abs(part.turn[2]) - 90) < 1;
-      const [w, h] = sideways ? [part.size[1], part.size[0]] : [part.size[0], part.size[1]];
-      const [x, y] = [part.at[0], f.head + part.at[1]];
-      if (part.shape === 'Ball') ball(x, y, w, part.color);
-      else block(x, y, w, h, part.color);
-    }
-  }
-  const hat = AVATAR.hats.find((h) => h.name === (l.item ? 'No hat' : l.hat));
-  for (const part of hat?.parts || []) {
-    const c = part.tinted ? l.hat_color : AVATAR.dark;
-    const [w, h] = part.turn ? [part.size[1], part.size[0]] : [part.size[0], part.size[1]];
-    const [x, y] = [part.at[0], f.head + part.at[1]];
-    if (part.shape === 'Ball') ball(x, y, w, c);
-    else block(x, y, w, h, c);
-  }
-  p.push(svg('text', { x: f.width / 2, y: f.height - 14, 'text-anchor': 'middle', 'dominant-baseline': 'central', class: 'figure-name' }, document.createTextNode(l.item ? l.item.name : l.hat)));
-  return svg('svg', { viewBox: `0 0 ${f.width} ${f.height}`, width: f.width, height: f.height, 'aria-hidden': 'true' }, ...p);
+/** A picture of an avatar's whole body. */
+function bodyPicture(id, look) {
+  return el('img', { class: 'body-pic', src: `${HUB}/accounts/${encodeURIComponent(id)}/pictures/body.png${lookTag(look)}`, alt: '', width: 150, height: 200 });
+}
+
+/** A picture of a look that isn't saved yet. */
+function figure(l, name) {
+  const look = encodeURIComponent(JSON.stringify(lookJson(l)));
+  return [
+    el('img', { src: `${HUB}/avatar/body.png?name=${encodeURIComponent(name)}&look=${look}`, alt: '', width: 220, height: 293 }),
+    el('div', { class: 'figure-name' }, l.item ? l.item.name : l.hat),
+  ];
 }
 
 // The glassy cube (theme.rs `paint_logo`), the same as in index.html.
@@ -1003,7 +941,7 @@ function home() {
   if (session) {
     const online = friends().filter((f) => f.online).length;
     out.push(el('div', { class: 'hello' },
-      portrait(data.me?.look, session.name || '', 64),
+      portrait(session.playerId, 64, data.me?.look),
       el('div', {},
         el('h1', {}, `Hello, ${session.name || 'there'}!`),
         el('div', { class: 'soft' }, online === 1 ? '1 friend is online.' : `${online} friends are online.`))));
@@ -1021,7 +959,7 @@ function home() {
         const [where, colour] = whereabouts(f);
         const dot = f.online ? (f.game ? 'var(--link)' : 'var(--green)') : null;
         const tile = el('a', { class: 'friend-tile', href: f.server ? '#' : `/user/${f.number ?? f.player_id}`, title: f.server ? `Join ${f.name}` : f.name },
-          el('div', { class: 'face' }, portrait(f.look, f.name, 78), dot && el('span', { class: 'dot', style: `background:${dot}` })),
+          el('div', { class: 'face' }, portrait(f.player_id, 78, f.look), dot && el('span', { class: 'dot', style: `background:${dot}` })),
           el('b', {}, f.name),
           el('small', { style: `color:${colour}` }, where));
         if (f.server) tile.addEventListener('click', (e) => { e.preventDefault(); joinServer(f.server); });
@@ -1107,7 +1045,7 @@ function gameCard(entry) {
     el('div', { class: 'pic' },
       gamePicture(188, 150, entry.key),
       el('span', { class: 'badge', style: `background:${rgb(pictureColour(entry.key))}` }, icon(entry.symbol)),
-      inside.length ? el('span', { class: 'faces' }, inside.slice(0, 3).map((f) => portrait(f.look, f.name, 26))) : null),
+      inside.length ? el('span', { class: 'faces' }, inside.slice(0, 3).map((f) => portrait(f.player_id, 26, f.look))) : null),
     el('h3', {}, entry.title),
     meta);
 }
@@ -1329,7 +1267,7 @@ function commentsPanel(entry) {
   const mine = (c) => session && (c.player_id === session.playerId || entry.byId === session.playerId);
   for (const c of list) {
     out.push(el('div', { class: 'comment' },
-      portrait(null, c.name, 36),
+      portrait(c.player_id, 36),
       el('div', { class: 'what' },
         el('div', {}, el('a', { href: `/user/${c.number ?? c.player_id}` }, el('b', {}, c.name)), el('span', { class: 'soft' }, ` · ${ago(c.secs_ago)}`)),
         el('div', { class: 'text' }, c.text)),
@@ -1355,7 +1293,7 @@ function serverRow(server, entry) {
       el('small', {},
         el('span', { class: `kind-${kind}` }, `${kind.charAt(0).toUpperCase()}${kind.slice(1)} server`),
         host,
-        inside.map((f) => el('span', { style: 'color:var(--link);display:inline-flex;gap:4px;align-items:center' }, portrait(f.look, f.name, 16), `${f.name} is here`)))),
+        inside.map((f) => el('span', { style: 'color:var(--link);display:inline-flex;gap:4px;align-items:center' }, portrait(f.player_id, 16, f.look), `${f.name} is here`)))),
     el('div', { class: `fill${isFull ? ' full' : ''}` },
       server.max_players ? `${server.players} / ${server.max_players} players` : `${server.players} playing`,
       el('div', { class: 'bar' }, el('i', { style: `width:${server.max_players ? filled * 100 : 0}%` }))),
@@ -1421,7 +1359,7 @@ function personResult(p) {
     } else action = el('button', { class: 'btn go small', onclick: () => changeFriend(p.player_id, 'add', asking ? `You and ${p.name} are friends now.` : `Friend request sent to ${p.name}.`) }, icon(ICON.userPlus), asking ? 'Accept' : 'Add');
   }
   return el('div', { class: 'person' },
-    portrait(null, p.name, 44),
+    portrait(p.player_id, 44),
     el('div', { class: 'what' },
       el('a', { href: `/user/${p.number ?? p.player_id}` }, el('b', {}, p.name), el('span', { class: 'soft' }, ` #${p.number ?? ''}`)),
       el('small', { class: 'soft' }, note)),
@@ -1455,7 +1393,7 @@ function partyRows() {
   const out = [];
   for (const invite of data.party?.invites || []) {
     out.push(el('div', { class: 'person' },
-      portrait(null, invite.from.name, 44),
+      portrait(invite.from.player_id, 44),
       el('div', { class: 'what' }, el('b', {}, invite.from.name), el('small', { style: 'color:var(--amber)' }, 'Invited you to a party')),
       el('div', { class: 'buttons' },
         el('button', { class: 'btn go small', onclick: () => changeParty('accept', invite.party_id, `You joined ${invite.from.name}'s party.`) }, icon(ICON.check), 'Accept'),
@@ -1470,14 +1408,14 @@ function partyRows() {
     const mine = m.player_id === session.playerId;
     const [text, colour] = m.game ? [m.game, 'var(--link)'] : m.online ? ['Online', 'var(--green)'] : ['Offline', 'var(--muted)'];
     out.push(el('div', { class: 'person' },
-      portrait(m.look, m.name, 44),
+      portrait(m.player_id, 44, m.look),
       el('div', { class: 'what' }, el('b', {}, m.leader ? icon(ICON.crown) : null, m.leader ? ' ' : null, m.name), el('small', { style: `color:${colour}` }, text)),
       el('div', { class: 'buttons' },
         !mine && m.server && el('button', { class: 'btn go small', onclick: () => joinServer(m.server) }, icon(ICON.signIn), 'Join'),
         leading && !mine && el('button', { class: 'chip', onclick: () => changeParty('remove', m.player_id) }, 'Remove'))));
   }
   for (const p of party.invited) {
-    out.push(el('div', { class: 'person' }, portrait(null, p.name, 44),
+    out.push(el('div', { class: 'person' }, portrait(p.player_id, 44),
       el('div', { class: 'what' }, el('b', {}, p.name), el('small', { class: 'soft' }, 'Invited'))));
   }
   return out;
@@ -1519,7 +1457,7 @@ function friendsPage() {
     const [where, colour] = whereabouts(friend);
     const text = friend.online && friend.game ? `Playing ${friend.game}${friend.server ? ` on ${friend.server.name}` : ''}` : where;
     left.push(el('div', { class: 'person' },
-      portrait(friend.look, friend.name, 44),
+      portrait(friend.player_id, 44, friend.look),
       el('div', { class: 'what' }, el('a', { href: `/user/${friend.number ?? friend.player_id}` }, el('b', {}, friend.name)), el('small', { style: `color:${colour}` }, text)),
       el('div', { class: 'buttons' },
         friend.online && !inParty.has(friend.player_id) && el('button', { class: 'chip', onclick: () => changeParty('invite', friend.player_id, `Invited ${friend.name}.`) }, icon(ICON.users), 'Invite'),
@@ -1539,7 +1477,7 @@ function friendsPage() {
     right.push(el('h2', { class: 'subhead sun' }, `Friend requests (${f.incoming.length})`));
     for (const p of f.incoming) {
       right.push(el('div', { class: 'person' },
-        portrait(null, p.name, 44),
+        portrait(p.player_id, 44),
         el('div', { class: 'what' }, el('a', { href: `/user/${p.number ?? p.player_id}` }, el('b', {}, p.name)), el('small', { class: 'soft' }, 'Wants to be your friend')),
         el('div', { class: 'buttons' },
           el('button', { class: 'btn go small', onclick: () => changeFriend(p.player_id, 'add', `You and ${p.name} are friends now.`) }, icon(ICON.check), 'Accept'),
@@ -1552,7 +1490,7 @@ function friendsPage() {
     right.push(el('div', { class: 'caps group' }, 'Requests you sent'));
     for (const p of f.outgoing) {
       right.push(el('div', { class: 'person' },
-        portrait(null, p.name, 44),
+        portrait(p.player_id, 44),
         el('div', { class: 'what' }, el('b', {}, p.name), el('small', { class: 'soft' }, 'Waiting for them to accept')),
         el('div', { class: 'buttons' }, el('button', { class: 'chip', onclick: () => changeFriend(p.player_id, 'remove', `Took back your request to ${p.name}.`) }, 'Cancel'))));
     }
@@ -1649,7 +1587,7 @@ function messagesPage() {
   for (const c of list) {
     const mine = c.last.from_id === session.playerId;
     left.push(el('a', { class: `person chat${c.with.player_id === chats.with ? ' on' : ''}`, href: `/messages/${c.with.player_id}` },
-      portrait(c.look, c.with.name, 40),
+      portrait(c.with.player_id, 40, c.look),
       el('div', { class: 'what' },
         el('b', {}, c.with.name),
         el('small', { class: 'soft' }, mine ? `You: ${c.last.text}` : c.last.text)),
@@ -1657,7 +1595,7 @@ function messagesPage() {
   }
   for (const f of friends().filter((x) => !talked.has(x.player_id))) {
     left.push(el('a', { class: `person chat${f.player_id === chats.with ? ' on' : ''}`, href: `/messages/${f.player_id}` },
-      portrait(f.look, f.name, 40),
+      portrait(f.player_id, 40, f.look),
       el('div', { class: 'what' }, el('b', {}, f.name), el('small', { class: 'soft' }, whereabouts(f)[0]))));
   }
   if (!left.length) left.push(el('div', { class: 'empty' }, chats.list ? 'Add friends to message them.' : 'Loading…'));
@@ -1718,12 +1656,13 @@ function user() {
   return [
     back,
     el('div', { class: 'hello' },
-      portrait(p.look, p.name, 84),
+      portrait(p.player_id, 84, p.look),
       el('div', {},
         el('h1', {}, p.name, ' ', p.badge && badge(p.badge), ' ', p.admin && el('span', { class: 'tag admin' }, 'Admin'), ' ', p.verified && el('span', { class: 'tag verified' }, 'Verified')),
         el('div', { class: 'soft' }, `#${p.number ?? 0} · `, days < 1 ? 'Joined today' : `Joined ${ago(p.joined_secs_ago)}`),
         (action || (session && !isMe)) && el('div', { style: 'margin-top:8px' }, action, ' ',
-          session && !isMe && el('button', { class: 'chip', title: 'Report', onclick: () => startReport('player', p.player_id, p.name) }, icon(ICON.flag))))),
+          session && !isMe && el('button', { class: 'chip', title: 'Report', onclick: () => startReport('player', p.player_id, p.name) }, icon(ICON.flag)))),
+      bodyPicture(p.player_id, p.look)),
     reportPanel('player', p.player_id),
     p.about && el('div', { class: 'about' }, p.about),
     el('h2', { class: 'section' }, `Games (${p.games.length})`),
@@ -1964,7 +1903,7 @@ function groupPage() {
     const rank = { owner: 2, admin: 1, member: 0 };
     if (admin && rank[m.role] < rank[role]) controls.push(el('button', { class: 'chip iconbtn', title: `Remove ${m.name}`, onclick: () => changeGroup('kick', id, { other_id: m.player_id }, `Removed ${m.name}.`) }, icon(ICON.userMinus)));
     side.push(el('div', { class: 'person' },
-      portrait(null, m.name, 36),
+      portrait(m.player_id, 36),
       el('div', { class: 'what' }, el('a', { href: `/user/${m.number ?? m.player_id}` }, el('b', {}, m.name)),
         el('small', { class: 'soft' }, m.role === 'owner' ? [icon(ICON.crown), ' Owner'] : m.role === 'admin' ? [icon(ICON.shield), ' Admin'] : 'Member')),
       el('div', { class: 'buttons' }, controls)));
@@ -2307,7 +2246,7 @@ function avatar() {
     el('h1', { class: 'title' }, 'Your avatar'),
     el('p', { class: 'note' }, 'How you look in every game you play or join. Other players see it too.'),
     el('div', { class: 'avatar-page' },
-      el('div', { class: 'figure' }, figure(look)),
+      el('div', { class: 'figure' }, figure(look, data.me.name)),
       el('div', { style: 'flex:1;min-width:280px' },
         row('Skin', 'skin', AVATAR.skins),
         row('Shirt', 'shirt', AVATAR.clothes),
@@ -2341,7 +2280,7 @@ function profile() {
   const save = el('button', { class: 'btn go', onclick: () => saveAccount(save) }, icon(ICON.check), 'Save');
   return [
     el('div', { class: 'hello' },
-      portrait(data.me.look, data.me.name, 84),
+      portrait(session.playerId, 84, data.me.look),
       el('div', {},
         el('h1', {}, data.me.name),
         el('div', { class: 'soft' }, `#${data.me.number ?? 0} · `, el('a', { href: `/user/${data.me.number ?? session.playerId}` }, 'Public page'), ' · ', el('a', { href: '/friends' }, 'Friends')))),

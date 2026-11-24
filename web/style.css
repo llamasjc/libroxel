@@ -180,6 +180,10 @@ label.field span { display: block; margin-bottom: 4px; }
 
 .hello { display: flex; align-items: center; gap: 18px; margin-bottom: 8px; }
 .hello h1 { font: 700 30px var(--display); color: var(--heading); }
+.hello .body-pic { margin-left: auto; width: 150px; height: 200px; }
+.portrait { position: relative; display: inline-block; flex: none; border-radius: 50%; overflow: hidden; background: radial-gradient(circle, rgb(236, 248, 255), rgb(160, 208, 244)); box-shadow: inset 0 0 0 2px #fff, 0 0 0 1px rgba(30, 80, 140, 0.43); }
+.portrait img { display: block; width: 100%; height: 100%; }
+.portrait::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: linear-gradient(rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0) 45%); box-shadow: inset 0 0 0 2px #fff; }
 .friend-row { display: flex; gap: 18px; overflow-x: auto; padding: 8px 4px 6px; }
 .friend-tile { width: 86px; flex: none; text-align: center; color: var(--text); }
 .friend-tile:hover { text-decoration: none; }
@@ -188,7 +192,7 @@ label.field span { display: block; margin-bottom: 4px; }
 .friend-tile b { display: block; font: 600 15px var(--display); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .friend-tile small { display: block; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .add-face { display: flex; align-items: center; justify-content: center; width: 78px; height: 78px; margin: 0 auto 6px; border-radius: 50%; background: radial-gradient(circle at 50% 62%, #fff, rgb(196, 226, 248)); border: 2px solid rgb(120, 170, 220); color: var(--accent); font-size: 26px; box-shadow: 0 2px 6px rgba(10, 40, 80, 0.2); }
-.friend-tile:hover .add-face, .friend-tile:hover .face svg { box-shadow: var(--glow); }
+.friend-tile:hover .add-face, .friend-tile:hover .face .portrait { box-shadow: var(--glow); }
 .waiting { color: var(--amber); font-size: 14px; display: flex; gap: 6px; align-items: center; }
 
 .games { display: grid; grid-template-columns: repeat(auto-fill, minmax(188px, 1fr)); gap: 18px 16px; max-width: 1100px; }
@@ -204,7 +208,7 @@ label.field span { display: block; margin-bottom: 4px; }
 .game .pic svg.scene { position: absolute; inset: 0; width: 100%; height: 100%; }
 .game .badge { position: absolute; left: 8px; top: 8px; width: 26px; height: 26px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 16px; background-image: var(--gloss); border: 1px solid rgba(0, 0, 0, 0.3); z-index: 1; }
 .game .faces { position: absolute; right: 8px; top: 8px; display: flex; z-index: 1; }
-.game .faces svg { width: 26px; height: 26px; margin-left: -6px; border-radius: 50%; box-shadow: 0 0 0 2px #fff; }
+.game .faces .portrait { margin-left: -6px; box-shadow: 0 0 0 2px #fff; }
 .game h3 { font-size: 16px; color: var(--heading); margin: 12px 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .game .meta { font-size: 13px; color: var(--link); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .game .meta.live { color: var(--green); }
@@ -308,7 +312,7 @@ a.person.chat { color: inherit; text-decoration: none; }
 
 .avatar-page { display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
 .figure { padding: 14px; background: rgba(255, 255, 255, 0.894); border: 1px solid rgb(160, 196, 230); border-radius: 8px; box-shadow: 0 3px 14px rgba(10, 50, 100, 0.157); line-height: 0; }
-.figure-name { font: 13px var(--body); fill: var(--muted); }
+.figure-name { font: 13px var(--body); color: var(--muted); text-align: center; line-height: 1.4; margin-top: 6px; }
 .swatches { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 14px; }
 .swatch { width: 26px; height: 26px; border-radius: 5px; border: 0; cursor: pointer; padding: 0; background: rgb(var(--c)); box-shadow: 0 2px 0 rgba(var(--c), 0.55); }
 .swatch.on { transform: translateY(-2px); outline: 2px solid var(--text); box-shadow: 0 4px 0 rgba(var(--c), 0.55); }

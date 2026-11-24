@@ -95,6 +95,7 @@ pub use parties::{
     party_view_message,
 };
 mod password;
+mod pictures;
 mod ratings;
 mod recovery;
 pub use recovery::{
@@ -776,6 +777,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     recovery::create_tables(&db)?;
     manage::create_tables(&db)?;
     copies::create_tables(&db)?;
+    pictures::create_tables(&db)?;
     seal::install(&db, path)?;
     closed_games(&db, false).map_err(|e| format!("could not set up the Hub database: {e}"))?;
     Ok(db)
@@ -848,6 +850,8 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/official/{name}", get(assets::official_place))
         .route("/accounts", get(find_people).post(update_account))
         .route("/accounts/{id}", get(profile))
+        .route("/accounts/{id}/pictures/{file}", get(pictures::picture))
+        .route("/avatar/{file}", get(pictures::preview))
         .route("/accounts/password", post(password::set_password))
         .route("/accounts/sign-in", post(password::sign_in))
         .route("/accounts/sign-in/{name}", get(password::sign_in_salt))

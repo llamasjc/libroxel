@@ -21,6 +21,7 @@ libroxel-script = { path = "crates/libroxel-script", version = "0.1.5" }
 libroxel-engine = { path = "crates/libroxel-engine", version = "0.1.5" }
 libroxel-net = { path = "crates/libroxel-net", version = "0.1.5" }
 libroxel-rbx = { path = "crates/libroxel-rbx", version = "0.1.5" }
+libroxel-avatar = { path = "crates/libroxel-avatar", version = "0.1.5" }
 libroxel-hub = { path = "crates/libroxel-hub", version = "0.1.5" }
 rbx_mesh = { version = "0.8.2", default-features = false, features = ["mesh", "mesh-v1", "union-graphics", "csgphs-v8-ruzstd"] }
 thiserror = "2"

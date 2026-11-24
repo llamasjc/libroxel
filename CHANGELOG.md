@@ -5,6 +5,9 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
 
 ## Unreleased
 
+- **Avatar pictures:** profile pictures in the app and on the website
+  are now 3D renders of your character, head and full body, redrawn
+  when your look changes.
 - **Roblox places keep more:** attributes holding a NumberRange,
   NumberSequence, ColorSequence, Rect or CFrame, particle emitters'
   Lifetime and Speed, and parts' `CustomPhysicalProperties` now come
