@@ -3162,7 +3162,6 @@ function download() {
 const PLANS = {
   once: { label: 'One-time', amounts: [5, 10, 25, 50, 100], per: '' },
   month: { label: 'Monthly', amounts: [3, 5, 10, 25, 50], per: ' a month' },
-  year: { label: 'Yearly', amounts: [25, 50, 100, 250, 500], per: ' a year' },
 };
 const giving = { plan: 'once', amount: 25, other: '' };
 
@@ -3190,7 +3189,7 @@ function donatePage() {
     const query = { frequency: giving.plan === 'month' ? 'recurring' : 'one-time' };
     if (n) query.amount = n;
     sponsors.href = `${SPONSORS}/sponsorships?${new URLSearchParams(query)}`;
-    fill(note, { once: '', month: 'Monthly gifts go through GitHub Sponsors.', year: 'Paid once for the year.' }[giving.plan]);
+    fill(note, { once: '', month: 'Monthly gifts go through GitHub Sponsors.' }[giving.plan]);
   };
   segs.forEach(([id, b]) => {
     b.onclick = () => {
