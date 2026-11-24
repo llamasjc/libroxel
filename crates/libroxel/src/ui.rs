@@ -301,6 +301,8 @@ pub fn editor_ui(
     }
     editor.platform.social_tick(engine.session.is_some());
     editor.platform.chats_tick(editor.menu.open && editor.menu.tab == crate::menu::Tab::Messages);
+    let hub = editor.platform.client();
+    editor.voice.tick(engine.session.as_mut(), || hub);
     if !playing {
         edit_together(engine, editor);
     }
@@ -513,6 +515,7 @@ pub fn editor_ui(
             if let Some(session) = engine.session.as_ref() {
                 hotbar_hit = gui::hotbar(ui, &tree_rc.borrow(), &session.hotbar());
             }
+            editor.voice.ui(ui, &tree_rc.borrow());
             if let (Some(session), Ok((cam, gt, _, _))) = (engine.session.as_ref(), cameras.single()) {
                 let tree = tree_rc.borrow();
                 for active in session.active_prompts() {

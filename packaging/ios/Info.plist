@@ -79,6 +79,8 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Voice chat</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 </dict>

@@ -1454,6 +1454,24 @@ impl PlaySession {
         matches!(self.link, Link::Client(_))
     }
 
+    /// Whether this game is hosted or joined.
+    pub fn online(&self) -> bool {
+        !matches!(self.link, Link::Alone)
+    }
+
+    /// Sends one frame of this computer's voice ([`crate::voice::FRAME`] samples at [`crate::voice::RATE`]).
+    pub fn speak(&mut self, samples: &[i16]) {
+        if self.online() && !samples.is_empty() {
+            let frame = &samples[..samples.len().min(crate::voice::FRAME)];
+            self.voice.say(crate::voice::to_wire(frame));
+        }
+    }
+
+    /// The voice heard since the last call: who spoke, and what.
+    pub fn take_heard(&mut self) -> Vec<(InstanceId, Vec<i16>)> {
+        std::mem::take(&mut self.voice.heard)
+    }
+
     pub(crate) fn send_to_server(&mut self, says: ClientSays) {
         let Link::Client(joined) = &mut self.link else { return };
         let host_id = |id: InstanceId| joined.back.get(&id).copied();
@@ -1605,6 +1623,16 @@ impl PlaySession {
                         }
                     }
                     "reset" => self.reset_character_for(index),
+                    "voice" => {
+                        if let Some(text) = message.get("d").and_then(Json::as_str)
+                            && let Some(samples) = crate::voice::from_wire(text)
+                        {
+                            if self.avatars.iter().any(|a| !a.remote) {
+                                self.voice.hear(player, samples);
+                            }
+                            self.voice.relay.push((player, text.to_owned()));
+                        }
+                    }
                     "activate" => {
                         let down = message.get("down").and_then(Json::as_bool).unwrap_or(false);
                         let tool = self.avatars[index].character.and_then(|c| {
@@ -1644,6 +1672,23 @@ impl PlaySession {
         let Link::Host(mut host) = std::mem::take(&mut self.link) else { return };
         let tree = self.runtime.tree().clone();
         let messages = self.runtime.take_net_messages();
+        let mut said = std::mem::take(&mut self.voice.relay);
+        let out = std::mem::take(&mut self.voice.out);
+        if let Some(me) = self.avatars.iter().find(|a| !a.remote).map(|a| a.player) {
+            said.extend(out.into_iter().map(|d| (me, d)));
+        }
+        for peer in &mut host.peers {
+            let Some(player) = peer.player else { continue };
+            for (from, d) in &said {
+                if *from != player
+                    && !peer.fresh
+                    && peer.queue.is_empty()
+                    && peer.conn.unsent_len() < SEND_AHEAD
+                {
+                    peer.conn.send(&json!({ "t": "voice", "p": bits(*from), "d": d }));
+                }
+            }
+        }
         if host.peers.iter().all(|p| p.player.is_none()) {
             // No one to send to: forget what was sent, so the first to join gets everything.
             host.replicator = None;
@@ -1920,6 +1965,13 @@ impl PlaySession {
                     joined.to_local(&mut values);
                     self.runtime.deliver_invoke_result(call, ok, values);
                 }
+                "voice" => {
+                    let from = message.get("p").and_then(|p| joined.local_of(p));
+                    let samples = message.get("d").and_then(Json::as_str).and_then(crate::voice::from_wire);
+                    if let (Some(from), Some(samples)) = (from, samples) {
+                        self.voice.hear(from, samples);
+                    }
+                }
                 "refused" => {
                     let why = message.get("why").and_then(Json::as_str).unwrap_or("no reason given");
                     self.warn(format!("The game turned us away: {why}"));
@@ -1986,6 +2038,12 @@ impl PlaySession {
                     joined.conn.send(&json!({ "t": "invoke", "call": call, "r": r, "a": args }));
                 }
                 _ => {}
+            }
+        }
+        let out = std::mem::take(&mut self.voice.out);
+        if joined.me.is_some() {
+            for d in out {
+                joined.conn.send(&json!({ "t": "voice", "d": d }));
             }
         }
         joined.conn.flush();

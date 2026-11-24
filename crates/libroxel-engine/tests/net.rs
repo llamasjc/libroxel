@@ -629,3 +629,33 @@ fn a_per_player_persistent_model_goes_to_the_players_added_to_it() {
     assert!(host.runtime().run("bad", "workspace.Near:AddPersistentPlayer(game.Players.Bea)").is_err());
     assert!(host.runtime().run("bad", "workspace.Vault:AddPersistentPlayer(workspace.Near)").is_err());
 }
+
+#[test]
+fn players_hear_each_other() {
+    use libroxel_engine::voice::FRAME;
+    let tree = Rc::new(RefCell::new(game()));
+    let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| g.character().is_some());
+    let hum: Vec<i16> = (0..FRAME).map(|i| ((i as f32 * 0.1).sin() * 8000.0) as i16).collect();
+    let name = |s: &PlaySession, id: InstanceId| s.runtime().tree().borrow().name(id).unwrap().to_owned();
+    let host_name = name(&host, host.players()[0]);
+    let (mut host_heard, mut guest_heard) = (Vec::new(), Vec::new());
+    for _ in 0..600 {
+        host.speak(&hum);
+        guest.speak(&hum);
+        host.step(DT, CharacterInput::default());
+        guest.step(DT, CharacterInput::default());
+        host_heard.extend(host.take_heard().into_iter().map(|(id, s)| (name(&host, id), s.len())));
+        guest_heard.extend(guest.take_heard().into_iter().map(|(id, s)| (name(&guest, id), s.len())));
+        if !host_heard.is_empty() && !guest_heard.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(host_heard.first(), Some(&("Bea".to_owned(), FRAME)));
+    assert_eq!(guest_heard.first(), Some(&(host_name, FRAME)));
+}

@@ -5,6 +5,8 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
 
 ## Unreleased
 
+- **Voice chat** in multiplayer games, for players 13 and up whose parent
+  settings allow chat. The 🎤 button turns the mic on; click a name to mute.
 - **Languages:** the home screen and the editor in Chinese (Simplified),
   Spanish, Portuguese (Brazil) and French, picked with the 🌐 button or
   following the computer's language. API names stay in English.
