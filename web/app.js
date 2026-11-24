@@ -197,7 +197,7 @@ async function api(path, { method = 'GET', body, query } = {}) {
 
 const SESSION_KEY = 'libroxel.session';
 let session = loadSession();
-let lastSigned = { friends: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0 };
+let lastSigned = { friends: 0, party: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0 };
 
 function loadSession() {
   for (const store of [sessionStorage, localStorage]) {
@@ -445,7 +445,7 @@ async function signOutEverywhere(password, code) {
 // What the Hub lists, kept fresh while the page is open
 // ---------------------------------------------------------------------------
 
-const data = { official: [], games: [], servers: [], charts: { charts: [], stats: [] }, forYou: null, friends: null, me: null, loaded: false, error: null };
+const data = { official: [], games: [], servers: [], charts: { charts: [], stats: [] }, forYou: null, friends: null, party: null, me: null, loaded: false, error: null };
 
 async function refresh() {
   const list = (path) => api(path).catch((e) => {
@@ -476,6 +476,13 @@ async function refresh() {
     }
     try {
       const time = Date.now();
+      const signature = signText(secretKey(), `libroxel party view\n${session.playerId}\n${time}`);
+      data.party = await api(`/parties/${session.playerId}`, { query: { time, signature } });
+    } catch {
+      data.party = data.party || null;
+    }
+    try {
+      const time = Date.now();
       const signature = signText(secretKey(), `libroxel for you\n${session.playerId}\n${time}`);
       data.forYou = await api(`/for-you/${session.playerId}`, { query: { time, signature } });
     } catch {
@@ -490,6 +497,7 @@ async function refresh() {
     }
   } else {
     data.friends = null;
+    data.party = null;
     data.forYou = null;
     data.me = null;
   }
@@ -1003,6 +1011,8 @@ function home() {
     if (waiting) {
       out.push(el('a', { class: 'waiting', href: '/friends' }, icon(ICON.bell), waiting === 1 ? '1 friend request waiting' : `${waiting} friend requests waiting`));
     }
+    const invite = data.party?.invites?.[0];
+    if (invite) out.push(el('a', { class: 'waiting', href: '/friends' }, icon(ICON.users), `${invite.from.name} invited you to a party`));
     out.push(el('div', { class: 'friend-row' },
       el('a', { class: 'friend-tile', href: '/friends' }, el('div', { class: 'add-face' }, icon(ICON.userPlus)), el('b', {}, 'Add friends')),
       list.map((f) => {
@@ -1383,6 +1393,51 @@ function searchPage() {
   ];
 }
 
+async function changeParty(action, target, done) {
+  const time = Math.max(Date.now(), lastSigned.party + 1);
+  lastSigned.party = time;
+  const signature = signText(secretKey(), `libroxel party\n${session.playerId}\n${action}\n${target}\n${time}`);
+  try {
+    data.party = await api('/parties', { method: 'POST', body: { player_id: session.playerId, action, target, time, signature } });
+    if (done) flash = { text: done };
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  render();
+}
+
+function partyRows() {
+  const out = [];
+  for (const invite of data.party?.invites || []) {
+    out.push(el('div', { class: 'person' },
+      portrait(null, invite.from.name, 44),
+      el('div', { class: 'what' }, el('b', {}, invite.from.name), el('small', { style: 'color:var(--amber)' }, 'Invited you to a party')),
+      el('div', { class: 'buttons' },
+        el('button', { class: 'btn go small', onclick: () => changeParty('accept', invite.party_id, `You joined ${invite.from.name}'s party.`) }, icon(ICON.check), 'Accept'),
+        el('button', { class: 'chip', onclick: () => changeParty('decline', invite.party_id) }, 'Decline'))));
+  }
+  const party = data.party?.party;
+  if (!party) return out;
+  const leading = party.leader_id === session.playerId;
+  out.push(el('h2', { class: 'subhead' }, `Party (${party.members.length})`,
+    el('button', { class: 'chip', style: 'margin-left:auto', onclick: () => changeParty('leave', '', 'You left the party.') }, 'Leave party')));
+  for (const m of party.members) {
+    const mine = m.player_id === session.playerId;
+    const [text, colour] = m.game ? [m.game, 'var(--link)'] : m.online ? ['Online', 'var(--green)'] : ['Offline', 'var(--muted)'];
+    out.push(el('div', { class: 'person' },
+      portrait(m.look, m.name, 44),
+      el('div', { class: 'what' }, el('b', {}, m.leader ? icon(ICON.crown) : null, m.leader ? ' ' : null, m.name), el('small', { style: `color:${colour}` }, text)),
+      el('div', { class: 'buttons' },
+        !mine && m.server && el('button', { class: 'btn go small', onclick: () => joinServer(m.server) }, icon(ICON.signIn), 'Join'),
+        leading && !mine && el('button', { class: 'chip', onclick: () => changeParty('remove', m.player_id) }, 'Remove'))));
+  }
+  for (const p of party.invited) {
+    out.push(el('div', { class: 'person' }, portrait(null, p.name, 44),
+      el('div', { class: 'what' }, el('b', {}, p.name), el('small', { class: 'soft' }, 'Invited'))));
+  }
+  return out;
+}
+
 async function changeFriend(otherId, action, done) {
   const time = Math.max(Date.now(), lastSigned.friends + 1);
   lastSigned.friends = time;
@@ -1411,7 +1466,9 @@ function friendsPage() {
   if (!session) return needSignIn('Sign in to see your friends, where they are playing, and join them.');
   const f = data.friends || { friends: [], incoming: [], outgoing: [] };
   const online = f.friends.filter((x) => x.online).length;
-  const left = [el('h2', { class: 'subhead' }, `Your friends (${f.friends.length}) · ${online} online`)];
+  const party = data.party?.party;
+  const inParty = new Set([...(party?.members || []), ...(party?.invited || [])].map((p) => p.player_id));
+  const left = [...partyRows(), el('h2', { class: 'subhead' }, `Your friends (${f.friends.length}) · ${online} online`)];
   if (!f.friends.length) left.push(el('div', { class: 'empty' }, 'No friends yet. Find people by name on the right.'));
   for (const friend of f.friends) {
     const [where, colour] = whereabouts(friend);
@@ -1420,6 +1477,7 @@ function friendsPage() {
       portrait(friend.look, friend.name, 44),
       el('div', { class: 'what' }, el('a', { href: `/user/${friend.number ?? friend.player_id}` }, el('b', {}, friend.name)), el('small', { style: `color:${colour}` }, text)),
       el('div', { class: 'buttons' },
+        friend.online && !inParty.has(friend.player_id) && el('button', { class: 'chip', onclick: () => changeParty('invite', friend.player_id, `Invited ${friend.name}.`) }, icon(ICON.users), 'Invite'),
         friend.server && el('button', { class: 'btn go small', onclick: () => joinServer(friend.server) }, icon(ICON.signIn), 'Join'),
         el('button', {
           class: 'chip iconbtn', title: `Unfriend ${friend.name}`,

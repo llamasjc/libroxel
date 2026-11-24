@@ -328,7 +328,7 @@ pub fn chat_level(db: &Connection, player_id: &str) -> Chat {
     settings_of(db, player_id).chat
 }
 
-fn are_friends(db: &Connection, a: &str, b: &str) -> bool {
+pub(crate) fn are_friends(db: &Connection, a: &str, b: &str) -> bool {
     db.query_row(
         "SELECT 1 FROM friends WHERE accepted = 1 AND ((from_id = ?1 AND to_id = ?2) OR (from_id = ?2 AND to_id = ?1))",
         params![a, b],

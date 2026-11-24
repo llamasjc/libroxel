@@ -88,6 +88,11 @@ pub use moderate::{
     moderate_message, moderation_message, warnings_seen_message,
 };
 mod owner;
+mod parties;
+pub use parties::{
+    PARTY_SIZE, Party, PartyAction, PartyChange, PartyInvite, PartyMember, PartyView, party_message,
+    party_view_message,
+};
 mod password;
 mod ratings;
 mod recovery;
@@ -735,6 +740,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     let _ = db.execute("ALTER TABLE accounts ADD COLUMN number INTEGER", []);
     number_accounts(&db).map_err(|e| format!("could not number the Hub's accounts: {e}"))?;
     social::create_tables(&db)?;
+    parties::create_tables(&db)?;
     messages::create_tables(&db)?;
     groups::create_tables(&db)?;
     password::create_tables(&db)?;
@@ -858,6 +864,8 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/friends/{id}", get(social::list_friends))
         .route("/presence", post(social::update_presence))
         .route("/presence/web", post(social::update_web_presence))
+        .route("/parties", post(parties::change_party))
+        .route("/parties/{id}", get(parties::get_party))
         .route("/creator/{id}", get(analytics::creator))
         .route("/creator/{id}/games", get(manage::my_games))
         .route("/games/{id}/versions", get(manage::versions))
@@ -2672,6 +2680,33 @@ impl HubClient {
             .call()
             .and_then(|mut r| r.body_mut().read_json())
             .map_err(|e| format!("could not get your friends from the Hub: {e}"))
+    }
+
+    pub fn change_party(&self, change: &PartyChange) -> Result<PartyView, String> {
+        self.agent
+            .post(format!("{}/parties", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(change)
+            .map_err(|e| format!("could not reach the Hub: {e}"))
+            .and_then(|mut r| {
+                if r.status().is_success() {
+                    r.body_mut().read_json().map_err(|e| e.to_string())
+                } else {
+                    Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+                }
+            })
+    }
+
+    pub fn party(&self, player_id: &str, time: i64, signature: &str) -> Result<PartyView, String> {
+        self.agent
+            .get(format!("{}/parties/{player_id}", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not get your party from the Hub: {e}"))
     }
 
     pub fn charts(&self) -> Result<Charts, String> {

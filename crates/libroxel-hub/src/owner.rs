@@ -155,6 +155,7 @@ pub fn ban_until(db: &Connection, who: &str, reason: &str, until: Option<i64>) -
     .map_err(|e| e.to_string())?;
     let _ = db.execute("DELETE FROM presence WHERE player_id = ?1", params![id]);
     let _ = db.execute("DELETE FROM web_presence WHERE player_id = ?1", params![id]);
+    let _ = crate::parties::leave(db, &id);
     let _ = db.execute("DELETE FROM servers WHERE host_id = ?1", params![id]);
     Ok(id)
 }

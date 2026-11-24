@@ -308,6 +308,15 @@ pub fn editor_ui(
     if !playing {
         edit_together(engine, editor);
     }
+    if editor.player_mode
+        && !editor.menu.open
+        && editor.platform.social.joined.is_some()
+        && let Some(code) = editor.platform.party_follow()
+    {
+        let name = editor.platform.name.clone();
+        menu_pick(crate::menu::Pick::Join { code, name }, engine, editor, now);
+        return Ok(());
+    }
     match editor.platform.item_status.take() {
         Some(Ok(said)) => log(engine, LogLevel::Info, said),
         Some(Err(why)) => log(engine, LogLevel::Error, format!("Could not share the hat: {why}")),
@@ -337,6 +346,12 @@ pub fn editor_ui(
             editor.menu.show(&ctx, &mut editor.platform).into_iter().collect();
         if let Some((code, name)) = editor.platform.window(&ctx) {
             picks.push(crate::menu::Pick::Join { code, name });
+        }
+        if picks.is_empty()
+            && !editor.dirty
+            && let Some(code) = editor.platform.party_follow()
+        {
+            picks.push(crate::menu::Pick::Join { code, name: editor.platform.name.clone() });
         }
         for pick in picks {
             menu_pick(pick, engine, editor, now);

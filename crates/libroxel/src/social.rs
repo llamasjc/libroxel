@@ -6,7 +6,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use libroxel_hub::{FriendAction, FriendChange, FriendState, Friends, Person, PresenceUpdate, ServerInfo};
+use libroxel_hub::{
+    FriendAction, FriendChange, FriendState, Friends, PartyAction, PartyChange, PartyView, Person,
+    PresenceUpdate, ServerInfo,
+};
 use libroxel_net::{Network, Pinger};
 
 use crate::browse::Platform;
@@ -101,6 +104,12 @@ pub struct Social {
     picks_slot: Slot<(libroxel_hub::Charts, Option<libroxel_hub::ForYou>)>,
     picks_busy: bool,
     picks_at: Option<Instant>,
+    pub party: PartyView,
+    party_slot: Slot<PartyView>,
+    party_busy: bool,
+    pub party_status: Option<Result<String, String>>,
+    party_changed: Slot<(PartyView, String)>,
+    followed: Option<String>,
 }
 
 impl Social {
@@ -188,6 +197,18 @@ impl Platform {
             }
             social.friends_at = None;
         }
+        if let Some(result) = social.party_slot.lock().unwrap().take() {
+            social.party_busy = false;
+            if let Ok(party) = result {
+                social.party = party;
+            }
+        }
+        if let Some(result) = social.party_changed.lock().unwrap().take() {
+            social.party_status = Some(result.map(|(party, said)| {
+                social.party = party;
+                said
+            }));
+        }
         if let Some(result) = social.picks_slot.lock().unwrap().take() {
             social.picks_busy = false;
             if let Ok((charts, for_you)) = result {
@@ -205,6 +226,9 @@ impl Platform {
             && self.social.friends_at.is_none_or(|at| at.elapsed() > FRIENDS_EVERY)
         {
             self.refresh_friends();
+            if !self.social.party_busy {
+                self.refresh_party();
+            }
         }
         if !playing
             && !self.social.picks_busy
@@ -249,6 +273,56 @@ impl Platform {
             });
             *out.lock().unwrap() = Some(result);
         });
+    }
+
+    pub fn refresh_party(&mut self) {
+        let time = self.social.stamp();
+        self.social.party_busy = true;
+        let client = self.client();
+        let out = self.social.party_slot.clone();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| {
+                let id = me.player_id();
+                client.party(&id, time, &me.sign(&libroxel_hub::party_view_message(&id, time)))
+            });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    pub fn change_party(&mut self, action: PartyAction, target: &str, done: String) {
+        let time = self.social.stamp();
+        self.social.party_status = None;
+        let client = self.client();
+        let out = self.social.party_changed.clone();
+        let target = target.to_owned();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| {
+                let player_id = me.player_id();
+                let signature = me.sign(&libroxel_hub::party_message(&player_id, action, &target, time));
+                client.change_party(&PartyChange { player_id, action, target, time, signature })
+            });
+            *out.lock().unwrap() = Some(result.map(|party| (party, done)));
+        });
+    }
+
+    pub fn party_follow(&mut self) -> Option<String> {
+        let me = self.account.as_ref()?.player_id.clone();
+        let party = self.social.party.party.as_ref()?;
+        let leader = party.leader().filter(|l| l.player_id != me)?;
+        let Some(server) = &leader.server else {
+            self.social.followed = None;
+            return None;
+        };
+        let here =
+            self.social.joined.as_ref().map(|s| s.server_id.as_str()).or(self.social.hosting.as_deref());
+        if here == Some(server.server_id.as_str())
+            || self.social.followed.as_deref() == Some(server.server_id.as_str())
+            || server.players >= server.max_players
+        {
+            return None;
+        }
+        self.social.followed = Some(server.server_id.clone());
+        Some(server.code.clone())
     }
 
     /// Tells the Hub this player is online and where, when that changes
@@ -342,10 +416,17 @@ impl Platform {
             }
             Pick::Join { code, .. } => {
                 let code = code.trim();
+                let party = self
+                    .social
+                    .party
+                    .party
+                    .iter()
+                    .flat_map(|p| p.members.iter().filter_map(|m| m.server.as_ref()));
                 let listed = self
                     .servers()
                     .iter()
                     .chain(self.social.friends.friends.iter().filter_map(|f| f.server.as_ref()))
+                    .chain(party)
                     .find(|s| s.code.trim() == code)
                     .cloned();
                 self.social.next_game =

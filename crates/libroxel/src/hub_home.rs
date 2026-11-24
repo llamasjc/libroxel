@@ -6,7 +6,7 @@
 use crate::i18n::{t, tf};
 use bevy_egui::egui::{self, Color32, RichText};
 use libroxel_engine::character::Look;
-use libroxel_hub::{Friend, FriendAction, GameInfo, ServerInfo};
+use libroxel_hub::{Friend, FriendAction, GameInfo, PartyAction, ServerInfo};
 use libroxel_instance::serde_json::Value as Json;
 
 use crate::browse::Platform;
@@ -758,6 +758,19 @@ pub fn home_tab(
             *tab = Tab::Friends;
         }
     }
+    if let Some(invite) = platform.social.party.invites.first() {
+        let label = format!(
+            "{} {}",
+            icon::USERS_THREE,
+            tf("{name} invited you to a party", &[("name", &invite.from.name)])
+        );
+        if ui
+            .add(egui::Label::new(RichText::new(label).color(theme::AMBER)).sense(egui::Sense::click()))
+            .clicked()
+        {
+            *tab = Tab::Friends;
+        }
+    }
     ui.add_space(6.0);
     egui::ScrollArea::horizontal().id_salt("friends-row").max_height(136.0).show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -1205,6 +1218,80 @@ pub(crate) fn person_row(
     ui.add_space(4.0);
 }
 
+fn party_panel(ui: &mut egui::Ui, platform: &mut Platform, name: &str) -> Option<Pick> {
+    let view = platform.social.party.clone();
+    let me = platform.account.as_ref().map(|a| a.player_id.clone()).unwrap_or_default();
+    let mut pick = None;
+    let mut change: Option<(PartyAction, String, String)> = None;
+    match &platform.social.party_status {
+        Some(Ok(said)) => {
+            theme::status(ui, theme::GREEN, said);
+        }
+        Some(Err(why)) => crate::report::status(ui, why),
+        None => {}
+    }
+    for invite in &view.invites {
+        let line = tf("{name} invited you to a party", &[("name", &invite.from.name)]);
+        person_row(ui, &Json::Null, &invite.from.name, (&line, theme::AMBER), |ui| {
+            if ui.button(t("Decline")).clicked() {
+                change = Some((PartyAction::Decline, invite.party_id.clone(), String::new()));
+            }
+            if theme::block_button(ui, theme::Kind::Go, icon::CHECK, t("Accept"), 30.0).clicked() {
+                let said = tf("You joined {name}'s party.", &[("name", &invite.from.name)]);
+                change = Some((PartyAction::Accept, invite.party_id.clone(), said));
+            }
+        });
+    }
+    if let Some(party) = &view.party {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(tf("Party ({n})", &[("n", &party.members.len())]))
+                    .font(theme::display(18.0))
+                    .color(theme::TEXT),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button(t("Leave party")).clicked() {
+                    change = Some((PartyAction::Leave, String::new(), t("You left the party.").to_owned()));
+                }
+            });
+        });
+        ui.add_space(4.0);
+        let leading = party.leader_id == me;
+        for member in &party.members {
+            let (status, colour) = match (&member.game, member.online) {
+                (Some(game), _) => (game.clone(), theme::LINK),
+                (None, true) => (t("Online").to_owned(), theme::GREEN),
+                (None, false) => (t("Offline").to_owned(), SOFT),
+            };
+            let shown =
+                if member.leader { format!("{} {}", icon::CROWN, member.name) } else { member.name.clone() };
+            person_row(ui, &member.look, &shown, (&status, colour), |ui| {
+                if leading && member.player_id != me && ui.button(t("Remove")).clicked() {
+                    change = Some((PartyAction::Remove, member.player_id.clone(), String::new()));
+                }
+                if let Some(server) = member.server.as_ref().filter(|_| member.player_id != me)
+                    && ui
+                        .add_enabled_ui(!full(server), |ui| {
+                            theme::block_button(ui, theme::Kind::Go, icon::SIGN_IN, t("Join"), 30.0)
+                        })
+                        .inner
+                        .clicked()
+                {
+                    pick = Some(Pick::Join { code: server.code.clone(), name: name.to_owned() });
+                }
+            });
+        }
+        for person in &party.invited {
+            person_row(ui, &Json::Null, &person.name, (t("Invited"), SOFT), |_| {});
+        }
+    }
+    if let Some((action, target, said)) = change {
+        platform.change_party(action, &target, said);
+    }
+    pick
+}
+
 /// The Friends tab: find people, answer requests and see every friend.
 pub fn friends_tab(
     state: &mut HomeState,
@@ -1247,6 +1334,20 @@ pub fn friends_tab(
         crate::report::status(ui, error);
     }
     ui.add_space(10.0);
+    if let Some(join) = party_panel(ui, platform, name) {
+        pick = Some(join);
+    }
+    ui.add_space(10.0);
+    let in_party: Vec<String> = platform
+        .social
+        .party
+        .party
+        .iter()
+        .flat_map(|p| {
+            p.members.iter().map(|m| m.player_id.clone()).chain(p.invited.iter().map(|i| i.player_id.clone()))
+        })
+        .collect();
+    let mut invite: Option<(String, String)> = None;
     let friends = platform.social.friends.clone();
     let friends_loaded = platform.social.friends_loaded;
     let changing = platform.social.changing.clone();
@@ -1293,6 +1394,12 @@ pub fn friends_tab(
                     }
                 } else if ui.small_button(icon::USER_MINUS).on_hover_text("Unfriend").clicked() {
                     state.confirm_unfriend = Some(friend.player_id.clone());
+                }
+                if friend.online
+                    && !in_party.contains(&friend.player_id)
+                    && ui.button(format!("{} {}", icon::USERS_THREE, t("Invite"))).clicked()
+                {
+                    invite = Some((friend.player_id.clone(), friend.name.clone()));
                 }
                 if let Some(server) = &friend.server {
                     let full = full(server);
@@ -1360,6 +1467,9 @@ pub fn friends_tab(
     });
     if let Some((id, who, action)) = change {
         platform.change_friend(&id, &who, action);
+    }
+    if let Some((id, who)) = invite {
+        platform.change_party(PartyAction::Invite, &id, tf("Invited {name}.", &[("name", &who)]));
     }
     pick
 }
