@@ -1791,14 +1791,29 @@ fn forward_keys(
     mut screen: ResMut<crate::devices::ScreenTouches>,
     time: Res<Time>,
     mut last: Local<libroxel_instance::UserInputType>,
+    mut vibrating: Local<bool>,
 ) {
     use libroxel_instance::UserInputType;
     let engine = &mut *engine;
     let Some(session) = engine.session.as_mut() else {
         screen.touches.clear();
+        screen.presses.clear();
+        screen.buttons.clear();
         screen.controls_hidden = false;
+        // A game that stops leaves the motor off.
+        if std::mem::take(&mut *vibrating) {
+            screen.vibration = Some(0.0);
+        }
         return;
     };
+    for (name, pressed) in std::mem::take(&mut screen.presses) {
+        session.press_touch_button(&name, pressed);
+    }
+    screen.buttons = session.touch_buttons();
+    if let Some(strength) = session.take_vibration() {
+        *vibrating = strength > 0.0;
+        screen.vibration = Some(strength);
+    }
     let now = time.elapsed_secs_f64();
     let touches = std::mem::take(&mut screen.touches);
     let touched_now = !touches.is_empty();
@@ -1849,6 +1864,7 @@ fn forward_keys(
         last: *last,
         keyboard: !phone || *last == UserInputType::Keyboard,
         mouse: !phone || matches!(*last, UserInputType::MouseButton1 | UserInputType::MouseButton2),
+        vibration: cfg!(target_os = "android"),
     });
     if !capture.keyboard {
         for key in keys.get_just_pressed().filter_map(|k| script_key(*k)) {

@@ -46,6 +46,14 @@ pub struct ScreenTouches {
     pub touches: Vec<ScreenTouch>,
     /// The game hid the stick and jump button (ModalEnabled and the like).
     pub controls_hidden: bool,
+    /// The touch buttons the game's actions asked for; the engine fills
+    /// these in each frame.
+    pub buttons: Vec<libroxel_script::TouchButton>,
+    /// Touch buttons pressed (true) or let go this frame, by action name;
+    /// the engine passes them on.
+    pub presses: Vec<(String, bool)>,
+    /// A new strength (0 to 1) for the vibration motor, for the app to set.
+    pub vibration: Option<f32>,
 }
 
 /// How far a stick must be pushed before it counts.

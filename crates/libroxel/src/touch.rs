@@ -39,6 +39,8 @@ enum Finger {
         at: Pos2,
     },
     Jump,
+    /// On one of the game's action buttons (which one is in `held`).
+    Action,
     Look {
         at: Pos2,
     },
@@ -60,6 +62,59 @@ pub struct TouchPad {
     /// The game hid the stick and jump button (every finger then looks
     /// round, or presses the game's buttons).
     pub hidden: bool,
+    /// The game's action buttons this frame (see [`lay_out_actions`]).
+    pub actions: Vec<ActionButton>,
+    /// Which action each finger on an action button holds down.
+    held: HashMap<u64, String>,
+    /// Action buttons pressed (true) or let go since last taken.
+    presses: Vec<(String, bool)>,
+}
+
+/// A button a game asked for with ContextActionService:BindAction: its
+/// action, what it says, and where its middle is.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActionButton {
+    pub name: String,
+    pub label: String,
+    pub center: Pos2,
+}
+
+/// An action button's radius, in points: a little smaller than jump's.
+pub fn action_radius(view: Rect) -> f32 {
+    jump_radius(view) * 0.72
+}
+
+/// Where the game's action buttons go: where a script put one with
+/// SetPosition (its corner, as a UDim2 across the view), and the rest in
+/// arcs above and left of the jump button, where the thumb already is, as
+/// Roblox lays them out.
+pub fn lay_out_actions(view: Rect, buttons: &[libroxel_script::TouchButton]) -> Vec<ActionButton> {
+    let (jump, jr, r) = (jump_center(view), jump_radius(view), action_radius(view));
+    let gap = 12.0 * scale(view);
+    let mut free = 0;
+    buttons
+        .iter()
+        .map(|b| {
+            let center = match b.position {
+                Some([sx, ox, sy, oy]) => {
+                    Pos2::new(view.min.x + sx * view.width() + ox, view.min.y + sy * view.height() + oy)
+                        + Vec2::splat(r)
+                }
+                None => {
+                    // Three on the first arc, four on the next, and so on.
+                    let (ring, slot) =
+                        if free < 3 { (0, free) } else { (1 + (free - 3) / 4, (free - 3) % 4) };
+                    free += 1;
+                    let per_ring = if ring == 0 { 3.0 } else { 4.0 };
+                    let distance = jr + r + gap + ring as f32 * (2.0 * r + gap);
+                    let angle = (180.0 - slot as f32 * 90.0 / (per_ring - 1.0)).to_radians();
+                    jump + Vec2::new(angle.cos(), -angle.sin()) * distance
+                }
+            };
+            let label = b.title.clone().unwrap_or_else(|| b.name.clone());
+            ActionButton { name: b.name.clone(), label: label.chars().take(10).collect(), center }
+        })
+        .collect()
 }
 
 /// A finger's touch this frame, for scripts: its number, what it did,
@@ -98,12 +153,22 @@ impl TouchPad {
         view: Rect,
         on_gui: impl Fn(Pos2) -> bool,
     ) -> bool {
-        let taken = |f: Option<&Finger>| matches!(f, Some(Finger::Stick { .. } | Finger::Jump | Finger::Gui));
+        let taken = |f: Option<&Finger>| {
+            matches!(f, Some(Finger::Stick { .. } | Finger::Jump | Finger::Action | Finger::Gui))
+        };
+        let action_at = |pos: Pos2| {
+            self.actions.iter().find(|b| pos.distance(b.center) <= action_radius(view) * 1.15).cloned()
+        };
         match phase {
             TouchPhase::Start => {
                 self.seen = true;
+                let action = if self.hidden { None } else { action_at(pos) };
                 let finger = if !self.hidden && pos.distance(jump_center(view)) <= jump_radius(view) * 1.35 {
                     Finger::Jump
+                } else if let Some(button) = action {
+                    self.presses.push((button.name.clone(), true));
+                    self.held.insert(id, button.name);
+                    Finger::Action
                 } else if on_gui(pos) {
                     Finger::Gui
                 } else if !self.hidden
@@ -120,7 +185,7 @@ impl TouchPad {
             TouchPhase::Move => {
                 let pinch_before = self.pinch_width();
                 let moved = match self.fingers.get_mut(&id) {
-                    Some(Finger::Gui | Finger::Jump) => return true,
+                    Some(Finger::Gui | Finger::Jump | Finger::Action) => return true,
                     None => return false,
                     Some(Finger::Stick { origin, at }) => {
                         *at = pos;
@@ -147,8 +212,11 @@ impl TouchPad {
             }
             TouchPhase::End | TouchPhase::Cancel => {
                 let finger = self.fingers.remove(&id);
-                if matches!(finger, Some(Finger::Stick { .. } | Finger::Jump)) {
+                if matches!(finger, Some(Finger::Stick { .. } | Finger::Jump | Finger::Action)) {
                     self.released = true;
+                }
+                if let Some(name) = self.held.remove(&id) {
+                    self.presses.push((name, false));
                 }
                 taken(finger.as_ref())
             }
@@ -189,7 +257,16 @@ impl TouchPad {
     /// Whether a finger is on the stick or jump button (or just left it),
     /// so the press isn't a click on the world as well.
     pub fn has_pointer(&self) -> bool {
-        self.released || self.fingers.values().any(|f| matches!(f, Finger::Stick { .. } | Finger::Jump))
+        self.released
+            || self
+                .fingers
+                .values()
+                .any(|f| matches!(f, Finger::Stick { .. } | Finger::Jump | Finger::Action))
+    }
+
+    /// The action buttons pressed (true) or let go since last asked.
+    pub fn take_presses(&mut self) -> Vec<(String, bool)> {
+        std::mem::take(&mut self.presses)
     }
 
     /// How far fingers dragged to look since last asked, in points.
@@ -205,6 +282,8 @@ impl TouchPad {
     /// Lets go of every finger (when the game stops).
     pub fn reset(&mut self) {
         self.fingers.clear();
+        self.held.clear();
+        self.presses.clear();
         self.look = Vec2::ZERO;
         self.zoom = 0.0;
         self.released = false;
@@ -275,6 +354,31 @@ impl TouchPad {
             egui::FontId::proportional(jr * 0.75),
             Color32::WHITE,
         );
+        // The game's action buttons, lit while held.
+        let ar = action_radius(view);
+        for button in &self.actions {
+            let rect = Rect::from_center_size(button.center, Vec2::splat(ar * 2.3));
+            egui::Area::new(egui::Id::new(("touch action", &button.name)))
+                .order(egui::Order::Foreground)
+                .fixed_pos(rect.min)
+                .show(ctx, |ui| {
+                    ui.allocate_rect(rect, egui::Sense::click_and_drag());
+                });
+            let pressed = self.held.values().any(|n| *n == button.name);
+            painter.circle(
+                button.center,
+                ar,
+                Color32::from_white_alpha(if pressed { 120 } else { 35 }),
+                Stroke::new(2.5, Color32::from_white_alpha(140)),
+            );
+            painter.text(
+                button.center,
+                egui::Align2::CENTER_CENTER,
+                &button.label,
+                egui::FontId::proportional((ar * 0.42).clamp(11.0, 18.0)),
+                Color32::WHITE,
+            );
+        }
         touched
     }
 }
@@ -350,6 +454,40 @@ mod tests {
         assert_eq!(pad.stick(v), Vec2::ZERO);
         assert_eq!(pad.take_look(), Vec2::ZERO);
         assert!(!pad.has_pointer());
+    }
+
+    #[test]
+    fn action_buttons_sit_by_the_jump_button_and_press_their_action() {
+        let v = view();
+        let button = |name: &str, position| libroxel_script::TouchButton {
+            name: name.to_owned(),
+            title: None,
+            image: None,
+            position,
+        };
+        let actions = lay_out_actions(
+            v,
+            &[button("Sprint", None), button("Attack", None), button("Menu", Some([0.0, 10.0, 0.0, 10.0]))],
+        );
+        // Near the jump button, not on it, nor on each other, and on screen.
+        let (a, b) = (actions[0].center, actions[1].center);
+        let reach = jump_radius(v) + action_radius(v);
+        for p in [a, b] {
+            assert!(
+                v.contains(p)
+                    && p.distance(jump_center(v)) >= reach
+                    && p.distance(jump_center(v)) < reach * 2.0
+            );
+        }
+        assert!(a.distance(b) >= action_radius(v) * 2.0);
+        // Where the script put it.
+        assert_eq!(actions[2].center, Pos2::new(10.0, 10.0) + Vec2::splat(action_radius(v)));
+
+        let mut pad = TouchPad { actions, ..Default::default() };
+        assert!(pad.touch(3, TouchPhase::Start, a, v, |_| false));
+        assert!(pad.has_pointer(), "pressing it doesn't click the world");
+        pad.touch(3, TouchPhase::End, a, v, |_| false);
+        assert_eq!(pad.take_presses(), vec![("Sprint".to_owned(), true), ("Sprint".to_owned(), false)]);
     }
 
     #[test]

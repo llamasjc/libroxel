@@ -1361,3 +1361,109 @@ fn joints_worlds_terrain_copies_and_older_names() {
         ]
     );
 }
+
+#[test]
+fn actions_can_ask_for_touch_buttons() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local cas = game:GetService("ContextActionService")
+        cas:BindAction("Sprint", function(name, state, input)
+            print(name, state.Name, input.UserInputType.Name)
+        end, true, Enum.KeyCode.LeftShift)
+        cas:SetTitle("Sprint", "Run")
+        cas:SetPosition("Sprint", UDim2.new(1, -90, 0, 20))
+        cas:BindAction("Wave", function() end, false, Enum.KeyCode.G)
+        cas:BindAction("Attack", function() end, true, Enum.KeyCode.F)
+        print(cas:GetButton("Sprint"))
+        "#,
+    );
+    let buttons = rt.touch_buttons();
+    assert_eq!(
+        buttons.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(),
+        ["Sprint", "Attack"],
+        "only actions that asked for one, in the order bound"
+    );
+    assert_eq!(buttons[0].title.as_deref(), Some("Run"));
+    assert_eq!(buttons[0].position, Some([1.0, -90.0, 0.0, 20.0]));
+    assert_eq!(buttons[1].title, None);
+    assert!(rt.press_touch_button("Sprint", true).is_empty());
+    assert!(rt.press_touch_button("Sprint", false).is_empty());
+    assert_eq!(printed(&rt), vec!["nil", "Sprint Begin Touch", "Sprint End Touch"]);
+    run(&rt, r#"game:GetService("ContextActionService"):UnbindAction("Sprint")"#);
+    assert_eq!(rt.touch_buttons().len(), 1);
+}
+
+#[test]
+fn phones_vibrate_through_the_haptic_service() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local haptics = game:GetService("HapticService")
+        print(haptics:IsVibrationSupported(Enum.UserInputType.Touch))
+        "#,
+    );
+    rt.set_devices(libroxel_script::Devices { vibration: true, ..Default::default() });
+    run(
+        &rt,
+        r#"
+        local haptics = game:GetService("HapticService")
+        local touch, large = Enum.UserInputType.Touch, Enum.VibrationMotor.Large
+        print(haptics:IsVibrationSupported(touch), haptics:IsMotorSupported(touch, large))
+        haptics:SetMotor(touch, large, 0.6)
+        print(haptics:GetMotor(touch, large))
+        "#,
+    );
+    assert_eq!(printed(&rt), vec!["false", "true true", "0.6"]);
+    let strength = rt.take_vibration().unwrap();
+    assert!((strength - 0.6).abs() < 1e-6);
+    assert_eq!(rt.take_vibration(), None, "taken once");
+    run(
+        &rt,
+        r#"game:GetService("HapticService"):SetMotor(Enum.UserInputType.Touch, Enum.VibrationMotor.Large, 0)"#,
+    );
+    assert_eq!(rt.take_vibration(), Some(0.0));
+}
+
+#[test]
+fn tapping_a_gui_object_fires_its_touch_tap() {
+    use libroxel_script::TouchPhase::{Began, Ended};
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local gui = Instance.new("ScreenGui")
+        gui.Parent = workspace
+        local button = Instance.new("TextButton")
+        button.Name = "Fire"
+        button.Parent = gui
+        button.TouchTap:Connect(function(at)
+            print("tapped", at[1].X, at[1].Y)
+        end)
+        button.TouchLongPress:Connect(function(at, state)
+            print("held", state.Name)
+        end)
+        "#,
+    );
+    let id = {
+        let tree = rt.tree().borrow();
+        tree.descendants(tree.workspace())
+            .unwrap()
+            .into_iter()
+            .find(|id| tree.name(*id).ok() == Some("Fire"))
+            .unwrap()
+    };
+    rt.set_gui_rects(vec![(id, [0.0, 0.0, 100.0, 50.0])]);
+    // A tap on it, then one beside it.
+    rt.touch(1, Began, 10.0, 20.0, true, 0.0);
+    rt.touch(1, Ended, 10.0, 20.0, true, 0.1);
+    rt.touch(2, Began, 300.0, 20.0, false, 1.0);
+    rt.touch(2, Ended, 300.0, 20.0, false, 1.1);
+    // A long press on it.
+    rt.touch(3, Began, 50.0, 25.0, true, 2.0);
+    rt.touch_tick(2.6);
+    rt.touch(3, Ended, 50.0, 25.0, true, 2.7);
+    assert_eq!(printed(&rt), vec!["tapped 10 20", "held Begin", "held End"]);
+}

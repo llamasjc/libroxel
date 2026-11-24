@@ -73,6 +73,27 @@ pub fn keyboard(
     }
 }
 
+/// Runs the phone's vibration motor at a strength a game set with
+/// HapticService:SetMotor, through Libroxel's activity.
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+pub fn vibrate(mut screen: bevy::prelude::ResMut<libroxel_engine::devices::ScreenTouches>) {
+    use jni::JavaVM;
+    use jni::objects::{JObject, JValue};
+
+    let Some(strength) = screen.vibration.take() else { return };
+    let Some(app) = bevy::android::ANDROID_APP.get() else { return };
+    // SAFETY: the pointers are the Java VM and activity Android gave the
+    // app, alive for as long as it runs.
+    let Ok(vm) = (unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }) else { return };
+    let Ok(mut env) = vm.attach_current_thread() else { return };
+    let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
+    let _ = env.call_method(&activity, "setMotor", "(F)V", &[JValue::Float(strength)]);
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -645,6 +645,7 @@ pub fn editor_ui(
     // Touch screens get on-screen controls while playing.
     if playing && !editor.menu.open && !editor.paused {
         editor.touch.hidden = screen_touches.controls_hidden;
+        editor.touch.actions = crate::touch::lay_out_actions(central, &screen_touches.buttons);
         for (id, phase, pos, processed) in editor.touch.show(&ctx, central, &boxes.inputs) {
             let phase = match phase {
                 egui::TouchPhase::Start => libroxel_script::TouchPhase::Began,
@@ -660,6 +661,7 @@ pub fn editor_ui(
                 processed,
             });
         }
+        screen_touches.presses.extend(editor.touch.take_presses());
         let stick = editor.touch.stick(central);
         touch_input.stick = Vec2::new(stick.x, stick.y);
         touch_input.jump = editor.touch.jump();
