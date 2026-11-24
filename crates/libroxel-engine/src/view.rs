@@ -974,6 +974,8 @@ pub struct GraphicsQuality {
     /// Automatic turned edge smoothing off; it stays off until a manual pick.
     smoothing_dropped: bool,
     applied: Option<u8>,
+    /// A phone or tablet: see [`GraphicsQuality::phone`].
+    phone: bool,
 }
 
 impl Default for GraphicsQuality {
@@ -1001,14 +1003,41 @@ impl GraphicsQuality {
             since_drop: 0.0,
             smoothing_dropped: false,
             applied: None,
+            phone: false,
         }
+    }
+
+    /// For a phone or tablet, whose graphics chip does far less than a
+    /// computer's: automatic starts low (no shadows) and climbs no higher
+    /// than the middle, and bloom and edge smoothing, which cost phones the
+    /// most, stay off unless a level of 8 or more is picked.
+    pub fn phone(mut self) -> Self {
+        self.phone = true;
+        if self.auto {
+            self.level = self.level.min(Self::PHONE_START);
+            self.ceiling = Self::PHONE_TOP;
+        }
+        self
+    }
+
+    const PHONE_START: u8 = 3;
+    const PHONE_TOP: u8 = 6;
+
+    /// The highest level automatic climbs back to.
+    fn top(&self) -> u8 {
+        if self.phone { Self::PHONE_TOP } else { Self::MAX }
     }
 
     /// Switches to automatic, or to a fixed level.
     pub fn set(&mut self, auto: bool, level: u8) {
         let target = self.target;
         let average = self.average;
+        let phone = self.phone;
         *self = Self::new(auto, level);
+        self.phone = phone;
+        if phone && auto {
+            self.ceiling = Self::PHONE_TOP.max(self.level);
+        }
         self.target = target;
         self.average = average;
     }
@@ -1030,7 +1059,7 @@ impl GraphicsQuality {
         self.slow_for = if self.average > goal * 1.1 { self.slow_for + dt } else { 0.0 };
         self.fast_for = if self.average < goal * 1.04 { self.fast_for + dt } else { 0.0 };
         if self.since_drop > 60.0 {
-            self.ceiling = Self::MAX;
+            self.ceiling = self.top();
         }
         if self.slow_for > 1.5 && self.level > 1 {
             let step = if self.average > goal * 1.6 { 2 } else { 1 };
@@ -1071,11 +1100,11 @@ impl GraphicsQuality {
 
     /// Whether edges are smoothed (MSAA).
     pub fn smoothing(&self) -> bool {
-        self.level >= 4 && !self.smoothing_dropped
+        self.level >= if self.phone { 8 } else { 4 } && !self.smoothing_dropped
     }
 
     pub fn bloom(&self) -> bool {
-        self.level >= 6
+        self.level >= if self.phone { 8 } else { 6 }
     }
 
     /// How many point and spot lights are drawn (the nearest ones).
@@ -2591,6 +2620,28 @@ mod tests {
         }
         assert_eq!(fixed.level, 1);
         assert!(!fixed.shadows() && !fixed.smoothing() && fixed.lights() == 0);
+    }
+
+    #[test]
+    fn phones_start_low_and_stay_in_the_middle() {
+        let mut q = GraphicsQuality::default().phone();
+        assert_eq!(q.level, 3);
+        assert!(!q.shadows() && !q.smoothing() && !q.bloom());
+        // However fast it runs, automatic stops at the middle.
+        for _ in 0..(200 * 60) {
+            q.frame(1.0 / 60.0);
+        }
+        assert_eq!(q.level, 6);
+        assert!(!q.smoothing() && !q.bloom(), "the costliest effects stay off");
+        // Picking a level by hand still reaches the top.
+        q.set(false, 10);
+        assert!(q.smoothing() && q.bloom() && q.shadows());
+        // And back on automatic, it still stops at the middle.
+        q.set(true, 3);
+        for _ in 0..(200 * 60) {
+            q.frame(1.0 / 60.0);
+        }
+        assert_eq!(q.level, 6);
     }
 
     fn close(a: Vec3, b: Vec3) -> bool {
