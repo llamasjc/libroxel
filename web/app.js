@@ -33,8 +33,10 @@ const ICON = {
   seal: '', x: '', lock: '', user: '', hammer: '',
   like: '', dislike: '', star: '', trash: '', flag: '',
   chat: '', send: '',
-  chart: '', profile: '',
+  chart: '', profile: '', heart: '',
 };
+
+const DONATE = 'https://github.com/sponsors/llamasjc';
 
 // The app's colours, for drawing.
 const C = {
@@ -851,11 +853,13 @@ function tabs() {
   const who = document.getElementById('who');
   // Search sits at the right, by who you play as, as in the app.
   const search = el('a', { class: `tab iconbtn${route.name === 'search' ? ' active' : ''}`, href: '/search', title: 'Search for players and games' }, icon(ICON.search));
+  const donate = el('a', { class: 'tab iconbtn', href: DONATE, target: '_blank', rel: 'noopener', title: 'Libroxel is open source. Donations are highly appreciated.' }, icon(ICON.heart));
   if (session) {
     const unread = chats.list?.reduce((n, c) => n + c.unread, 0) || 0;
     const messages = el('a', { class: `tab iconbtn${route.name === 'messages' ? ' active' : ''}`, href: '/messages', title: 'Messages' },
       icon(ICON.chat), unread > 0 && el('span', { class: 'badge' }, unread > 99 ? '99+' : unread));
     fill(who,
+      donate,
       search,
       data.me?.admin && el('a', { class: `tab iconbtn${route.name === 'moderation' ? ' active' : ''}`, href: '/moderation', title: 'Moderation' }, icon(ICON.flag)),
       data.me?.admin && el('a', { class: `tab iconbtn${route.name === 'stats' ? ' active' : ''}`, href: '/stats', title: 'Stats' }, icon(ICON.signal)),
@@ -866,6 +870,7 @@ function tabs() {
     );
   } else {
     who.replaceChildren(
+      donate,
       search,
       el('a', { class: 'chip', href: '/create' }, 'Make an account'),
       el('a', { class: 'btn go small', href: '/sign-in' }, icon(ICON.signIn), 'Sign in'),
