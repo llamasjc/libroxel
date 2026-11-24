@@ -98,7 +98,7 @@ pub fn scrub(text: &str) -> String {
     libroxel_hub::scrub::scrub(&text)
 }
 
-fn open_url(url: &str) {
+pub fn open_url(url: &str) {
     #[cfg(target_os = "windows")]
     let _ = std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", url]).spawn();
     #[cfg(target_os = "macos")]
