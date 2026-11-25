@@ -186,7 +186,14 @@ pub fn install(ctx: &egui::Context) -> bool {
     ctx.data_mut(|d| d.insert_temp(id, true));
     ctx.set_fonts(fonts());
     ctx.all_styles_mut(style);
+    if crate::MOBILE {
+        fingers(ctx);
+    }
     false
+}
+
+fn fingers(ctx: &egui::Context) {
+    ctx.options_mut(|o| o.input_options.max_click_dist = 16.0);
 }
 
 fn style(style: &mut egui::Style) {
@@ -1667,5 +1674,49 @@ mod screen_reader_tests {
         for want in ["Play", "Search", "Test"] {
             assert!(names.iter().any(|n| n == want), "{want:?} in {names:?}");
         }
+    }
+
+    fn tapped(ctx: &egui::Context, drift: Vec2) -> bool {
+        let at = egui::pos2(60.0, 40.0);
+        let mut clicked = false;
+        let mut frame = |time: f64, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(400.0, 300.0))),
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    clicked |= ui.add_sized([120.0, 60.0], egui::Button::new("Play")).clicked();
+                    ui.add_space(800.0);
+                });
+            });
+        };
+        let press = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(0.0, vec![]);
+        frame(0.1, vec![egui::Event::PointerMoved(at), press(at, true)]);
+        frame(0.15, vec![egui::Event::PointerMoved(at + drift * 0.5)]);
+        frame(
+            0.2,
+            vec![egui::Event::PointerMoved(at + drift), press(at + drift, false), egui::Event::PointerGone],
+        );
+        frame(0.25, vec![]);
+        clicked
+    }
+
+    #[test]
+    fn a_tap_that_drifts_a_little_still_clicks() {
+        let drift = Vec2::new(5.0, 7.0);
+        assert!(!tapped(&egui::Context::default(), drift));
+        let ctx = egui::Context::default();
+        fingers(&ctx);
+        assert!(tapped(&ctx, drift));
+        assert!(!tapped(&ctx, Vec2::new(0.0, 30.0)));
     }
 }
