@@ -228,7 +228,7 @@ fn creators_share_hats_and_others_find_and_wear_them() {
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].data, hat);
     client.wore(&shared.item_id).unwrap();
-    assert_eq!(client.catalog("").unwrap()[0].wears, 1);
+    assert_eq!(client.catalog("").unwrap().iter().find(|i| i.item_id == shared.item_id).unwrap().wears, 1);
 
     // Only the creator takes it out.
     assert!(client.unlist(&shared.item_id, &sign(&[4u8; 32], &unlist_message(&shared.item_id))).is_err());

@@ -98,7 +98,7 @@ pub(crate) fn create_tables(db: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-fn player_code(db: &Connection, game_id: &str, player_id: &str) -> rusqlite::Result<String> {
+pub(crate) fn player_code(db: &Connection, game_id: &str, player_id: &str) -> rusqlite::Result<String> {
     let secret: Vec<u8> =
         db.query_row("SELECT secret FROM analytics_secret WHERE id = 0", [], |r| r.get(0))?;
     let mut hash = Sha256::new();

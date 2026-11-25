@@ -1091,6 +1091,7 @@ function game() {
   ];
   if (entry.about) out.push(el('div', { class: 'about' }, el('div', { class: 'caps' }, 'About'), entry.about));
   if (hostable) out.push(ratingBar(entry), reportPanel('game', entry.key));
+  if (entry.game) out.push(passesPanel(entry));
 
   const hide = el('input', { type: 'checkbox', checked: view.hideFull });
   hide.addEventListener('change', () => { view.hideFull = hide.checked; render(); });
@@ -2757,6 +2758,177 @@ function chart(points, { bars = false, label }) {
   return add(box, [area, tip]);
 }
 
+let walletSigned = 0;
+const walletTime = () => (walletSigned = Math.max(Date.now(), walletSigned + 1));
+const sparks = (n) => `${count(n)} Sparks`;
+const money = (cents) => `$${(cents / 100).toFixed(2)}`;
+
+const passList = { key: null, who: null, list: null, busy: false };
+
+function loadPasses(key, again) {
+  if (!again && passList.key === key && passList.who === (session?.playerId || null)) return;
+  passList.key = key;
+  passList.who = session?.playerId || null;
+  const query = session ? { player: session.playerId } : undefined;
+  api(`/games/${encodeURIComponent(key)}/passes`, { query })
+    .then((list) => { if (passList.key === key) passList.list = list; })
+    .catch(() => { passList.list = []; })
+    .finally(() => render());
+}
+
+async function buyPass(p) {
+  passList.busy = true;
+  render();
+  const time = walletTime();
+  const signature = signText(secretKey(), `libroxel buy pass\n${session.playerId}\n${p.pass_id}\n${p.price}\n${time}`);
+  try {
+    await api('/passes/buy', { method: 'POST', body: { player_id: session.playerId, pass_id: p.pass_id, price: p.price, time, signature } });
+    flash = { text: `You have ${p.name}.` };
+    loadPasses(p.game_id, true);
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  passList.busy = false;
+  render();
+}
+
+function passesPanel(entry) {
+  loadPasses(entry.key);
+  const list = passList.key === entry.key ? passList.list : null;
+  if (!list?.length) return null;
+  return el('div', { class: 'about' }, el('div', { class: 'caps' }, 'Passes'),
+    el('div', { class: 'versions' }, list.map((p) => el('div', { class: 'person' },
+      el('div', { class: 'what' }, el('b', {}, p.name), p.about && el('small', { class: 'soft' }, p.about)),
+      el('div', { class: 'buttons' }, p.owned
+        ? el('span', { class: 'soft' }, 'Owned')
+        : el('button', { class: 'chip', disabled: !session || passList.busy, title: session ? undefined : 'Sign in to buy passes', onclick: (e) => {
+          const b = e.currentTarget;
+          if (b.dataset.sure) buyPass(p);
+          else { b.dataset.sure = '1'; b.replaceChildren(`Buy for ${sparks(p.price)}?`); }
+        } }, sparks(p.price)))))));
+}
+
+async function changePass(gameId, c, said) {
+  if (mine.busy) return;
+  mine.busy = true;
+  render();
+  const body = { player_id: session.playerId, action: c.action, pass_id: c.pass_id || 0, name: c.name || '', about: c.about || '', price: c.price || 0, time: walletTime() };
+  body.signature = signText(secretKey(), `libroxel pass\n${body.player_id}\n${gameId}\n${body.action}\n${body.pass_id}\n${body.name}\n${body.about}\n${body.price}\n${body.time}`);
+  try {
+    passList.list = await api(`/games/${encodeURIComponent(gameId)}/passes`, { method: 'POST', body });
+    passList.key = gameId;
+    passList.who = session.playerId;
+    flash = { text: said };
+    earned.for = null;
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  mine.busy = false;
+  render();
+}
+
+function passForm(gameId, p) {
+  const name = el('input', { type: 'text', value: p?.name || '', maxlength: 50 });
+  const about = el('input', { type: 'text', value: p?.about || '', maxlength: 300 });
+  const price = el('input', { type: 'number', min: 1, max: 100000, value: p?.price || '' });
+  const read = () => ({ pass_id: p?.pass_id, name: name.value.trim(), about: about.value.trim(), price: Math.floor(Number(price.value) || 0) });
+  return el('div', { class: 'form manage' },
+    el('label', { class: 'field' }, el('span', {}, 'Name'), name),
+    el('label', { class: 'field' }, el('span', {}, 'Description'), about),
+    el('label', { class: 'field' }, el('span', {}, 'Price in Sparks'), price),
+    el('div', { class: 'form-actions' },
+      el('button', { class: 'btn go small', disabled: mine.busy, onclick: () => changePass(gameId, { action: p ? 'edit' : 'add', ...read() }, p ? 'Saved.' : `Added ${name.value.trim()}.`) }, icon(ICON.check), p ? 'Save' : 'Add pass'),
+      p && el('button', { class: 'chip', disabled: mine.busy, onclick: () => changePass(gameId, { action: 'remove', pass_id: p.pass_id }, `Removed ${p.name}.`) }, icon(ICON.trash), 'Remove')));
+}
+
+function passesTab(g) {
+  loadPasses(g.game_id);
+  const list = passList.key === g.game_id ? passList.list : null;
+  if (!list) return el('p', { class: 'soft' }, 'Loading…');
+  return el('div', {},
+    list.map((p) => el('div', {}, el('h2', { class: 'section' }, `${p.name} · ${sparks(p.price)} · ${count(p.sold)} sold`), passForm(g.game_id, p))),
+    el('h2', { class: 'section' }, 'New pass'), passForm(g.game_id, null));
+}
+
+const earned = { result: null, loading: false, error: null, for: null, busy: false };
+
+function loadEarnings(again) {
+  if (again) earned.for = null;
+  if (earned.loading || earned.for === session.playerId) return;
+  earned.loading = true;
+  const time = Date.now();
+  const signature = signText(secretKey(), `libroxel earnings\n${session.playerId}\n${time}`);
+  api(`/earnings/${session.playerId}`, { query: { time, signature } })
+    .then((r) => { earned.result = r; earned.error = null; })
+    .catch((e) => { earned.error = e.message; })
+    .finally(() => { earned.loading = false; earned.for = session.playerId; if (route.name === 'creator') render(); });
+}
+
+async function cashOut(amount, details) {
+  earned.busy = true;
+  render();
+  const body = { player_id: session.playerId, sparks: amount, details, time: walletTime() };
+  body.signature = signText(secretKey(), `libroxel cash out\n${body.player_id}\n${body.sparks}\n${body.details}\n${body.time}`);
+  try {
+    earned.result = await api('/earnings/cash-out', { method: 'POST', body });
+    flash = { text: 'Cash out asked for.' };
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  earned.busy = false;
+  render();
+}
+
+function cashOutPanel(e) {
+  const out = [el('h2', { class: 'section' }, 'Cash out')];
+  if (!e.payouts_on) return [...out, el('p', { class: 'soft' }, 'Not available yet.')];
+  out.push(el('p', { class: 'soft' }, `${money(e.cents_per_thousand)} per 1,000 Sparks through ${e.provider}. At least ${sparks(e.minimum)}. You can cash out ${sparks(e.payable)}.`));
+  if (e.needs.length) out.push(status(`First ${e.needs.join(', ')}.`));
+  else if (!e.payouts.some((p) => p.state === 'waiting')) {
+    const amount = el('input', { type: 'number', min: e.minimum, max: e.payable, value: e.payable });
+    const details = el('input', { type: 'text', maxlength: 200, placeholder: `Your ${e.provider} email or account` });
+    out.push(el('div', { class: 'form manage' },
+      el('label', { class: 'field' }, el('span', {}, 'Sparks'), amount),
+      el('label', { class: 'field' }, el('span', {}, 'Pay to'), details),
+      el('div', { class: 'form-actions' },
+        el('button', { class: 'btn go small', disabled: earned.busy || e.payable < e.minimum, onclick: () => cashOut(Math.floor(Number(amount.value) || 0), details.value.trim()) }, icon(ICON.check), 'Cash out'))));
+  }
+  if (e.payouts.length) {
+    out.push(el('div', { class: 'versions' }, e.payouts.map((p) => el('div', { class: 'person' },
+      el('div', { class: 'what' }, el('b', {}, `${sparks(p.sparks)} · ${money(p.cents)}`), el('small', { class: 'soft' }, [ago(p.asked_secs_ago), p.note].filter(Boolean).join(' · '))),
+      el('div', { class: 'buttons' }, el('span', { class: 'soft' }, { waiting: 'Waiting', paid: 'Paid', refused: 'Refused' }[p.state] || p.state))))));
+  }
+  return out;
+}
+
+function earningsPage() {
+  loadEarnings();
+  const out = [el('a', { class: 'back', href: '/creator' }, icon(ICON.left), 'Create'), el('h1', { class: 'title' }, 'Earnings')];
+  const e = earned.result;
+  if (earned.error) out.push(status(earned.error, 'error'));
+  if (!e) return [...out, el('p', { class: 'soft' }, 'Loading…')];
+  const tiles = [[sparks(e.balance), 'Balance'], [sparks(e.pending), 'On hold'], [sparks(e.last_30), 'Last 30 days'], [sparks(e.total), 'All time']];
+  out.push(el('div', { class: 'tiles' }, tiles.map(([v, l]) => el('div', {}, el('b', {}, v), el('span', { class: 'caps' }, l)))));
+  out.push(el('h2', { class: 'section' }, 'Each day'),
+    chart(e.days.map((d) => ({ v: d.sales + d.engagement, short: dayName(d.day), long: `${dayName(d.day)}: ${sparks(d.sales)} sales, ${sparks(d.engagement)} playtime` })), { bars: true, label: 'Sparks earned each day' }));
+  if (e.games.length) {
+    out.push(el('h2', { class: 'section' }, 'Games'), el('div', { class: 'table-wrap' }, el('table', { class: 'numbers' },
+      el('thead', {}, el('tr', {}, ['Game', 'Passes', 'Playtime', 'Total'].map((h) => el('th', {}, h)))),
+      el('tbody', {},
+        e.games.map((g) => el('tr', {},
+          el('td', {}, el('a', { href: `/creator/${encodeURIComponent(g.game_id)}/passes` }, g.title)),
+          [g.passes, g.engagement, g.passes + g.engagement].map((v) => el('td', {}, count(v))))),
+        e.items > 0 && el('tr', {}, el('td', {}, 'Items'), el('td', {}, '–'), el('td', {}, '–'), el('td', {}, count(e.items)))))));
+  }
+  if (e.sales.length) {
+    out.push(el('h2', { class: 'section' }, 'Sales'), el('div', { class: 'versions' }, e.sales.map((s) => el('div', { class: 'person' },
+      el('div', { class: 'what' }, el('b', {}, s.name), el('small', { class: 'soft' }, `${sparks(s.price)} · ${ago(s.secs_ago)}`)),
+      el('div', { class: 'buttons' }, el('span', { class: 'soft' }, `${s.settled ? '+' : 'On hold: '}${sparks(s.earned)}`))))));
+  }
+  out.push(...cashOutPanel(e));
+  return out;
+}
+
 function creatorPage() {
   if (!session) return needSignIn('Sign in to see how your games are played.');
   loadCreator();
@@ -2764,6 +2936,7 @@ function creatorPage() {
     el('button', { class: `chip${creator.days === d ? ' on' : ''}`, onclick: () => { creator.days = d; creator.for = null; render(); } }, d === 1 ? 'Today' : `${d} days`)));
   const games = creator.result?.games || [];
   const out = [];
+  if (route.id === 'earnings') return earningsPage();
   loadMine();
   if (route.id) {
     const g = games.find((x) => x.game_id === route.id);
@@ -2774,15 +2947,16 @@ function creatorPage() {
       return out;
     }
     const base = `/creator/${encodeURIComponent(info.game_id)}`;
-    const tab = ['settings', 'versions'].includes(route.tab) ? route.tab : '';
+    const tab = ['settings', 'passes', 'versions'].includes(route.tab) ? route.tab : '';
     out.push(el('div', { class: 'manage-head' },
       el('div', { class: 'mini' }, gamePicture(64, 64, info.game_id)),
       el('div', {}, el('h1', { class: 'title' }, info.title),
         el('div', { class: 'soft' }, `${info.private ? 'Private' : 'Public'} · version ${info.version} · ${ago(info.updated_secs_ago)}`)),
       !info.private && el('a', { class: 'chip', href: `/game/${encodeURIComponent(info.game_id)}` }, icon(ICON.play), 'View')));
-    out.push(el('div', { class: 'hats' }, [['', 'Numbers'], ['settings', 'Settings'], ['versions', 'Versions']].map(([t, label]) =>
+    out.push(el('div', { class: 'hats' }, [['', 'Numbers'], ['settings', 'Settings'], ['passes', 'Passes'], ['versions', 'Versions']].map(([t, label]) =>
       el('a', { class: `chip${tab === t ? ' on' : ''}`, href: t ? `${base}/${t}` : base }, label))));
     if (tab === 'settings') { out.push(settingsTab(info)); return out; }
+    if (tab === 'passes') { out.push(passesTab(info)); return out; }
     if (tab === 'versions') { out.push(versionsTab(info)); return out; }
     out.push(range);
     if (!g) {
@@ -2808,7 +2982,8 @@ function creatorPage() {
     }
     return out;
   }
-  out.push(el('h1', { class: 'title' }, 'Create'));
+  out.push(el('div', { class: 'servers-head' }, el('h1', { class: 'title' }, 'Create'),
+    el('a', { class: 'chip', href: '/creator/earnings' }, icon(ICON.chart), 'Earnings')));
   if (mine.error) out.push(status(mine.error, 'error'));
   if (!mine.list) out.push(el('p', { class: 'soft' }, 'Loading…'));
   else if (!mine.list.length) out.push(el('div', { class: 'empty' }, 'No published games yet.'));

@@ -36,6 +36,14 @@ pub const HUB_HELP: &str = "\
   ban <name> [reason]          ban an account; unban <name> lets it back
   verify|unverify <name>       give or take away a verified badge
   rename <name> <new name>     rename an account
+  earnings                     show the engagement pool and cash out settings
+  earnings pool <sparks>       Sparks shared each day between creators by
+                               playtime (0: off)
+  payouts [all]                list cash outs waiting to be paid
+  payouts on <provider> <cents per 1000 Sparks> <minimum Sparks>
+  payouts off
+  payouts paid <id> [reference]
+  payouts refuse <id> <reason> gives the Sparks back
 ";
 
 struct Flags {
@@ -213,6 +221,75 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
             let id = crate::ban(&db, who, &reason)?;
             crate::moderate::log(&db, "", crate::ModAction::Ban, "", "", &id, &reason, "", None, 0);
             println!("{who} is banned.");
+            Ok(())
+        }
+        ["earnings"] => {
+            let s = crate::earnings_settings(&crate::open_db(Some(&data))?);
+            println!("Engagement pool: {} Sparks a day", s.pool);
+            if s.payouts_on() {
+                println!("Cash out: on, through {}, {} cents per 1000 Sparks, at least {} Sparks", s.provider, s.cents_per_thousand, s.minimum);
+            } else {
+                println!("Cash out: off");
+            }
+            Ok(())
+        }
+        ["earnings", "pool", sparks] => {
+            let db = crate::open_db(Some(&data))?;
+            let pool = sparks.parse().map_err(|_| format!("{sparks} is not a number"))?;
+            crate::set_earnings_settings(&db, &crate::EarningsSettings { pool, ..crate::earnings_settings(&db) })?;
+            println!("Creators share {pool} Sparks a day.");
+            Ok(())
+        }
+        ["payouts", "on", provider, cents, minimum] => {
+            let db = crate::open_db(Some(&data))?;
+            let number = |v: &str| v.parse::<u32>().map_err(|_| format!("{v} is not a number"));
+            let s = crate::EarningsSettings {
+                provider: (*provider).to_owned(),
+                cents_per_thousand: number(cents)?,
+                minimum: number(minimum)?,
+                ..crate::earnings_settings(&db)
+            };
+            if !s.payouts_on() {
+                return Err("cents per 1000 Sparks must be more than 0".into());
+            }
+            crate::set_earnings_settings(&db, &s)?;
+            println!("Cash out is on.");
+            Ok(())
+        }
+        ["payouts", "off"] => {
+            let db = crate::open_db(Some(&data))?;
+            let s = crate::EarningsSettings { provider: String::new(), ..crate::earnings_settings(&db) };
+            crate::set_earnings_settings(&db, &s)?;
+            println!("Cash out is off.");
+            Ok(())
+        }
+        ["payouts", "paid", id, note @ ..] => {
+            let id = id.parse().map_err(|_| format!("{id} is not a cash out"))?;
+            crate::finish_payout(&crate::open_db(Some(&data))?, id, true, &note.join(" "))?;
+            println!("Cash out {id} is paid.");
+            Ok(())
+        }
+        ["payouts", "refuse", id, reason @ ..] if !reason.is_empty() => {
+            let id = id.parse().map_err(|_| format!("{id} is not a cash out"))?;
+            crate::finish_payout(&crate::open_db(Some(&data))?, id, false, &reason.join(" "))?;
+            println!("Cash out {id} is refused and its Sparks are back.");
+            Ok(())
+        }
+        ["payouts", which @ ..] if which.is_empty() || which == ["all"] => {
+            let db = crate::open_db(Some(&data))?;
+            let list = crate::payouts(&db, if which.is_empty() { "waiting" } else { "" });
+            if list.is_empty() {
+                println!("No cash outs.");
+            }
+            for p in list {
+                let name: String = db
+                    .query_row("SELECT name FROM accounts WHERE player_id = ?1", [&p.player_id], |r| r.get(0))
+                    .unwrap_or_else(|_| p.player_id.clone());
+                println!(
+                    "{:<5} {:<20} {} Sparks  ${}.{:02}  {}  {}  {} days ago  {}",
+                    p.payout_id, name, p.sparks, p.cents / 100, p.cents % 100, p.details, p.state, p.asked_secs_ago / 86_400, p.note
+                );
+            }
             Ok(())
         }
         ["rename", who, name] => {

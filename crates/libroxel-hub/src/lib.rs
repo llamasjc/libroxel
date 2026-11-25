@@ -58,6 +58,13 @@ pub use assets::{
 pub use charts::{Chart, ChartStats, Charts, ForYou, Played, for_you_message, guess_genre, wilson};
 mod cli;
 mod copies;
+mod earnings;
+pub use earnings::{
+    BuyPass, CREATOR_SHARE, CashOut, EarnedDay, Earnings, EarningsSettings, GameEarnings, HOLD_DAYS,
+    PAYOUT_AGE, Pass, PassAction, PassChange, Payout, SaleLine, buy_pass_message, cash_out_message,
+    earnings_message, finish_payout, pass_message, payouts, set_settings as set_earnings_settings,
+    settings as earnings_settings, settle,
+};
 mod email;
 mod family;
 pub use family::{
@@ -859,6 +866,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     copies::create_tables(&db)?;
     pictures::create_tables(&db)?;
     wallet::create_tables(&db)?;
+    earnings::create_tables(&db)?;
     seal::install(&db, path)?;
     closed_games(&db, false).map_err(|e| format!("could not set up the Hub database: {e}"))?;
     Ok(db)
@@ -926,6 +934,15 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
             }
         });
     }
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        let db = hub.db.clone();
+        runtime.spawn(async move {
+            loop {
+                let _ = earnings::settle(&db.lock().unwrap(), now());
+                tokio::time::sleep(Duration::from_secs(600)).await;
+            }
+        });
+    }
     // Only publishing carries a whole place; everything else is small.
     let big = (
         tower_http::decompression::RequestDecompressionLayer::new(),
@@ -982,6 +999,11 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/shop/buy", post(wallet::buy_item))
         .route("/wallet/daily", post(wallet::claim_daily))
         .route("/wallet/{id}", get(wallet::get_wallet))
+        .route("/earnings/{id}", get(earnings::get_earnings))
+        .route("/earnings/cash-out", post(earnings::cash_out))
+        .route("/games/{id}/passes", get(earnings::list_passes).post(earnings::change_pass))
+        .route("/passes/buy", post(earnings::buy_pass))
+        .route("/passes/{id}/owners/{player}", get(earnings::owns))
         .route("/reports", post(report))
         .route("/moderation", post(moderate::moderate))
         .route("/moderation/{id}", get(moderate::get_dashboard))
@@ -2671,6 +2693,50 @@ impl HubClient {
 
     pub fn set_price(&self, item_id: &str, price: &SetPrice) -> Result<(), String> {
         self.post_raw(&format!("/catalog/{item_id}/price"), price).map(|_| ())
+    }
+
+    pub fn earnings(&self, player_id: &str, time: i64, signature: &str) -> Result<Earnings, String> {
+        let request = self
+            .agent
+            .get(format!("{}/earnings/{player_id}", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call();
+        self.answer(request)
+    }
+
+    pub fn cash_out(&self, cash_out: &CashOut) -> Result<Earnings, String> {
+        self.post_signed("/earnings/cash-out", cash_out)
+    }
+
+    pub fn passes(&self, game_id: &str, player_id: Option<&str>) -> Result<Vec<Pass>, String> {
+        let mut request = self.agent.get(format!("{}/games/{game_id}/passes", self.base));
+        if let Some(player) = player_id {
+            request = request.query("player", player);
+        }
+        self.answer(request.config().http_status_as_error(false).build().call())
+    }
+
+    pub fn change_pass(&self, game_id: &str, change: &PassChange) -> Result<Vec<Pass>, String> {
+        self.post_signed(&format!("/games/{game_id}/passes"), change)
+    }
+
+    pub fn buy_pass(&self, buy: &BuyPass) -> Result<Pass, String> {
+        self.post_signed("/passes/buy", buy)
+    }
+
+    pub fn owns_pass(&self, pass_id: i64, player_id: &str) -> Result<bool, String> {
+        let request = self
+            .agent
+            .get(format!("{}/passes/{pass_id}/owners/{player_id}", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call();
+        self.answer(request)
     }
 
     /// Counts someone putting an item on.
