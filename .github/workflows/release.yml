@@ -405,6 +405,7 @@ jobs:
             export "CARGO_TARGET_${env^^}_LINKER=$ndk/bin/${clang}26-clang"
             cargo rustc --locked --profile dist -p libroxel --lib --crate-type cdylib --target "$target" \
               -- -C link-arg=-Wl,-z,max-page-size=16384
+            packaging/ci/check-android-lib.sh "target/$target/dist/liblibroxel.so" "$machine" "$class" "$target"
             libs="packaging/android/app/src/main/jniLibs/$name"
             mkdir -p "$libs"
             cp "target/$target/dist/liblibroxel.so" "$libs/"
@@ -430,6 +431,7 @@ jobs:
           fi
           gradle -p packaging/android --no-daemon assembleRelease bundleRelease
           out=packaging/android/app/build/outputs
+          packaging/ci/check-android-apk.sh "$out/apk/release/app-release.apk"
           if [[ -n "$ANDROID_KEYSTORE_BASE64" ]]; then
             # Every APK must carry the same certificate as the releases before it,
             # or Android won't install it over them.
