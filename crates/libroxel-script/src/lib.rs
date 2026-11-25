@@ -289,6 +289,13 @@ impl ScriptRuntime {
         &self.tree
     }
 
+    /// Those of `ids` that scripts may still reach (an object for one is
+    /// alive in a script, or something is connected to its events), so
+    /// they must not be freed yet.
+    pub fn held(&self, ids: &[InstanceId]) -> std::collections::HashSet<InstanceId> {
+        bindings::held(&self.lua, ids)
+    }
+
     /// Runs source code as a new script. Signal handlers it connects stay
     /// alive, and if it calls `task.wait` it continues during later steps.
     /// Errors raised before its first wait are returned here; later ones

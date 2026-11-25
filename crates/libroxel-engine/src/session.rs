@@ -87,6 +87,8 @@ pub struct Blast {
 
 /// How long an explosion's flash lasts, in seconds.
 pub const BLAST_TIME: f32 = 0.6;
+/// How many steps apart destroyed instances are freed (see `PlaySession::tidy`).
+const TIDY_EVERY: u32 = 300;
 
 /// Seconds after a jump sound before another jump makes one.
 const JUMP_QUIET: f32 = 0.35;
@@ -270,6 +272,10 @@ pub struct PlaySession {
     pub(crate) exploded: std::collections::HashSet<InstanceId>,
     /// Humanoids whose Died event has fired (it fires once).
     pub(crate) died: std::collections::HashSet<InstanceId>,
+    /// Steps since destroyed instances were last freed, and those that
+    /// were destroyed then (see [`tidy`](Self::tidy)).
+    tidy_steps: u32,
+    doomed: Vec<InstanceId>,
     /// Explosions still being drawn: where, how big, and how long ago.
     pub(crate) blasts: Vec<Blast>,
     /// Particle bursts scripts asked for, for the renderer to send out.
@@ -324,6 +330,8 @@ impl PlaySession {
             log: Vec::new(),
             exploded: Default::default(),
             died: Default::default(),
+            tidy_steps: 0,
+            doomed: Vec::new(),
             blasts: Vec::new(),
             emits: Vec::new(),
             sound_restarts: Vec::new(),
@@ -1299,6 +1307,7 @@ impl PlaySession {
     /// what changed; a joined one only sends input and shows what the
     /// server sends (see [`crate::net`]).
     pub fn step(&mut self, dt: f32, input: CharacterInput) {
+        self.tidy();
         match self.runtime.net_role() {
             NetRole::Client => return self.client_step(dt, input),
             NetRole::Server => self.serve_incoming(),
@@ -1308,6 +1317,33 @@ impl PlaySession {
         if self.runtime.net_role() == NetRole::Server {
             self.serve_outgoing();
         }
+    }
+
+    /// Frees what the game destroyed, every [`TIDY_EVERY`] steps: a game
+    /// that keeps making and destroying things (bullets, effects, players'
+    /// characters) otherwise kept every one of them for as long as it ran,
+    /// on the host and on every joined computer. An instance goes only
+    /// once it was already destroyed at the last look (so everything that
+    /// runs each frame, like the renderer, has seen it go) and no script
+    /// can still reach it.
+    fn tidy(&mut self) {
+        self.tidy_steps += 1;
+        if self.tidy_steps < TIDY_EVERY {
+            return;
+        }
+        self.tidy_steps = 0;
+        let doomed = std::mem::take(&mut self.doomed);
+        let held = self.runtime.held(&doomed);
+        let free: Vec<InstanceId> = doomed.into_iter().filter(|id| !held.contains(id)).collect();
+        let tree = self.runtime.tree().clone();
+        let mut t = tree.borrow_mut();
+        t.purge(&free);
+        self.doomed = t.destroyed();
+        let gone = |id: &InstanceId| t.is_destroyed(*id).unwrap_or(true);
+        self.exploded.retain(|id| !gone(id));
+        self.died.retain(|id| !gone(id));
+        drop(t);
+        self.tidy_link();
     }
 
     /// Fires the Changed events of what scripts changed this frame, and of

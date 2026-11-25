@@ -88,6 +88,14 @@ const GUEST_ACTION_BURST: f32 = 240.0;
 const MAX_WAITING: usize = 16;
 /// How long a computer may stay connected without saying hello.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+/// Each side says something at least this often (a `ka`, "keep alive",
+/// when it has nothing else to say), so the other can tell a quiet game
+/// from a connection that went away without hanging up.
+const KEEP_ALIVE: Duration = Duration::from_secs(1);
+/// How long the other side may say nothing before the connection counts
+/// as lost (Wi-Fi that dropped, a computer that went to sleep). Only for a
+/// side that sends keep-alives: older copies don't.
+pub const SILENCE_LIMIT: Duration = Duration::from_secs(20);
 
 /// The services whose contents every computer sees.
 const SHARED: [ClassKind; 6] = [
@@ -204,6 +212,12 @@ pub(crate) struct Conn {
     parser: Option<Parser>,
     /// The key exchange's [`safety code`](Self::safety_code), once done.
     safety: Option<String>,
+    /// When something last came in, and when something last went out.
+    heard: Instant,
+    said: Instant,
+    /// Whether the other side sends keep-alives, so its silence means
+    /// something.
+    keeps_alive: bool,
 }
 
 /// Eight digits from the key exchange: the same on both ends of one
@@ -299,6 +313,9 @@ impl Conn {
             bytes_read: 0,
             parser: None,
             safety: None,
+            heard: Instant::now(),
+            said: Instant::now(),
+            keeps_alive: false,
         };
         if side == Side::Joining {
             conn.unsent.extend_from_slice(MAGIC);
@@ -316,6 +333,26 @@ impl Conn {
     /// are agreed. Someone listening in the middle makes them differ.
     pub(crate) fn safety_code(&self) -> Option<&str> {
         self.safety.as_deref()
+    }
+
+    /// How long the other side has said nothing, counting only from when
+    /// everything it sent has been taken in (a computer busy with a big
+    /// world isn't reading, but the host isn't quiet).
+    fn silent_for(&self, now: Instant) -> Duration {
+        let busy = !self.wire_in.is_empty()
+            || !self.received.is_empty()
+            || self.parser.as_ref().is_some_and(|p| p.pending > 0);
+        if busy { Duration::ZERO } else { now.saturating_duration_since(self.heard) }
+    }
+
+    /// Whether the other side keeps alive and has been quiet for longer than `limit`.
+    fn gone_quiet(&self, limit: Duration, now: Instant) -> bool {
+        self.keeps_alive && self.ready() && self.silent_for(now) > limit
+    }
+
+    /// Whether it's time to say something so the other side knows we're here.
+    fn due_keep_alive(&self, now: Instant) -> bool {
+        self.ready() && !self.closed && now.saturating_duration_since(self.said) >= KEEP_ALIVE
     }
 
     /// Whether the other end is on this computer (as an internet tunnel is).
@@ -343,6 +380,7 @@ impl Conn {
         }
         self.plain_out.extend_from_slice(body);
         self.plain_out.push(b'\n');
+        self.said = Instant::now();
         self.seal();
     }
 
@@ -358,6 +396,7 @@ impl Conn {
             None => self.plain_out.extend_from_slice(body),
         }
         self.plain_out.push(b'\n');
+        self.said = Instant::now();
         self.seal();
     }
 
@@ -565,6 +604,7 @@ impl Conn {
                 Ok(n) => {
                     taken += n;
                     self.bytes_read += n as u64;
+                    self.heard = Instant::now();
                     self.wire_in.extend_from_slice(&buf[..n]);
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => break,
@@ -773,6 +813,21 @@ pub(crate) struct Hosting {
     /// Whether computers on the network may join by address while there is
     /// a tunnel (see [`PlaySession::allow_network_joins`]).
     network_joins: bool,
+    /// How long a joined computer may say nothing before it is let go.
+    silence: Duration,
+}
+
+impl Drop for Hosting {
+    /// The game is over: everyone still here is told so, rather than just
+    /// finding the connection gone (and trying to come back).
+    fn drop(&mut self) {
+        for peer in &mut self.peers {
+            if peer.player.is_some() && !peer.conn.closed {
+                peer.conn.send(&json!({ "t": "ended" }));
+                peer.conn.flush();
+            }
+        }
+    }
 }
 
 /// Says which player's computer a connection to the game comes from (by
@@ -948,6 +1003,19 @@ pub(crate) struct Joined {
     /// The workspace's loose parts, which our character's physics holds
     /// where the host put them.
     loose: LooseParts,
+    /// Where the game is (`host:port`) and who we joined as, to come back.
+    address: String,
+    name: String,
+    /// How we last asked to look, to ask again when we come back.
+    look: Option<Json>,
+    /// `InvokeServer` calls sent and not answered yet.
+    calls: HashSet<u64>,
+    /// Whether the host ended the game, or removed or turned us away:
+    /// then there is nothing to come back to.
+    ended: bool,
+    turned_away: bool,
+    /// How long the host may say nothing before the connection counts as lost.
+    silence: Duration,
 }
 
 /// The unanchored parts in the workspace, kept up from the tree's log of
@@ -1172,6 +1240,10 @@ impl Replicator {
             || tree.game_structure() != self.structure
             || self.tick.is_multiple_of(FULL_LOOK);
         let mut ops = if full {
+            // A full look finds again what's still held back; without this,
+            // a game whose structure changes every step (anything made or
+            // destroyed) only ever added to it.
+            self.later.clear();
             let (wanted, waiting) = focus.wanted(tree, &self.sent);
             self.waiting = waiting;
             let ops = self.delta_within(tree, Some(&wanted));
@@ -1947,6 +2019,7 @@ impl PlaySession {
             banned: Vec::new(),
             who: None,
             network_joins: true,
+            silence: SILENCE_LIMIT,
         }));
         Ok(session)
     }
@@ -1966,7 +2039,7 @@ impl PlaySession {
             .map_err(|e| format!("could not reach the host: {e}"))?;
         let reached = began.elapsed().as_secs_f64();
         let mut conn = Conn::new(stream, Side::Joining).map_err(|e| e.to_string())?;
-        conn.send(&json!({ "t": "hello", "name": name, "version": PROTOCOL }));
+        conn.send(&json!({ "t": "hello", "name": name, "version": PROTOCOL, "ka": true }));
         conn.flush();
         *tree.borrow_mut() = InstanceTree::new();
         let mut session = Self::empty(tree, NetRole::Client)?;
@@ -1989,6 +2062,13 @@ impl PlaySession {
             wrong_version: false,
             clock: JoinClock::new(began),
             loose: LooseParts::default(),
+            address: address.clone(),
+            name: name.to_owned(),
+            look: None,
+            calls: HashSet::new(),
+            ended: false,
+            turned_away: false,
+            silence: SILENCE_LIMIT,
         }));
         session.info("🔗 Joining the game (its address stays hidden here)".to_owned());
         session.info(format!("⏱ Join: reached the host after {reached:.2} s"));
@@ -2004,7 +2084,86 @@ impl PlaySession {
     /// Tells the host how this computer's player looks, when joined.
     pub(crate) fn send_look(&mut self, look: crate::character::Look) {
         if let Link::Client(joined) = &mut self.link {
-            joined.conn.send(&json!({ "t": "look", "look": look.to_json() }));
+            let look = look.to_json();
+            joined.conn.send(&json!({ "t": "look", "look": look }));
+            joined.look = Some(look);
+        }
+    }
+
+    /// How long the other side may say nothing before the connection
+    /// counts as lost ([`SILENCE_LIMIT`] unless changed): for a host, each
+    /// joined computer; for a joined computer, the host.
+    pub fn set_silence_limit(&mut self, limit: Duration) {
+        match &mut self.link {
+            Link::Host(host) => host.silence = limit,
+            Link::Client(joined) => joined.silence = limit,
+            Link::Alone => {}
+        }
+    }
+
+    /// Lets go of what the network side remembers about instances freed
+    /// since (see [`tidy`](Self::tidy)).
+    pub(crate) fn tidy_link(&mut self) {
+        let Link::Client(joined) = &mut self.link else { return };
+        let tree = self.runtime.tree().borrow();
+        let alive = |id: &InstanceId| tree.is_destroyed(*id) == Ok(false);
+        joined.started.retain(alive);
+        joined.glide.retain(|id, _| alive(id));
+    }
+
+    /// Whether this joined game lost its connection in a way worth trying
+    /// again: not because the host ended the game, removed us or turned us
+    /// away.
+    pub fn can_reconnect(&self) -> bool {
+        matches!(&self.link, Link::Client(j)
+            if j.conn.closed && !j.ended && !j.turned_away && !j.wrong_version)
+    }
+
+    /// Where this joined game is (`host:port`), to see whether it answers
+    /// again before [`reconnect`](Self::reconnect)ing.
+    pub fn joined_address(&self) -> Option<String> {
+        match &self.link {
+            Link::Client(joined) => Some(joined.address.clone()),
+            _ => None,
+        }
+    }
+
+    /// Joins the same game again after the connection was lost (see
+    /// [`can_reconnect`](Self::can_reconnect)), as the same name and look.
+    /// The host sees a player leave and come back; this computer gets the
+    /// world as it is now, and its local scripts start over.
+    pub fn reconnect(&mut self) -> Result<(), String> {
+        let Link::Client(joined) = &self.link else { return Err("not a joined game".to_owned()) };
+        let (address, name, look, silence) =
+            (joined.address.clone(), joined.name.clone(), joined.look.clone(), joined.silence);
+        let mut again = Self::join(self.runtime.tree().clone(), &address, &name)?;
+        if let Link::Client(joined) = &mut again.link {
+            joined.silence = silence;
+            if let Some(look) = look {
+                joined.conn.send(&json!({ "t": "look", "look": look }));
+                joined.look = Some(look);
+            }
+        }
+        let mut log = std::mem::take(&mut self.log);
+        log.append(&mut again.log);
+        again.log = log;
+        self.stop();
+        *self = again;
+        Ok(())
+    }
+
+    /// How many instances the session keeps records about besides the
+    /// world itself (what was sent, ids matched up, effects seen): for
+    /// checking that a long game doesn't keep growing.
+    pub fn bookkeeping_len(&self) -> usize {
+        let own = self.exploded.len() + self.died.len();
+        own + match &self.link {
+            Link::Alone => 0,
+            Link::Host(host) => {
+                host.replicator.as_ref().map_or(0, |r| r.sent.len() + r.later.len())
+                    + host.peers.iter().map(|p| p.stream.sent.len() + p.stream.later.len()).sum::<usize>()
+            }
+            Link::Client(j) => j.ids.len() + j.back.len() + j.glide.len() + j.started.len() + j.waiting.len(),
         }
     }
 
@@ -2179,9 +2338,17 @@ impl PlaySession {
                 host.peers.push(Peer::new(conn, Some(from), now));
             }
         }
+        let mut quiet = Vec::new();
         for peer in &mut host.peers {
             if peer.player.is_none() && now.saturating_duration_since(peer.since) > HELLO_TIMEOUT {
                 peer.conn.closed = true;
+            }
+            // A computer that went away without hanging up (its Wi-Fi
+            // dropped, it went to sleep) is let go, not kept as a player
+            // standing still forever with the world piling up for it.
+            if peer.player.is_some() && !peer.conn.closed && peer.conn.gone_quiet(host.silence, now) {
+                peer.conn.closed = true;
+                quiet.extend(peer.player);
             }
         }
         let mut too_much = Vec::new();
@@ -2198,7 +2365,14 @@ impl PlaySession {
                 let kind = message.get("t").and_then(Json::as_str).unwrap_or("");
                 let action = matches!(kind, "fire" | "invoke" | "click" | "prompt" | "tool" | "activate");
                 if !peer.messages.spend(1.0, now) || (action && !peer.actions.spend(1.0, now)) {
-                    // Too much at once: the rest is dropped, and the host told once.
+                    // Too much at once: the rest is dropped, and the host told
+                    // once. A call is answered, so the script that made it
+                    // doesn't wait for ever.
+                    if kind == "invoke"
+                        && let Some(call) = message.get("call").and_then(Json::as_u64)
+                    {
+                        peer.send(json!({ "t": "result", "call": call, "ok": false, "a": "too many calls to the server at once" }));
+                    }
                     if !peer.warned {
                         peer.warned = true;
                         too_much.push(peer.player);
@@ -2245,6 +2419,7 @@ impl PlaySession {
                             break;
                         }
                         peer.asked = name.clone();
+                        peer.conn.keeps_alive = message.get("ka").and_then(Json::as_bool) == Some(true);
                         let player = self.add_player(&name, true);
                         peer.player = Some(player);
                         let shown = tree.borrow().name(player).unwrap_or("A player").to_owned();
@@ -2258,6 +2433,10 @@ impl PlaySession {
                     }
                     continue;
                 };
+                if kind == "ka" {
+                    peer.conn.keeps_alive = true;
+                    continue;
+                }
                 let Some(index) = self.avatar_of(player) else { continue };
                 match kind {
                     "input" => self.avatars[index].input = input_from(&message),
@@ -2284,11 +2463,17 @@ impl PlaySession {
                     }
                     "invoke" => {
                         let call = message.get("call").and_then(Json::as_u64).unwrap_or(0);
-                        if let Some(remote) = id_in(&message, "r") {
+                        let remote = id_in(&message, "r")
+                            .filter(|r| tree.borrow().class(*r) == Ok(ClassKind::RemoteFunction));
+                        if let Some(remote) = remote {
                             let stream = host.streaming.then_some(&peer.stream);
                             let args = guest_args(&tree.borrow(), &message, stream);
                             let errors = self.runtime.deliver_invoke(call, remote, player, &args);
                             self.collect(errors);
+                        } else {
+                            // Gone from the server since (or never there): say
+                            // so, or the call would wait for ever.
+                            peer.send(json!({ "t": "result", "call": call, "ok": false, "a": "that RemoteFunction isn't on the server" }));
                         }
                     }
                     "click" => {
@@ -2346,7 +2531,11 @@ impl PlaySession {
             if let Some(player) = peer.player {
                 let shown = tree.borrow().name(player).unwrap_or("A player").to_owned();
                 self.leave(player);
-                self.info(format!("{shown} left"));
+                if quiet.contains(&player) {
+                    self.info(format!("{shown} left (their connection went quiet)"));
+                } else {
+                    self.info(format!("{shown} left"));
+                }
             }
         }
         self.link = Link::Host(host);
@@ -2364,6 +2553,9 @@ impl PlaySession {
         }
         for peer in &mut host.peers {
             let Some(player) = peer.player else { continue };
+            if peer.conn.due_keep_alive(Instant::now()) {
+                peer.send(json!({ "t": "ka" }));
+            }
             for (from, d) in &said {
                 if *from != player
                     && !peer.fresh
@@ -2440,7 +2632,7 @@ impl PlaySession {
                     .filter_map(|c| t.service(*c))
                     .map(|s| t.descendants(s).map_or(0, |d| d.len()))
                     .sum();
-                peer.send(json!({ "t": "welcome", "services": services, "total": total }));
+                peer.send(json!({ "t": "welcome", "services": services, "total": total, "ka": true }));
                 drop(t);
                 if let Some(world) = worlds.pop() {
                     peer.send_world(world);
@@ -2553,7 +2745,7 @@ impl PlaySession {
                     .iter()
                     .filter_map(|c| Some((c.file_name().to_owned(), bits(t.service(*c)?))))
                     .collect();
-                peer.send(json!({ "t": "welcome", "services": services, "total": ops.len() }));
+                peer.send(json!({ "t": "welcome", "services": services, "total": ops.len(), "ka": true }));
                 for line in world_lines(&ops) {
                     peer.queue.push_back(Out::Line(line));
                 }
@@ -2612,7 +2804,15 @@ impl PlaySession {
             && let Some(mut message) = joined.inbox.pop_front()
         {
             match message.get("t").and_then(Json::as_str).unwrap_or("") {
+                "ka" => joined.conn.keeps_alive = true,
+                "ended" => {
+                    self.warn("The host ended the game".to_owned());
+                    joined.reported = true;
+                    joined.ended = true;
+                    joined.conn.closed = true;
+                }
                 "welcome" => {
+                    joined.conn.keeps_alive |= message.get("ka").and_then(Json::as_bool) == Some(true);
                     joined.total = message.get("total").and_then(Json::as_u64).unwrap_or(0) as usize;
                     joined.got = 0;
                     if !joined.clock.welcomed {
@@ -2685,6 +2885,7 @@ impl PlaySession {
                         message.get("why").and_then(Json::as_str).unwrap_or("You were removed from the game");
                     self.warn(format!("The host removed you: {why}"));
                     joined.reported = true;
+                    joined.turned_away = true;
                     joined.conn.closed = true;
                 }
                 "teleport" => {
@@ -2714,6 +2915,7 @@ impl PlaySession {
                 }
                 "result" => {
                     let call = message.get("call").and_then(Json::as_u64).unwrap_or(0);
+                    joined.calls.remove(&call);
                     let ok = message.get("ok").and_then(Json::as_bool).unwrap_or(false);
                     let mut values = message.get("a").cloned().unwrap_or(Json::Null);
                     joined.to_local(&mut values);
@@ -2729,6 +2931,7 @@ impl PlaySession {
                 "refused" => {
                     let why = message.get("why").and_then(Json::as_str).unwrap_or("no reason given");
                     joined.wrong_version |= why.contains("version");
+                    joined.turned_away = true;
                     self.warn(format!("The game turned us away: {why}"));
                 }
                 _ => {}
@@ -2751,9 +2954,23 @@ impl PlaySession {
         if joined.conn.closed && !joined.conn.ready() {
             joined.wrong_version = true;
         }
+        if !joined.conn.closed && joined.conn.gone_quiet(joined.silence, Instant::now()) {
+            // The host went away without hanging up (or the network
+            // between did): don't wait for ever.
+            joined.conn.closed = true;
+            joined.reported = true;
+            self.warn("Lost the connection to the game: the host stopped answering".to_owned());
+        }
         if joined.conn.closed && joined.inbox.is_empty() && !joined.reported {
             joined.reported = true;
             self.warn("Lost the connection to the game");
+        }
+        if joined.conn.closed && joined.inbox.is_empty() {
+            // No answer is coming: calls waiting for one fail, and the
+            // scripts that made them go on.
+            for call in joined.calls.drain() {
+                self.runtime.deliver_invoke_result(call, false, json!("lost the connection to the server"));
+            }
         }
 
         self.adopt_player(&mut joined);
@@ -2837,9 +3054,26 @@ impl PlaySession {
                     joined.conn.send(&json!({ "t": "fire", "r": r, "a": args }));
                 }
                 NetMessage::Invoke { call, remote, mut args } => {
-                    let Some(r) = joined.back.get(&remote).copied() else { continue };
+                    let Some(r) = joined.back.get(&remote).copied() else {
+                        // Made here, so the server has never heard of it.
+                        self.runtime.deliver_invoke_result(
+                            call,
+                            false,
+                            json!("that RemoteFunction isn't on the server"),
+                        );
+                        continue;
+                    };
+                    if joined.conn.closed {
+                        self.runtime.deliver_invoke_result(
+                            call,
+                            false,
+                            json!("lost the connection to the server"),
+                        );
+                        continue;
+                    }
                     joined.to_host(&mut args);
                     joined.conn.send(&json!({ "t": "invoke", "call": call, "r": r, "a": args }));
+                    joined.calls.insert(call);
                 }
                 _ => {}
             }
@@ -2849,6 +3083,9 @@ impl PlaySession {
             for d in out {
                 joined.conn.send(&json!({ "t": "voice", "d": d }));
             }
+        }
+        if joined.conn.due_keep_alive(Instant::now()) {
+            joined.conn.send(&json!({ "t": "ka" }));
         }
         joined.conn.flush();
         self.link = Link::Client(joined);

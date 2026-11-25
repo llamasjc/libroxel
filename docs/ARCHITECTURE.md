@@ -300,6 +300,26 @@
     is dropped and the host's Output says so once.
   - **Connections:** at most 16 computers may be connected without having
     said hello, for at most 10 seconds each.
+- **Connections that go away.** Both sides send a `ka` (keep alive) when
+  they have said nothing for a second, and say in `hello` and `welcome`
+  that they do; a side that does and then says nothing for 20 seconds
+  (`SILENCE_LIMIT`, counted only once what it sent has been read) is
+  taken as gone. A host that stops says `ended` to everyone first. A
+  joined computer that lost its connection any other way can
+  `reconnect`: it joins again as the same name and look, and the app
+  tries that by itself a few times. Calls waiting for `InvokeServer`
+  answers fail when the connection goes, and the host answers calls it
+  won't run (an unknown remote, too many calls) with an error.
+- **Freeing what was destroyed.** Every 300 steps a session frees the
+  instances that were already destroyed at the last look and that no
+  script can reach (no live object for it, no connections, no Debris or
+  tween), with `InstanceTree::purge`; the session's and network's own
+  records of them go too.
+- **Tests over a pretend network.** `tests/bad_network` is a proxy that
+  delays, jitters, slows, stalls, silences or cuts connections (in order,
+  as TCP delivers, so a lost packet is a stall); `tests/net_weather.rs`
+  plays busy games through it and checks every joined computer ends up
+  with the host's world.
   On a joined computer, its character passes through other players'
   characters; the host alone sorts out who stands where, so two players
   on one spot no longer push each other up into the sky.

@@ -5,6 +5,34 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
 
 ## Unreleased
 
+- **Steadier multiplayer:**
+  - Both sides of a game say something at least once a second, so a
+    connection that goes quiet without hanging up (Wi-Fi that drops, a
+    computer that sleeps) is noticed after 20 seconds: the host lets that
+    player go instead of keeping them standing there for ever with the
+    world piling up for them, and the joined computer says the host
+    stopped answering instead of freezing.
+  - A joined game whose connection drops tries to come back by itself a
+    few times (1, 2, 4, 8 and 16 seconds apart, once the host answers),
+    and the status bar has a Reconnect button. The player comes back with
+    the same name and look and gets the world as it is now.
+  - When the host stops the game, everyone still in it is told "The host
+    ended the game" (and nothing tries to reconnect).
+  - `InvokeServer` no longer waits for ever: it fails when the connection
+    is lost, when the RemoteFunction isn't on the server (or is gone from
+    it), or when a computer calls too often.
+  - Long games no longer keep everything they ever destroyed: bullets,
+    effects and old characters are freed every few seconds once no script
+    can reach them, on the host and on every joined computer. Fifteen
+    seconds of ten bullets a frame used to leave about 90,000 of them in
+    memory.
+  - Streamed games no longer collect a list of held-back changes that
+    only grew while things were being made or destroyed.
+  - New tests play games over a pretend network (delay, jitter, lost
+    packets, lag spikes, connections that go silent or hang up) with
+    many players joining and leaving, and check each joined computer
+    ends up with exactly the host's world.
+
 - **Safer for creators and players:**
   - Edit together now needs the share's code or password, and the person
     sharing lets each guest in by name before they see anything. Each

@@ -601,25 +601,43 @@ impl InstanceTree {
     /// Call this only when nothing (such as a script) can still hold one of
     /// those ids, or accept that such holders will see [`TreeError::Dead`].
     pub fn purge_destroyed(&mut self) -> usize {
+        let doomed = self.destroyed();
+        self.purge(&doomed)
+    }
+
+    /// Every destroyed instance not purged yet.
+    pub fn destroyed(&self) -> Vec<InstanceId> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.data.as_ref().is_some_and(|d| d.destroyed))
+            .map(|(index, slot)| InstanceId { index: index as u32, generation: slot.generation })
+            .collect()
+    }
+
+    /// Frees those of `ids` that are destroyed (live ones are left alone)
+    /// and says how many. Their ids stop resolving, as with
+    /// [`purge_destroyed`](Self::purge_destroyed): a long game frees what it
+    /// destroyed this way once nothing holds it any more.
+    pub fn purge(&mut self, ids: &[InstanceId]) -> usize {
         let mut purged = 0;
-        for (index, slot) in self.slots.iter_mut().enumerate() {
-            if slot.data.as_ref().is_some_and(|d| d.destroyed) {
-                let id = InstanceId { index: index as u32, generation: slot.generation };
-                for tag in slot.data.as_ref().map(|d| d.tags.as_slice()).unwrap_or_default() {
-                    if let Some(set) = self.tag_index.get_mut(tag) {
-                        set.remove(&id);
-                    }
-                }
-                if let Some(count) =
-                    slot.data.as_ref().and_then(|d| self.kind_counts.get_mut(d.class as usize))
-                {
-                    *count = count.saturating_sub(1);
-                }
-                slot.data = None;
-                slot.generation = slot.generation.wrapping_add(1);
-                self.free.push(index as u32);
-                purged += 1;
+        for id in ids {
+            let Some(slot) = self.slots.get_mut(id.index as usize) else { continue };
+            if slot.generation != id.generation || !slot.data.as_ref().is_some_and(|d| d.destroyed) {
+                continue;
             }
+            for tag in slot.data.as_ref().map(|d| d.tags.as_slice()).unwrap_or_default() {
+                if let Some(set) = self.tag_index.get_mut(tag) {
+                    set.remove(id);
+                }
+            }
+            if let Some(count) = slot.data.as_ref().and_then(|d| self.kind_counts.get_mut(d.class as usize)) {
+                *count = count.saturating_sub(1);
+            }
+            slot.data = None;
+            slot.generation = slot.generation.wrapping_add(1);
+            self.free.push(id.index);
+            purged += 1;
         }
         purged
     }

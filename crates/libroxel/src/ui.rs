@@ -42,6 +42,8 @@ enum Action {
         name: String,
     },
     Stop,
+    /// Join the game whose connection dropped again, now.
+    Reconnect,
     Undo,
     Redo,
     /// Use the terrain brush where a ray met something.
@@ -285,6 +287,7 @@ pub fn editor_ui(
     if engine.session.is_none() {
         editor.tunnel = None;
     }
+    rejoin_tick(engine, editor);
     let hosting = engine.session.as_ref().filter(|s| s.host_address().is_some()).map(|s| {
         let code = match &editor.tunnel {
             Some(Tunnel::Host(tunnel)) => tunnel.code(),
@@ -1135,6 +1138,15 @@ fn session_status(
             if let Some(error) = tunnel.and_then(|t| t.error()) {
                 theme::status(ui, theme::RED, "Could not reach the host").on_hover_text(&error);
                 crate::report::button(ui, &format!("Could not reach the host: {error}"));
+            } else if session.disconnected() && session.can_reconnect() {
+                if editor.rejoin.tries < REJOIN_TRIES {
+                    theme::status(ui, theme::AMBER, "Connection lost · trying to reconnect…");
+                } else {
+                    theme::status(ui, theme::RED, "Connection lost");
+                }
+                if ui.button(t("Reconnect")).clicked() {
+                    actions.push(Action::Reconnect);
+                }
             } else if session.disconnected() {
                 theme::status(ui, theme::RED, "Disconnected");
             } else if tunnel.is_some_and(|t| !t.connected()) {
@@ -2896,6 +2908,76 @@ fn data_path(editor: &Editor) -> PathBuf {
 
 /// Ends the play session, if there is one: the player leaves, then saved
 /// data is written. Returns whether a session was running.
+/// How many times a joined game whose connection dropped tries to come
+/// back by itself (a second apart, then 2, 4, 8 and 16), before it waits
+/// for the Reconnect button.
+const REJOIN_TRIES: u32 = 5;
+
+/// Brings a joined game whose connection dropped (Wi-Fi that blinked, a
+/// computer that slept) back by itself when the host answers again.
+fn rejoin_tick(engine: &mut EngineState, editor: &mut Editor) {
+    let Some(session) = engine.session.as_ref() else {
+        editor.rejoin = Default::default();
+        return;
+    };
+    if !session.can_reconnect() {
+        if session.character().is_some() {
+            // Back in and playing: the next drop starts counting again.
+            editor.rejoin.tries = 0;
+        }
+        editor.rejoin.next = None;
+        editor.rejoin.probe = None;
+        return;
+    }
+    let rejoin = &mut editor.rejoin;
+    if rejoin.tries >= REJOIN_TRIES {
+        return;
+    }
+    let now = std::time::Instant::now();
+    if let Some(probe) = &rejoin.probe {
+        match probe.try_recv() {
+            Ok(true) => {
+                rejoin.probe = None;
+                rejoin.tries += 1;
+                rejoin_now(engine);
+            }
+            Ok(false) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                rejoin.probe = None;
+                rejoin.tries += 1;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+        return;
+    }
+    let next = *rejoin.next.get_or_insert(now + std::time::Duration::from_secs(1 << rejoin.tries.min(4)));
+    if now < next {
+        return;
+    }
+    rejoin.next = None;
+    let Some(address) = session.joined_address() else { return };
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        use std::net::ToSocketAddrs;
+        let up = address.to_socket_addrs().ok().and_then(|mut a| a.next()).is_some_and(|a| {
+            std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_secs(3)).is_ok()
+        });
+        let _ = tx.send(up);
+    });
+    rejoin.probe = Some(rx);
+}
+
+/// Joins the game whose connection dropped again, as the same player.
+fn rejoin_now(engine: &mut EngineState) {
+    let Some(session) = engine.session.as_mut() else { return };
+    if !session.can_reconnect() {
+        return;
+    }
+    match session.reconnect() {
+        Ok(()) => log(engine, LogLevel::Info, "Reconnecting to the game…"),
+        Err(e) => log(engine, LogLevel::Warn, format!("Could not reconnect: {e}")),
+    }
+}
+
 fn end_session(engine: &mut EngineState, editor: &Editor) -> bool {
     let Some(mut session) = engine.session.take() else { return false };
     session.stop();
@@ -3501,6 +3583,10 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     }
                 }
             }
+        }
+        Action::Reconnect => {
+            editor.rejoin = Default::default();
+            rejoin_now(engine);
         }
         Action::Stop => {
             if end_session(engine, editor) {

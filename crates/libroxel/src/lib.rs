@@ -107,6 +107,16 @@ pub enum Dialog {
 }
 
 /// Everything the editor remembers between frames.
+/// Coming back by itself to a joined game whose connection dropped: how
+/// many tries so far, when the next one is, and whether the host answers
+/// (asked on a thread of its own, so an unreachable host can't freeze the app).
+#[derive(Default)]
+pub struct Rejoin {
+    pub tries: u32,
+    pub next: Option<std::time::Instant>,
+    pub probe: Option<std::sync::mpsc::Receiver<bool>>,
+}
+
 pub struct Editor {
     /// The graphics card and driver drawing the game, for the speed report.
     pub graphics_adapter: String,
@@ -153,6 +163,8 @@ pub struct Editor {
     pub focus_typing: bool,
     /// While hosting or joining by code: the connection over the internet.
     pub tunnel: Option<Tunnel>,
+    /// Coming back to a joined game whose connection dropped.
+    pub rejoin: Rejoin,
     /// Editing this game together with other computers.
     pub coedit: Option<libroxel_engine::coedit::CoEdit>,
     /// While sharing or joining an edit by code: its internet connection.
@@ -249,6 +261,7 @@ impl Default for Editor {
             typing: None,
             focus_typing: false,
             tunnel: None,
+            rejoin: Rejoin::default(),
             coedit: None,
             edit_tunnel: None,
             platform: browse::Platform::default(),

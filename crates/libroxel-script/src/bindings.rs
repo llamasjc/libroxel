@@ -880,6 +880,36 @@ pub(crate) fn push_instance(lua: &Lua, id: InstanceId) -> mlua::Result<AnyUserDa
     Ok(ud)
 }
 
+/// Those of `ids` that scripts may still reach: a script's object for it
+/// is alive, something is connected to its events or watches it, it is a
+/// running script, or Debris or a tween will still touch it. The rest
+/// can be freed.
+pub(crate) fn held(lua: &Lua, ids: &[InstanceId]) -> std::collections::HashSet<InstanceId> {
+    let host = host(lua);
+    let cache = host.instance_cache.borrow().clone();
+    let connections = host.connections.borrow();
+    let running = host.running_scripts.borrow();
+    let soon: std::collections::HashSet<InstanceId> = host
+        .debris
+        .borrow()
+        .iter()
+        .map(|(d, _)| *d)
+        .chain(host.tweens.borrow().iter().map(|t| t.instance))
+        .collect();
+    ids.iter()
+        .copied()
+        .filter(|id| {
+            let key = id.to_bits() as f64;
+            cache.as_ref().is_some_and(|c| c.raw_get::<Value>(key).is_ok_and(|v| !v.is_nil()))
+                || connections.targets.contains_key(id)
+                || connections.watched.contains_key(id)
+                || connections.owners.contains_key(id)
+                || running.contains(id)
+                || soon.contains(id)
+        })
+        .collect()
+}
+
 /// A script table holding the objects for `ids`, in order.
 pub(crate) fn instance_list(lua: &Lua, ids: Vec<InstanceId>) -> mlua::Result<Table> {
     let out = lua.create_sequence_from(ids.into_iter().map(|id| id.to_bits() as f64))?;
