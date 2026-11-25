@@ -39,12 +39,22 @@ pub use session::{Blast, FrameTimes, LogEntry, LogLevel, PlaySession};
 /// limits the wrong way round are swapped.
 pub(crate) fn clamp_lenient<T: num_like::Float>(x: T, lo: T, hi: T) -> T {
     let (lo, hi) = if lo > hi { (hi, lo) } else { (lo, hi) };
-    let x = if lo == lo && x < lo { lo } else { x };
-    if hi == hi && x > hi { hi } else { x }
+    let x = if !lo.is_nan() && x < lo { lo } else { x };
+    if !hi.is_nan() && x > hi { hi } else { x }
 }
 
 mod num_like {
-    pub trait Float: Copy + PartialOrd {}
-    impl Float for f32 {}
-    impl Float for f64 {}
+    pub trait Float: Copy + PartialOrd {
+        fn is_nan(self) -> bool;
+    }
+    impl Float for f32 {
+        fn is_nan(self) -> bool {
+            f32::is_nan(self)
+        }
+    }
+    impl Float for f64 {
+        fn is_nan(self) -> bool {
+            f64::is_nan(self)
+        }
+    }
 }

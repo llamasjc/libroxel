@@ -994,9 +994,11 @@ fn badge_id(value: &Value) -> Option<String> {
     }
 }
 
+// A Luau integer is an i32 on 32-bit processors and an i64 elsewhere.
+#[allow(clippy::useless_conversion)]
 fn user_id(value: &Value) -> Option<i64> {
     match value {
-        Value::Integer(n) => Some(*n),
+        Value::Integer(n) => Some(i64::from(*n)),
         Value::Number(n) if n.fract() == 0.0 => Some(*n as i64),
         _ => None,
     }

@@ -6,11 +6,16 @@ use crate::theme::{self, icon};
 const FADE: f64 = 0.4;
 const SHORTEST: f64 = 0.9;
 const LONGEST_FILL: f64 = 10.0;
+/// How long a join may go without anything new from the host before the
+/// screen gives up and shows what came, rather than spinning forever.
+const LONGEST_STALL: f64 = 30.0;
 
 #[derive(Default)]
 pub struct Loading {
     began: Option<f64>,
     came: Option<f64>,
+    /// The join's progress, and when it last went up.
+    moved: Option<(f32, f64)>,
     done: Option<f64>,
     /// What the loading screen waited on, once it is done, for the Output.
     finished: Option<String>,
@@ -41,26 +46,31 @@ impl Loading {
         self.finished.take()
     }
 
-    /// Draws the loading screen over `view`. Returns true when the player
-    /// taps its X to give up waiting (phones and tablets have no window to
-    /// close).
-    pub fn show(
-        &mut self,
-        ctx: &egui::Context,
-        view: Rect,
-        now: f64,
-        progress: Option<f32>,
-        filling: bool,
-    ) -> bool {
-        let Some(began) = self.began else { return false };
+    /// Decides, from how loading is going, whether the screen should start
+    /// to go.
+    fn advance(&mut self, now: f64, progress: Option<f32>, filling: bool) {
+        let Some(began) = self.began else { return };
         if self.done.is_none() {
-            if progress.is_some() {
+            if let Some(p) = progress {
                 self.came = None;
+                if self.moved.is_none_or(|(was, _)| p > was) {
+                    self.moved = Some((p, now));
+                }
             } else if self.came.is_none() {
                 self.came = Some(now);
             }
+            let stalled = progress.is_some() && self.moved.is_some_and(|(_, at)| now - at > LONGEST_STALL);
+            if stalled {
+                self.done = Some(now);
+                self.finished = Some(format!(
+                    "⏱ Loading screen gone after {:.2} s: nothing new came from the host for {LONGEST_STALL:.0} s \
+                     (at {:.0}% of the world)",
+                    now - began,
+                    self.moved.map_or(0.0, |(p, _)| p * 100.0),
+                ));
+            }
             let filled = !filling || self.came.is_some_and(|c| now - c > LONGEST_FILL);
-            if progress.is_none() && filled && now - began >= SHORTEST {
+            if self.done.is_none() && progress.is_none() && filled && now - began >= SHORTEST {
                 self.done = Some(now);
                 let came = self.came.unwrap_or(now);
                 let why = if filling {
@@ -76,6 +86,21 @@ impl Loading {
                 ));
             }
         }
+    }
+
+    /// Draws the loading screen over `view`. Returns true when the player
+    /// taps its X to give up waiting (phones and tablets have no window to
+    /// close).
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        view: Rect,
+        now: f64,
+        progress: Option<f32>,
+        filling: bool,
+    ) -> bool {
+        let Some(began) = self.began else { return false };
+        self.advance(now, progress, filling);
         let fade = self.done.map_or(1.0, |d| 1.0 - ((now - d) / FADE) as f32);
         if fade <= 0.0 {
             self.stop();
@@ -265,5 +290,35 @@ impl Cube {
         for (a, b) in EDGES {
             painter.line_segment([self.point(center, CORNERS[a]), self.point(center, CORNERS[b])], stroke);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(loading: &mut Loading, now: f64, progress: Option<f32>) {
+        loading.advance(now, progress, false);
+    }
+
+    #[test]
+    fn a_join_that_stops_coming_lets_the_screen_go() {
+        let mut loading = Loading::default();
+        loading.start(0.0);
+        for i in 0..100 {
+            frame(&mut loading, f64::from(i) * 0.5, Some(0.4));
+        }
+        assert!(!loading.covering());
+        assert!(loading.take_finished().is_some_and(|t| t.contains("nothing new came from the host")));
+    }
+
+    #[test]
+    fn a_join_that_keeps_coming_keeps_the_screen() {
+        let mut loading = Loading::default();
+        loading.start(0.0);
+        for i in 0..100 {
+            frame(&mut loading, f64::from(i) * 0.5, Some(i as f32 / 200.0));
+        }
+        assert!(loading.covering());
     }
 }
