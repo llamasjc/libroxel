@@ -467,9 +467,12 @@ impl Voxels {
         }
         let reach = reach.min(MOST_RAY_REACH);
         // Past the last chunk on the way out there is nothing to hit.
-        let (lo, hi) = self.chunks.keys().fold(((i32::MAX, i32::MAX, i32::MAX), (i32::MIN, i32::MIN, i32::MIN)), |(lo, hi), c| {
-            ((lo.0.min(c.0), lo.1.min(c.1), lo.2.min(c.2)), (hi.0.max(c.0), hi.1.max(c.1), hi.2.max(c.2)))
-        });
+        let (lo, hi) = self.chunks.keys().fold(
+            ((i32::MAX, i32::MAX, i32::MAX), (i32::MIN, i32::MIN, i32::MIN)),
+            |(lo, hi), c| {
+                ((lo.0.min(c.0), lo.1.min(c.1), lo.2.min(c.2)), (hi.0.max(c.0), hi.1.max(c.1), hi.2.max(c.2)))
+            },
+        );
         let (lo, hi) = (
             (lo.0 * CHUNK, lo.1 * CHUNK, lo.2 * CHUNK),
             (hi.0 * CHUNK + CHUNK - 1, hi.1 * CHUNK + CHUNK - 1, hi.2 * CHUNK + CHUNK - 1),
@@ -703,7 +706,9 @@ mod tests {
     #[test]
     fn endless_fills_are_turned_down() {
         let mut v = Voxels::new();
-        for size in [Vec3::new(f32::INFINITY, 1.0, 1.0), Vec3::new(1e9, 1e9, 1e9), Vec3::new(f32::NAN, 4.0, 4.0)] {
+        for size in
+            [Vec3::new(f32::INFINITY, 1.0, 1.0), Vec3::new(1e9, 1e9, 1e9), Vec3::new(f32::NAN, 4.0, 4.0)]
+        {
             let began = std::time::Instant::now();
             v.fill_block(Vec3::new(0.0, 0.0, 0.0), AXES, size, Some(Material::Grass));
             v.fill_wedge(Vec3::new(0.0, 0.0, 0.0), AXES, size, Some(Material::Grass));

@@ -92,7 +92,16 @@ const SHAPED: &str = r#"
 fn cases() -> Vec<(String, String)> {
     let mut out = Vec::new();
     for v in ODD_VECTORS {
-        for property in ["Position", "Size", "Orientation", "AssemblyLinearVelocity", "AssemblyAngularVelocity", "Velocity", "RotVelocity", "PivotOffset"] {
+        for property in [
+            "Position",
+            "Size",
+            "Orientation",
+            "AssemblyLinearVelocity",
+            "AssemblyAngularVelocity",
+            "Velocity",
+            "RotVelocity",
+            "PivotOffset",
+        ] {
             out.push((
                 format!("{property} = {v}"),
                 format!(

@@ -475,7 +475,10 @@ fn describe_tree_error(err: TreeError) -> String {
         ),
         TreeError::BadAttribute(kind) => format!("attributes can't hold a {}", names::value_kind_name(kind)),
         TreeError::TooMany => {
-            format!("the game already has {} instances, the most there can be", libroxel_instance::MOST_INSTANCES)
+            format!(
+                "the game already has {} instances, the most there can be",
+                libroxel_instance::MOST_INSTANCES
+            )
         }
         TreeError::WrongType { property, expected, got } => format!(
             "{} expects a {}, got a {}",

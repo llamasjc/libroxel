@@ -220,7 +220,10 @@ fn probe(subject: &str, member: &str, values: &[&str]) -> Option<String> {
     match ran {
         Err(why) => Some(format!(
             "{subject} .{member}: panicked: {}",
-            why.downcast_ref::<String>().cloned().or_else(|| why.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default()
+            why.downcast_ref::<String>()
+                .cloned()
+                .or_else(|| why.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_default()
         )),
         Ok(()) if took > SLOW => Some(format!("{subject} .{member}: took {:.1}s", took.as_secs_f32())),
         Ok(()) => None,
@@ -253,11 +256,15 @@ fn sweep(full: bool) -> Vec<String> {
         let members: Vec<String> = rt.take_output().into_iter().map(|l| l.text).collect();
         eprintln!("{subject}: {} members", members.len());
         for member in members {
-            if !full && member.chars().next().is_some_and(|c| c.is_ascii_lowercase()) && subject.starts_with("Instance") {
+            if !full
+                && member.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+                && subject.starts_with("Instance")
+            {
                 continue;
             }
             eprint!("  {member}\r");
-            let values: Vec<&str> = if full { ODD.to_vec() } else { ODD.iter().step_by(3).copied().collect() };
+            let values: Vec<&str> =
+                if full { ODD.to_vec() } else { ODD.iter().step_by(3).copied().collect() };
             if let Some(problem) = probe(&subject, &member, &values) {
                 eprintln!("PROBLEM {problem}");
                 problems.push(problem);

@@ -92,7 +92,8 @@ pub enum TreeError {
 /// computer's memory, so making more fails instead, as an error a script
 /// can catch. The engine's own instances (players, characters) don't count
 /// against it, so a full game still lets people join.
-pub const MOST_INSTANCES: usize = if cfg!(any(target_os = "android", target_os = "ios")) { 2_000_000 } else { 6_000_000 };
+pub const MOST_INSTANCES: usize =
+    if cfg!(any(target_os = "android", target_os = "ios")) { 2_000_000 } else { 6_000_000 };
 
 pub type Result<T> = std::result::Result<T, TreeError>;
 

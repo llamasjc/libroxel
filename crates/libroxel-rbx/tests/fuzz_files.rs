@@ -61,7 +61,8 @@ fn damage(rng: &mut Rng, bytes: &[u8]) -> Vec<u8> {
             }
             6 => {
                 // Digits in a text file, made huge or strange.
-                let word: &[u8] = [&b"1e39"[..], b"-0", b"nan", b"inf", b"99999999999", b"-2147483649"][rng.below(6)];
+                let word: &[u8] =
+                    [&b"1e39"[..], b"-0", b"nan", b"inf", b"99999999999", b"-2147483649"][rng.below(6)];
                 out.splice(at..at, word.iter().copied());
             }
             _ => {

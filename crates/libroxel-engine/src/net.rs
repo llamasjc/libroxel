@@ -3780,12 +3780,14 @@ mod tests {
     /// Everything a joined computer may send, filled in at random.
     fn guest_message(rng: &mut Rng, known: &[u64]) -> Json {
         let kind = *rng.pick(&[
-            "input", "look", "move", "fire", "invoke", "click", "prompt", "tool", "reset", "voice", "activate",
-            "hello", "nonsense",
+            "input", "look", "move", "fire", "invoke", "click", "prompt", "tool", "reset", "voice",
+            "activate", "hello", "nonsense",
         ]);
         let mut map = Map::new();
         map.insert("t".into(), json!(kind));
-        for key in ["r", "p", "a", "call", "pos", "vel", "yaw", "look", "d", "seq", "name", "dir", "jump", "slot"] {
+        for key in
+            ["r", "p", "a", "call", "pos", "vel", "yaw", "look", "d", "seq", "name", "dir", "jump", "slot"]
+        {
             if rng.below(2) == 0 {
                 let value = if matches!(key, "r" | "p") { rng.id(known) } else { rng.value(0) };
                 map.insert(key.into(), value);
@@ -3857,7 +3859,10 @@ mod tests {
     }
 
     fn panic_text(why: Box<dyn std::any::Any + Send>) -> String {
-        why.downcast_ref::<String>().cloned().or_else(|| why.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default()
+        why.downcast_ref::<String>()
+            .cloned()
+            .or_else(|| why.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default()
     }
 
     /// A joined computer that sends nonsense can't crash the host or keep it busy.
@@ -3878,7 +3883,8 @@ mod tests {
             tree.set(script, Property::Source, PropertyValue::String(
                 "game.ReplicatedStorage.Remote.OnServerEvent:Connect(function(p, ...) local t = {...} for _, v in t do tostring(v) end end)".into(),
             )).unwrap();
-            let known: Vec<u64> = tree.descendants(tree.root()).unwrap().iter().map(|i| i.to_bits()).collect();
+            let known: Vec<u64> =
+                tree.descendants(tree.root()).unwrap().iter().map(|i| i.to_bits()).collect();
             let mut host = PlaySession::host(Rc::new(RefCell::new(tree)), 0, None, false).unwrap();
             let port = host.host_address().unwrap().port();
             let mut rng = Rng(0x5eed_0000_1111_2222);
@@ -3930,10 +3936,11 @@ mod tests {
                     let _ = host.receive();
                     if host.ready() {
                         if frame < 3 {
-                            let services: Map<String, Json> = [ClassKind::Workspace, ClassKind::Players, ClassKind::ReplicatedStorage]
-                                .iter()
-                                .map(|c| (c.file_name().to_owned(), json!(c.file_name().len())))
-                                .collect();
+                            let services: Map<String, Json> =
+                                [ClassKind::Workspace, ClassKind::Players, ClassKind::ReplicatedStorage]
+                                    .iter()
+                                    .map(|c| (c.file_name().to_owned(), json!(c.file_name().len())))
+                                    .collect();
                             made.extend(services.values().filter_map(Json::as_u64));
                             host.send(&json!({ "t": "welcome", "total": 10, "services": services }));
                         }
@@ -3943,14 +3950,19 @@ mod tests {
                     }
                     host.flush();
                     let began = Instant::now();
-                    joined.step(1.0 / 60.0, CharacterInput { move_dir: Vec3::new(1.0, 0.0, 0.0), ..Default::default() });
+                    joined.step(
+                        1.0 / 60.0,
+                        CharacterInput { move_dir: Vec3::new(1.0, 0.0, 0.0), ..Default::default() },
+                    );
                     slowest = slowest.max(began.elapsed());
                     std::thread::sleep(Duration::from_millis(1));
                 }
                 slowest
             });
             match ran {
-                Ok(slowest) => assert!(slowest < Duration::from_secs(2), "round {round}: a step took {slowest:?}"),
+                Ok(slowest) => {
+                    assert!(slowest < Duration::from_secs(2), "round {round}: a step took {slowest:?}")
+                }
                 Err(why) => panic!("round {round}: the joined computer crashed: {}", panic_text(why)),
             }
         }
