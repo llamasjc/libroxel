@@ -277,10 +277,93 @@ pub fn load(name: &str) -> Option<Model> {
     parse(&bytes)
 }
 
+/// How finely [`Model::simplified`] keeps a model's shape: corners closer
+/// than a tenth of its size each way merge.
+const FAR_CELLS: f32 = 10.0;
+
+/// Models with fewer triangles than this are drawn as they are at any
+/// distance (a far copy would save little).
+const FAR_MIN_TRIANGLES: usize = 400;
+
+impl Model {
+    /// A rougher copy of the model for drawing far away, where its small
+    /// details are smaller than a pixel: corners in the same small box
+    /// (a tenth of the model's size each way) become one, and triangles
+    /// that shrink to nothing go. Sharp edges stay sharp (corners facing
+    /// different ways don't merge their normals) and textures stay put
+    /// (nor do corners from different parts of the picture). None when
+    /// the model is small already, or the copy wouldn't be much smaller.
+    pub fn simplified(&self) -> Option<Model> {
+        let triangles = self.positions.len() / 3;
+        if triangles < FAR_MIN_TRIANGLES {
+            return None;
+        }
+        let cell = |p: [f32; 3]| {
+            let c = |x: f32| ((x + 0.5) * FAR_CELLS).floor().clamp(0.0, FAR_CELLS - 1.0) as i32;
+            IVec3::new(c(p[0]), c(p[1]), c(p[2]))
+        };
+        // Each box's corners averaged, so neighbouring triangles still meet.
+        let mut middles: HashMap<IVec3, (Vec3, f32)> = HashMap::new();
+        for p in &self.positions {
+            let m = middles.entry(cell(*p)).or_insert((Vec3::ZERO, 0.0));
+            m.0 += Vec3::from(*p);
+            m.1 += 1.0;
+        }
+        // Normals and texture positions averaged among the corners that
+        // face much the same way and show much the same part of the picture.
+        let facing = |n: [f32; 3]| {
+            let n = Vec3::from(n);
+            let axis = n.abs().max_position();
+            (axis as i32 + 1) * if n[axis] < 0.0 { -1 } else { 1 }
+        };
+        let key = |i: usize| {
+            let uv = self.uvs.get(i).copied().unwrap_or_default();
+            (
+                cell(self.positions[i]),
+                facing(self.normals[i]),
+                IVec2::new((uv[0] * 8.0).floor() as i32, (uv[1] * 8.0).floor() as i32),
+            )
+        };
+        let mut looks: HashMap<(IVec3, i32, IVec2), (Vec3, Vec2)> = HashMap::new();
+        for i in 0..self.positions.len() {
+            let l = looks.entry(key(i)).or_insert((Vec3::ZERO, Vec2::ZERO));
+            l.0 += Vec3::from(self.normals[i]);
+            l.1 += Vec2::from(self.uvs.get(i).copied().unwrap_or_default());
+        }
+        let counts = {
+            let mut counts: HashMap<(IVec3, i32, IVec2), f32> = HashMap::new();
+            for i in 0..self.positions.len() {
+                *counts.entry(key(i)).or_default() += 1.0;
+            }
+            counts
+        };
+        let mut far = Model { positions: Vec::new(), normals: Vec::new(), uvs: Vec::new(), size: self.size };
+        for t in 0..triangles {
+            let corners = [t * 3, t * 3 + 1, t * 3 + 2];
+            let cells = corners.map(|i| cell(self.positions[i]));
+            if cells[0] == cells[1] || cells[1] == cells[2] || cells[0] == cells[2] {
+                continue;
+            }
+            for i in corners {
+                let (m, n) = middles[&cell(self.positions[i])];
+                let k = key(i);
+                let (normal, uv) = looks[&k];
+                far.positions.push((m / n).to_array());
+                far.normals.push(normal.normalize_or(Vec3::from(self.normals[i])).to_array());
+                far.uvs.push((uv / counts[&k]).to_array());
+            }
+        }
+        (far.positions.len() / 3 * 2 <= triangles && !far.positions.is_empty()).then_some(far)
+    }
+}
+
 /// Models already read, by name (None when a name couldn't be read).
 #[derive(Resource, Default)]
 pub(crate) struct MeshFiles {
     loaded: HashMap<String, Option<Handle<Mesh>>>,
+    /// Each detailed model's rough copy, by the model's mesh, and back.
+    far_of: HashMap<AssetId<Mesh>, Handle<Mesh>>,
+    near_of: HashMap<AssetId<Mesh>, Handle<Mesh>>,
     generation: u64,
 }
 
@@ -289,15 +372,40 @@ impl MeshFiles {
         let generation = crate::pictures::generation();
         if generation != self.generation {
             self.loaded.clear();
+            self.far_of.clear();
+            self.near_of.clear();
             self.generation = generation;
         }
         if let Some(known) = self.loaded.get(name) {
             return known.clone();
         }
-        self.loaded
-            .entry(name.to_owned())
-            .or_insert_with(|| load(name).map(|m| meshes.add(m.to_mesh())))
-            .clone()
+        let made = load(name).map(|model| {
+            let near = meshes.add(model.to_mesh());
+            let far = model.simplified().map(|far| meshes.add(far.to_mesh()));
+            if let Some(far) = far {
+                self.near_of.insert(far.id(), near.clone());
+                self.far_of.insert(near.id(), far);
+            }
+            near
+        });
+        self.loaded.insert(name.to_owned(), made.clone());
+        made
+    }
+
+    /// Whether no model has a rough copy (nothing to switch).
+    pub(crate) fn is_empty(&self) -> bool {
+        self.far_of.is_empty()
+    }
+
+    /// For a model's mesh (either copy), its full and rough copies, if it
+    /// has a rough one.
+    pub(crate) fn both(&self, mesh: AssetId<Mesh>) -> Option<(Handle<Mesh>, Handle<Mesh>)> {
+        if let Some(far) = self.far_of.get(&mesh) {
+            let near = self.near_of.get(&far.id())?;
+            return Some((near.clone(), far.clone()));
+        }
+        let near = self.near_of.get(&mesh)?;
+        Some((near.clone(), self.far_of.get(&near.id())?.clone()))
     }
 }
 
@@ -345,6 +453,47 @@ mod tests {
             mesh.attribute(Mesh::ATTRIBUTE_NORMAL),
             Some(bevy::mesh::VertexAttributeValues::Snorm16x2(n)) if n.len() == 16
         ));
+    }
+
+    /// A smooth ball of `rings` by `rings * 2` squares, as an .obj file.
+    fn ball(rings: usize) -> String {
+        let segments = rings * 2;
+        let mut text = String::new();
+        for r in 0..=rings {
+            let a = std::f32::consts::PI * r as f32 / rings as f32;
+            for s in 0..=segments {
+                let b = std::f32::consts::TAU * s as f32 / segments as f32;
+                let (x, y, z) = (a.sin() * b.cos(), a.cos(), a.sin() * b.sin());
+                text += &format!("v {x} {y} {z}\nvn {x} {y} {z}\n");
+            }
+        }
+        let at = |r: usize, s: usize| r * (segments + 1) + s + 1;
+        for r in 0..rings {
+            for s in 0..segments {
+                let (a, b, c, d) = (at(r, s), at(r, s + 1), at(r + 1, s + 1), at(r + 1, s));
+                text += &format!("f {a}//{a} {b}//{b} {c}//{c}\nf {a}//{a} {c}//{c} {d}//{d}\n");
+            }
+        }
+        text
+    }
+
+    #[test]
+    fn detailed_models_get_a_rough_copy_for_far_away() {
+        let model = parse_obj(&ball(32)).unwrap();
+        let far = model.simplified().expect("a detailed ball has a rough copy");
+        let (near, rough) = (model.positions.len() / 3, far.positions.len() / 3);
+        assert!(rough * 4 <= near, "{near} triangles became {rough}");
+        assert!(rough >= 100, "still a ball, not a blob: {rough}");
+        // Still the same ball: every corner near its surface, normals outwards.
+        for (p, n) in far.positions.iter().zip(&far.normals) {
+            let (p, n) = (Vec3::from(*p), Vec3::from(*n));
+            assert!((p.length() - 0.5).abs() < 0.08, "{p}");
+            assert!(p.normalize().dot(n) > 0.8, "{p} {n}");
+        }
+        assert_eq!(far.size, model.size);
+        // Small models are drawn as they are.
+        assert!(parse_obj(PYRAMID).unwrap().simplified().is_none());
+        assert!(parse_obj(&ball(6)).unwrap().simplified().is_none());
     }
 
     #[test]

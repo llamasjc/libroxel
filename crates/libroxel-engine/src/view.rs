@@ -599,6 +599,7 @@ impl Plugin for RenderPlugin {
                     update_materials,
                     update_meshes,
                     use_mesh_files,
+                    model_detail,
                     use_mesh_textures,
                     crate::clusters::cluster_parts,
                 )
@@ -1641,6 +1642,43 @@ fn use_mesh_files(
         } else {
             files.get(&file.0, &mut meshes).unwrap_or_else(|| part_meshes.get(geometry.0))
         };
+        if mesh.0 != wanted {
+            mesh.0 = wanted;
+        }
+    }
+}
+
+/// How far away, in times its biggest side, a detailed model switches to
+/// its rough copy (and, a little nearer, back): its smallest details are
+/// then about a pixel or two across.
+const FAR_MODEL: f32 = 40.0;
+
+/// Draws detailed models far from the camera with their rough copy (see
+/// [`crate::mesh_files::Model::simplified`]), a few times a second.
+fn model_detail(
+    files: Res<crate::mesh_files::MeshFiles>,
+    cameras: Query<&GlobalTransform, (With<Camera3d>, Without<PartLink>)>,
+    mut parts: Query<(&PartMeshFile, &Transform, &mut Mesh3d), With<PartLink>>,
+    mut frame: Local<u32>,
+) {
+    *frame = frame.wrapping_add(1);
+    if !frame.is_multiple_of(10) || files.is_empty() {
+        return;
+    }
+    let Some(eye) = cameras.iter().next().map(GlobalTransform::translation) else {
+        return;
+    };
+    for (file, transform, mut mesh) in &mut parts {
+        if file.0.is_empty() {
+            continue;
+        }
+        let Some((near, far)) = files.both(mesh.0.id()) else {
+            continue;
+        };
+        let size = transform.scale.max_element().max(0.01);
+        let away = transform.translation.distance(eye) / size;
+        let showing_far = mesh.0 == far;
+        let wanted = if away > FAR_MODEL || (showing_far && away > FAR_MODEL * 0.9) { far } else { near };
         if mesh.0 != wanted {
             mesh.0 = wanted;
         }

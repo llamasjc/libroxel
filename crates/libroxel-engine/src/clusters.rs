@@ -12,6 +12,7 @@
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::primitives::Aabb;
+use bevy::math::Affine3A;
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use libroxel_instance::Material;
@@ -127,6 +128,7 @@ pub(crate) fn cluster_parts(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     textures: Res<MaterialTextures>,
+    part_meshes: Option<Res<crate::view::PartMeshes>>,
     mut removed: RemovedComponents<PartLink>,
     mut parts: Query<PartView, With<PartLink>>,
     moved: Query<Entity, (With<PartLink>, Changes)>,
@@ -231,7 +233,10 @@ pub(crate) fn cluster_parts(
             continue;
         }
         done += members.len();
-        let Some((mesh, aabb)) = merge(&meshes, &parts, &members) else {
+        // A see-through wall shows the sides inside it.
+        let hide_inner = key.1.3 == 0;
+        let block = part_meshes.as_ref().map(|m| &m.block);
+        let Some((mesh, aabb)) = merge(&meshes, &parts, &members, block, hide_inner) else {
             continue;
         };
         let surface = key.1;
@@ -312,12 +317,80 @@ fn dissolve(
     commands.entity(cluster).despawn();
 }
 
+/// A side of a block, for finding the sides that touch another block's.
+struct Side {
+    member: usize,
+    centre: Vec3,
+    /// Half the side's width and height, as directions along it.
+    across: Vec3,
+    up: Vec3,
+}
+
+/// A side's plane: which way it faces and how far along that it is,
+/// rounded so sides on the same plane land together.
+fn plane_key(normal: Vec3, centre: Vec3) -> (IVec3, i64) {
+    let n = (normal * 1000.0).round().as_ivec3();
+    (n, (normal.dot(centre) * 100.0).round() as i64)
+}
+
+/// Every side of each block member, by plane.
+fn block_sides(boxes: &[Option<Affine3A>]) -> FastMap<(IVec3, i64), Vec<Side>> {
+    let mut sides: FastMap<(IVec3, i64), Vec<Side>> = FastMap::default();
+    for (member, affine) in boxes.iter().enumerate() {
+        let Some(affine) = affine else { continue };
+        let centre = Vec3::from(affine.translation);
+        let axes = [affine.matrix3.x_axis, affine.matrix3.y_axis, affine.matrix3.z_axis].map(Vec3::from);
+        for k in 0..3 {
+            let half = axes[k] * 0.5;
+            let Some(normal) = half.try_normalize() else { continue };
+            let (across, up) = (axes[(k + 1) % 3] * 0.5, axes[(k + 2) % 3] * 0.5);
+            for sign in [1.0, -1.0] {
+                let (normal, centre) = (normal * sign, centre + half * sign);
+                sides.entry(plane_key(normal, centre)).or_default().push(Side { member, centre, across, up });
+            }
+        }
+    }
+    sides
+}
+
+/// Whether the triangle `corners` (facing `normal`) of `member` is covered
+/// by another block's side pressed flat against it, facing it: then it
+/// can't be seen from anywhere.
+fn covered(
+    sides: &FastMap<(IVec3, i64), Vec<Side>>,
+    member: usize,
+    corners: [Vec3; 3],
+    normal: Vec3,
+) -> bool {
+    let centre = (corners[0] + corners[1] + corners[2]) / 3.0;
+    let Some(facing) = sides.get(&plane_key(-normal, centre)) else {
+        return false;
+    };
+    const SLACK: f32 = 0.01;
+    facing.iter().any(|side| {
+        side.member != member
+            && corners.iter().all(|p| {
+                let off = *p - side.centre;
+                let inside = |half: Vec3| {
+                    let len = half.length();
+                    len > 0.0 && off.dot(half / len).abs() <= len + SLACK
+                };
+                inside(side.across) && inside(side.up) && off.dot(-normal).abs() <= SLACK
+            })
+    })
+}
+
 /// One mesh of all the members, placed where they are, each corner in its
-/// part's colour.
+/// part's colour. Where `hide_inner`, the sides of blocks pressed against
+/// another block's side (a wall built of bricks, a floor of tiles) are
+/// left out: nothing can see them, and they were often most of a wall's
+/// triangles.
 fn merge(
     meshes: &Assets<Mesh>,
     parts: &Query<PartView, With<PartLink>>,
     members: &[Entity],
+    block: Option<&Handle<Mesh>>,
+    hide_inner: bool,
 ) -> Option<(Mesh, Aabb)> {
     let mut positions = Vec::<[f32; 3]>::new();
     let mut normals = Vec::<[f32; 3]>::new();
@@ -325,7 +398,18 @@ fn merge(
     let mut colours = Vec::<[f32; 4]>::new();
     let mut indices = Vec::<u32>::new();
     let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-    for member in members {
+    let boxes: Vec<Option<Affine3A>> = members
+        .iter()
+        .map(|member| {
+            let (_, transform, mesh, ..) = parts.get(*member).ok()?;
+            (hide_inner && Some(&mesh.0) == block).then(|| transform.compute_affine())
+        })
+        .collect();
+    let sides = if boxes.iter().any(Option::is_some) { block_sides(&boxes) } else { FastMap::default() };
+    let mut placed: Vec<Vec3> = Vec::new();
+    let mut kept: Vec<u32> = Vec::new();
+    let mut remap: Vec<u32> = Vec::new();
+    for (index, member) in members.iter().enumerate() {
         let Ok((_, transform, mesh, _, look, ..)) = parts.get(*member) else {
             continue;
         };
@@ -337,31 +421,58 @@ fn merge(
         };
         let affine = transform.compute_affine();
         let turn = Mat3::from(affine.matrix3).inverse().transpose();
-        let base = positions.len() as u32;
-        for p in points {
-            let p = affine.transform_point3(Vec3::from_array(*p));
-            lo = lo.min(p);
-            hi = hi.max(p);
-            positions.push(p.to_array());
-        }
-        match mesh.attribute(Mesh::ATTRIBUTE_NORMAL) {
-            Some(VertexAttributeValues::Float32x3(n)) if n.len() == points.len() => {
-                normals
-                    .extend(n.iter().map(|n| (turn * Vec3::from_array(*n)).normalize_or_zero().to_array()));
+        placed.clear();
+        placed.extend(points.iter().map(|p| affine.transform_point3(Vec3::from_array(*p))));
+        kept.clear();
+        let all: Vec<u32> = match mesh.indices() {
+            Some(list) => list.iter().map(|i| i as u32).collect(),
+            None => (0..points.len() as u32).collect(),
+        };
+        for t in all.as_chunks::<3>().0 {
+            let corners = t.map(|i| placed[i as usize]);
+            if boxes[index].is_some() {
+                let normal = (corners[1] - corners[0]).cross(corners[2] - corners[0]).normalize_or_zero();
+                if normal != Vec3::ZERO && covered(&sides, index, corners, normal) {
+                    continue;
+                }
             }
-            _ => normals.extend(std::iter::repeat_n([0.0, 1.0, 0.0], points.len())),
+            kept.extend(t);
         }
+        if kept.is_empty() {
+            continue;
+        }
+        // Only the corners the kept triangles use.
+        remap.clear();
+        remap.resize(points.len(), u32::MAX);
+        let normals_in = match mesh.attribute(Mesh::ATTRIBUTE_NORMAL) {
+            Some(VertexAttributeValues::Float32x3(n)) if n.len() == points.len() => Some(n),
+            _ => None,
+        };
+        let uvs_in = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+            Some(VertexAttributeValues::Float32x2(uv)) if uv.len() == points.len() => Some(uv),
+            _ => None,
+        };
+        let colour = look.color.to_linear().to_f32_array();
         let repeat = look.texture_repeat;
-        match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
-            Some(VertexAttributeValues::Float32x2(uv)) if uv.len() == points.len() => {
-                uvs.extend(uv.iter().map(|[u, v]| [u * repeat, v * repeat]));
+        for &i in &kept {
+            let i = i as usize;
+            if remap[i] == u32::MAX {
+                remap[i] = positions.len() as u32;
+                let p = placed[i];
+                lo = lo.min(p);
+                hi = hi.max(p);
+                positions.push(p.to_array());
+                normals.push(match normals_in {
+                    Some(n) => (turn * Vec3::from_array(n[i])).normalize_or_zero().to_array(),
+                    None => [0.0, 1.0, 0.0],
+                });
+                uvs.push(match uvs_in {
+                    Some(uv) => [uv[i][0] * repeat, uv[i][1] * repeat],
+                    None => [0.0, 0.0],
+                });
+                colours.push(colour);
             }
-            _ => uvs.extend(std::iter::repeat_n([0.0, 0.0], points.len())),
-        }
-        colours.extend(std::iter::repeat_n(look.color.to_linear().to_f32_array(), points.len()));
-        match mesh.indices() {
-            Some(list) => indices.extend(list.iter().map(|i| base + i as u32)),
-            None => indices.extend(base..base + points.len() as u32),
+            indices.push(remap[i]);
         }
     }
     if positions.is_empty() {
@@ -375,4 +486,51 @@ fn merge(
     mesh.insert_indices(Indices::U32(indices));
     crate::view::pack_mesh(&mut mesh);
     Some((mesh, Aabb::from_min_max(lo, hi)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn block(at: Vec3, size: Vec3) -> Option<Affine3A> {
+        Some(Transform::from_translation(at).with_scale(size).compute_affine())
+    }
+
+    /// The triangle at the middle of `member`'s side facing `normal`.
+    fn side_triangle(b: &Affine3A, normal: Vec3) -> [Vec3; 3] {
+        let (u, v) = (normal.any_orthonormal_pair().0 * 0.2, normal.any_orthonormal_pair().1 * 0.2);
+        let c = b.transform_point3(normal * 0.5);
+        [c - u - v, c + u - v, c + v]
+    }
+
+    #[test]
+    fn sides_pressed_together_are_hidden_and_others_kept() {
+        // A 2-wide brick, a 1-wide one against its right, and a big floor below both.
+        let boxes = vec![
+            block(Vec3::ZERO, Vec3::new(2.0, 1.0, 1.0)),
+            block(Vec3::new(1.5, 0.0, 0.0), Vec3::ONE),
+            block(Vec3::new(0.0, -1.0, 0.0), Vec3::new(10.0, 1.0, 10.0)),
+        ];
+        let sides = block_sides(&boxes);
+        let hidden = |member: usize, normal: Vec3| {
+            let b = boxes[member].unwrap();
+            // A triangle at the very edge of the side, so all of it counts.
+            let corners = side_triangle(&b, normal);
+            covered(&sides, member, corners, normal)
+        };
+        assert!(hidden(0, Vec3::X), "the long brick's right side is against the short one");
+        assert!(hidden(1, Vec3::NEG_X), "and the short one's left against it");
+        assert!(hidden(0, Vec3::NEG_Y) && hidden(1, Vec3::NEG_Y), "both bottoms are on the floor");
+        assert!(hidden(2, Vec3::Y), "the floor right under the long brick is hidden");
+        let open_floor = [Vec3::new(4.0, -0.5, 4.0), Vec3::new(4.2, -0.5, 4.0), Vec3::new(4.0, -0.5, 3.8)];
+        assert!(!covered(&sides, 2, open_floor, Vec3::Y), "the floor's top shows round them");
+        let half_under = [Vec3::new(0.9, -0.5, 0.0), Vec3::new(1.2, -0.5, 0.0), Vec3::new(0.9, -0.5, -0.2)];
+        assert!(!covered(&sides, 2, half_under, Vec3::Y), "a triangle only partly under one brick shows");
+        assert!(!hidden(0, Vec3::Y) && !hidden(1, Vec3::X) && !hidden(0, Vec3::Z), "open sides show");
+        // A gap, however small to the eye, keeps both sides.
+        let apart = vec![block(Vec3::ZERO, Vec3::ONE), block(Vec3::new(1.05, 0.0, 0.0), Vec3::ONE)];
+        let sides = block_sides(&apart);
+        let corners = side_triangle(&apart[0].unwrap(), Vec3::X);
+        assert!(!covered(&sides, 0, corners, Vec3::X));
+    }
 }
