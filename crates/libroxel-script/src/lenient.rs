@@ -28,10 +28,15 @@ const FAMILIES: &[&str] = &[
 /// Loads the layer: adds the enumerations libroxel lacks to `enum_lib`
 /// (which must still be writable) and the extra globals.
 pub(crate) fn install(lua: &Lua, enum_lib: &Table) -> mlua::Result<()> {
-    let layer: Table = lua
-        .load(include_str!("lenient.luau"))
-        .set_name("=libroxel.lenient")
-        .call((enum_lib.clone(), lua.globals()))?;
+    // The layer is most of the runtime's Luau and most of it runs rarely:
+    // turning all of it into machine code took about two thirds of the time
+    // a game took to start. It runs interpreted; game scripts still get the JIT.
+    #[cfg(not(target_arch = "arm"))]
+    lua.enable_jit(false);
+    let layer = lua.load(include_str!("lenient.luau")).set_name("=libroxel.lenient").into_function();
+    #[cfg(not(target_arch = "arm"))]
+    lua.enable_jit(!cfg!(target_os = "ios"));
+    let layer: Table = layer?.call((enum_lib.clone(), lua.globals()))?;
     layer.get::<Function>("add_enums")?.call::<()>((enum_lib.clone(), crate::reflection::enums(lua)?))?;
     layer.get::<Function>("globals")?.call::<()>(())?;
     crate::animation::install_layer(lua, &layer)?;

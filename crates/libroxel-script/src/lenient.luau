@@ -2802,14 +2802,22 @@ local SERVICES = {
 	},
 }
 
+local resolved = {}
 local function resolve(v)
-	-- Enum defaults are written "Kind.Item" and looked up when first read.
+	-- Enum defaults are written "Kind.Item" and looked up when first read
+	-- (then kept: games read these every frame, and matching the text each
+	-- time was most of the cost).
+	local known = resolved[v]
+	if known ~= nil then
+		return known
+	end
 	if type(v) == "string" and v:find("^%u%a+%.%w+$") then
 		local kind, item = v:match("^(%a+)%.(%w+)$")
 		local ok, e = pcall(function()
 			return Enum[kind][item]
 		end)
 		if ok and e ~= nil then
+			resolved[v] = e
 			return e
 		end
 	end

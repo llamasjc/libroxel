@@ -248,7 +248,14 @@ pub struct InstanceTree {
     /// of its instances last came into or left the workspace: a class
     /// lookup made since then still holds.
     class_stamps: Vec<u64>,
+    /// For parents with many children that someone looked a child up in by
+    /// name: the first child of each name. Dropped for a parent whenever its
+    /// children or their names change, and rebuilt when next asked.
+    child_names: std::cell::RefCell<foldhash::HashMap<InstanceId, foldhash::HashMap<String, InstanceId>>>,
 }
+
+/// Parents with fewer children than this are searched in order instead.
+const CHILD_NAME_INDEX_MIN: usize = 32;
 
 #[derive(Debug, Clone, Default)]
 struct ClassCache {
@@ -295,6 +302,7 @@ impl InstanceTree {
             part_index: Default::default(),
             kind_counts: Vec::new(),
             class_stamps: Vec::new(),
+            child_names: Default::default(),
         };
         tree.root = tree.alloc(InstanceData::new(ClassKind::DataModel, "Game".into()));
         tree.data_mut(tree.root).expect("root exists").parent_locked = true;
@@ -430,7 +438,36 @@ impl InstanceTree {
     /// The first direct child called `name`, in child order.
     pub fn find_first_child(&self, id: InstanceId, name: &str) -> Result<Option<InstanceId>> {
         let data = self.data(id)?;
-        Ok(data.children.iter().copied().find(|child| self.data(*child).is_ok_and(|c| c.name == name)))
+        if data.children.len() < CHILD_NAME_INDEX_MIN {
+            return Ok(data
+                .children
+                .iter()
+                .copied()
+                .find(|child| self.data(*child).is_ok_and(|c| c.name == name)));
+        }
+        // A big folder (`workspace.Map.Part` in a map of thousands): one
+        // look in a table instead of comparing every child's name.
+        let mut index = self.child_names.borrow_mut();
+        let names = index.entry(id).or_insert_with(|| {
+            let mut names = foldhash::HashMap::default();
+            for child in &data.children {
+                if let Ok(c) = self.data(*child) {
+                    names.entry(c.name.clone()).or_insert(*child);
+                }
+            }
+            names
+        });
+        Ok(names.get(name).copied())
+    }
+
+    /// Forgets the child-name table of `parent` (its children or their names changed).
+    fn children_renamed(&self, parent: Option<InstanceId>) {
+        if let Some(parent) = parent {
+            let mut index = self.child_names.borrow_mut();
+            if !index.is_empty() {
+                index.remove(&parent);
+            }
+        }
     }
 
     /// The first direct child of class `class` (or a subclass of it).
@@ -489,6 +526,8 @@ impl InstanceTree {
         if let Some(parent) = new_parent {
             self.data_mut(parent)?.children.push(id);
         }
+        self.children_renamed(old_parent);
+        self.children_renamed(new_parent);
         let in_world = |p: Option<InstanceId>| {
             p.is_some_and(|p| {
                 p == self.workspace || self.is_descendant_of(p, self.workspace).unwrap_or(false)
@@ -535,6 +574,7 @@ impl InstanceTree {
         doomed.insert(0, id);
         // Destroy leaves first so observers never see a destroyed parent with live children.
         for victim in doomed.into_iter().rev() {
+            self.children_renamed(Some(victim));
             let children = std::mem::take(&mut self.data_mut(victim)?.children);
             for child in children {
                 let child_data = self.data_mut(child)?;
@@ -604,7 +644,14 @@ impl InstanceTree {
         };
         let changed = if property == Property::Name {
             match value {
-                PropertyValue::String(v) => replace(&mut data.name, v),
+                PropertyValue::String(v) => {
+                    let renamed = replace(&mut data.name, v);
+                    if renamed {
+                        let parent = data.parent;
+                        self.children_renamed(parent);
+                    }
+                    renamed
+                }
                 other => return Err(wrong_type(&other)),
             }
         } else {

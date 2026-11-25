@@ -390,6 +390,9 @@ pub(crate) struct Host {
     pub(crate) script_time: RefCell<std::collections::HashMap<String, (f64, u64)>>,
     /// Finished threads kept to run the next handler in.
     pub(crate) spare_threads: RefCell<Vec<Thread>>,
+    /// Scripts already compiled, by a hash of their name and source (with
+    /// both kept to check), so copies of a script start without compiling.
+    compiled: RefCell<std::collections::HashMap<u64, (String, String, Function)>>,
     /// How long each waiting thread ran the last time it was resumed from a
     /// wait (by its pointer), to tell heavy background work from the rest.
     thread_cost: RefCell<std::collections::HashMap<usize, Duration>>,
@@ -2325,6 +2328,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         to_start: RefCell::new(Vec::new()),
         script_time: RefCell::new(std::collections::HashMap::new()),
         spare_threads: RefCell::new(Vec::new()),
+        compiled: RefCell::new(std::collections::HashMap::new()),
         thread_cost: RefCell::new(std::collections::HashMap::new()),
         script_cost: RefCell::new(std::collections::HashMap::new()),
         heavy_debt: Cell::new(Duration::ZERO),
@@ -2543,7 +2547,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
             )));
         }
         let env = script_env(lua, Some(id))?;
-        lua.load(source.unwrap_or_default()).set_name(format!("={name}")).set_environment(env).into_function()
+        load_script(lua, &name, &source.unwrap_or_default(), env)
     })?;
     let (wait, wait_for_child, require, signal_wait): (Function, Function, Function, Function) =
         lua.load(prelude()).set_name("=libroxel").call((
@@ -2629,6 +2633,40 @@ fn script_env(lua: &Lua, script_instance: Option<InstanceId>) -> mlua::Result<Ta
     Ok(env)
 }
 
+/// Compiles `source` (named `name` in errors) into a function that runs in
+/// `env`. A script compiled before is copied instead: games often hold
+/// hundreds of copies of one script (coins, enemies, doors), and compiling
+/// each one, and turning it into machine code, was most of their start.
+/// The copy shares the compiled code but has its own environment, so it
+/// runs exactly as a freshly compiled one would.
+fn load_script(lua: &Lua, name: &str, source: &str, env: Table) -> mlua::Result<Function> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (name, source).hash(&mut hasher);
+    let key = hasher.finish();
+    let cached = host(lua)
+        .compiled
+        .borrow()
+        .get(&key)
+        .filter(|(n, s, _)| n == name && s == source)
+        .map(|(.., f)| f.clone());
+    if let Some(template) = cached {
+        let func = template.deep_clone()?;
+        func.set_environment(env)?;
+        return Ok(func);
+    }
+    let func = lua.load(source).set_name(format!("={name}")).set_environment(env).into_function()?;
+    // The kept copy never runs, so its environment doesn't matter.
+    let template = func.deep_clone()?;
+    let host = host(lua);
+    let mut compiled = host.compiled.borrow_mut();
+    if compiled.len() >= 512 {
+        compiled.clear();
+    }
+    compiled.insert(key, (name.to_owned(), source.to_owned(), template));
+    Ok(func)
+}
+
 /// Runs a chunk as a new thread in its own environment. Errors raised before
 /// the script first yields are returned; later ones surface from `step`.
 pub(crate) fn run_chunk(
@@ -2639,12 +2677,7 @@ pub(crate) fn run_chunk(
 ) -> Result<(), ScriptError> {
     let fail = |err: mlua::Error| ScriptError { script: script_name.to_owned(), message: err.to_string() };
     let env = script_env(lua, script_instance).map_err(fail)?;
-    let func = lua
-        .load(source)
-        .set_name(format!("={script_name}"))
-        .set_environment(env)
-        .into_function()
-        .map_err(fail)?;
+    let func = load_script(lua, script_name, source, env).map_err(fail)?;
     let thread = lua.create_thread(func).map_err(fail)?;
     if let Some(id) = script_instance {
         host(lua).running_scripts.borrow_mut().insert(id);

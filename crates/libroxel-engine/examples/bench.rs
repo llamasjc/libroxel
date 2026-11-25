@@ -1,5 +1,7 @@
 //! Times play-session frames in a world with many parts:
-//! `cargo run -p libroxel-engine --example bench -- 2000`.
+//! `cargo run -p libroxel-engine --example bench -- 2000`. A second number
+//! adds that many spinning parts, each turned by its own script every frame
+//! (as coins and spinners are): `-- 2000 300`.
 
 use libroxel_engine::CharacterInput;
 use libroxel_engine::session::start_on;
@@ -26,6 +28,18 @@ fn main() {
         tree.set(id, Property::Size, PropertyValue::Vec3(Vec3::new(2.0, 2.0, 2.0))).unwrap();
         tree.set(id, Property::Anchored, PropertyValue::Bool(!loose)).unwrap();
     }
+    let spinners: usize = std::env::args().nth(2).and_then(|n| n.parse().ok()).unwrap_or(0);
+    for i in 0..spinners {
+        let id = tree.create(ClassKind::Part, "Coin").unwrap();
+        tree.set_parent(id, Some(ws)).unwrap();
+        let (x, z) = ((i % 20) as f32 * 4.0 - 40.0, (i / 20) as f32 * 4.0 - 40.0);
+        tree.set(id, Property::Position, PropertyValue::Vec3(Vec3::new(x, 6.0, z))).unwrap();
+        tree.set(id, Property::Anchored, PropertyValue::Bool(true)).unwrap();
+        let script = tree.create(ClassKind::Script, "Spin").unwrap();
+        tree.set_parent(script, Some(id)).unwrap();
+        let source = "local part = script.Parent\nwhile true do\n  task.wait()\n  part.CFrame = part.CFrame * CFrame.Angles(0, 0.05, 0)\n  part.Transparency = 0.5 + 0.5 * math.sin(os.clock())\nend\n";
+        tree.set(script, Property::Source, PropertyValue::String(source.into())).unwrap();
+    }
     let began = std::time::Instant::now();
     let mut session = start_on(tree, true).unwrap();
     let start_ms = began.elapsed().as_secs_f64() * 1000.0;
@@ -43,7 +57,7 @@ fn main() {
     let t = session.physics_mut().take_timing();
     let each = |s: f64| s * 1000.0 / t.steps.max(1) as f64;
     println!(
-        "{count} parts: {ms:.2} ms per frame (start {start_ms:.1} ms, first frame {first_ms:.1} ms; physics: \
+        "{count} parts, {spinners} spinners: {ms:.2} ms per frame (start {start_ms:.1} ms, first frame {first_ms:.1} ms; physics: \
          gather {:.2}, broadphase {:.2}, characters {:.2}, loose {:.2}, touches {:.2})",
         each(t.gather),
         each(t.broadphase),

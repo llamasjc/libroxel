@@ -208,12 +208,35 @@ unsafe fn push_protected_cfunctions(state: *mut ffi::lua_State, f: ffi::lua_CFun
     Ok(())
 }
 
-#[cfg(not(any(feature = "lua51", feature = "luajit")))]
+#[cfg(not(any(feature = "lua51", feature = "luajit", feature = "luau")))]
 #[inline]
 unsafe fn push_protected_cfunctions(state: *mut ffi::lua_State, f: ffi::lua_CFunction) -> Result<()> {
     MemoryState::relax_limit_with(state, || {
         ffi::lua_pushcfunction(state, error_traceback);
         ffi::lua_pushcfunction(state, f);
+    });
+    Ok(())
+}
+
+// Libroxel: in Luau every `lua_pushcfunction` makes a new closure, and this
+// runs for nearly every call into the Lua API (two closures each time, for
+// the garbage collector to clean up). Each function is made once instead and
+// kept in the registry under its own address.
+#[cfg(feature = "luau")]
+#[inline]
+unsafe fn push_protected_cfunctions(state: *mut ffi::lua_State, f: ffi::lua_CFunction) -> Result<()> {
+    unsafe fn push_cached(state: *mut ffi::lua_State, f: ffi::lua_CFunction) {
+        let key = f as *const c_void;
+        if ffi::lua_rawgetp(state, ffi::LUA_REGISTRYINDEX, key) != ffi::LUA_TFUNCTION {
+            ffi::lua_pop(state, 1);
+            ffi::lua_pushcfunction(state, f);
+            ffi::lua_pushvalue(state, -1);
+            ffi::lua_rawsetp(state, ffi::LUA_REGISTRYINDEX, key);
+        }
+    }
+    MemoryState::relax_limit_with(state, || {
+        push_cached(state, error_traceback);
+        push_cached(state, f);
     });
     Ok(())
 }
