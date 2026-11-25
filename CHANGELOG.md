@@ -5,6 +5,37 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
 
 ## Unreleased
 
+- **Safer for creators and players:**
+  - Edit together now needs the share's code or password, and the person
+    sharing lets each guest in by name before they see anything. Each
+    share uses a key of its own, so its code can't be worked out from
+    the sharer's player id.
+  - A game can only open picture, sound and model files inside its own
+    folders: no full paths elsewhere, no `..`, no network shares (which
+    on Windows would hand someone the user's sign-in), only ordinary
+    files up to 64 MB. Pictures that claim to be huge are not unpacked.
+  - Instances a player's computer names in `FireServer` and
+    `InvokeServer` reach the server's scripts only if that computer was
+    sent them, as in Roblox: nothing from `ServerStorage`.
+  - Walking through walls is caught like moving too fast.
+  - Players who join by code are known to the host by their key: someone
+    removed from a game can't come back under another name. While a game
+    has a join code it takes players only through it, and joins by
+    address show a safety code on both computers.
+  - The Hub lists a server under a game only when its host signs it, and
+    the join code must reach the computer that signed.
+  - The Hub keeps password salts and keys encrypted with its key file,
+    gives the same made-up salt for names with no password (so the
+    sign-in page can't tell which names have one), and counts wrong
+    passwords per name and address, so a stranger can't lock someone out.
+  - `HttpService:GenerateGUID` uses the system's secure random numbers.
+  - A joined computer's scripts may use 512 MB of memory, and a phone's 768 MB.
+- **Faster:** the host writes each step's changes out once for all its
+  players, not once per player; players joining in the same step share one
+  copy of the world; parts with the same picture and look share one
+  material, so they draw together; and their pictures load in the
+  background, without stalling the frame. The Hub's database uses WAL.
+
 - **Avatar pictures:** profile pictures in the app and on the website
   are now 3D renders of your character, head and full body, redrawn
   when your look changes.

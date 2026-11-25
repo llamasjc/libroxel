@@ -153,10 +153,13 @@ The first build compiles Bevy and takes a while. After that it is quick.
   anywhere, with no port forwarding. The code connects the two computers
   directly over [iroh](https://www.iroh.computer), going through a relay
   only when home routers block a direct path, and is encrypted either way.
-  On your own network, Join also takes the host's address (and a port, if
-  not 7420). That's encrypted too, but it can't check who's answering at
-  that address the way a join code does, so use a code on networks you
-  don't trust. The host runs every `Script` and all the physics; each joined
+  When the host couldn't get a join code (no internet), Join also takes
+  the host's address on your own network (and a port, if not 7420).
+  That's encrypted too, but it can't check who's answering at that address
+  the way a join code does: both computers show a safety code in the
+  output, which only matches when nobody is listening in. While a game has
+  a join code, it takes players only through it, and knows each by their
+  key, so someone removed can't come back under another name. The host runs every `Script` and all the physics; each joined
   computer runs its own player's `LocalScript`s, moves its own character
   straight away (telling the host where it went), and shows the rest of the
   world as the host sends it. The bar along the top shows how many have joined. To
@@ -229,8 +232,12 @@ The first build compiles Bevy and takes a while. After that it is quick.
 - **Editing together:** **Test > Edit together → Share this game**
   lets others edit the game you have open, live, while you work on it. Send
   them the code from **📋 Copy edit code** (or, on your own network, your
-  address; the port is 7421): they paste it into **Edit together…** under
-  Join, and your game, scripts and all, replaces the one they had open.
+  address, then `#` and the password from **📋 Copy edit password**; the
+  port is 7421): they paste it into **Edit together…** under Join. Nobody
+  gets in without the code or password, and you still let each person in
+  by name (**Let in** or **Turn away** on the bar along the top) before
+  they see anything. Then your game, scripts and all, replaces the one
+  they had open. Each share gets a new code and password.
   Everything anyone changes (parts, scripts, terrain, properties, adding and
   removing) shows up for everyone a moment later. When two people change
   the same thing at once, the last change to reach the sharing computer

@@ -1604,8 +1604,24 @@ fn use_mesh_files(
 #[derive(Resource, Default)]
 struct MeshTextures {
     loaded: std::collections::HashMap<String, Option<Handle<Image>>>,
+    /// Pictures being read and unpacked away from the frame, so a map full
+    /// of them doesn't stall while they come in.
+    loading: std::collections::HashMap<String, bevy::tasks::Task<Option<Image>>>,
+    /// One material for each look and picture, shared by every part with
+    /// both, so they draw together.
+    materials: std::collections::HashMap<(LookKey, String), Handle<StandardMaterial>>,
+    /// Parts showing their colour until their picture arrives.
+    waiting: std::collections::HashSet<Entity>,
     generation: u64,
 }
+
+/// A part that may wrap a picture over its model.
+type TexturedPart = (
+    Entity,
+    Ref<'static, PartMeshTexture>,
+    Ref<'static, PartAppearance>,
+    &'static mut MeshMaterial3d<StandardMaterial>,
+);
 
 /// Wraps a part's picture over its model, in place of its colour.
 fn use_mesh_textures(
@@ -1614,40 +1630,86 @@ fn use_mesh_textures(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut shared: ResMut<SharedMaterials>,
-    mut parts: Query<(Ref<PartMeshTexture>, Ref<PartAppearance>, &mut MeshMaterial3d<StandardMaterial>)>,
+    mut parts: Query<TexturedPart>,
 ) {
     let generation = crate::pictures::generation();
-    if cache.generation != generation {
+    // Other folders: the same names may be other pictures now, so waiting
+    // parts look again.
+    let mut arrived = cache.generation != generation;
+    if arrived {
         cache.loaded.clear();
+        cache.loading.clear();
+        cache.materials.clear();
         cache.generation = generation;
     }
-    for (texture, appearance, mut handle) in &mut parts {
-        if !texture.is_changed() && !appearance.is_changed() {
+    let cache = &mut *cache;
+    cache.loading.retain(|name, task| {
+        if !task.is_finished() {
+            return true;
+        }
+        let image = bevy::tasks::block_on(bevy::tasks::poll_once(task)).flatten();
+        cache.loaded.insert(name.clone(), image.map(|i| images.add(i)));
+        arrived = true;
+        false
+    });
+    let any_changed = parts.iter().any(|(_, t, a, _)| t.is_changed() || a.is_changed());
+    if !arrived && !any_changed {
+        return;
+    }
+    if arrived {
+        // Forget parts that are gone.
+        cache.waiting.retain(|e| parts.contains(*e));
+    }
+    for (entity, texture, appearance, mut handle) in &mut parts {
+        let due =
+            texture.is_changed() || appearance.is_changed() || (arrived && cache.waiting.contains(&entity));
+        if !due {
             continue;
         }
         if texture.0.is_empty() {
+            cache.waiting.remove(&entity);
             if texture.is_changed() {
                 handle.0 = shared.get(&appearance, &textures, &mut materials);
             }
             continue;
         }
-        // Its own material, so the picture isn't put on every part that looks the same.
-        let own = materials.add(material_for(&appearance, &textures));
-        handle.0 = own;
-        let Some(mut material) = materials.get_mut(&handle.0) else { continue };
-        let picture = cache
-            .loaded
-            .entry(texture.0.clone())
+        let picture = match cache.loaded.get(&texture.0) {
+            Some(picture) => picture.clone(),
+            None => {
+                if !cache.loading.contains_key(&texture.0) {
+                    let name = texture.0.clone();
+                    let pool = bevy::tasks::AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
+                    let task = pool.spawn(async move {
+                        let bytes = crate::pictures::bytes_for(&name)?;
+                        crate::pictures::decode(&bytes, bevy::image::ImageSampler::linear())
+                    });
+                    cache.loading.insert(texture.0.clone(), task);
+                }
+                // Its colour until the picture is ready.
+                cache.waiting.insert(entity);
+                handle.0 = shared.get(&appearance, &textures, &mut materials);
+                continue;
+            }
+        };
+        cache.waiting.remove(&entity);
+        let Some(picture) = picture else {
+            handle.0 = shared.get(&appearance, &textures, &mut materials);
+            continue;
+        };
+        let key = (LookKey::of(&appearance), texture.0.clone());
+        let material = cache
+            .materials
+            .entry(key)
             .or_insert_with(|| {
-                let bytes = crate::pictures::bytes_for(&texture.0)?;
-                let image = crate::pictures::decode(&bytes, bevy::image::ImageSampler::linear())?;
-                Some(images.add(image))
+                let mut material = material_for(&appearance, &textures);
+                let alpha = material.base_color.alpha();
+                material.base_color = Color::srgba(1.0, 1.0, 1.0, alpha);
+                material.base_color_texture = Some(picture);
+                materials.add(material)
             })
             .clone();
-        if let Some(picture) = picture {
-            let alpha = material.base_color.alpha();
-            material.base_color = Color::srgba(1.0, 1.0, 1.0, alpha);
-            material.base_color_texture = Some(picture);
+        if handle.0 != material {
+            handle.0 = material;
         }
     }
 }

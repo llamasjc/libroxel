@@ -40,11 +40,18 @@ Some things are known and don't need a report:
 
 - Every game and edit-together connection is encrypted, but a direct join
   by address doesn't check who the host is, so someone on the same network
-  could pretend to be the host. Join codes do check: the code names the
-  host's key.
+  could pretend to be the host. Both ends show a safety code in the output
+  that only matches when nobody is in the middle. Join codes do check: the
+  code names the host's key. While a game has a join code, it takes players
+  only through it.
 - A host runs every server script and sees everything its players send.
-- A script can use up to 5 seconds without waiting and 512 MB of memory
-  before it is stopped.
+  A player's name is what they typed; players who join by code are also
+  known to the host by their key, and someone removed that way stays out
+  whatever name they use.
+- A script can use up to 5 seconds without waiting. A game's scripts may
+  use 2 GB of memory together on a computer that hosts or plays on its own,
+  768 MB on a phone or tablet, and 512 MB on a computer that joined someone
+  else's game.
 
 ## Supported versions
 
