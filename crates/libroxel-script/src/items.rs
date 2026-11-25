@@ -104,6 +104,10 @@ function codec.encode(v)
         for _, x in { v.Min.X, v.Min.Y, v.Max.X, v.Max.Y } do table.insert(out, n(x)) end
     elseif kind == "CFrame" then
         for _, x in { v:GetComponents() } do table.insert(out, n(x)) end
+    elseif kind == "Ray" then
+        for _, x in { v.Origin.X, v.Origin.Y, v.Origin.Z, v.Direction.X, v.Direction.Y, v.Direction.Z } do
+            table.insert(out, n(x))
+        end
     else
         return nil
     end
@@ -130,6 +134,20 @@ function codec.decode(text)
         return Rect.new(x[1] or 0, x[2] or 0, x[3] or 0, x[4] or 0)
     elseif kind == "CFrame" then
         return CFrame.new(table.unpack(x, 1, 12))
+    elseif kind == "Ray" then
+        return Ray.new(Vector3.new(x[1] or 0, x[2] or 0, x[3] or 0), Vector3.new(x[4] or 0, x[5] or 0, x[6] or 0))
+    elseif kind == "Faces" then
+        return Faces.new(table.unpack(parts))
+    elseif kind == "Axes" then
+        return Axes.new(table.unpack(parts))
+    elseif kind == "Font" then
+        -- Weight, style, then the family, which may hold spaces.
+        local weight = Enum.FontWeight[parts[1] or "Regular"] or Enum.FontWeight.Regular
+        local style = Enum.FontStyle[parts[2] or "Normal"] or Enum.FontStyle.Normal
+        return Font.new(table.concat(parts, " ", 3), weight, style)
+    elseif kind == "EnumItem" then
+        local ok, item = pcall(function() return Enum[parts[1]][parts[2]] end)
+        return ok and item or nil
     end
     return nil
 end
@@ -157,6 +175,15 @@ fn rich_attribute(lua: &Lua, id: InstanceId, name: &str, value: Value) -> mlua::
     let key = format!("{}:{name}", id.to_bits());
     rich_values(lua)?.raw_set(key.as_str(), value)?;
     Ok(PropertyValue::String(format!("{RICH}{key}")))
+}
+
+/// A kept value's text form (see [`libroxel_instance::RICH_ATTRIBUTE`]) as
+/// the value it stands for; None when `text` isn't one.
+pub(crate) fn rich_to_lua(lua: &Lua, text: &str) -> mlua::Result<Option<Value>> {
+    match text.strip_prefix(libroxel_instance::RICH_ATTRIBUTE) {
+        Some(encoded) => Ok(Some(codec(lua)?.get::<mlua::Function>("decode")?.call(encoded)?)),
+        None => Ok(None),
+    }
 }
 
 /// An attribute's value for scripts.

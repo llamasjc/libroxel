@@ -19,8 +19,10 @@ use libroxel_script::names;
 use rbx_dom_weak::types::{Ref, Variant};
 use rbx_dom_weak::{Instance, WeakDom};
 
+mod collision;
 mod csg;
 pub mod meshes;
+mod migrations;
 pub mod terrain;
 mod unions;
 
@@ -62,8 +64,13 @@ pub struct Report {
     pub unknown_classes: BTreeMap<String, usize>,
     /// Properties that weren't brought across, as `Class.Property`.
     pub skipped_properties: BTreeMap<String, usize>,
+    /// Values only Studio uses (scripts can't read them and Libroxel has
+    /// no setting for them), left out without a mention.
+    pub studio_only: usize,
     /// Services Libroxel doesn't have, left out with everything in them.
     pub skipped_services: Vec<String>,
+    /// Animations whose keyframes were saved beside the file.
+    pub animations: usize,
     /// One-stud terrain cells filled from the file's terrain.
     pub terrain_cells: usize,
     /// Model files made from shapes stored inside the file (unions), by
@@ -85,6 +92,9 @@ impl Report {
             v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
             v.iter().take(n).map(|(k, c)| format!("{k} ×{c}")).collect::<Vec<_>>().join(", ")
         };
+        if self.animations > 0 {
+            lines.push(format!("Animations saved beside the file: {}.", self.animations));
+        }
         if self.terrain_cells > 0 {
             lines.push(format!("Terrain: {} one-stud cells.", self.terrain_cells));
         }
@@ -115,16 +125,93 @@ impl Report {
 
 /// Reads a Roblox file of either kind from its bytes.
 pub fn read_dom(bytes: &[u8]) -> Result<WeakDom, ImportError> {
+    read_dom_noting(bytes, &mut Vec::new())
+}
+
+/// Reads a place or model file, noting in `notes` anything it had to leave out to
+/// read it at all.
+pub fn read_dom_noting(bytes: &[u8], notes: &mut Vec<String>) -> Result<WeakDom, ImportError> {
     let start = bytes.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(0);
     let body = &bytes[start..];
     let body = body.strip_prefix(b"\xEF\xBB\xBF".as_slice()).unwrap_or(body);
     if body.starts_with(b"<roblox!") {
-        rbx_binary::from_reader(body).map_err(|e| ImportError::Binary(e.to_string()))
+        read_binary(body, notes)
     } else if body.starts_with(b"<roblox") || body.starts_with(b"<?xml") {
         rbx_xml::from_reader_default(body).map_err(|e| ImportError::Xml(e.to_string()))
     } else {
         Err(ImportError::NotARobloxFile)
     }
+}
+
+/// Reads a binary file. A newer Studio sometimes saves a property in a
+/// different form than the class list here expects (the property changed its
+/// type); rather than give up on the whole file, that property is read
+/// as whatever the file says it is, and the file read again.
+fn read_binary(body: &[u8], notes: &mut Vec<String>) -> Result<WeakDom, ImportError> {
+    let bundled = rbx_reflection_database::get_bundled();
+    let first = match rbx_binary::from_reader(body) {
+        Ok(dom) => return Ok(dom),
+        Err(e) => e.to_string(),
+    };
+    let mut db = None::<rbx_reflection::ReflectionDatabase<'static>>;
+    let mut error = first;
+    for _ in 0..32 {
+        let Some((class, property)) = mistyped_property(&error) else { break };
+        let db = db.get_or_insert_with(|| bundled.clone());
+        if !forget_property(db, &class, &property) {
+            break;
+        }
+        notes.push(format!(
+            "{class}.{property} was saved in a newer form than Libroxel knows, so it was read as the file has it."
+        ));
+        match rbx_binary::Deserializer::new().reflection_database(db).deserialize(body) {
+            Ok(dom) => return Ok(dom),
+            Err(e) => error = e.to_string(),
+        }
+    }
+    Err(ImportError::Binary(error))
+}
+
+/// The class and property a binary reading error is about, when it's one
+/// of a value not in the form the class list expects.
+fn mistyped_property(error: &str) -> Option<(String, String)> {
+    let rest = [
+        "Type mismatch: Property ",
+        "Invalid property data: Property ",
+        "Invalid property data: CFrame property ",
+    ]
+    .iter()
+    .find_map(|p| error.find(p).map(|at| &error[at + p.len()..]))?;
+    let full = rest.split([' ', ',']).next()?;
+    let (class, property) = full.split_once('.')?;
+    Some((class.to_owned(), property.to_owned()))
+}
+
+/// Takes `property` (by its name or the name it's saved under) out of
+/// `class` and the classes it comes from, so it's read as the file has it.
+fn forget_property(
+    db: &mut rbx_reflection::ReflectionDatabase<'static>,
+    class: &str,
+    property: &str,
+) -> bool {
+    let mut removed = false;
+    let mut current = Some(class.to_owned());
+    while let Some(name) = current {
+        let Some(c) = db.classes.get_mut(name.as_str()) else { break };
+        let before = c.properties.len();
+        c.properties.retain(|n, p| {
+            let saved_as = match &p.kind {
+                rbx_reflection::PropertyKind::Canonical {
+                    serialization: rbx_reflection::PropertySerialization::SerializesAs(s),
+                } => Some(*s),
+                _ => None,
+            };
+            *n != property && saved_as != Some(property)
+        });
+        removed |= c.properties.len() != before;
+        current = c.superclass.map(str::to_owned);
+    }
+    removed
 }
 
 /// Whether a file name looks like one this crate opens.
@@ -137,10 +224,12 @@ pub fn is_roblox_file(path: &Path) -> bool {
 /// Opens a place (or a model, which lands in the workspace) as a new tree.
 pub fn open(path: &Path) -> Result<(InstanceTree, Report), ImportError> {
     let bytes = std::fs::read(path).map_err(ImportError::Read)?;
-    let dom = read_dom(&bytes)?;
+    let mut notes = Vec::new();
+    let dom = read_dom_noting(&bytes, &mut notes)?;
     let mut tree = InstanceTree::new();
     let mut importer = Importer::new(&dom);
     importer.assets = path.parent().map(|p| p.join("assets"));
+    importer.report.notes = notes;
     let report = importer.place(&mut tree);
     tree.drain_changes();
     Ok((tree, report))
@@ -204,9 +293,15 @@ struct Importer<'a> {
     db: &'static rbx_reflection::ReflectionDatabase<'static>,
     report: Report,
     /// The file's instances to the ones made for them.
-    made: HashMap<Ref, InstanceId>,
+    made: HashMap<Ref, InstanceId, foldhash::fast::RandomState>,
     /// Links to set once everything is made.
     links: Vec<(InstanceId, Property, Ref)>,
+    /// Links Libroxel has no setting for, kept by name for scripts.
+    kept_links: Vec<(InstanceId, String, Ref)>,
+    /// The place's collision groups.
+    groups: Vec<collision::Group>,
+    /// Animation asset numbers already looked for beside the file.
+    animations_read: std::collections::HashSet<String>,
     /// Where files for asset numbers are kept, beside the opened file.
     assets: Option<std::path::PathBuf>,
 }
@@ -217,8 +312,11 @@ impl<'a> Importer<'a> {
             dom,
             db: rbx_reflection_database::get_bundled(),
             report: Report::default(),
-            made: HashMap::new(),
+            made: HashMap::with_capacity_and_hasher(dom.descendants().size_hint().0, Default::default()),
             links: Vec::new(),
+            kept_links: Vec::new(),
+            groups: collision::groups(dom),
+            animations_read: Default::default(),
             assets: None,
         }
     }
@@ -286,6 +384,9 @@ impl<'a> Importer<'a> {
             self.special_mesh(tree, inst, parent);
         }
         self.shape_from_file(tree, inst, id);
+        if class == ClassKind::Animation {
+            self.animation_asset(tree, id);
+        }
         self.children(tree, inst, id);
         Some(id)
     }
@@ -385,6 +486,47 @@ impl<'a> Importer<'a> {
         if !self.report.files.iter().any(|(n, _)| *n == name) {
             self.report.files.push((name, text.into_bytes()));
         }
+    }
+
+    /// An animation whose keyframes were saved beside the file (as
+    /// `assets/<number>.rbxm`): the sequence is brought into the server's
+    /// storage and marked with its address, so the game plays it for
+    /// every animation with that address.
+    fn animation_asset(&mut self, tree: &mut InstanceTree, animation: InstanceId) {
+        let Some(url) = tree.get_string(animation, Property::AnimationId) else { return };
+        let Some(number) = asset_number(&url) else { return };
+        if !self.animations_read.insert(number.clone()) {
+            return;
+        }
+        let Some(dir) = self.assets.as_ref() else { return };
+        let Some(bytes) =
+            ["", ".rbxm", ".rbxmx"].iter().find_map(|e| std::fs::read(dir.join(format!("{number}{e}"))).ok())
+        else {
+            return;
+        };
+        let Ok(dom) = read_dom(&bytes) else {
+            self.report.notes.push(format!("The saved animation {number} couldn't be read."));
+            return;
+        };
+        let Some(sequence) = dom.descendants().find(|i| i.class == "KeyframeSequence") else { return };
+        let Some(storage) = tree.service(ClassKind::ServerStorage) else { return };
+        let holder = match tree.find_first_child(storage, ANIMATIONS_FOLDER) {
+            Ok(Some(f)) => f,
+            _ => {
+                let Ok(f) = tree.create(ClassKind::Folder, ANIMATIONS_FOLDER) else { return };
+                if tree.set_parent(f, Some(storage)).is_err() {
+                    return;
+                }
+                f
+            }
+        };
+        let mut importer = Importer::new(&dom);
+        let Some(made) = importer.instance(tree, sequence, holder) else { return };
+        importer.finish(tree);
+        let address = PropertyValue::String(format!("rbxassetid://{number}"));
+        let _ = tree.set_extra(made, libroxel_instance::ANIMATION_ASSET, Some(address));
+        self.report.instances += importer.report.instances;
+        self.report.animations += 1;
     }
 
     fn has_asset(&self, id: &str, endings: &[&str]) -> bool {
@@ -570,30 +712,49 @@ impl<'a> Importer<'a> {
         let file_class = inst.class.as_str();
         let mut entries: Vec<(&str, &Variant)> =
             inst.properties.iter().map(|(k, v)| (k.as_str(), v)).collect();
-        entries.sort_by_key(|(k, _)| *k);
+        entries.sort_unstable_by_key(|(k, _)| *k);
+        let moves = migrations::for_class(self.db, file_class);
         for (name, value) in entries {
             if self.special(tree, class, id, name, value) {
                 continue;
             }
-            // A mesh part's picture, newer files' name for it.
-            let name = if class == ClassKind::Part && name == "TextureContent" {
-                "TextureID"
-            } else {
-                renamed(name)
+            // Older files name a part's collision group by its number.
+            if let ("CollisionGroupId", Variant::Int32(n)) = (name, value) {
+                if !inst.properties.contains_key(&"CollisionGroup".into())
+                    && let Some(group) = self.groups.iter().find(|g| i64::from(g.id) == i64::from(*n))
+                    && class.has_property(Property::CollisionGroup)
+                    && tree
+                        .set(id, Property::CollisionGroup, PropertyValue::String(group.name.clone()))
+                        .is_ok()
+                {
+                    self.report.properties += 1;
+                }
+                continue;
+            }
+            // The readers move replaced properties onto their new names;
+            // Libroxel mostly knows the older ones.
+            let name = match moves.and_then(|m| m.get(name)).copied() {
+                Some(migrations::Moved::Address(old)) => old,
+                Some(migrations::Moved::Corner(old)) if name == "TopLeftRadius" => old,
+                Some(migrations::Moved::Corner(_)) => continue,
+                Some(migrations::Moved::Font(old)) => {
+                    self.font(tree, id, name, old, value);
+                    continue;
+                }
+                Some(migrations::Moved::Insets(old)) => {
+                    // Insets of none or the device's: the older "ignore the inset".
+                    if let Variant::Enum(e) = value
+                        && tree.set_extra(id, old, Some(PropertyValue::Bool(e.to_u32() <= 1))).is_ok()
+                    {
+                        self.report.properties += 1;
+                    }
+                    name
+                }
+                None => renamed(name),
             };
             let Some(property) = names::property_from_name(class, name) else {
                 if !ignored(name) && !self.is_default(file_class, name, value) {
-                    // Kept by name, so scripts read the file's value.
-                    let kept = self
-                        .scriptable(file_class, name)
-                        .then(|| extra_value(value))
-                        .flatten()
-                        .is_some_and(|v| tree.set_extra(id, name, Some(v)).is_ok());
-                    if kept {
-                        self.report.properties += 1;
-                    } else {
-                        self.report.skip(file_class, name);
-                    }
+                    self.keep(tree, id, file_class, name, value);
                 }
                 continue;
             };
@@ -615,6 +776,56 @@ impl<'a> Importer<'a> {
             } else {
                 self.report.skip(file_class, name);
             }
+        }
+    }
+
+    /// Keeps a property Libroxel has no setting for by name, so scripts
+    /// read the file's value.
+    fn keep(
+        &mut self,
+        tree: &mut InstanceTree,
+        id: InstanceId,
+        file_class: &str,
+        name: &str,
+        value: &Variant,
+    ) {
+        if !self.scriptable(file_class, name) {
+            self.report.studio_only += 1;
+            return;
+        }
+        // Values the game works out as it runs, not the file's.
+        if matches!(
+            (file_class, name),
+            ("Workspace", "CurrentCamera") | ("Camera", "CameraSubject" | "Focus")
+        ) {
+            return;
+        }
+        if let Variant::Ref(r) = value {
+            if r.is_some() {
+                self.kept_links.push((id, name.to_owned(), *r));
+            }
+            return;
+        }
+        let kept = extra_value(value)
+            .or_else(|| rich_value(self.db, value).map(PropertyValue::String))
+            .is_some_and(|v| tree.set_extra(id, name, Some(v)).is_ok());
+        if kept {
+            self.report.properties += 1;
+        } else {
+            self.report.skip(file_class, name);
+        }
+    }
+
+    /// A text font: kept as the face scripts read (`FontFace`), and as the
+    /// older font list's item (`Font`) when it is one of theirs.
+    fn font(&mut self, tree: &mut InstanceTree, id: InstanceId, name: &str, old: &str, value: &Variant) {
+        let Variant::Font(face) = value else { return };
+        if let Some(text) = rich_value(self.db, value) {
+            let _ = tree.set_extra(id, name, Some(PropertyValue::String(text)));
+            self.report.properties += 1;
+        }
+        if let Some(n) = migrations::font_number(self.db, face) {
+            let _ = tree.set_extra(id, old, Some(PropertyValue::Number(f64::from(n))));
         }
     }
 
@@ -648,6 +859,8 @@ impl<'a> Importer<'a> {
             return true;
         }
         match (name, value) {
+            // Read before anything is made (see `collision`).
+            ("CollisionGroups" | "CollisionGroupData", _) if class == ClassKind::Workspace => true,
             // Where a part, attachment or camera is and which way it faces.
             ("CFrame", Variant::CFrame(cf)) if class.has_property(Property::Orientation) => {
                 let (pos, turn) = cframe(cf);
@@ -691,7 +904,7 @@ impl<'a> Importer<'a> {
                         Variant::Color3(c) => Some(PropertyValue::Color3(Color3::new(c.r, c.g, c.b))),
                         Variant::UDim2(u) => Some(PropertyValue::UDim2(udim2(u))),
                         Variant::UDim(u) => Some(PropertyValue::UDim(UDim::new(u.scale, u.offset as f32))),
-                        other => rich_attribute(other).map(PropertyValue::String),
+                        other => rich_value(self.db, other).map(PropertyValue::String),
                     };
                     if !v.is_some_and(|v| tree.set_attribute(id, key, Some(v)).is_ok()) {
                         self.report.skip("Attribute", key);
@@ -806,6 +1019,21 @@ impl<'a> Importer<'a> {
     /// Sets the links (a model's primary part, a weld's parts…) now that
     /// everything they point at exists.
     fn finish(&mut self, tree: &mut InstanceTree) {
+        for (id, name, target) in std::mem::take(&mut self.kept_links) {
+            match self.made.get(&target) {
+                Some(t) if tree.set_extra(id, &name, Some(PropertyValue::Ref(Some(*t)))).is_ok() => {
+                    self.report.properties += 1;
+                }
+                _ => {
+                    let class = tree.class(id).map(names::class_name).unwrap_or("?");
+                    self.report.skip(class, &name);
+                }
+            }
+        }
+        if collision::matter(&self.groups) {
+            let text = collision::to_text(&self.groups);
+            let _ = tree.set_extra(tree.workspace(), COLLISION_GROUPS, Some(PropertyValue::String(text)));
+        }
         for (id, property, target) in std::mem::take(&mut self.links) {
             match self.made.get(&target) {
                 Some(t) if tree.set(id, property, PropertyValue::Ref(Some(*t))).is_ok() => {
@@ -819,6 +1047,14 @@ impl<'a> Importer<'a> {
         }
     }
 }
+
+/// Where a place's collision groups are kept on the workspace, as
+/// `CollisionGroups` text (`name^number^mask`, separated by `\`), for
+/// scripts' physics service to start from.
+pub const COLLISION_GROUPS: &str = "CollisionGroups";
+
+/// The folder in server storage animations saved beside a file go in.
+const ANIMATIONS_FOLDER: &str = "Animations from files";
 
 const EXPANDED_TERRAIN: &str = "This place uses Studio's newer expanded terrain, which keeps its voxels outside the place file, so the file has no terrain to bring across.";
 
@@ -873,13 +1109,10 @@ fn ignored(name: &str) -> bool {
         || name.ends_with("ParamB")
 }
 
-/// Newer files' names for properties Libroxel knows by their older names.
+/// Newer names for properties Libroxel knows by their older names, beyond
+/// the ones the readers move (see `migrations`).
 fn renamed(name: &str) -> &str {
     match name {
-        "TextureContent" => "Texture",
-        "MeshContent" => "MeshId",
-        "ImageContent" => "Image",
-        "SoundContent" => "SoundId",
         "ConstrainedValue" => "Value",
         other => other,
     }
@@ -956,9 +1189,10 @@ fn extra_value(value: &Variant) -> Option<PropertyValue> {
     })
 }
 
-/// An attribute value with no kind of its own in Libroxel, as the text it
-/// keeps such values as (see [`libroxel_instance::RICH_ATTRIBUTE`]).
-fn rich_attribute(value: &Variant) -> Option<String> {
+/// A value with no kind of its own in Libroxel (a CFrame, a curve, a
+/// font...), as the text it keeps such values as (see
+/// [`libroxel_instance::RICH_ATTRIBUTE`]); scripts read it back as the value.
+fn rich_value(db: &rbx_reflection::ReflectionDatabase<'_>, value: &Variant) -> Option<String> {
     let mut out: Vec<String> = Vec::new();
     let mut put = |kind: &str, numbers: &[f32]| {
         out.push(kind.to_owned());
@@ -976,9 +1210,35 @@ fn rich_attribute(value: &Variant) -> Option<String> {
             put("ColorSequence", &numbers);
         }
         Variant::Rect(r) => put("Rect", &[r.min.x, r.min.y, r.max.x, r.max.y]),
-        Variant::CFrame(cf) => {
+        Variant::CFrame(cf) | Variant::OptionalCFrame(Some(cf)) => {
             let (p, m) = (cf.position, cf.orientation);
             put("CFrame", &[p.x, p.y, p.z, m.x.x, m.x.y, m.x.z, m.y.x, m.y.y, m.y.z, m.z.x, m.z.y, m.z.z]);
+        }
+        Variant::Ray(r) => {
+            let (o, d) = (r.origin, r.direction);
+            put("Ray", &[o.x, o.y, o.z, d.x, d.y, d.z]);
+        }
+        Variant::Faces(f) => {
+            out.push("Faces".to_owned());
+            let names = [(1, "Right"), (2, "Top"), (4, "Back"), (8, "Left"), (16, "Bottom"), (32, "Front")];
+            out.extend(names.iter().filter(|(b, _)| f.bits() & b != 0).map(|(_, n)| (*n).to_owned()));
+        }
+        Variant::Axes(a) => {
+            out.push("Axes".to_owned());
+            let names = [(1, "X"), (2, "Y"), (4, "Z")];
+            out.extend(names.iter().filter(|(b, _)| a.bits() & b != 0).map(|(_, n)| (*n).to_owned()));
+        }
+        // The family last: it's an address, which could hold anything.
+        Variant::Font(f) => {
+            out.push("Font".to_owned());
+            out.push(format!("{:?}", f.weight));
+            out.push(format!("{:?}", f.style));
+            out.push(f.family.clone());
+        }
+        Variant::EnumItem(e) => {
+            let list = db.enums.get(e.ty.as_str())?;
+            let item = list.items.iter().find(|(_, v)| **v == e.value)?.0;
+            out.extend(["EnumItem".to_owned(), e.ty.clone(), (*item).to_owned()]);
         }
         _ => return None,
     }

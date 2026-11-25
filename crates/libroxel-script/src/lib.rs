@@ -300,7 +300,26 @@ impl ScriptRuntime {
     /// Starts every enabled `Script` instance in the tree, in tree order,
     /// with `script` bound to the instance. Returns their startup errors.
     pub fn run_tree_scripts(&self) -> Vec<ScriptError> {
+        self.register_saved_animations();
         bindings::run_tree_scripts(&self.lua)
+    }
+
+    /// Registers each keyframe sequence a file reader brought in for an
+    /// asset address (marked with [`libroxel_instance::ANIMATION_ASSET`]).
+    fn register_saved_animations(&self) {
+        let marked: Vec<(String, InstanceId)> = {
+            let tree = self.tree().borrow();
+            let Ok(all) = tree.descendants(tree.root()) else { return };
+            all.into_iter()
+                .filter_map(|id| match tree.get_extra(id, libroxel_instance::ANIMATION_ASSET) {
+                    Ok(Some(libroxel_instance::PropertyValue::String(address))) => Some((address, id)),
+                    _ => None,
+                })
+                .collect()
+        };
+        for (address, id) in marked {
+            let _ = self.register_animation(&address, id);
+        }
     }
 
     /// Advances time by `dt` seconds: resumes threads whose wait is over,

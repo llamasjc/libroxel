@@ -38,6 +38,10 @@ pub use enums::{
 /// joined players like any other attribute.
 pub const RICH_ATTRIBUTE: &str = "\u{1}rbx:";
 
+/// Kept on a keyframe sequence read from a saved asset: the asset address
+/// (`rbxassetid://123`) whose animations it plays. Scripts don't see it.
+pub const ANIMATION_ASSET: &str = "\u{1}AnimationAsset";
+
 /// The collision group parts are in unless put in another.
 pub const DEFAULT_COLLISION_GROUP: &str = "Default";
 

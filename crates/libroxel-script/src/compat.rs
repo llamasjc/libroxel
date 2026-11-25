@@ -1164,6 +1164,49 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
 pub(crate) struct CollisionGroups {
     registered: Vec<String>,
     apart: std::collections::BTreeSet<(String, String)>,
+    /// Whether the place's own groups (set up in Studio) were read yet.
+    seeded: bool,
+}
+
+/// Starts from the place's own collision groups, once: the file reader
+/// keeps them on the workspace as `CollisionGroups` text, entries of
+/// `name^number^mask` separated by `\` (bit `n` of the mask set: the
+/// group collides with group `n`).
+fn seed_collision_groups(lua: &Lua) {
+    let host = host(lua);
+    if host.groups.borrow().seeded {
+        return;
+    }
+    // Read again later if the tree is busy right now.
+    let Ok(tree) = host.tree.try_borrow() else { return };
+    let text = match tree.get_extra(tree.workspace(), "CollisionGroups") {
+        Ok(Some(PropertyValue::String(text))) => Some(text),
+        _ => None,
+    };
+    drop(tree);
+    let mut groups = host.groups.borrow_mut();
+    groups.seeded = true;
+    let Some(text) = text else { return };
+    let mut list: Vec<(String, u32, u32)> = Vec::new();
+    for entry in text.split('\\').filter(|e| !e.is_empty()) {
+        let mut parts = entry.rsplitn(3, '^');
+        let (Some(mask), Some(id), Some(name)) = (parts.next(), parts.next(), parts.next()) else { continue };
+        let (Ok(mask), Ok(id)) = (mask.trim().parse::<i64>(), id.trim().parse::<u32>()) else { continue };
+        list.push((name.to_owned(), id, mask as u32));
+    }
+    let collides = |mask: u32, id: u32| id < 32 && mask & (1 << id) != 0;
+    for (name, _, _) in &list {
+        if name != libroxel_instance::DEFAULT_COLLISION_GROUP && !groups.registered.contains(name) {
+            groups.registered.push(name.clone());
+        }
+    }
+    for (a, a_id, a_mask) in &list {
+        for (b, b_id, b_mask) in &list {
+            if !collides(*a_mask, *b_id) || !collides(*b_mask, *a_id) {
+                groups.apart.insert(pair(a.clone(), b.clone()));
+            }
+        }
+    }
 }
 
 fn pair(a: String, b: String) -> (String, String) {
@@ -1171,11 +1214,13 @@ fn pair(a: String, b: String) -> (String, String) {
 }
 
 pub(crate) fn collision_rules(lua: &Lua) -> Vec<(String, String)> {
+    seed_collision_groups(lua);
     host(lua).groups.borrow().apart.iter().cloned().collect()
 }
 
 fn physics_service(lua: &Lua, t: &Table) -> mlua::Result<()> {
     let register = |lua: &Lua, name: String| {
+        seed_collision_groups(lua);
         let host = host(lua);
         let mut groups = host.groups.borrow_mut();
         if name != libroxel_instance::DEFAULT_COLLISION_GROUP && !groups.registered.contains(&name) {
@@ -1186,6 +1231,7 @@ fn physics_service(lua: &Lua, t: &Table) -> mlua::Result<()> {
     method(lua, t, REGISTER_COLLISION_GROUP, register)?;
     method(lua, t, CREATE_COLLISION_GROUP, move |lua, name: String| register(lua, name).map(|()| 0))?;
     method(lua, t, UNREGISTER_COLLISION_GROUP, |lua, name: String| {
+        seed_collision_groups(lua);
         let host = host(lua);
         let mut groups = host.groups.borrow_mut();
         groups.registered.retain(|g| *g != name);
@@ -1193,10 +1239,12 @@ fn physics_service(lua: &Lua, t: &Table) -> mlua::Result<()> {
         Ok(())
     })?;
     method(lua, t, IS_COLLISION_GROUP_REGISTERED, |lua, name: String| {
+        seed_collision_groups(lua);
         Ok(name == libroxel_instance::DEFAULT_COLLISION_GROUP
             || host(lua).groups.borrow().registered.contains(&name))
     })?;
     method(lua, t, COLLISION_GROUP_SET_COLLIDABLE, |lua, (a, b, collide): (String, String, bool)| {
+        seed_collision_groups(lua);
         let host = host(lua);
         let mut groups = host.groups.borrow_mut();
         if collide {
@@ -1207,9 +1255,11 @@ fn physics_service(lua: &Lua, t: &Table) -> mlua::Result<()> {
         Ok(())
     })?;
     method(lua, t, COLLISION_GROUPS_ARE_COLLIDABLE, |lua, (a, b): (String, String)| {
+        seed_collision_groups(lua);
         Ok(!host(lua).groups.borrow().apart.contains(&pair(a, b)))
     })?;
     method(lua, t, GET_REGISTERED_COLLISION_GROUPS, |lua, ()| {
+        seed_collision_groups(lua);
         let names: Vec<String> = std::iter::once(libroxel_instance::DEFAULT_COLLISION_GROUP.to_owned())
             .chain(host(lua).groups.borrow().registered.iter().cloned())
             .collect();
@@ -1223,6 +1273,7 @@ fn physics_service(lua: &Lua, t: &Table) -> mlua::Result<()> {
         Ok(list)
     })?;
     method(lua, t, SET_PART_COLLISION_GROUP, |lua, (part, group): (Value, String)| {
+        seed_collision_groups(lua);
         let part = as_instance(&part).ok_or_else(|| runtime_err("SetPartCollisionGroup expects a part"))?;
         let value = PropertyValue::String(group);
         host(lua).tree.borrow_mut().set(part, Property::CollisionGroup, value).map_err(tree_err)

@@ -100,6 +100,8 @@ pub(crate) fn extra_to_lua(
         (Some(rbx_reflection::DataType::Value(rbx_types::VariantType::BrickColor)), P::Number(n)) => {
             call(lua, "BrickColor", "new", *n)
         }
+        // A value with no kind of its own in the tree, kept as text.
+        (_, P::String(text)) if let Some(v) = crate::items::rich_to_lua(lua, text)? => Ok(v),
         _ => crate::bindings::property_to_lua(lua, value),
     }
 }

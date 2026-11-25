@@ -17,6 +17,7 @@ rbx_xml = "3.0"
 rbx_reflection_database = "3.0"
 rbx_reflection = "7.0"
 rbx_mesh.workspace = true
+foldhash.workspace = true
 
 [lints]
 workspace = true
