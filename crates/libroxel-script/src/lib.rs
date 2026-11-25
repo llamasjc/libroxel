@@ -53,6 +53,61 @@ pub static RENDERING_3D: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 pub use net::{NetMessage, NetRole, decode as decode_net_value, encode as encode_net_value, map_instances};
 pub use world::VelocityRequest;
 
+/// Measures GUI text: the text, its size in points and the width it wraps
+/// at, giving how wide and tall it is. The app hands in the one its GUI
+/// draws with, so `TextService:GetTextSize` matches what players see.
+pub type TextMeasure = fn(&str, f32, f32) -> (f32, f32);
+
+static TEXT_MEASURE: std::sync::OnceLock<TextMeasure> = std::sync::OnceLock::new();
+
+/// Sets how [`TextMeasure`] text is measured. Only the first call counts.
+pub fn set_text_measure(measure: TextMeasure) {
+    let _ = TEXT_MEASURE.set(measure);
+}
+
+/// How big `text` is at `size`, wrapped at `width`: with the app's measure
+/// if it gave one, or estimated (half a point of width a character, wrapped
+/// at spaces, one `size` a line).
+pub(crate) fn measure_text(text: &str, size: f32, width: f32) -> (f32, f32) {
+    if text.is_empty() {
+        return (0.0, size);
+    }
+    if let Some(measure) = TEXT_MEASURE.get() {
+        return measure(text, size, width);
+    }
+    let char_width = size * 0.5;
+    let max_chars = if width.is_finite() && width > 0.0 {
+        (width / char_width).floor().max(1.0) as usize
+    } else {
+        usize::MAX
+    };
+    let mut lines = 0usize;
+    let mut widest = 0usize;
+    for line in text.split('\n') {
+        let mut current = 0usize;
+        lines += 1;
+        for word in line.split(' ') {
+            let n = word.chars().count();
+            let needed = if current == 0 { n } else { current + 1 + n };
+            if needed <= max_chars || current == 0 {
+                current = needed;
+                // A word longer than the line breaks across lines.
+                while current > max_chars {
+                    widest = widest.max(max_chars);
+                    current -= max_chars;
+                    lines += 1;
+                }
+            } else {
+                widest = widest.max(current);
+                lines += 1;
+                current = n.min(max_chars);
+            }
+        }
+        widest = widest.max(current);
+    }
+    (widest as f32 * char_width, lines as f32 * size)
+}
+
 /// The tree, shared between the runtime and the host engine.
 ///
 /// The VM is single-threaded, so this is a plain `Rc<RefCell<_>>`. The

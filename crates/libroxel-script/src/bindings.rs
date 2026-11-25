@@ -363,6 +363,10 @@ pub(crate) struct Host {
     /// Saved data: store name, then key, then value.
     pub(crate) data: RefCell<crate::services::DataStores>,
     pub(crate) data_changed: Cell<bool>,
+    /// Versions, times, user ids and metadata of saved keys, for this run.
+    pub(crate) data_info: RefCell<crate::services::KeyInfos>,
+    /// A script reached `CollectionService.TagAdded` or `TagRemoved`.
+    pub(crate) tag_sets_heard: Cell<bool>,
     /// Instances to destroy, and when.
     pub(crate) debris: RefCell<Vec<(InstanceId, f64)>>,
     /// Attribute and tag names that signals refer to by number.
@@ -484,6 +488,18 @@ fn resume(
     script: &str,
     owner: Option<InstanceId>,
 ) -> Option<ScriptError> {
+    resume_returning(lua, thread, args, script, owner).err()
+}
+
+/// [`resume`], also giving back what the thread returned if it ran to its
+/// end (`None` if it is waiting).
+fn resume_returning(
+    lua: &Lua,
+    thread: Thread,
+    args: MultiValue,
+    script: &str,
+    owner: Option<InstanceId>,
+) -> Result<Option<MultiValue>, ScriptError> {
     let previous = host(lua).current_script.replace(script.to_owned());
     let previous_owner = host(lua).current_owner.replace(owner);
     let deadline = host(lua).deadline.clone();
@@ -535,10 +551,11 @@ fn resume(
                     owner,
                     parallel: false,
                 });
+                return Ok(None);
             }
-            None
+            Ok(Some(yielded))
         }
-        Err(err) => Some(ScriptError { script: script.to_owned(), message: err.to_string() }),
+        Err(err) => Err(ScriptError { script: script.to_owned(), message: err.to_string() }),
     }
 }
 
@@ -557,6 +574,25 @@ fn running_side(lua: &Lua) -> Option<Side> {
         ClassKind::LocalScript => Some(Side::Client),
         ClassKind::Script => Some(Side::Server),
         _ => None,
+    }
+}
+
+/// Runs `func` in a new thread like [`spawn`], and gives back what it
+/// returned if it finished without waiting. An error is reported and gives
+/// `None`, as does a thread that is now waiting.
+pub(crate) fn spawn_returning(
+    lua: &Lua,
+    func: Function,
+    args: MultiValue,
+    script: &str,
+) -> mlua::Result<Option<MultiValue>> {
+    let thread = lua.create_thread(func)?;
+    match resume_returning(lua, thread, args, script, None) {
+        Ok(values) => Ok(values),
+        Err(err) => {
+            host(lua).errors.borrow_mut().push(err);
+            Ok(None)
+        }
     }
 }
 
@@ -1600,6 +1636,8 @@ enum TweenValue {
     UDim2(UDim2),
     UDim(libroxel_instance::UDim),
     CFrame(CFrame),
+    /// Jumps to the goal when the tween reaches its end.
+    Bool(bool),
 }
 
 impl TweenValue {
@@ -1611,6 +1649,7 @@ impl TweenValue {
             PropertyValue::Vec2(v) => TweenValue::Vec2(*v),
             PropertyValue::UDim2(u) => TweenValue::UDim2(*u),
             PropertyValue::UDim(u) => TweenValue::UDim(*u),
+            PropertyValue::Bool(b) => TweenValue::Bool(*b),
             _ => return None,
         })
     }
@@ -1626,6 +1665,7 @@ impl TweenValue {
             (TweenValue::UDim2(a), TweenValue::UDim2(b)) => TweenValue::UDim2(a.lerp(b, t)),
             (TweenValue::UDim(a), TweenValue::UDim(b)) => TweenValue::UDim(a.lerp(b, t)),
             (TweenValue::CFrame(a), TweenValue::CFrame(b)) => TweenValue::CFrame(a.lerp(b, t)),
+            (TweenValue::Bool(a), TweenValue::Bool(b)) => TweenValue::Bool(if t >= 1.0 { b } else { a }),
             (_, to) => to,
         }
     }
@@ -1663,6 +1703,7 @@ impl TweenValue {
         Some(match value {
             Value::Integer(n) => TweenValue::Number(*n as f64),
             Value::Number(n) => TweenValue::Number(*n),
+            Value::Boolean(b) => TweenValue::Bool(*b),
             Value::Vector(_) => TweenValue::Vec3(as_vector3(value)?),
             Value::UserData(ud) => {
                 if let Ok(c) = ud.borrow::<LuaColor3>() {
@@ -1690,6 +1731,7 @@ impl TweenValue {
             TweenValue::Vec2(v) => Value::UserData(lua.create_userdata(LuaVector2(v))?),
             TweenValue::UDim2(u) => Value::UserData(lua.create_userdata(LuaUDim2(u))?),
             TweenValue::UDim(u) => Value::UserData(lua.create_userdata(crate::types::LuaUDim(u))?),
+            TweenValue::Bool(b) => Value::Boolean(b),
         })
     }
 }
@@ -1719,6 +1761,9 @@ struct TweenState {
     info: LuaTweenInfo,
     /// Target, value at the start (filled in when played), goal value.
     goals: Vec<(TweenTarget, Option<TweenValue>, TweenValue)>,
+    /// Every goal it was made with: a newer tween can take some of `goals`
+    /// over, and playing again from the start gets them back.
+    all_goals: Vec<(TweenTarget, TweenValue)>,
     elapsed: f64,
     phase: TweenPhase,
     /// No script holds it any more: it goes once it isn't playing.
@@ -1769,6 +1814,7 @@ fn write_tween_value(lua: &Lua, id: InstanceId, target: TweenTarget, value: Twee
                 TweenValue::Vec2(v) => PropertyValue::Vec2(v),
                 TweenValue::UDim2(u) => PropertyValue::UDim2(u),
                 TweenValue::UDim(u) => PropertyValue::UDim(u),
+                TweenValue::Bool(b) => PropertyValue::Bool(b),
                 TweenValue::CFrame(_) => return,
             };
             host(lua).tree.borrow_mut().set(id, p, value).map_err(tree_err)
@@ -1816,6 +1862,7 @@ fn create_tween(lua: &Lua, target: Value, info: Value, goals: Table) -> mlua::Re
         id: tween,
         instance: id,
         info,
+        all_goals: list.iter().map(|g| (g.0, g.2)).collect(),
         goals: list,
         elapsed: 0.0,
         phase: TweenPhase::Idle,
@@ -1899,14 +1946,20 @@ impl UserData for LuaTween {
         fields.add_field_method_get("Instance", |lua, this| {
             Ok(this.with(lua, |t| t.instance).map(LuaInstance))
         });
+        fields.add_field_method_get("TweenInfo", |lua, this| Ok(this.with(lua, |t| t.info)));
+        fields.add_field_method_get("ClassName", |_, _| Ok(names::tween::TYPE_NAME));
+        fields.add_field_method_get("Name", |_, _| Ok(names::tween::TYPE_NAME));
         fields.add_meta_field(MetaMethod::Type, names::tween::TYPE_NAME);
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method(names::tween::PLAY, |lua, this, ()| {
-            let Some((instance, phase, targets)) =
-                this.with(lua, |t| (t.instance, t.phase, t.goals.iter().map(|g| g.0).collect::<Vec<_>>()))
-            else {
+            let Some((instance, phase, targets)) = this.with(lua, |t| {
+                if t.phase != TweenPhase::Paused && t.phase != TweenPhase::Playing {
+                    t.goals = t.all_goals.iter().map(|(target, goal)| (*target, None, *goal)).collect();
+                }
+                (t.instance, t.phase, t.goals.iter().map(|g| g.0).collect::<Vec<_>>())
+            }) else {
                 return Ok(());
             };
             if phase == TweenPhase::Playing {
@@ -1925,18 +1978,36 @@ impl UserData for LuaTween {
                     t.elapsed = 0.0;
                 });
             }
-            // A newer tween takes over any property an older one is still moving.
-            {
+            // A newer tween takes over any property an older one is still
+            // moving. One left with nothing to move is cancelled, as on Roblox.
+            let overridden: Vec<u64> = {
                 let host = host(lua);
                 let mut tweens = host.tweens.borrow_mut();
+                let mut overridden = Vec::new();
                 for other in tweens.iter_mut().filter(|t| t.id != this.0 && t.instance == instance) {
-                    if other.phase == TweenPhase::Playing {
+                    if matches!(other.phase, TweenPhase::Playing | TweenPhase::Paused) {
+                        let before = other.goals.len();
                         other.goals.retain(|g| !targets.contains(&g.0));
+                        if other.goals.is_empty() && before > 0 {
+                            other.phase = TweenPhase::Cancelled;
+                            other.elapsed = 0.0;
+                            overridden.push(other.id);
+                        }
                     }
                 }
-            }
+                overridden
+            };
             this.with(lua, |t| t.phase = TweenPhase::Playing);
+            if !overridden.is_empty() {
+                let state = playback_state(lua, "Cancelled")?;
+                for id in overridden {
+                    fire(lua, SignalKind::TweenCompleted(id), || Ok(MultiValue::from_iter([state.clone()])));
+                }
+            }
             Ok(())
+        });
+        methods.add_method("IsA", |_, _, class: String| {
+            Ok(matches!(class.as_str(), "Tween" | "TweenBase" | "Instance"))
         });
         methods.add_method(names::tween::PAUSE, |lua, this, ()| {
             this.with(lua, |t| {
@@ -2269,6 +2340,8 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         data: RefCell::new(Default::default()),
         animations: RefCell::new(Default::default()),
         data_changed: Cell::new(false),
+        data_info: RefCell::new(Default::default()),
+        tag_sets_heard: Cell::new(false),
         debris: RefCell::new(Vec::new()),
         interned: RefCell::new(Vec::new()),
         mouse: Cell::new(None),
@@ -2979,9 +3052,30 @@ fn fire_heard_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
         let conns = host.connections.borrow();
         (!conns.watched.is_empty(), conns.tags > 0, conns.tools > 0)
     };
-    if !any_watched && !tags_heard && !tools_heard {
+    let sets_heard = host(lua).tag_sets_heard.get();
+    if !any_watched && !tags_heard && !tools_heard && !sets_heard {
         return Vec::new();
     }
+    // CollectionService.TagAdded fires when the first instance in the game
+    // gets a tag, and TagRemoved when the last one loses it.
+    let tag_set = |tag: &str, added: bool| {
+        if !sets_heard {
+            return;
+        }
+        let count = host(lua).tree.borrow().tagged(tag).len();
+        if (added && count == 1) || (!added && count == 0) {
+            let event = if added { "TagAdded" } else { "TagRemoved" };
+            let args = lua.create_string(tag).map(|t| MultiValue::from_iter([Value::String(t)]));
+            if let Err(err) =
+                args.and_then(|a| crate::lenient::fire_service_event(lua, "CollectionService", event, a))
+            {
+                host(lua)
+                    .errors
+                    .borrow_mut()
+                    .push(ScriptError { script: event.to_owned(), message: err.to_string() });
+            }
+        }
+    };
     let watched = |id: &InstanceId| host(lua).connections.borrow().is_watched(id);
     let with_instance = |signal: SignalKind, id: InstanceId| {
         fire(lua, signal, || Ok(std::iter::once(Value::UserData(push_instance(lua, id)?)).collect()));
@@ -3129,24 +3223,32 @@ fn fire_heard_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
                     fire(lua, SignalKind::AttributeNamedChanged(*id, n), || Ok(MultiValue::new()));
                 }
             }
-            Change::TagAdded { id, tag } if tags_heard => {
-                if let Some(n) = interned(lua, tag) {
+            Change::TagAdded { id, tag } if tags_heard || sets_heard => {
+                tag_set(tag, true);
+                if let Some(n) = interned(lua, tag).filter(|_| tags_heard) {
                     with_instance(SignalKind::TagAdded(n), *id);
                 }
             }
-            Change::TagRemoved { id, tag } if tags_heard => {
-                if let Some(n) = interned(lua, tag) {
+            Change::TagRemoved { id, tag } if tags_heard || sets_heard => {
+                tag_set(tag, false);
+                if let Some(n) = interned(lua, tag).filter(|_| tags_heard) {
                     with_instance(SignalKind::TagRemoved(n), *id);
                 }
             }
-            Change::Destroyed(id) if watched(id) || tags_heard => {
+            Change::Destroyed(id) if watched(id) || tags_heard || sets_heard => {
                 if watched(id) {
                     fire(lua, SignalKind::Destroying(*id), || Ok(MultiValue::new()));
+                }
+                if !tags_heard && !sets_heard {
+                    continue;
+                }
+                let tags = host(lua).tree.borrow().tags(*id).map(|t| t.to_vec()).unwrap_or_default();
+                for tag in &tags {
+                    tag_set(tag, false);
                 }
                 if !tags_heard {
                     continue;
                 }
-                let tags = host(lua).tree.borrow().tags(*id).map(|t| t.to_vec()).unwrap_or_default();
                 for n in tags.iter().filter_map(|t| interned(lua, t)) {
                     with_instance(SignalKind::TagRemoved(n), *id);
                 }

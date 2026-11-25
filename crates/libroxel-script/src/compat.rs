@@ -930,6 +930,9 @@ const ACTION_TITLE: &str = "title";
 const ACTION_IMAGE: &str = "image";
 const ACTION_DESCRIPTION: &str = "description";
 const ACTION_POSITION: &str = "position";
+const ACTION_PRIORITY: &str = "priority";
+/// `Enum.ContextActionPriority.Default`.
+const ACTION_DEFAULT_PRIORITY: f64 = 2000.0;
 
 /// A service table (made once, so every `GetService` gets the same one).
 pub(crate) fn get_service(lua: &Lua, name: &str) -> mlua::Result<Option<Value>> {
@@ -988,13 +991,6 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
     t.set(names::instance::CLASS_NAME, name)?;
     match name {
         MARKETPLACE_SERVICE => {
-            for prompt in [PROMPT_PURCHASE, PROMPT_GAME_PASS_PURCHASE, PROMPT_PRODUCT_PURCHASE] {
-                method(lua, &t, prompt, move |lua, _: MultiValue| {
-                    warn(lua, format!("{MARKETPLACE_SERVICE}.{prompt} {NOT_AVAILABLE}"));
-                    Ok(())
-                })?;
-            }
-            // Purchases never happen, so these never fire.
             for event in [
                 "PromptGamePassPurchaseFinished",
                 "PromptProductPurchaseFinished",
@@ -1004,17 +1000,73 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
             ] {
                 t.set(event, crate::lenient::new_signal(lua)?)?;
             }
-            method(lua, &t, USER_OWNS_GAME_PASS_ASYNC, |_, _: MultiValue| Ok(false))?;
-            method(lua, &t, PLAYER_OWNS_ASSET, |_, _: MultiValue| Ok(false))?;
-            method(lua, &t, GET_PRODUCT_INFO, |lua, _: MultiValue| {
-                let info = lua.create_table()?;
-                info.set(NAME, "")?;
-                Ok(info)
-            })?;
+            // Nothing can be bought in Libroxel. As on Roblox when a player
+            // closes the prompt, its Finished event says it wasn't bought,
+            // so shops that wait for the answer don't get stuck.
+            for (prompt, event, by_user_id) in [
+                (PROMPT_PURCHASE, "PromptPurchaseFinished", false),
+                (PROMPT_GAME_PASS_PURCHASE, "PromptGamePassPurchaseFinished", false),
+                (PROMPT_PRODUCT_PURCHASE, "PromptProductPurchaseFinished", true),
+                ("PromptBundlePurchase", "PromptBundlePurchaseFinished", false),
+                ("PromptSubscriptionPurchase", "PromptSubscriptionPurchaseFinished", false),
+            ] {
+                let signal: Value = t.get(event)?;
+                method(lua, &t, prompt, move |lua, (player, id): (Value, Value)| {
+                    warn(lua, format!("{MARKETPLACE_SERVICE}.{prompt} {NOT_AVAILABLE}"));
+                    let who = if by_user_id {
+                        match &player {
+                            Value::UserData(ud) => {
+                                mlua::ObjectLike::get::<Value>(ud, "UserId").unwrap_or(Value::Nil)
+                            }
+                            other => other.clone(),
+                        }
+                    } else {
+                        player
+                    };
+                    let defer: Function = lua
+                        .load("local signal, who, id = ... task.defer(function() signal:Fire(who, id, false) end)")
+                        .set_name("=MarketplaceService")
+                        .into_function()?;
+                    defer.call::<()>((signal.clone(), who, id))
+                })?;
+            }
+            for owns in [
+                USER_OWNS_GAME_PASS_ASYNC,
+                PLAYER_OWNS_ASSET,
+                "PlayerOwnsAssetAsync",
+                "PlayerOwnsBundle",
+                "PlayerOwnsBundleAsync",
+            ] {
+                method(lua, &t, owns, |_, _: MultiValue| Ok(false))?;
+            }
+            for info in [GET_PRODUCT_INFO, "GetProductInfoAsync"] {
+                method(lua, &t, info, |lua, (id, kind): (Option<f64>, Value)| {
+                    product_info(lua, id.unwrap_or(0.0), &kind)
+                })?;
+            }
         }
         BADGE_SERVICE => {
-            method(lua, &t, AWARD_BADGE, |_, _: MultiValue| Ok(false))?;
-            method(lua, &t, USER_HAS_BADGE_ASYNC, |_, _: MultiValue| Ok(false))?;
+            for award in [AWARD_BADGE, "AwardBadgeAsync"] {
+                method(lua, &t, award, |lua, (user, badge): (f64, f64)| Ok(award_badge(lua, user, badge)))?;
+            }
+            method(lua, &t, USER_HAS_BADGE_ASYNC, |lua, (user, badge): (f64, f64)| {
+                Ok(has_badge(lua, user, badge))
+            })?;
+            method(lua, &t, "UserHasBadge", |lua, (user, badge): (f64, f64)| {
+                Ok(has_badge(lua, user, badge))
+            })?;
+            method(lua, &t, "CheckUserBadgesAsync", |lua, (user, badges): (f64, Vec<f64>)| {
+                Ok(badges.into_iter().filter(|b| has_badge(lua, user, *b)).collect::<Vec<_>>())
+            })?;
+            method(lua, &t, "GetBadgeInfoAsync", |lua, id: f64| {
+                let info = lua.create_table()?;
+                info.set("Name", format!("Badge {id}"))?;
+                info.set("Description", "")?;
+                info.set("IconImageId", 0)?;
+                // Enabled, so the usual "if info.IsEnabled then award" works.
+                info.set("IsEnabled", true)?;
+                Ok(info)
+            })?;
         }
         TELEPORT_SERVICE => {
             for go in [TELEPORT, TELEPORT_ASYNC, TELEPORT_TO_PLACE_INSTANCE] {
@@ -1040,15 +1092,22 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
             })?;
         }
         TEXT_SERVICE => {
-            method(lua, &t, GET_TEXT_SIZE, |_, (text, size): (String, Option<f32>)| {
-                let size = size.unwrap_or(14.0);
-                let lines = text.lines().count().max(1) as f32;
-                let widest = text.lines().map(|l| l.chars().count()).max().unwrap_or(0) as f32;
-                Ok(LuaVector2(Vec2::new(widest * size * 0.5, lines * size)))
-            })?;
+            // GetTextSize(text, size, font, frameSize): wrapped at the frame's width.
+            method(
+                lua,
+                &t,
+                GET_TEXT_SIZE,
+                |_, (text, size, _font, frame): (String, Option<f32>, Value, Value)| {
+                    let size = size.unwrap_or(14.0).max(1.0);
+                    let width = crate::types::as_vector2(&frame).map(|f| f.x).unwrap_or(f32::INFINITY);
+                    let (w, h) = crate::measure_text(&text, size, width);
+                    Ok(LuaVector2(Vec2::new(w.ceil(), h.ceil())))
+                },
+            )?;
             // The text, filtered once; every way of asking for it gives the same.
             method(lua, &t, FILTER_STRING_ASYNC, |lua, (text, _from): (String, MultiValue)| {
                 let result = lua.create_table()?;
+                result.set("ClassName", "TextFilterResult")?;
                 let clean = crate::filter::filter(&text);
                 for name in [
                     GET_NON_CHAT_STRING_FOR_BROADCAST_ASYNC,
@@ -1081,6 +1140,14 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
             method(lua, &t, GET_POLICY_INFO_FOR_PLAYER_ASYNC, |lua, _: MultiValue| {
                 let info = lua.create_table()?;
                 info.set(ARE_ADS_ALLOWED, false)?;
+                // Libroxel shows no links out of the game, trading or paid
+                // random items, so every such policy is the strict one.
+                info.set("AllowedExternalLinkReferences", lua.create_table()?)?;
+                info.set("ArePaidRandomItemsRestricted", true)?;
+                info.set("IsPaidItemTradingAllowed", false)?;
+                info.set("IsSubjectToChinaPolicies", false)?;
+                info.set("IsContentSharingAllowed", false)?;
+                info.set("IsEligibleToPurchaseSubscription", false)?;
                 Ok(info)
             })?;
         }
@@ -1211,19 +1278,96 @@ fn messaging(lua: &Lua, t: &Table) -> mlua::Result<()> {
     })
 }
 
+/// What `GetProductInfo` tells about a product nobody can buy here: the
+/// fields Roblox documents, with a price of 0 and not for sale.
+fn product_info(lua: &Lua, id: f64, kind: &Value) -> mlua::Result<Table> {
+    let kind = if kind.is_nil() { String::new() } else { kind.to_string().unwrap_or_default() };
+    let info = lua.create_table()?;
+    info.set("Name", "")?;
+    info.set("Description", "")?;
+    info.set("PriceInRobux", 0)?;
+    info.set("IsForSale", false)?;
+    info.set("IsPublicDomain", false)?;
+    info.set("IsLimited", false)?;
+    info.set("IsLimitedUnique", false)?;
+    info.set("IsNew", false)?;
+    info.set("Remaining", 0)?;
+    info.set("Sales", 0)?;
+    info.set("IconImageAssetId", 0)?;
+    info.set("MinimumMembershipLevel", 0)?;
+    info.set("ContentRatingTypeId", 0)?;
+    info.set("Created", "1970-01-01T00:00:00Z")?;
+    info.set("Updated", "1970-01-01T00:00:00Z")?;
+    let creator = lua.create_table()?;
+    creator.set("Id", 0)?;
+    creator.set("Name", "")?;
+    creator.set("CreatorType", "User")?;
+    creator.set("CreatorTargetId", 0)?;
+    creator.set("HasVerifiedBadge", false)?;
+    info.set("Creator", creator)?;
+    if kind.ends_with(".GamePass") {
+        info.set("TargetId", id)?;
+        info.set("ProductType", "Game Pass")?;
+    } else if kind.ends_with(".Product") {
+        info.set("ProductId", id)?;
+        info.set("ProductType", "Developer Product")?;
+    } else {
+        info.set("AssetId", id)?;
+        info.set("AssetTypeId", 0)?;
+        info.set("ProductId", 0)?;
+    }
+    Ok(info)
+}
+
+/// Badges are kept with the game's saved data, so an award lasts like
+/// one on Roblox: in a store scripts can't name (it holds a control
+/// character), user id to the badges they have.
+const BADGE_STORE: &str = "libroxel\u{1f}badges";
+
+fn has_badge(lua: &Lua, user: f64, badge: f64) -> bool {
+    let host = host(lua);
+    let data = host.data.borrow();
+    let Some(list) = data.get(BADGE_STORE).and_then(|s| s.get(&(user as i64).to_string())) else {
+        return false;
+    };
+    list.as_array().is_some_and(|l| l.iter().any(|b| b.as_f64() == Some(badge)))
+}
+
+/// Gives `user` the badge; true if they didn't have it yet.
+fn award_badge(lua: &Lua, user: f64, badge: f64) -> bool {
+    if has_badge(lua, user, badge) || user <= 0.0 {
+        return false;
+    }
+    let host = host(lua);
+    host.data_changed.set(true);
+    let mut data = host.data.borrow_mut();
+    let list = data
+        .entry(BADGE_STORE.to_owned())
+        .or_default()
+        .entry((user as i64).to_string())
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    if let serde_json::Value::Array(l) = list {
+        l.push(serde_json::Value::from(badge as i64));
+    }
+    true
+}
+
 /// Key bindings: `BindAction(name, handler, button, keys...)` calls the
 /// handler with the action's name, the press's state and the input when
 /// one of the keys goes down or up.
 fn actions(lua: &Lua, t: &Table) -> mlua::Result<()> {
     let bound = lua.create_table()?;
     lua.set_named_registry_value(ACTIONS_KEY, bound)?;
-    let bind = |lua: &Lua, (name, f, button, keys): (String, Function, Value, mlua::Variadic<Value>)| {
+    let bind = |lua: &Lua, name: String, f: Function, button: Value, priority: f64, keys: Vec<Value>| {
+        // Binding a name again replaces the old binding, which is told to
+        // cancel if one of its inputs is held.
+        cancel_action(lua, &name)?;
         let bound: Table = lua.named_registry_value(ACTIONS_KEY)?;
         let entry = lua.create_table()?;
         entry.set(1, f)?;
         let list = lua.create_table()?;
-        for key in keys.iter() {
-            list.raw_push(key.clone())?;
+        for key in keys {
+            list.raw_push(key)?;
         }
         entry.set(2, list)?;
         // A button on the touch screen, drawn by the app (see `touch_buttons`).
@@ -1231,23 +1375,53 @@ fn actions(lua: &Lua, t: &Table) -> mlua::Result<()> {
         let order: u64 = lua.named_registry_value::<Option<u64>>(ACTIONS_ORDER_KEY)?.unwrap_or(0) + 1;
         lua.set_named_registry_value(ACTIONS_ORDER_KEY, order)?;
         entry.set(ACTION_ORDER, order)?;
+        entry.set(ACTION_PRIORITY, priority)?;
         bound.set(name, entry)
     };
-    method(lua, t, BIND_ACTION, bind)?;
-    method(lua, t, BIND_ACTION_AT_PRIORITY, move |lua, args: MultiValue| {
-        // The priority comes after the button; drop it.
-        let mut args: Vec<Value> = args.into_iter().collect();
-        if args.len() >= 4 {
-            args.remove(3);
-        }
-        let (name, f, button, keys) = mlua::FromLuaMulti::from_lua_multi(args.into_iter().collect(), lua)?;
-        bind(lua, (name, f, button, keys))
-    })?;
+    method(
+        lua,
+        t,
+        BIND_ACTION,
+        move |lua, (name, f, button, keys): (String, Function, Value, mlua::Variadic<Value>)| {
+            bind(lua, name, f, button, ACTION_DEFAULT_PRIORITY, keys.to_vec())
+        },
+    )?;
+    method(
+        lua,
+        t,
+        BIND_ACTION_AT_PRIORITY,
+        move |lua, (name, f, button, priority, keys): (String, Function, Value, Value, mlua::Variadic<Value>)| {
+            bind(lua, name, f, button, priority_number(&priority)?, keys.to_vec())
+        },
+    )?;
     method(lua, t, UNBIND_ACTION, |lua, name: String| {
+        cancel_action(lua, &name)?;
         let bound: Table = lua.named_registry_value(ACTIONS_KEY)?;
         bound.set(name, Value::Nil)
     })?;
+    method(lua, t, names::compat::GET_BOUND_ACTION_INFO, |lua, name: String| {
+        let bound: Table = lua.named_registry_value(ACTIONS_KEY)?;
+        match bound.get::<Value>(name)? {
+            Value::Table(entry) => action_info(lua, &entry),
+            _ => lua.create_table(),
+        }
+    })?;
+    method(lua, t, names::compat::GET_ALL_BOUND_ACTION_INFO, |lua, ()| {
+        let bound: Table = lua.named_registry_value(ACTIONS_KEY)?;
+        let all = lua.create_table()?;
+        for pair in bound.pairs::<String, Table>() {
+            let (name, entry) = pair?;
+            all.set(name, action_info(lua, &entry)?)?;
+        }
+        Ok(all)
+    })?;
     method(lua, t, UNBIND_ALL_ACTIONS, |lua, ()| {
+        let bound: Table = lua.named_registry_value(ACTIONS_KEY)?;
+        let names: Vec<String> =
+            bound.pairs::<String, Value>().filter_map(|p| p.ok().map(|(k, _)| k)).collect();
+        for name in names {
+            cancel_action(lua, &name)?;
+        }
         lua.set_named_registry_value(ACTIONS_KEY, lua.create_table()?)
     })?;
     // How an action's touch button looks and where it sits.
@@ -1320,35 +1494,125 @@ pub(crate) fn press_touch_button(lua: &Lua, name: &str, pressed: bool) -> mlua::
     Ok(())
 }
 
-/// Runs the bound actions for a key or button going down or up.
+/// A priority given as a number or a `ContextActionPriority` item.
+fn priority_number(value: &Value) -> mlua::Result<f64> {
+    match value {
+        Value::Integer(n) => Ok(*n as f64),
+        Value::Number(n) => Ok(*n),
+        Value::Nil => Ok(ACTION_DEFAULT_PRIORITY),
+        Value::UserData(ud) => mlua::ObjectLike::get::<f64>(ud, "Value"),
+        Value::Table(t) => t.get::<f64>("Value"),
+        _ => Err(mlua::Error::runtime("BindActionAtPriority expects a number for the priority")),
+    }
+}
+
+/// What `GetBoundActionInfo` tells about an action.
+fn action_info(lua: &Lua, entry: &Table) -> mlua::Result<Table> {
+    let info = lua.create_table()?;
+    let inputs: Table = entry.get(2)?;
+    info.set("inputTypes", inputs.clone())?;
+    info.set("priorityLevel", entry.get::<Option<f64>>(ACTION_PRIORITY)?.unwrap_or(ACTION_DEFAULT_PRIORITY))?;
+    info.set("stackOrder", entry.get::<Option<u64>>(ACTION_ORDER)?.unwrap_or(0))?;
+    info.set("createTouchButton", entry.get::<Option<bool>>(ACTION_TOUCH_BUTTON)?.unwrap_or(false))?;
+    for (field, key) in
+        [(ACTION_TITLE, "title"), (ACTION_DESCRIPTION, "description"), (ACTION_IMAGE, "image")]
+    {
+        let value: Value = entry.get(field)?;
+        if !value.is_nil() {
+            info.set(key, value)?;
+        }
+    }
+    Ok(info)
+}
+
+/// The input each of `entry`'s bindings is for.
+fn input_matches(entry: &Table, wanted: EnumValue, is_key: bool) -> mlua::Result<bool> {
+    let keys: Table = entry.get(2)?;
+    for key in keys.sequence_values::<Value>() {
+        let Value::UserData(ud) = key? else { continue };
+        let Ok(item) = ud.borrow::<LuaEnumItem>().map(|i| i.0) else { continue };
+        // Binding the keyboard as a whole takes every key.
+        if item == wanted
+            || (is_key && item == EnumValue::UserInputType(libroxel_instance::UserInputType::Keyboard))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn wanted_input(input: UserInput) -> (EnumValue, bool) {
+    match input {
+        UserInput::Key(k) => (EnumValue::KeyCode(k), true),
+        UserInput::MouseButton1 => {
+            (EnumValue::UserInputType(libroxel_instance::UserInputType::MouseButton1), false)
+        }
+        UserInput::MouseButton2 => {
+            (EnumValue::UserInputType(libroxel_instance::UserInputType::MouseButton2), false)
+        }
+    }
+}
+
+/// Tells an action being unbound (or bound again) that the input it was
+/// handling is cancelled, if one of its inputs is held down.
+fn cancel_action(lua: &Lua, name: &str) -> mlua::Result<()> {
+    let Value::Table(bound) = lua.named_registry_value::<Value>(ACTIONS_KEY)? else { return Ok(()) };
+    let Value::Table(entry) = bound.get::<Value>(name)? else { return Ok(()) };
+    let held: Vec<UserInput> = crate::bindings::host(lua).inputs_down.borrow().iter().copied().collect();
+    for input in held {
+        let (wanted, is_key) = wanted_input(input);
+        if input_matches(&entry, wanted, is_key)? {
+            let object = lua.create_userdata(crate::services::InputObject(input, false))?;
+            let args = MultiValue::from_iter([
+                Value::String(lua.create_string(name)?),
+                Value::UserData(
+                    lua.create_userdata(LuaEnumItem(EnumValue::UserInputState(UserInputState::Cancel)))?,
+                ),
+                Value::UserData(object),
+            ]);
+            crate::bindings::spawn(lua, entry.get::<Function>(1)?, args, CONTEXT_ACTION_SERVICE, None)?;
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Runs the bound actions for a key or button going down or up. As on
+/// Roblox, the highest priority goes first (the latest bound among equals),
+/// and each handler sinks the input unless it returns
+/// `Enum.ContextActionResult.Pass`.
 pub(crate) fn action_input(lua: &Lua, input: UserInput, began: bool, object: &Value) -> mlua::Result<()> {
     let Value::Table(bound) = lua.named_registry_value::<Value>(ACTIONS_KEY)? else { return Ok(()) };
-    let wanted = match input {
-        UserInput::Key(k) => EnumValue::KeyCode(k),
-        UserInput::MouseButton1 => EnumValue::UserInputType(libroxel_instance::UserInputType::MouseButton1),
-        UserInput::MouseButton2 => EnumValue::UserInputType(libroxel_instance::UserInputType::MouseButton2),
-    };
+    let (wanted, is_key) = wanted_input(input);
     let mut calls = Vec::new();
     for pair in bound.pairs::<String, Table>() {
         let (name, entry) = pair?;
-        let keys: Table = entry.get(2)?;
-        let matches = keys.sequence_values::<Value>().any(|k| {
-            k.ok().and_then(|k| match k {
-                Value::UserData(ud) => ud.borrow::<LuaEnumItem>().ok().map(|i| i.0),
-                _ => None,
-            }) == Some(wanted)
-        });
-        if matches {
-            calls.push((name, entry.get::<Function>(1)?));
+        if input_matches(&entry, wanted, is_key)? {
+            let priority = entry.get::<Option<f64>>(ACTION_PRIORITY)?.unwrap_or(ACTION_DEFAULT_PRIORITY);
+            let order = entry.get::<Option<u64>>(ACTION_ORDER)?.unwrap_or(0);
+            calls.push((priority, order, name, entry.get::<Function>(1)?));
         }
     }
-    for (name, f) in calls {
+    calls.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.cmp(&a.1)));
+    for (_, _, name, f) in calls {
         let args = MultiValue::from_iter([
             Value::String(lua.create_string(&name)?),
             Value::UserData(lua.create_userdata(input_state(began))?),
             object.clone(),
         ]);
-        crate::bindings::spawn(lua, f, args, CONTEXT_ACTION_SERVICE, None)?;
+        let returned = crate::bindings::spawn_returning(lua, f, args, CONTEXT_ACTION_SERVICE)?;
+        let passed = returned.and_then(|r| r.into_iter().next()).is_some_and(|v| is_pass(&v));
+        if !passed {
+            break;
+        }
     }
     Ok(())
+}
+
+/// The handler returned `Enum.ContextActionResult.Pass`.
+fn is_pass(value: &Value) -> bool {
+    match value {
+        Value::UserData(_) | Value::Table(_) => value.to_string().is_ok_and(|s| s.ends_with(".Pass")),
+        _ => false,
+    }
 }
