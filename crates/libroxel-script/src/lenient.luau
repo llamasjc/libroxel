@@ -522,6 +522,10 @@ local function humanoid_state(h, s)
 	if h.Sit then
 		return State.Seated
 	end
+	local moving = L.moving(h)
+	if moving then
+		return State[moving]
+	end
 	local root = root_part(h.Parent)
 	if root then
 		local v = velocity(root)
@@ -571,7 +575,16 @@ local function watch_humanoid(h, s)
 			local v = velocity(root)
 			speed = Vector3.new(v.X, 0, v.Z).Magnitude
 		end
-		if sig.Running and math.abs(speed - last_speed) > 0.1 then
+		-- Climbing tells how fast it goes up; swimming, how fast it goes.
+		local along = now == State.Climbing and sig.Climbing or now == State.Swimming and sig.Swimming
+		if along then
+			local v = root and velocity(root) or Vector3.zero
+			local rate = now == State.Climbing and v.Y or v.Magnitude
+			if math.abs(rate - last_speed) > 0.1 then
+				last_speed = rate
+				along:Fire(rate)
+			end
+		elseif sig.Running and math.abs(speed - last_speed) > 0.1 then
 			last_speed = speed
 			sig.Running:Fire(speed)
 		end
@@ -1052,9 +1065,9 @@ add(signals, "Humanoid", {
 	Running = state_signal,
 	Jumping = state_signal,
 	FreeFalling = state_signal,
-	Climbing = true,
+	Climbing = state_signal,
 	GettingUp = true,
-	Swimming = true,
+	Swimming = state_signal,
 	Strafing = true,
 	PlatformStanding = true,
 	FallingDown = true,
@@ -2660,11 +2673,16 @@ local SERVICES = {
 	},
 	KeyframeSequenceProvider = {
 		methods = {
-			RegisterKeyframeSequence = function()
-				return ""
+			RegisterKeyframeSequence = function(_, sequence)
+				return L.register_sequence(sequence)
 			end,
-			GetKeyframeSequenceAsync = function()
-				error("keyframe sequences aren't available in libroxel", 2)
+			-- Only sequences registered here: assets aren't fetched.
+			GetKeyframeSequenceAsync = function(_, id)
+				local sequence = L.registered_sequence(tostring(id))
+				if sequence == nil then
+					error("libroxel can't fetch the keyframe sequence " .. tostring(id), 2)
+				end
+				return sequence:Clone()
 			end,
 		},
 	},

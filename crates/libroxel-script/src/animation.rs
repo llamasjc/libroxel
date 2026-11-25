@@ -2,12 +2,21 @@
 //! older `Humanoid:LoadAnimation`) gives an animation track to `Play`,
 //! `Stop` and `AdjustSpeed`. The engine asks [`pose_for`] how each
 //! character's limbs should be turned.
+//!
+//! A track plays a built-in clip (`libroxel://wave`), a keyframe sequence
+//! a script registered (or the engine supplied for an asset id), or, for
+//! an asset libroxel can't fetch, the built-in clip that the character's
+//! animate script means by the animation's name (its wave, jump, climb and
+//! so on), else nothing for a second.
 
-use libroxel_instance::animation::{Clip, Pose, clip, mix_pose};
+use std::rc::Rc;
+
+use libroxel_instance::animation::{Clip, Pose, clip};
 use libroxel_instance::{ClassKind, InstanceId, Property, PropertyValue};
 use mlua::{Lua, MetaMethod, MultiValue, UserData, UserDataFields, UserDataMethods, Value};
 
 use crate::bindings::{Signal, SignalKind, as_instance, fire, host, push_instance, require_class};
+use crate::keyframes::{CORE, Motion, enum_number, from_sequence, id_key, mix_moving};
 use crate::names::animation as names;
 
 fn runtime_err(message: impl Into<String>) -> mlua::Error {
@@ -19,8 +28,13 @@ struct Track {
     id: u64,
     humanoid: InstanceId,
     animation: InstanceId,
-    clip: &'static Clip,
+    clip: Rc<Motion>,
     looped: bool,
+    /// Its `AnimationPriority` number: higher ones play over lower ones.
+    priority: u32,
+    /// How far in it was when its keyframes and markers were last looked
+    /// at, unwrapped (a looped track counts on past its length).
+    seen: f32,
     speed: f32,
     weight: f32,
     /// How far in it is, in seconds, as of `at`.
@@ -63,6 +77,16 @@ pub(crate) struct Tracks {
     next: u64,
     /// How many script objects stand for each track.
     held: Held,
+    /// Keyframe sequences by the id they were registered under (see
+    /// [`id_key`]): the sequence, and the motion it was read as.
+    sequences: std::collections::HashMap<String, (Option<InstanceId>, Rc<Motion>)>,
+    /// How many sequences scripts have registered.
+    temp: u64,
+}
+
+/// The order tracks are drawn in: `Core` under everything, then by number.
+fn rank(priority: u32) -> i64 {
+    if priority == CORE { -1 } else { i64::from(priority) }
 }
 
 type Held = std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u64, u32>>>;
@@ -122,10 +146,11 @@ impl UserData for LuaTrack {
             with_track(lua, this.0, |t, now| {
                 t.position = position.max(0.0);
                 t.at = now;
+                t.seen = t.position;
             })
         });
         fields.add_field_method_get(names::NAME, |lua, this| {
-            with_track(lua, this.0, |t, _| t.clip.name.to_owned())
+            with_track(lua, this.0, |t, _| t.clip.name.clone())
         });
         fields.add_field_method_get(names::ANIMATION, |lua, this| {
             let animation = with_track(lua, this.0, |t, _| t.animation)?;
@@ -135,14 +160,17 @@ impl UserData for LuaTrack {
             .add_field_method_get(names::STOPPED, |_, this| Ok(Signal(SignalKind::AnimationStopped(this.0))));
         // Fires as it finishes; libroxel's tracks are done once stopped.
         fields.add_field_method_get("Ended", |_, this| Ok(Signal(SignalKind::AnimationStopped(this.0))));
-        fields.add_field_method_get("Priority", |lua, this| extra_member(lua, this.0, "Priority"));
-        fields.add_field_method_set("Priority", |lua, this, priority: Value| {
-            extra(lua, this.0)?.raw_set("Priority", priority)
+        fields.add_field_method_get(names::PRIORITY, |lua, this| extra_member(lua, this.0, names::PRIORITY));
+        fields.add_field_method_set(names::PRIORITY, |lua, this, priority: Value| {
+            if let Some(n) = enum_number(&priority) {
+                with_track(lua, this.0, |t, _| t.priority = n)?;
+            }
+            extra(lua, this.0)?.raw_set(names::PRIORITY, priority)
         });
-        fields.add_field_method_get("KeyframeReached", |lua, this| {
-            extra_member(lua, this.0, "KeyframeReached")
+        fields.add_field_method_get(names::KEYFRAME_REACHED, |lua, this| {
+            extra_member(lua, this.0, names::KEYFRAME_REACHED)
         });
-        fields.add_field_method_get("DidLoop", |lua, this| extra_member(lua, this.0, "DidLoop"));
+        fields.add_field_method_get(names::DID_LOOP, |lua, this| extra_member(lua, this.0, names::DID_LOOP));
         fields.add_meta_field(MetaMethod::Type, names::TRACK_TYPE_NAME);
     }
 
@@ -155,6 +183,8 @@ impl UserData for LuaTrack {
                     let started = !t.playing || t.stopping;
                     if started {
                         t.position = 0.0;
+                        // So a keyframe or marker right at the start fires.
+                        t.seen = -1e-4;
                     } else {
                         t.position = t.time(now);
                     }
@@ -214,7 +244,7 @@ impl UserData for LuaTrack {
                 t.speed = speed.unwrap_or(1.0);
             })
         });
-        methods.add_method("GetMarkerReachedSignal", |lua, this, name: String| {
+        methods.add_method(names::GET_MARKER_REACHED_SIGNAL, |lua, this, name: String| {
             let key = format!("marker:{name}");
             let t = extra(lua, this.0)?;
             if let Value::Nil = t.raw_get::<Value>(key.as_str())? {
@@ -222,7 +252,11 @@ impl UserData for LuaTrack {
             }
             t.raw_get::<Value>(key.as_str())
         });
-        methods.add_method("GetTimeOfKeyframe", |_, _, _: Value| Ok(0.0));
+        methods.add_method(names::GET_TIME_OF_KEYFRAME, |lua, this, name: String| {
+            with_track(lua, this.0, |t, _| {
+                t.clip.keyframes.iter().find(|(_, n)| *n == name).map_or(0.0, |(time, _)| *time)
+            })
+        });
         methods.add_method(names::ADJUST_WEIGHT, |lua, this, weight: Option<f32>| {
             with_track(lua, this.0, |t, _| t.weight = weight.unwrap_or(1.0))
         });
@@ -263,16 +297,17 @@ fn extra_member(lua: &Lua, id: u64, key: &str) -> mlua::Result<Value> {
         return Ok(v);
     }
     let made = match key {
-        "Priority" => {
+        names::PRIORITY => {
+            let priority = with_track(lua, id, |t, _| t.priority)?;
             let e: mlua::Table = lua.globals().get("Enum")?;
-            let p: Value = e.get("AnimationPriority")?;
+            let p: Value = e.get(names::PRIORITY_ENUM)?;
             match p {
-                Value::Table(p) => p.get("Core")?,
-                Value::UserData(p) => mlua::ObjectLike::get(&p, "Core")?,
+                Value::Table(p) => mlua::ObjectLike::call_method(&p, names::FROM_VALUE, priority)?,
+                Value::UserData(p) => mlua::ObjectLike::call_method(&p, names::FROM_VALUE, priority)?,
                 _ => Value::Nil,
             }
         }
-        "KeyframeReached" | "DidLoop" => crate::lenient::new_signal(lua)?,
+        names::KEYFRAME_REACHED | names::DID_LOOP => crate::lenient::new_signal(lua)?,
         _ => return Err(runtime_err(format!("{key} is not a valid member of AnimationTrack"))),
     };
     t.raw_set(key, made.clone())?;
@@ -317,20 +352,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
         let animation =
             as_instance(&animation).ok_or_else(|| runtime_err("LoadAnimation expects an Animation"))?;
         require_class(lua, animation, ClassKind::Animation, names::LOAD_ANIMATION)?;
-        let id = match host(lua).tree.borrow().get(animation, Property::AnimationId) {
-            Ok(PropertyValue::String(s)) => s,
-            _ => String::new(),
-        };
-        let clip = match clip(&id) {
-            Some(clip) => clip,
-            // A built-in name that isn't one is a mistake worth saying.
-            None if id.starts_with(libroxel_instance::animation::BUILT_IN) => {
-                return Err(runtime_err(format!(
-                    "there is no animation {id:?}; built-in ones are libroxel://wave, cheer, point, nod, shake, jacks and dance"
-                )));
-            }
-            None => &SILENT,
-        };
+        let clip = motion_for(lua, animation)?;
         let host = host(lua);
         let now = host.clock.get();
         let mut tracks = host.animations.borrow_mut();
@@ -340,8 +362,10 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
             id,
             humanoid,
             animation,
-            clip,
             looped: clip.looped,
+            priority: clip.priority,
+            seen: 0.0,
+            clip,
             speed: 1.0,
             weight: 1.0,
             position: 0.0,
@@ -371,6 +395,81 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
+/// The layer's hooks for `KeyframeSequenceProvider`: registering a
+/// sequence gives an id an animation can play it by, and that id gives
+/// the sequence back.
+pub(crate) fn install_layer(lua: &Lua, layer: &mlua::Table) -> mlua::Result<()> {
+    layer.set(
+        names::REGISTER_SEQUENCE,
+        lua.create_function(|lua, sequence: Value| {
+            let sequence = as_instance(&sequence)
+                .ok_or_else(|| runtime_err("RegisterKeyframeSequence expects a KeyframeSequence"))?;
+            let motion = Rc::new(from_sequence(lua, sequence)?);
+            let host = host(lua);
+            let mut tracks = host.animations.borrow_mut();
+            let id = format!("{}{}", names::TEMP_ID, tracks.temp);
+            tracks.temp += 1;
+            tracks.sequences.insert(id_key(&id), (Some(sequence), motion));
+            Ok(id)
+        })?,
+    )?;
+    layer.set(
+        names::REGISTERED_SEQUENCE,
+        lua.create_function(|lua, id: String| {
+            let found = host(lua).animations.borrow().sequences.get(&id_key(&id)).and_then(|s| s.0);
+            let Some(sequence) = found else { return Ok(Value::Nil) };
+            if host(lua).tree.borrow().is_destroyed(sequence) != Ok(false) {
+                return Ok(Value::Nil);
+            }
+            Ok(Value::UserData(push_instance(lua, sequence)?))
+        })?,
+    )?;
+    Ok(())
+}
+
+/// Makes `id` (an asset id such as `rbxassetid://123`, or any other) play
+/// the keyframe sequence `sequence`, as it is now.
+pub(crate) fn register(lua: &Lua, id: &str, sequence: InstanceId) -> mlua::Result<()> {
+    let motion = Rc::new(from_sequence(lua, sequence)?);
+    host(lua).animations.borrow_mut().sequences.insert(id_key(id), (Some(sequence), motion));
+    Ok(())
+}
+
+/// What an `Animation` plays: see the top of this file.
+fn motion_for(lua: &Lua, animation: InstanceId) -> mlua::Result<Rc<Motion>> {
+    let host = host(lua);
+    let (id, own_name, holder_name) = {
+        let tree = host.tree.borrow();
+        let id = match tree.get(animation, Property::AnimationId) {
+            Ok(PropertyValue::String(s)) => s,
+            _ => String::new(),
+        };
+        let name = |i: InstanceId| match tree.get(i, Property::Name) {
+            Ok(PropertyValue::String(s)) => s.to_ascii_lowercase(),
+            _ => String::new(),
+        };
+        let holder = tree.parent(animation).ok().flatten().map(name).unwrap_or_default();
+        (id, name(animation), holder)
+    };
+    if let Some(clip) = clip(&id) {
+        return Ok(Rc::new(Motion::built_in(clip)));
+    }
+    // A built-in name that isn't one is a mistake worth saying.
+    if id.starts_with(libroxel_instance::animation::BUILT_IN) {
+        return Err(runtime_err(format!(
+            "there is no animation {id:?}; built-in ones are libroxel://wave, cheer, point, nod, shake, jacks, dance, jump, fall, climb, hold and laugh"
+        )));
+    }
+    if let Some((_, motion)) = host.animations.borrow().sequences.get(&id_key(&id)) {
+        return Ok(motion.clone());
+    }
+    let by_name = names::BY_NAME
+        .iter()
+        .find(|(n, _)| *n == own_name || *n == holder_name)
+        .and_then(|(_, built_in)| clip(&format!("{}{built_in}", libroxel_instance::animation::BUILT_IN)));
+    Ok(Rc::new(Motion::built_in(by_name.unwrap_or(&SILENT))))
+}
+
 /// An animator's (or humanoid's) animation methods.
 pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> mlua::Result<Option<Value>> {
     let animates = match class {
@@ -392,6 +491,7 @@ pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> m
 /// whose humanoid is gone or that no script holds and aren't playing.
 pub(crate) fn step(lua: &Lua) {
     let mut forgotten = Vec::new();
+    let mut reached = Vec::new();
     let ended: Vec<u64> = {
         let host = host(lua);
         let now = host.clock.get();
@@ -409,6 +509,9 @@ pub(crate) fn step(lua: &Lua) {
         });
         let mut ended = Vec::new();
         for t in &mut tracks.tracks {
+            if t.playing && !t.stopping {
+                reached_since(t, now, &mut reached);
+            }
             if t.playing && !t.stopping && !t.looped && t.time(now) >= t.clip.length {
                 t.position = t.clip.length;
                 t.at = now;
@@ -425,6 +528,18 @@ pub(crate) fn step(lua: &Lua) {
         }
         ended
     };
+    for (id, what) in reached {
+        let Ok(t) = extra(lua, id) else { continue };
+        let (key, arg) = match what {
+            Reached::Keyframe(name) => (names::KEYFRAME_REACHED.to_owned(), Some(name)),
+            Reached::Marker(name, value) => (format!("marker:{name}"), Some(value)),
+            Reached::Loop => (names::DID_LOOP.to_owned(), None),
+        };
+        // Only events a script asked for were made, so only they fire.
+        if let Ok(Value::Table(signal)) = t.raw_get::<Value>(key.as_str()) {
+            let _ = mlua::ObjectLike::call_method::<()>(&signal, names::FIRE, arg);
+        }
+    }
     for id in ended {
         fire(lua, SignalKind::AnimationStopped(id), || Ok(MultiValue::new()));
     }
@@ -442,6 +557,58 @@ pub(crate) fn step(lua: &Lua) {
     }
 }
 
+/// Something a track passed while playing.
+enum Reached {
+    Keyframe(String),
+    Marker(String, String),
+    Loop,
+}
+
+/// What `t` passed since it was last looked at, up to now.
+fn reached_since(t: &mut Track, now: f64, out: &mut Vec<(u64, Reached)>) {
+    let clip = t.clip.clone();
+    let length = clip.length;
+    let mut to = t.time(now);
+    if !t.looped {
+        to = to.min(length);
+    }
+    let from = t.seen;
+    t.seen = to;
+    if to <= from || (clip.keyframes.is_empty() && clip.markers.is_empty() && !t.looped) {
+        return;
+    }
+    // Each time round a looped track, and at most a few, for a long frame.
+    let rounds: Vec<f32> = if t.looped && length > 1e-3 {
+        let first = (from / length).floor().max(0.0) as i64;
+        let last = (to / length).floor() as i64;
+        (first..=last.min(first + 4)).map(|r| r as f32 * length).collect()
+    } else {
+        vec![0.0]
+    };
+    for start in rounds {
+        if start > 0.0 && start > from && start <= to {
+            out.push((t.id, Reached::Loop));
+        }
+        let passed = |time: f32| {
+            let at = start + time;
+            at > from && at <= to
+        };
+        let mut found: Vec<(f32, Reached)> = Vec::new();
+        for (time, name) in &clip.keyframes {
+            if passed(*time) {
+                found.push((*time, Reached::Keyframe(name.clone())));
+            }
+        }
+        for (time, name, value) in &clip.markers {
+            if passed(*time) {
+                found.push((*time, Reached::Marker(name.clone(), value.clone())));
+            }
+        }
+        found.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out.extend(found.into_iter().map(|(_, r)| (t.id, r)));
+    }
+}
+
 /// How the animations playing on `humanoid` turn its limbs now, and
 /// whether they move the legs. `None` while none are playing.
 pub(crate) fn pose_for(lua: &Lua, humanoid: InstanceId) -> Option<(Pose, bool)> {
@@ -449,14 +616,17 @@ pub(crate) fn pose_for(lua: &Lua, humanoid: InstanceId) -> Option<(Pose, bool)> 
     let now = host.clock.get();
     let tracks = host.animations.borrow();
     let mut pose: Option<(Pose, bool)> = None;
-    for t in tracks.tracks.iter().filter(|t| t.humanoid == humanoid) {
+    let mut playing: Vec<&Track> = tracks.tracks.iter().filter(|t| t.humanoid == humanoid).collect();
+    // Lower priorities first, so higher ones play over them where they move.
+    playing.sort_by_key(|t| rank(t.priority));
+    for t in playing {
         let strength = t.strength(now);
-        if strength <= 0.0 || t.clip.keys.is_empty() {
+        if strength <= 0.0 || t.clip.is_still() {
             continue;
         }
         let sampled = t.clip.sample(if t.looped { t.time(now) } else { t.time(now).min(t.clip.length) });
         let (base, legs) = pose.unwrap_or_default();
-        pose = Some((mix_pose(base, sampled, strength), legs || t.clip.legs));
+        pose = Some((mix_moving(base, sampled, strength, &t.clip.moves), legs || t.clip.legs()));
     }
     pose
 }

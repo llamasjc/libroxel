@@ -1468,6 +1468,7 @@ impl PlaySession {
                     }
                 } else if let Some(c) = avatar.character.filter(|c| !c.is_dead(&tree)) {
                     c.drive(&tree, &mut self.physics, *input, dt);
+                    c.share_moving(&mut tree, &self.physics);
                 }
             }
             let player_models: Vec<InstanceId> =

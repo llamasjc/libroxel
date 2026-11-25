@@ -97,6 +97,29 @@ const DANCE_B: Pose = Pose {
     bob: 0.25,
 };
 
+const JUMP_UP: Pose = arms(limb(170.0, 0.0), limb(170.0, 0.0));
+const FALL: Pose = arms(limb(150.0, 25.0), limb(150.0, 25.0));
+const CLIMB_A: Pose = Pose {
+    left_arm: limb(160.0, 0.0),
+    right_arm: limb(110.0, 0.0),
+    left_leg: limb(40.0, 0.0),
+    right_leg: limb(0.0, 0.0),
+    nod: 0.0,
+    turn: 0.0,
+    bob: 0.0,
+};
+const CLIMB_B: Pose = Pose {
+    left_arm: limb(110.0, 0.0),
+    right_arm: limb(160.0, 0.0),
+    left_leg: limb(0.0, 0.0),
+    right_leg: limb(40.0, 0.0),
+    nod: 0.0,
+    turn: 0.0,
+    bob: 0.0,
+};
+const HOLD: Pose = arms(limb(0.0, 0.0), limb(90.0, 0.0));
+const LAUGH_BACK: Pose = Pose { nod: -18.0, bob: 0.1, ..arms(limb(10.0, 10.0), limb(10.0, 10.0)) };
+
 /// Every built-in animation.
 pub const CLIPS: &[Clip] = &[
     Clip {
@@ -163,6 +186,32 @@ pub const CLIPS: &[Clip] = &[
         legs: true,
         keys: &[(0.0, DANCE_A), (0.6, DANCE_B), (1.2, DANCE_A)],
     },
+    // Arms thrown up for a jump, held there.
+    Clip {
+        name: "jump",
+        length: 0.3,
+        looped: false,
+        legs: false,
+        keys: &[(0.0, REST), (0.15, JUMP_UP), (0.3, JUMP_UP)],
+    },
+    Clip { name: "fall", length: 0.3, looped: false, legs: false, keys: &[(0.0, JUMP_UP), (0.3, FALL)] },
+    // Hand over hand, a knee up on each reach.
+    Clip {
+        name: "climb",
+        length: 1.0,
+        looped: true,
+        legs: true,
+        keys: &[(0.0, CLIMB_A), (0.5, CLIMB_B), (1.0, CLIMB_A)],
+    },
+    // The right arm held out in front, as for carrying a tool.
+    Clip { name: "hold", length: 1.0, looped: true, legs: false, keys: &[(0.0, HOLD), (1.0, HOLD)] },
+    Clip {
+        name: "laugh",
+        length: 1.2,
+        looped: false,
+        legs: false,
+        keys: &[(0.0, REST), (0.3, LAUGH_BACK), (0.5, REST), (0.8, LAUGH_BACK), (1.2, REST)],
+    },
 ];
 
 /// The built-in clip an animation id names, like `libroxel://wave`.
@@ -196,26 +245,29 @@ impl Clip {
     /// The pose `time` seconds in (wrapped round when looped, held at the
     /// end when not).
     pub fn sample(&self, time: f32) -> Pose {
-        let time = if self.looped && self.length > 0.0 {
-            time.rem_euclid(self.length)
-        } else {
-            time.clamp(0.0, self.length)
-        };
-        let Some(first) = self.keys.first() else { return REST };
-        if time <= first.0 {
-            return first.1;
-        }
-        for pair in self.keys.windows(2) {
-            let ((t0, a), (t1, b)) = (pair[0], pair[1]);
-            if time <= t1 {
-                let t = if t1 > t0 { (time - t0) / (t1 - t0) } else { 1.0 };
-                // Ease in and out, so moves don't start and stop with a jolt.
-                let t = t * t * (3.0 - 2.0 * t);
-                return mix_pose(a, b, t);
-            }
-        }
-        self.keys.last().map_or(REST, |k| k.1)
+        sample_keys(self.keys, self.length, self.looped, time, true)
     }
+}
+
+/// The pose `time` seconds into the keys of a clip `length` long. With
+/// `ease`, moves between keys start and stop gently; without, they go
+/// straight from one key to the next (for clips with many close keys).
+pub fn sample_keys(keys: &[(f32, Pose)], length: f32, looped: bool, time: f32, ease: bool) -> Pose {
+    let time = if looped && length > 0.0 { time.rem_euclid(length) } else { time.clamp(0.0, length) };
+    let Some(first) = keys.first() else { return REST };
+    if time <= first.0 {
+        return first.1;
+    }
+    for pair in keys.windows(2) {
+        let ((t0, a), (t1, b)) = (pair[0], pair[1]);
+        if time <= t1 {
+            let t = if t1 > t0 { (time - t0) / (t1 - t0) } else { 1.0 };
+            // Ease in and out, so moves don't start and stop with a jolt.
+            let t = if ease { t * t * (3.0 - 2.0 * t) } else { t };
+            return mix_pose(a, b, t);
+        }
+    }
+    keys.last().map_or(REST, |k| k.1)
 }
 
 #[cfg(test)]

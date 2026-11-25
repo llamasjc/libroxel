@@ -176,3 +176,45 @@ fn climbing_to_the_top_of_a_truss_steps_onto_it() {
     }
     assert!(stood_on_top, "walked over the top; ended at {:?}", root_position(&session));
 }
+
+#[test]
+fn a_climbing_humanoid_says_so_and_its_climb_animation_plays() {
+    let mut session = session();
+    humanoid_script(
+        &session,
+        r#"
+        local t = Instance.new("TrussPart")
+        t.Anchored = true
+        t.Size = Vector3.new(2, 20, 2)
+        t.Position = Vector3.new(4, 10, 0)
+        t.Parent = workspace
+        -- As a character's animate script keeps it.
+        local holder = Instance.new("StringValue")
+        holder.Name = "climb"
+        local animation = Instance.new("Animation")
+        animation.Name = "ClimbAnim"
+        animation.AnimationId = "rbxassetid://5"
+        animation.Parent = holder
+        local track = h:LoadAnimation(animation)
+        local fastest = 0
+        h.Climbing:Connect(function(speed)
+            fastest = math.max(fastest, speed)
+            if not track.IsPlaying then track:Play() end
+        end)
+        h.StateChanged:Connect(function(_, new)
+            if new == Enum.HumanoidStateType.Climbing then print("climbing", h:GetState() == new) end
+        end)
+        task.delay(0.8, function() print(fastest > 5, track.IsPlaying, track.Looped) end)
+    "#,
+    );
+    let into = CharacterInput { move_dir: Vec3::new(1.0, 0.0, 0.0), ..Default::default() };
+    let mut out = Vec::new();
+    for _ in 0..60 {
+        session.step(DT, into);
+        out.extend(session.take_log().into_iter().map(|l| l.text).filter(|t| !t.is_empty()));
+    }
+    assert_eq!(out, ["climbing true", "true true true"]);
+    let humanoid = session.character().unwrap().humanoid;
+    let (_, legs) = session.runtime().animation_pose(humanoid).expect("climbing animation");
+    assert!(legs);
+}

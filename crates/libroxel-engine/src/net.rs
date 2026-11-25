@@ -2971,6 +2971,7 @@ impl PlaySession {
                     .collect();
                 self.physics.set_assemblies(others, theirs);
                 c.drive(&t, &mut self.physics, input, dt);
+                c.share_moving(&mut t, &self.physics);
                 self.physics.step(&mut t, dt);
                 c.follow(&mut t);
             }

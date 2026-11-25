@@ -34,6 +34,21 @@ pub(crate) fn install(lua: &Lua, enum_lib: &Table) -> mlua::Result<()> {
         .call((enum_lib.clone(), lua.globals()))?;
     layer.get::<Function>("add_enums")?.call::<()>((enum_lib.clone(), crate::reflection::enums(lua)?))?;
     layer.get::<Function>("globals")?.call::<()>(())?;
+    crate::animation::install_layer(lua, &layer)?;
+    // What the engine says a humanoid's character is doing (climbing,
+    // swimming), or nil.
+    layer.set(
+        "moving",
+        lua.create_function(|lua, h: Value| {
+            let Some(id) = crate::bindings::as_instance(&h) else { return Ok(None) };
+            let host = crate::bindings::host(lua);
+            let tree = host.tree.borrow();
+            Ok(match tree.get_extra(id, crate::names::character::MOVING) {
+                Ok(Some(libroxel_instance::PropertyValue::String(s))) => Some(s),
+                _ => None,
+            })
+        })?,
+    )?;
     // Where the GUI object was really drawn, for AbsolutePosition and AbsoluteSize.
     layer.set(
         "drawn_rect",

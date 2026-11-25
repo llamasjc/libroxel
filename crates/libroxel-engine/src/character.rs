@@ -702,6 +702,29 @@ impl Character {
         drive(tree, physics, self.root, self.humanoid, input, dt);
     }
 
+    /// Tells scripts whether the character is climbing or swimming (for
+    /// its humanoid's state and events). Call after [`Character::drive`].
+    pub fn share_moving(&self, tree: &mut InstanceTree, physics: &Physics) {
+        let moving = if physics.is_climbing(self.root) {
+            Some(names::CLIMBING)
+        } else if physics.is_in_water(self.root) {
+            Some(names::SWIMMING)
+        } else {
+            None
+        };
+        let now = match tree.get_extra(self.humanoid, names::MOVING) {
+            Ok(Some(PropertyValue::String(s))) => Some(s),
+            _ => None,
+        };
+        if now.as_deref() != moving {
+            let _ = tree.set_extra(
+                self.humanoid,
+                names::MOVING,
+                moving.map(|m| PropertyValue::String(m.to_owned())),
+            );
+        }
+    }
+
     /// Keeps the body on the root, standing straight. Call after
     /// [`Physics::step`]; the session poses it properly later in the frame.
     pub fn follow(&self, tree: &mut InstanceTree) {

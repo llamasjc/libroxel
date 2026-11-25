@@ -27,6 +27,7 @@ pub mod drawn;
 mod effects;
 pub mod filter;
 mod items;
+mod keyframes;
 mod lenient;
 pub mod names;
 mod net;
@@ -258,6 +259,14 @@ impl ScriptRuntime {
     /// now, and whether they move its legs. `None` while none are playing.
     pub fn animation_pose(&self, humanoid: InstanceId) -> Option<(libroxel_instance::animation::Pose, bool)> {
         animation::pose_for(&self.lua, humanoid)
+    }
+
+    /// Makes animations whose `AnimationId` is `id` (such as
+    /// `rbxassetid://123`; other spellings of the same asset match too)
+    /// play the keyframe sequence `sequence`, as it is now. This is how an
+    /// animation kept in a local file is supplied for an asset id.
+    pub fn register_animation(&self, id: &str, sequence: InstanceId) -> mlua::Result<()> {
+        animation::register(&self.lua, id, sequence)
     }
 
     /// Fires `part`'s touch event with `other` as the argument.

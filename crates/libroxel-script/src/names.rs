@@ -594,6 +594,79 @@ pub mod animation {
     pub const STOPPED: &str = "Stopped";
     /// The animator every character's humanoid has.
     pub const ANIMATOR: &str = "Animator";
+    pub const PRIORITY: &str = "Priority";
+    pub const PRIORITY_ENUM: &str = "AnimationPriority";
+    pub const FROM_VALUE: &str = "FromValue";
+    pub const KEYFRAME_REACHED: &str = "KeyframeReached";
+    pub const DID_LOOP: &str = "DidLoop";
+    pub const GET_MARKER_REACHED_SIGNAL: &str = "GetMarkerReachedSignal";
+    pub const GET_TIME_OF_KEYFRAME: &str = "GetTimeOfKeyframe";
+    pub const FIRE: &str = "Fire";
+    /// The layer's hooks for registering keyframe sequences.
+    pub const REGISTER_SEQUENCE: &str = "register_sequence";
+    pub const REGISTERED_SEQUENCE: &str = "registered_sequence";
+    /// The start of the ids handed out for sequences a script registers.
+    pub const TEMP_ID: &str = "rbxtemp://";
+    /// How an asset id is written: `rbxassetid://123`, or a web address
+    /// ending `?id=123`.
+    pub const ASSET_ID: &str = "rbxassetid://";
+    pub const ASSET_QUERY: &str = "id=";
+    /// The built-in clip played for an animation a character's animate
+    /// script keeps under one of these names (its own name, or the value
+    /// it sits in), when the animation itself can't be fetched. Walking,
+    /// running, idling and sitting are left to the engine's own moves.
+    pub const BY_NAME: &[(&str, &str)] = &[
+        ("wave", "wave"),
+        ("waveanim", "wave"),
+        ("point", "point"),
+        ("pointanim", "point"),
+        ("cheer", "cheer"),
+        ("cheeranim", "cheer"),
+        ("laugh", "laugh"),
+        ("laughanim", "laugh"),
+        ("dance", "dance"),
+        ("dance2", "dance"),
+        ("dance3", "dance"),
+        ("jump", "jump"),
+        ("jumpanim", "jump"),
+        ("fall", "fall"),
+        ("fallanim", "fall"),
+        ("climb", "climb"),
+        ("climbanim", "climb"),
+        ("toolnone", "hold"),
+        ("toolnoneanim", "hold"),
+    ];
+}
+
+/// Keyframe sequences: an animation kept as instances, a `Keyframe` for
+/// each moment holding a `Pose` for each joint it turns.
+pub mod keyframes {
+    pub const KEYFRAME: &str = "Keyframe";
+    pub const POSE: &str = "Pose";
+    pub const MARKER: &str = "KeyframeMarker";
+    pub const CLASS_NAME: &str = "ClassName";
+    pub const NAME: &str = "Name";
+    pub const TIME: &str = "Time";
+    pub const CFRAME: &str = "CFrame";
+    pub const WEIGHT: &str = "Weight";
+    pub const LOOP: &str = "Loop";
+    pub const PRIORITY: &str = "Priority";
+    pub const VALUE: &str = "Value";
+    /// A keyframe still called this doesn't fire `KeyframeReached`.
+    pub const UNNAMED: &str = "Keyframe";
+    /// The poses libroxel's characters can show, by the part they turn:
+    /// the classic six-part body's first, then the fifteen-part one's.
+    pub const R6_TORSO: &str = "Torso";
+    pub const R6_LEFT_ARM: &str = "Left Arm";
+    pub const R6_RIGHT_ARM: &str = "Right Arm";
+    pub const R6_LEFT_LEG: &str = "Left Leg";
+    pub const R6_RIGHT_LEG: &str = "Right Leg";
+    pub const HEAD: &str = "Head";
+    pub const R15_LOWER_TORSO: &str = "LowerTorso";
+    pub const R15_LEFT_ARM: &str = "LeftUpperArm";
+    pub const R15_RIGHT_ARM: &str = "RightUpperArm";
+    pub const R15_LEFT_LEG: &str = "LeftUpperLeg";
+    pub const R15_RIGHT_LEG: &str = "RightUpperLeg";
 }
 
 /// Members of overlap parameters (the filter members are as on raycast ones).
@@ -926,6 +999,11 @@ pub fn enum_item_from_name(kind: EnumKind, name: &str) -> Option<EnumValue> {
 
 /// Names of the instances the engine builds for each player.
 pub mod character {
+    /// What the engine says a character is doing that scripts can't see
+    /// from its parts (kept on its humanoid): climbing or swimming.
+    pub const MOVING: &str = "libroxel.moving";
+    pub const CLIMBING: &str = "Climbing";
+    pub const SWIMMING: &str = "Swimming";
     pub const MODEL: &str = "Player";
     pub const ROOT_PART: &str = "HumanoidRootPart";
     pub const HUMANOID: &str = "Humanoid";
