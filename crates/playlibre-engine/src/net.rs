@@ -46,7 +46,11 @@ pub const DEFAULT_PORT: u16 = 7420;
 /// 2: long messages are compressed (see [`Conn::send`]).
 /// 3: everything is encrypted (see [`Conn`]).
 /// 4: streamed terrain comes in chunks (`xs`).
-pub const PROTOCOL: u64 = 4;
+/// 5: a new instance's properties that equal its class's starting values
+///    aren't sent (both sides start from them), and numbers are written
+///    short. Changing any class's starting value needs a new version; the
+///    `starting_values_belong_to_the_protocol` test says when.
+pub const PROTOCOL: u64 = 5;
 /// Messages longer than this many bytes are sent compressed.
 const COMPRESS_OVER: usize = 4096;
 /// How much unsent data a connection may build up before it is dropped,
@@ -1429,8 +1433,14 @@ impl Replicator {
     ) -> Option<Json> {
         let mut op = Map::new();
         let mut props = Map::new();
+        // A new instance starts with its class's values on the other side
+        // too (tree.create), so only what differs from them is sent.
+        let fresh = old.is_none() && !service;
         for (property, value) in &now.props {
             let before = old.and_then(|o| o.props.iter().find(|(p, _)| p == property)).map(|(_, v)| v);
+            if fresh && class.default_value(*property).as_ref() == Some(value) {
+                continue;
+            }
             if before != Some(value) {
                 props.insert(property.file_name().to_owned(), wire_value(class, *property, value, edits));
             }
@@ -3394,6 +3404,27 @@ mod tests {
     fn pair(limit: usize) -> (Conn, Conn) {
         let (host, other) = raw_pair(limit);
         (host, Conn::new(other, Side::Joining).unwrap())
+    }
+
+    /// A new instance's properties are left out when they equal its
+    /// class's starting values, so both sides must agree on those: any
+    /// change to them changes this number, and needs a new [`PROTOCOL`].
+    #[test]
+    fn starting_values_belong_to_the_protocol() {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for class in ClassKind::ALL {
+            for property in class.properties() {
+                let line = format!("{class:?} {property:?} {:?}\n", class.default_value(*property));
+                for byte in line.bytes() {
+                    hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+                }
+            }
+        }
+        assert_eq!(
+            (PROTOCOL, hash),
+            (5, 16128808556911983565),
+            "a class's starting values changed: raise PROTOCOL and put the new pair here"
+        );
     }
 
     #[test]

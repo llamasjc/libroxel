@@ -39,14 +39,34 @@ pub fn value_to_json(value: &PropertyValue) -> Value {
         PropertyValue::Bool(b) => json!(b),
         PropertyValue::Number(n) => json!(n),
         PropertyValue::String(s) => json!(s),
-        PropertyValue::Vec3(v) => json!([v.x, v.y, v.z]),
-        PropertyValue::Color3(c) => json!([c.r, c.g, c.b]),
+        PropertyValue::Vec3(v) => floats(&[v.x, v.y, v.z]),
+        PropertyValue::Color3(c) => floats(&[c.r, c.g, c.b]),
         PropertyValue::Enum(v) => json!(v.file_name()),
         PropertyValue::Ref(_) => Value::Null,
-        PropertyValue::Vec2(v) => json!([v.x, v.y]),
-        PropertyValue::UDim2(u) => json!([u.x_scale, u.x_offset, u.y_scale, u.y_offset]),
-        PropertyValue::UDim(u) => json!([u.scale, u.offset]),
+        PropertyValue::Vec2(v) => floats(&[v.x, v.y]),
+        PropertyValue::UDim2(u) => floats(&[u.x_scale, u.x_offset, u.y_scale, u.y_offset]),
+        PropertyValue::UDim(u) => floats(&[u.scale, u.offset]),
     }
+}
+
+/// `xs` as JSON numbers, each the shortest decimal that reads back as the
+/// same `f32` (`1.37`, not `1.3700000047683716`): about a third as long to
+/// send or save and to read, and read back exactly the same.
+fn floats(xs: &[f32]) -> Value {
+    Value::Array(xs.iter().map(|x| short_f32(*x)).collect())
+}
+
+fn short_f32(x: f32) -> Value {
+    if !x.is_finite() {
+        return Value::Null;
+    }
+    // Whole numbers (sizes, most positions in built worlds) print short already.
+    if x.fract() == 0.0 {
+        return serde_json::Number::from_f64(f64::from(x)).map_or(Value::Null, Value::Number);
+    }
+    let mut buffer = ryu::Buffer::new();
+    let short = buffer.format_finite(x).parse::<f64>().unwrap_or(f64::from(x));
+    serde_json::Number::from_f64(short).map_or(Value::Null, Value::Number)
 }
 
 fn triple(value: &Value) -> Option<[f32; 3]> {

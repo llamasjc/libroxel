@@ -7158,6 +7158,7 @@ name = "playlibre-instance"
 version = "0.1.17"
 dependencies = [
  "foldhash 0.2.0",
+ "ryu",
  "serde_json",
  "thiserror 2.0.21",
 ]
