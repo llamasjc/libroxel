@@ -13,7 +13,7 @@ import { ROUTES, href, routeOf } from './routes.js';
 // The Hub this site talks to. `?hub=http://127.0.0.1:7430` picks another
 // one for testing (remembered in this browser; `?hub=` alone forgets it).
 const HUB = (() => {
-  const official = document.querySelector('meta[name="libroxel-hub"]')?.content || 'https://hub.libroxel.com';
+  const official = document.querySelector('meta[name="libroxel-hub"]')?.content || 'https://hub.playlibre.net';
   try {
     const asked = new URLSearchParams(location.search).get('hub');
     if (asked !== null) {
@@ -839,7 +839,7 @@ function status(text, kind = '') {
   return el('div', { class: `status ${kind}` }, text, kind === 'error' && reportLink(text));
 }
 
-const ISSUES = 'https://github.com/llamasjc/libroxel/issues/new';
+const ISSUES = 'https://github.com/llamasjc/playlibre/issues/new';
 const recent = [];
 
 function remember(line) {
@@ -3776,7 +3776,7 @@ function donatePage() {
 
 // --- Privacy -----------------------------------------------------------------
 
-const CONTACT = 'privacy@libroxel.com';
+const CONTACT = 'privacy@playlibre.net';
 
 function privacy() {
   const h = (text) => el('h2', { class: 'section' }, text);
@@ -3786,7 +3786,7 @@ function privacy() {
   return el('div', { class: 'privacy' },
     el('h1', { class: 'title' }, 'Privacy policy'),
     p(el('span', { class: 'soft' }, 'Last updated 23 November 2026')),
-    p('This policy covers the Libroxel app, this website and the Libroxel Hub (hub.libroxel.com), which keeps accounts, friends, games and server lists.'),
+    p('This policy covers the Libroxel app, this website and the Libroxel Hub (hub.playlibre.net), which keeps accounts, friends, games and server lists.'),
     h('What we keep'),
     list(
       'Your account: your name, player number, avatar (colours and hat), the few words about yourself, and when the account was made.',

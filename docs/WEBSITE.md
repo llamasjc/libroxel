@@ -80,7 +80,7 @@ the Hub's `hub.caddy` and leaves the rest alone.
 
    ```sh
    curl -fsSLO https://raw.githubusercontent.com/<owner>/<repo>/main/packaging/web/setup-site.sh
-   sudo bash setup-site.sh --repo <owner>/<repo> --domain libroxel.com --hub https://hub.libroxel.com
+   sudo bash setup-site.sh --repo <owner>/<repo> --domain playlibre.net --hub https://hub.playlibre.net
    ```
 
    It installs Caddy and git if they aren't there, fetches `web/` from the

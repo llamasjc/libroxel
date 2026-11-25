@@ -3,7 +3,7 @@
 # the Hub as a service that always runs, HTTPS with Caddy, a firewall,
 # nightly backups, and updates from GitHub releases.
 #
-#   sudo bash setup-hub.sh --repo <owner>/<repo> [--domain hub.libroxel.com] [--from-source]
+#   sudo bash setup-hub.sh --repo <owner>/<repo> [--domain hub.playlibre.net] [--from-source]
 #
 # With a libroxel-hub (or libroxel-hub-linux-x86_64) next to this script it
 # installs that one. Otherwise, with --from-source it builds main on this
@@ -18,7 +18,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 conf=/etc/libroxel/hub.conf
 # What an earlier run chose, unless told otherwise now.
-DOMAIN=hub.libroxel.com
+DOMAIN=hub.playlibre.net
 REPO=""
 GITHUB_TOKEN=""
 UPDATE_FROM=releases
@@ -154,7 +154,7 @@ if [ ! -f /etc/libroxel/mail.conf ]; then
 #LIBROXEL_SMTP_PORT=587
 #LIBROXEL_SMTP_USER=resend
 #LIBROXEL_SMTP_PASSWORD=your-api-key
-#LIBROXEL_MAIL_FROM=Libroxel <no-reply@libroxel.com>
+#LIBROXEL_MAIL_FROM=Libroxel <no-reply@playlibre.net>
 #LIBROXEL_MODERATION_KEY=your-openai-key
 MAIL
 fi

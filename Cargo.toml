@@ -10,7 +10,7 @@ version = "0.1.17"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/llamasjc/libroxel"
+repository = "https://github.com/llamasjc/playlibre"
 authors = ["Libroxel contributors"]
 
 [workspace.dependencies]

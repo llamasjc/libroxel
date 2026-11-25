@@ -1,7 +1,7 @@
 # Changelog
 
 What changed in each release. The full list of commits for each one is on
-its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
+its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 
 ## Unreleased
 

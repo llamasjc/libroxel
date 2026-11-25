@@ -19,7 +19,7 @@ pub fn tag() -> String {
     if VERSION.starts_with(|c: char| c.is_ascii_digit()) { format!("v{VERSION}") } else { VERSION.to_owned() }
 }
 
-const RELEASES: &str = "https://github.com/llamasjc/libroxel/releases";
+const RELEASES: &str = "https://github.com/llamasjc/playlibre/releases";
 const KEY: &str = "eZLyPH2I3vxefEog220wBtSrI3CxSLCMkgKWyRKv0xY=";
 
 static READY: Mutex<Option<Staged>> = Mutex::new(None);

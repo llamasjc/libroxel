@@ -159,7 +159,7 @@ pub const DEFAULT_PORT: u16 = 7430;
 /// A fork sets its own here, or builds with `LIBROXEL_OFFICIAL_HUB=<url>`.
 pub const OFFICIAL_HUB: &str = match option_env!("LIBROXEL_OFFICIAL_HUB") {
     Some(hub) if !hub.is_empty() => hub,
-    _ => "https://hub.libroxel.com",
+    _ => "https://hub.playlibre.net",
 };
 
 pub use email::{

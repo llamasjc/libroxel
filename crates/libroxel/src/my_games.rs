@@ -206,7 +206,7 @@ fn row(state: &mut MyGames, ui: &mut egui::Ui, platform: &Platform, game: &GameI
                     };
                 }
                 if theme::tool_button(ui, icon::CHART_LINE, t("Numbers"), false).clicked() {
-                    crate::report::open_url(&format!("https://libroxel.com/creator/{}", game.game_id));
+                    crate::report::open_url(&format!("https://playlibre.net/creator/{}", game.game_id));
                 }
                 if let Some(path) = state.files.get(&game.game_id)
                     && theme::tool_button(ui, icon::PENCIL_SIMPLE, t("Edit"), false).clicked()

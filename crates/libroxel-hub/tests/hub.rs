@@ -301,11 +301,11 @@ fn reported_games_drop_off_until_whoever_runs_the_hub_clears_them() {
 fn web_pages_may_call_the_hub() {
     let hub = start("127.0.0.1:0".parse().unwrap(), None).unwrap();
     let agent = ureq::Agent::from(ureq::Agent::config_builder().proxy(None).build());
-    let answer = agent.get(&hub.url()).header("Origin", "https://libroxel.com").call().unwrap();
+    let answer = agent.get(&hub.url()).header("Origin", "https://playlibre.net").call().unwrap();
     assert_eq!(answer.headers().get("access-control-allow-origin").unwrap(), "*");
     let preflight = agent
         .options(format!("{}/accounts", hub.url()))
-        .header("Origin", "https://libroxel.com")
+        .header("Origin", "https://playlibre.net")
         .header("Access-Control-Request-Method", "POST")
         .header("Access-Control-Request-Headers", "content-type")
         .call()

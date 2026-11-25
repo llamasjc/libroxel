@@ -1,5 +1,5 @@
 blank_issues_enabled: true
 contact_links:
   - name: A security problem
-    url: https://github.com/llamasjc/libroxel/security/advisories/new
+    url: https://github.com/llamasjc/playlibre/security/advisories/new
     about: Please report security problems privately, not as an issue.

@@ -97,7 +97,7 @@ fn app_links() -> Vec<(String, String)> {
     }
     for loc in SITEMAP.split("<loc>").skip(1) {
         let url = loc.split("</loc>").next().unwrap();
-        links.push(("web/sitemap.xml".to_owned(), url.trim_start_matches("https://libroxel.com").to_owned()));
+        links.push(("web/sitemap.xml".to_owned(), url.trim_start_matches("https://playlibre.net").to_owned()));
     }
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../libroxel/src");
     let mut dirs = vec![src];
@@ -112,7 +112,7 @@ fn app_links() -> Vec<(String, String)> {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
-            for rest in text.split("\"https://libroxel.com").skip(1) {
+            for rest in text.split("\"https://playlibre.net").skip(1) {
                 let link = rest.split('"').next().unwrap();
                 links.push((
                     path.display().to_string(),

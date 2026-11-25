@@ -298,7 +298,7 @@ The first build compiles Bevy and takes a while. After that it is quick.
   called. Accounts, passwords and friends live in the Hub's SQLite file
   (`hub.sqlite` on the Hub's server, or `--data` for `libroxel-hub`),
   so they outlast a restart.
-- **One official Hub:** every copy of the app uses `https://hub.libroxel.com`
+- **One official Hub:** every copy of the app uses `https://hub.playlibre.net`
   (`OFFICIAL_HUB` in `crates/libroxel-hub/src/lib.rs`) for accounts, friends, publishing
   and server lists; the app never runs a Hub of its own. Whoever runs it
   owns it: only its owners list Official servers, and `libroxel-hub ban`, `owners` and

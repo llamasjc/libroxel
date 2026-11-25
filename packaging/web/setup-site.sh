@@ -2,7 +2,7 @@
 # Puts the Libroxel website (the web/ folder) on an Ubuntu server, served by
 # Caddy with HTTPS, next to the official Hub.
 #
-#   sudo bash setup-site.sh --repo <owner>/<repo> [--domain libroxel.com] [--hub https://hub.libroxel.com]
+#   sudo bash setup-site.sh --repo <owner>/<repo> [--domain playlibre.net] [--hub https://hub.playlibre.net]
 #
 # With --repo the site comes from that GitHub repository's main branch, and
 # a timer checks it every 10 minutes and puts any change online (see
@@ -19,8 +19,8 @@ here="$(cd "$(dirname "$0")" && pwd)"
 
 conf=/etc/libroxel/site.conf
 REPO=""
-DOMAIN="libroxel.com"
-HUB="https://hub.libroxel.com"
+DOMAIN="playlibre.net"
+HUB="https://hub.playlibre.net"
 [ -f "$conf" ] && . "$conf"
 from=""
 check=yes
@@ -89,7 +89,7 @@ cp -r "$site"/. "$new"/
 sed -i -e "s#<meta name=\"libroxel-hub\" content=\"[^\"]*\">#<meta name=\"libroxel-hub\" content=\"$HUB\">#" \
     -e "s#<meta name=\"libroxel-repo\" content=\"[^\"]*\">#<meta name=\"libroxel-repo\" content=\"$REPO\">#" \
     "$new/index.html"
-sed -i "s#https://libroxel.com#https://$DOMAIN#g" "$new/index.html" "$new/robots.txt" "$new/sitemap.xml"
+sed -i "s#https://playlibre.net#https://$DOMAIN#g" "$new/index.html" "$new/robots.txt" "$new/sitemap.xml"
 chmod -R a+rX "$new"
 # Swap the files in, keeping the downloads; files gone from the site go.
 find /var/www/libroxel -mindepth 1 -maxdepth 1 ! -name downloads -exec rm -rf {} +

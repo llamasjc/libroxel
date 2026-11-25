@@ -4,14 +4,14 @@ Libroxel works best with **one Hub everyone uses**: one place for accounts,
 friends, published games, the catalog and server lists. Whoever runs that Hub
 owns it. A fork runs its own and points its copies of the app at it.
 
-Libroxel's official Hub is `https://hub.libroxel.com` (`OFFICIAL_HUB` in
+Libroxel's official Hub is `https://hub.playlibre.net` (`OFFICIAL_HUB` in
 `crates/libroxel-hub/src/lib.rs`). An app built with an empty
 `LIBROXEL_OFFICIAL_HUB=` runs a small Hub of its own instead.
 
 ## 1. A server and a domain
 
 Any small Ubuntu server works (1 CPU and 1 GB of memory is plenty to start).
-Point a name at it with an `A` record, such as `hub.libroxel.com` →
+Point a name at it with an `A` record, such as `hub.playlibre.net` →
 the server's IPv4 address.
 
 ## 2. Set it up with one script
@@ -21,7 +21,7 @@ change only has to be pushed, with no release to wait for. On the server:
 
 ```sh
 git clone https://github.com/<owner>/<repo>.git ~/libroxel
-sudo bash ~/libroxel/packaging/hub/setup-hub.sh --repo <owner>/<repo> --domain hub.libroxel.com --from-source
+sudo bash ~/libroxel/packaging/hub/setup-hub.sh --repo <owner>/<repo> --domain hub.playlibre.net --from-source
 ```
 
 The first build takes a few minutes (it installs Rust for your user the
@@ -57,7 +57,7 @@ also start from a release:
 ```sh
 curl -fsSLO https://github.com/<owner>/<repo>/releases/latest/download/setup-hub.sh
 curl -fsSLO https://github.com/<owner>/<repo>/releases/latest/download/update-hub.sh
-sudo bash setup-hub.sh --repo <owner>/<repo> --domain hub.libroxel.com
+sudo bash setup-hub.sh --repo <owner>/<repo> --domain hub.playlibre.net
 ```
 
 ### Email codes
@@ -68,11 +68,11 @@ the account's owner sees theirs. The Hub sends mail through any SMTP
 provider; [Resend](https://resend.com) is free for 3,000 mails a month:
 
 1. Make a Resend account, open **Domains → Add domain** and add
-   `libroxel.com`.
+   `playlibre.net`.
 2. Add the DNS records it shows at your domain's DNS provider (an `MX` and
-   a `TXT` for SPF on `send.libroxel.com`, and a `TXT` for DKIM on
-   `resend._domainkey.libroxel.com`). Adding a DMARC record too helps mail
-   land in inboxes: `TXT` on `_dmarc.libroxel.com` with
+   a `TXT` for SPF on `send.playlibre.net`, and a `TXT` for DKIM on
+   `resend._domainkey.playlibre.net`). Adding a DMARC record too helps mail
+   land in inboxes: `TXT` on `_dmarc.playlibre.net` with
    `v=DMARC1; p=none;`. Wait until Resend says the domain is verified.
 3. Open **API Keys → Create API key** (sending access is enough).
 4. On the server, put the key in `/etc/libroxel/mail.conf`:
@@ -83,7 +83,7 @@ provider; [Resend](https://resend.com) is free for 3,000 mails a month:
    LIBROXEL_SMTP_PORT=587
    LIBROXEL_SMTP_USER=resend
    LIBROXEL_SMTP_PASSWORD=re_your_key_here
-   LIBROXEL_MAIL_FROM=Libroxel <no-reply@libroxel.com>
+   LIBROXEL_MAIL_FROM=Libroxel <no-reply@playlibre.net>
    EOF
    sudo chmod 600 /etc/libroxel/mail.conf
    sudo systemctl restart libroxel-hub
@@ -145,10 +145,10 @@ CORS), so a website can show its lists.
 ## 4. Point the app at it
 
 Set the address in `crates/libroxel-hub/src/lib.rs` (Libroxel's is
-`https://hub.libroxel.com`):
+`https://hub.playlibre.net`):
 
 ```rust
-    None => Some("https://hub.libroxel.com"),
+    None => Some("https://hub.playlibre.net"),
 ```
 
 (or build with `LIBROXEL_OFFICIAL_HUB=https://hub.example.com`). Every copy
@@ -173,7 +173,7 @@ Names are first come, first served, whatever the case, so make your
 account (for example `Admin`) before you open the Hub to players. Accounts
 are numbered in the order they joined: the first one is 0, the next 1, and
 so on, and profile links use the number (`/accounts/0` on the Hub,
-`libroxel.com/#/user/0` on the website). To start the numbers over on a Hub
+`playlibre.net/#/user/0` on the website). To start the numbers over on a Hub
 nobody uses yet, stop it, delete its database and start it again:
 
 ```sh

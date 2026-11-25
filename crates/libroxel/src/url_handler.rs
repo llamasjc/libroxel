@@ -110,7 +110,7 @@ fn register_now() -> Result<(), String> {
         })
         .collect();
     let entry = format!(
-        "[Desktop Entry]\nType=Application\nName=Libroxel\nComment=Opens games from libroxel.com\n\
+        "[Desktop Entry]\nType=Application\nName=Libroxel\nComment=Opens games from playlibre.net\n\
          Exec=\"{quoted}\" %u\nTerminal=false\nNoDisplay=true\nMimeType=x-scheme-handler/libroxel;\n"
     );
     let file = dir.join("libroxel-links.desktop");
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn turns_away_anything_else() {
-        assert_eq!(parse("https://libroxel.com/join/abc"), None);
+        assert_eq!(parse("https://playlibre.net/join/abc"), None);
         assert_eq!(parse("libroxel://delete/everything"), None);
         assert_eq!(parse("libroxel://join/"), None);
         assert_eq!(parse("libroxel://join"), None);

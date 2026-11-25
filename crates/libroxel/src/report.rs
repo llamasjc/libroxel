@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use bevy_egui::egui;
 
-const ISSUES: &str = "https://github.com/llamasjc/libroxel/issues/new";
+const ISSUES: &str = "https://github.com/llamasjc/playlibre/issues/new";
 const MAX_URL: usize = 7500;
 const LOG_LINES: usize = 20;
 
