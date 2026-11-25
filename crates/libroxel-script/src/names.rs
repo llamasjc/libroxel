@@ -622,6 +622,11 @@ pub mod cframe {
     pub const LOOK_VECTOR: &str = "LookVector";
     pub const RIGHT_VECTOR: &str = "RightVector";
     pub const UP_VECTOR: &str = "UpVector";
+    /// Older spellings that scripts written long ago still use.
+    pub const OLD_POSITION: &str = "p";
+    pub const OLD_LOOK_VECTOR: &str = "lookVector";
+    pub const OLD_RIGHT_VECTOR: &str = "rightVector";
+    pub const OLD_UP_VECTOR: &str = "upVector";
     pub const ROTATION: &str = "Rotation";
     pub const INVERSE: &str = "Inverse";
     pub const LERP: &str = "Lerp";
@@ -632,6 +637,8 @@ pub mod cframe {
     pub const TO_ORIENTATION: &str = "ToOrientation";
     pub const TO_EULER_ANGLES_XYZ: &str = "ToEulerAnglesXYZ";
     pub const TO_EULER_ANGLES_YXZ: &str = "ToEulerAnglesYXZ";
+    /// The same as `ToEulerAnglesXYZ`.
+    pub const TO_EULER_ANGLES: &str = "ToEulerAngles";
     pub const TO_AXIS_ANGLE: &str = "ToAxisAngle";
     pub const GET_COMPONENTS: &str = "GetComponents";
     pub const X_VECTOR: &str = "XVector";
@@ -673,6 +680,10 @@ pub mod enum_item {
     pub const VALUE: &str = "Value";
     pub const ENUM_TYPE: &str = "EnumType";
     pub const TYPE_NAME: &str = "EnumItem";
+    /// Whether an item belongs to the enumeration of that name.
+    pub const IS_A: &str = "IsA";
+    /// On `Enum` itself: every enumeration, as a list.
+    pub const GET_ENUMS: &str = "GetEnums";
 }
 
 /// The name scripts use for each enumeration, as in `Enum.<name>`.

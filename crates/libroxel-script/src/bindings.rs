@@ -689,9 +689,17 @@ function methods.Angle(a, b, axis)
 end
 return {
 	__index = function(v, key)
-		if key == "Magnitude" then
+		-- The VM answers `v.X` written out in the source itself; a key worked
+		-- out while running (`v[axis]`) comes here.
+		if key == "X" or key == "x" then
+			return v.x
+		elseif key == "Y" or key == "y" then
+			return v.y
+		elseif key == "Z" or key == "z" then
+			return v.z
+		elseif key == "Magnitude" or key == "magnitude" then
 			return vector.magnitude(v)
-		elseif key == "Unit" then
+		elseif key == "Unit" or key == "unit" then
 			if v == zero then return v end
 			return vector.normalize(v)
 		end
@@ -745,11 +753,22 @@ impl UserData for LuaEnumItem {
         use names::enum_item::*;
         fields.add_field_method_get(NAME, |_, this| Ok(names::enum_item_name(this.0)));
         fields.add_field_method_get(VALUE, |_, this| Ok(this.0.index() as i64));
-        fields.add_field_method_get(ENUM_TYPE, |_, this| Ok(names::enum_name(this.0.kind())));
+        // The enumeration itself, so `item.EnumType == Enum.Material` holds.
+        fields.add_field_method_get(ENUM_TYPE, |lua, this| {
+            let name = names::enum_name(this.0.kind());
+            let lib: Option<Table> = lua.globals().get(globals::ENUM).ok();
+            match lib.and_then(|lib| lib.raw_get::<Value>(name).ok()).filter(|v| !v.is_nil()) {
+                Some(enum_table) => Ok(enum_table),
+                None => Ok(Value::String(lua.create_string(name)?)),
+            }
+        });
         fields.add_meta_field(MetaMethod::Type, TYPE_NAME);
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method(names::enum_item::IS_A, |_, this, name: String| {
+            Ok(names::enum_name(this.0.kind()) == name)
+        });
         methods.add_meta_method(MetaMethod::ToString, |_, this, ()| {
             Ok(format!(
                 "{}.{}.{}",

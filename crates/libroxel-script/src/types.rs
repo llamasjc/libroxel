@@ -30,13 +30,21 @@ pub(crate) fn as_cframe(value: &Value) -> Option<CFrame> {
 impl UserData for LuaCFrame {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         use cframe::*;
-        fields.add_field_method_get(POSITION, |_, this| Ok(LuaVector3(this.0.pos)));
+        for name in [POSITION, OLD_POSITION] {
+            fields.add_field_method_get(name, |_, this| Ok(LuaVector3(this.0.pos)));
+        }
         fields.add_field_method_get(X, |_, this| Ok(this.0.pos.x));
         fields.add_field_method_get(Y, |_, this| Ok(this.0.pos.y));
         fields.add_field_method_get(Z, |_, this| Ok(this.0.pos.z));
-        fields.add_field_method_get(LOOK_VECTOR, |_, this| Ok(LuaVector3(-this.0.rot.z)));
-        fields.add_field_method_get(RIGHT_VECTOR, |_, this| Ok(LuaVector3(this.0.rot.x)));
-        fields.add_field_method_get(UP_VECTOR, |_, this| Ok(LuaVector3(this.0.rot.y)));
+        for name in [LOOK_VECTOR, OLD_LOOK_VECTOR] {
+            fields.add_field_method_get(name, |_, this| Ok(LuaVector3(-this.0.rot.z)));
+        }
+        for name in [RIGHT_VECTOR, OLD_RIGHT_VECTOR] {
+            fields.add_field_method_get(name, |_, this| Ok(LuaVector3(this.0.rot.x)));
+        }
+        for name in [UP_VECTOR, OLD_UP_VECTOR] {
+            fields.add_field_method_get(name, |_, this| Ok(LuaVector3(this.0.rot.y)));
+        }
         fields.add_field_method_get(X_VECTOR, |_, this| Ok(LuaVector3(this.0.rot.x)));
         fields.add_field_method_get(Y_VECTOR, |_, this| Ok(LuaVector3(this.0.rot.y)));
         fields.add_field_method_get(Z_VECTOR, |_, this| Ok(LuaVector3(this.0.rot.z)));
@@ -62,24 +70,36 @@ impl UserData for LuaCFrame {
         use cframe::*;
         let cf_arg =
             |v: &Value, what: &str| as_cframe(v).ok_or_else(|| err(format!("{what} expects a CFrame")));
-        methods.add_method(INVERSE, |_, this, ()| Ok(LuaCFrame(this.0.inverse())));
-        methods.add_method(LERP, move |_, this, (other, t): (Value, f32)| {
-            Ok(LuaCFrame(this.0.lerp(cf_arg(&other, LERP)?, t)))
-        });
-        methods.add_method(TO_WORLD_SPACE, move |_, this, other: Value| {
-            Ok(LuaCFrame(this.0 * cf_arg(&other, TO_WORLD_SPACE)?))
-        });
-        methods.add_method(TO_OBJECT_SPACE, move |_, this, other: Value| {
-            Ok(LuaCFrame(this.0.inverse() * cf_arg(&other, TO_OBJECT_SPACE)?))
-        });
-        methods.add_method(POINT_TO_WORLD_SPACE, |_, this, p: Value| {
-            let p = as_vector3(&p).ok_or_else(|| err("PointToWorldSpace expects a Vector3"))?;
-            Ok(LuaVector3(this.0.point_to_world(p)))
-        });
-        methods.add_method(POINT_TO_OBJECT_SPACE, |_, this, p: Value| {
-            let p = as_vector3(&p).ok_or_else(|| err("PointToObjectSpace expects a Vector3"))?;
-            Ok(LuaVector3(this.0.inverse().point_to_world(p)))
-        });
+        for name in [INVERSE, "inverse"] {
+            methods.add_method(name, |_, this, ()| Ok(LuaCFrame(this.0.inverse())));
+        }
+        for name in [LERP, "lerp"] {
+            methods.add_method(name, move |_, this, (other, t): (Value, f32)| {
+                Ok(LuaCFrame(this.0.lerp(cf_arg(&other, LERP)?, t)))
+            });
+        }
+        for name in [TO_WORLD_SPACE, "toWorldSpace"] {
+            methods.add_method(name, move |_, this, other: Value| {
+                Ok(LuaCFrame(this.0 * cf_arg(&other, TO_WORLD_SPACE)?))
+            });
+        }
+        for name in [TO_OBJECT_SPACE, "toObjectSpace"] {
+            methods.add_method(name, move |_, this, other: Value| {
+                Ok(LuaCFrame(this.0.inverse() * cf_arg(&other, TO_OBJECT_SPACE)?))
+            });
+        }
+        for name in [POINT_TO_WORLD_SPACE, "pointToWorldSpace"] {
+            methods.add_method(name, |_, this, p: Value| {
+                let p = as_vector3(&p).ok_or_else(|| err("PointToWorldSpace expects a Vector3"))?;
+                Ok(LuaVector3(this.0.point_to_world(p)))
+            });
+        }
+        for name in [POINT_TO_OBJECT_SPACE, "pointToObjectSpace"] {
+            methods.add_method(name, |_, this, p: Value| {
+                let p = as_vector3(&p).ok_or_else(|| err("PointToObjectSpace expects a Vector3"))?;
+                Ok(LuaVector3(this.0.inverse().point_to_world(p)))
+            });
+        }
         methods.add_method(TO_ORIENTATION, |_, this, ()| {
             let d = this.0.rot.to_orientation();
             Ok((d.x.to_radians(), d.y.to_radians(), d.z.to_radians()))
@@ -88,23 +108,31 @@ impl UserData for LuaCFrame {
             let d = this.0.rot.to_orientation();
             Ok((d.x.to_radians(), d.y.to_radians(), d.z.to_radians()))
         });
-        methods.add_method(TO_EULER_ANGLES_XYZ, |_, this, ()| Ok(euler_xyz(this.0.rot)));
-        methods.add_method(TO_AXIS_ANGLE, |_, this, ()| {
-            let [x, y, z, w] = this.0.rot.to_quat();
-            let w = w.clamp(-1.0, 1.0);
-            let angle = 2.0 * w.acos();
-            let s = (1.0 - w * w).sqrt();
-            let axis = if s > 1e-6 { Vec3::new(x / s, y / s, z / s) } else { Vec3::new(1.0, 0.0, 0.0) };
-            Ok((LuaVector3(axis), angle))
-        });
-        methods.add_method("VectorToWorldSpace", |_, this, v: Value| {
-            let v = as_vector3(&v).ok_or_else(|| err("VectorToWorldSpace expects a Vector3"))?;
-            Ok(LuaVector3(this.0.rot.apply(v)))
-        });
-        methods.add_method("VectorToObjectSpace", |_, this, v: Value| {
-            let v = as_vector3(&v).ok_or_else(|| err("VectorToObjectSpace expects a Vector3"))?;
-            Ok(LuaVector3(this.0.rot.transpose().apply(v)))
-        });
+        for name in [TO_EULER_ANGLES_XYZ, TO_EULER_ANGLES] {
+            methods.add_method(name, |_, this, ()| Ok(euler_xyz(this.0.rot)));
+        }
+        for name in [TO_AXIS_ANGLE, "toAxisAngle"] {
+            methods.add_method(name, |_, this, ()| {
+                let [x, y, z, w] = this.0.rot.to_quat();
+                let w = w.clamp(-1.0, 1.0);
+                let angle = 2.0 * w.acos();
+                let s = (1.0 - w * w).sqrt();
+                let axis = if s > 1e-6 { Vec3::new(x / s, y / s, z / s) } else { Vec3::new(1.0, 0.0, 0.0) };
+                Ok((LuaVector3(axis), angle))
+            });
+        }
+        for name in ["VectorToWorldSpace", "vectorToWorldSpace"] {
+            methods.add_method(name, |_, this, v: Value| {
+                let v = as_vector3(&v).ok_or_else(|| err("VectorToWorldSpace expects a Vector3"))?;
+                Ok(LuaVector3(this.0.rot.apply(v)))
+            });
+        }
+        for name in ["VectorToObjectSpace", "vectorToObjectSpace"] {
+            methods.add_method(name, |_, this, v: Value| {
+                let v = as_vector3(&v).ok_or_else(|| err("VectorToObjectSpace expects a Vector3"))?;
+                Ok(LuaVector3(this.0.rot.transpose().apply(v)))
+            });
+        }
         methods.add_method("Orthonormalize", |_, this, ()| {
             Ok(LuaCFrame(CFrame::new(this.0.pos, Rotation::from_quat(this.0.rot.to_quat()))))
         });
@@ -412,10 +440,12 @@ impl UserData for LuaVector2 {
             let v = other(CROSS, &v)?;
             Ok(this.0.x * v.y - this.0.y * v.x)
         });
-        methods.add_method(LERP, |_, this, (v, t): (Value, f32)| {
-            let v = other(LERP, &v)?;
-            Ok(LuaVector2(Vec2::new(this.0.x + (v.x - this.0.x) * t, this.0.y + (v.y - this.0.y) * t)))
-        });
+        for name in [LERP, "lerp"] {
+            methods.add_method(name, |_, this, (v, t): (Value, f32)| {
+                let v = other(LERP, &v)?;
+                Ok(LuaVector2(Vec2::new(this.0.x + (v.x - this.0.x) * t, this.0.y + (v.y - this.0.y) * t)))
+            });
+        }
         for (name, pick) in [(MIN, f32::min as fn(f32, f32) -> f32), (MAX, f32::max)] {
             methods.add_method(name, move |_, this, others: mlua::Variadic<Value>| {
                 let mut out = this.0;

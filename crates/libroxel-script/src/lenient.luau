@@ -278,6 +278,21 @@ function L.add_enums(lib, database)
 			end
 		end
 	end
+	-- Every enumeration, as a list (`Enum:GetEnums()`).
+	if rawget(lib, "GetEnums") == nil then
+		rawset(lib, "GetEnums", function()
+			local list = {}
+			for _, t in pairs(lib) do
+				if type(t) == "table" then
+					table.insert(list, t)
+				end
+			end
+			table.sort(list, function(a, b)
+				return tostring(a) < tostring(b)
+			end)
+			return list
+		end)
+	end
 	-- Looking items up by name or number, on every enumeration.
 	for name, t in pairs(lib) do
 		if type(t) == "table" and getmetatable(t) == nil then
@@ -300,6 +315,17 @@ function L.add_enums(lib, database)
 					return nil
 				end)
 			end
+		end
+	end
+	-- libroxel's own enumerations print their names, as the others do (an
+	-- item's EnumType is its enumeration).
+	for name, t in pairs(lib) do
+		if type(t) == "table" and getmetatable(t) == nil then
+			setmetatable(t, {
+				__tostring = function()
+					return name
+				end,
+			})
 		end
 	end
 end
@@ -1340,6 +1366,23 @@ add(props, "Lighting", {
 	Technology = "Technology.ShadowMap",
 	LightingStyle = NIL,
 	PrioritizeLightingQuality = true,
+})
+-- The time of day as "hh:mm:ss" text: another way to read and set ClockTime.
+add(getters, "Lighting", {
+	TimeOfDay = function(self)
+		local seconds = math.floor((self.ClockTime or 14) % 24 * 3600 + 0.5) % 86400
+		return string.format("%02d:%02d:%02d", seconds // 3600, seconds // 60 % 60, seconds % 60)
+	end,
+})
+add(setters, "Lighting", {
+	TimeOfDay = function(self, v)
+		local h, m, sec = string.match(tostring(v), "^%s*(%-?%d+):?(%d*):?(%d*)")
+		if not h then
+			return
+		end
+		local hours = tonumber(h) + (tonumber(m) or 0) / 60 + (tonumber(sec) or 0) / 3600
+		self.ClockTime = hours % 24
+	end,
 })
 add(methods, "Lighting", {
 	GetSunDirection = function(self)
@@ -4076,6 +4119,22 @@ function L.globals()
 	g.Vector3.FromAxis = function(axis)
 		local n = typeof(axis) == "string" and axis or axis.Name
 		return n == "X" and Vector3.xAxis or n == "Y" and Vector3.yAxis or Vector3.zAxis
+	end
+	-- The newer lower-case spellings of the two above.
+	g.Vector3.fromNormalId = g.Vector3.FromNormalId
+	g.Vector3.fromAxis = g.Vector3.FromAxis
+	-- A new object like `existing`, with its properties but none of its children.
+	g.Instance.fromExisting = function(existing)
+		if typeof(existing) ~= "Instance" then
+			error("Instance.fromExisting expects an Instance", 2)
+		end
+		local archivable = existing.Archivable
+		existing.Archivable = true
+		local copy = existing:Clone()
+		existing.Archivable = archivable
+		copy:ClearAllChildren()
+		copy.Archivable = archivable
+		return copy
 	end
 	-- Content: a picture by address, or one a script draws (an EditableImage).
 	local function content(kind, uri, object)
