@@ -8,7 +8,8 @@
 //! physics step (things bump into them) and are placed afterwards. A script
 //! that moves a carried part on its own changes where it sits on the root.
 
-use std::collections::{HashMap, HashSet};
+// A fast fixed hash: these maps are read thousands of times a step.
+use bevy::platform::collections::{HashMap, HashSet};
 
 use libroxel_instance::{
     CFrame, ClassKind, InstanceId, InstanceTree, Property, PropertyValue, Rotation, Vec3,

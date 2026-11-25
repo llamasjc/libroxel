@@ -21,7 +21,8 @@
 //! with a spring beside it, that is suspension. A `BallSocketConstraint`
 //! holds the two attachments together and lets the part turn any way.
 
-use std::collections::HashMap;
+// A fast fixed hash: these maps are read thousands of times a step.
+use bevy::platform::collections::HashMap;
 
 use libroxel_instance::{
     ActuatorType, CFrame, ClassKind, EnumValue, InstanceId, InstanceTree, Property, PropertyValue, Rotation,

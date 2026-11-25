@@ -123,12 +123,12 @@ pub fn attribute_from_json(value: &Value) -> Option<PropertyValue> {
 }
 
 /// Saved instances that something links to, numbered in the order they are saved.
-type RefIds = std::collections::HashMap<InstanceId, u64>;
+type RefIds = foldhash::HashMap<InstanceId, u64>;
 
 fn ref_targets(tree: &InstanceTree) -> RefIds {
     let all = tree.descendants(tree.root()).unwrap_or_default();
-    let saved: std::collections::HashSet<InstanceId> = all.iter().copied().collect();
-    let mut wanted = std::collections::HashSet::new();
+    let saved: foldhash::HashSet<InstanceId> = all.iter().copied().collect();
+    let mut wanted = foldhash::HashSet::default();
     for &id in &all {
         let Ok(class) = tree.class(id) else { continue };
         for &property in class.properties() {
@@ -138,7 +138,7 @@ fn ref_targets(tree: &InstanceTree) -> RefIds {
         }
     }
     // Number them in save order (depth first), so saving is repeatable.
-    let mut ids = RefIds::new();
+    let mut ids = RefIds::default();
     let mut order = Vec::new();
     fn walk(tree: &InstanceTree, id: InstanceId, out: &mut Vec<InstanceId>) {
         for &child in tree.children(id).unwrap_or_default() {
@@ -234,7 +234,7 @@ pub struct LoadReport {
 /// links waiting for their target to be loaded.
 #[derive(Default)]
 struct LoadRefs {
-    ids: std::collections::HashMap<u64, InstanceId>,
+    ids: foldhash::HashMap<u64, InstanceId>,
     pending: Vec<(InstanceId, Property, u64)>,
 }
 

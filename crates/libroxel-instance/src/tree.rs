@@ -226,7 +226,7 @@ pub struct InstanceTree {
     touched_epoch: u64,
     /// Each tag and the instances that carry it (some may have been
     /// destroyed since), so finding tagged instances doesn't walk the game.
-    tag_index: std::collections::HashMap<String, std::collections::HashSet<InstanceId>>,
+    tag_index: foldhash::HashMap<String, foldhash::HashSet<InstanceId>>,
     /// Bumped whenever something in the workspace is reparented or destroyed
     /// (or something moves in or out of it).
     structure: u64,
@@ -256,12 +256,12 @@ struct ClassCache {
     all: Vec<InstanceId>,
     /// For each class number, where in `all` its instances are (in order).
     buckets: Vec<Vec<u32>>,
-    by_class: std::collections::HashMap<ClassKind, Vec<InstanceId>>,
+    by_class: foldhash::HashMap<ClassKind, Vec<InstanceId>>,
     /// The class numbers each looked-up class takes in.
-    fits: std::collections::HashMap<ClassKind, Vec<u16>>,
+    fits: foldhash::HashMap<ClassKind, Vec<u16>>,
     /// Workspace lookups with the class stamp they were made at (they hold
     /// across walks while no instance of theirs came or went).
-    kept: std::collections::HashMap<ClassKind, (u64, Vec<InstanceId>)>,
+    kept: foldhash::HashMap<ClassKind, (u64, Vec<InstanceId>)>,
 }
 
 impl Default for InstanceTree {
@@ -851,7 +851,7 @@ impl InstanceTree {
     pub fn tagged(&self, tag: &str) -> Vec<InstanceId> {
         let Some(set) = self.tag_index.get(tag) else { return Vec::new() };
         let mut found: Vec<(Vec<usize>, InstanceId)> = Vec::new();
-        let mut places: std::collections::HashMap<InstanceId, usize> = Default::default();
+        let mut places: foldhash::HashMap<InstanceId, usize> = Default::default();
         for &id in set {
             if !self.has_tag(id, tag).unwrap_or(false) || self.data(id).is_ok_and(|d| d.destroyed) {
                 continue;
@@ -968,7 +968,7 @@ impl InstanceTree {
     /// between instances inside the copy point at their copies, so a cloned
     /// model's welds hold the cloned parts.
     pub fn clone_subtree(&mut self, id: InstanceId) -> Result<InstanceId> {
-        let mut copies = std::collections::HashMap::new();
+        let mut copies = foldhash::HashMap::default();
         let new_id = self.clone_inner(id, &mut copies)?;
         for &copy in copies.values() {
             let data = self.data_mut(copy)?;
@@ -986,7 +986,7 @@ impl InstanceTree {
     fn clone_inner(
         &mut self,
         id: InstanceId,
-        copies: &mut std::collections::HashMap<InstanceId, InstanceId>,
+        copies: &mut foldhash::HashMap<InstanceId, InstanceId>,
     ) -> Result<InstanceId> {
         let source = self.data(id)?;
         if !source.class.is_creatable() {

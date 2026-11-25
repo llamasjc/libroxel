@@ -1532,8 +1532,10 @@ impl PlaySession {
             }
             self.fire_died(humanoid);
         }
-        self.runtime.set_velocities(self.physics.velocities().clone());
-        self.runtime.set_angular_velocities(self.physics.angular_velocities().clone());
+        self.runtime.set_velocities(self.physics.velocities().iter().map(|(k, v)| (*k, *v)).collect());
+        self.runtime.set_angular_velocities(
+            self.physics.angular_velocities().iter().map(|(k, v)| (*k, *v)).collect(),
+        );
         self.start_swings();
         for (index, input) in inputs.into_iter().enumerate() {
             self.pose_character(index, input, dt);

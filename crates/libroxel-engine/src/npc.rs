@@ -3,7 +3,8 @@
 //! scripts send it with `MoveTo`, jumps when its `Jump` is set, and carries
 //! the rest of its parts along with its root.
 
-use std::collections::{HashMap, HashSet};
+// A fast fixed hash: these maps are read thousands of times a step.
+use bevy::platform::collections::{HashMap, HashSet};
 
 use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property, PropertyValue, Rotation, Vec3};
 use libroxel_script::names;

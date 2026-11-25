@@ -26,12 +26,29 @@ fn main() {
         tree.set(id, Property::Size, PropertyValue::Vec3(Vec3::new(2.0, 2.0, 2.0))).unwrap();
         tree.set(id, Property::Anchored, PropertyValue::Bool(!loose)).unwrap();
     }
+    let began = std::time::Instant::now();
     let mut session = start_on(tree, true).unwrap();
+    let start_ms = began.elapsed().as_secs_f64() * 1000.0;
+    // The first frame builds the physics world; time it on its own.
+    let began = std::time::Instant::now();
+    session.step(1.0 / 60.0, CharacterInput::default());
+    let first_ms = began.elapsed().as_secs_f64() * 1000.0;
+    session.physics_mut().take_timing();
     let frames = 120;
     let start = std::time::Instant::now();
     for _ in 0..frames {
         session.step(1.0 / 60.0, CharacterInput::default());
     }
     let ms = start.elapsed().as_secs_f64() * 1000.0 / frames as f64;
-    println!("{count} parts: {ms:.2} ms per frame");
+    let t = session.physics_mut().take_timing();
+    let each = |s: f64| s * 1000.0 / t.steps.max(1) as f64;
+    println!(
+        "{count} parts: {ms:.2} ms per frame (start {start_ms:.1} ms, first frame {first_ms:.1} ms; physics: \
+         gather {:.2}, broadphase {:.2}, characters {:.2}, loose {:.2}, touches {:.2})",
+        each(t.gather),
+        each(t.broadphase),
+        each(t.characters),
+        each(t.loose),
+        each(t.touches),
+    );
 }

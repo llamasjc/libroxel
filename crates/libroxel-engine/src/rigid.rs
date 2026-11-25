@@ -9,7 +9,8 @@
 //! and hands it over as a [`Spec`]; this module keeps the simulated world
 //! in step with them and runs it.
 
-use std::collections::{HashMap, HashSet};
+// A fast fixed hash: these maps are read thousands of times a step.
+use bevy::platform::collections::{HashMap, HashSet};
 
 use bevy::math::{Quat, Vec3 as GVec3};
 use libroxel_instance::{InstanceId, PartShape, Vec3, voxels::Voxels};
@@ -310,9 +311,14 @@ impl Rigid {
         let Some(entry) = self.parts.remove(&id) else { return };
         match entry.body {
             Some(body) => {
-                // Members on this body go with it; forget them so they are made again.
+                // Members on this body go with it; forget them so they are made
+                // again. (Most bodies have only their own collider, and looking
+                // through every part for members each time is slow when many go.)
+                let members = self.world.bodies.get(body).is_some_and(|b| b.colliders().len() > 1);
                 self.world.remove_body_with_colliders(body, true);
-                self.parts.retain(|_, e| e.parent != body);
+                if members {
+                    self.parts.retain(|_, e| e.parent != body);
+                }
             }
             None => {
                 self.world.remove_collider(entry.collider);
@@ -351,7 +357,7 @@ impl Rigid {
         }
         self.terrain_seen = Some(seen);
         // Chunks no longer near anything loose go.
-        let gone: Vec<_> = self.terrain_chunks.keys().filter(|k| !wanted.contains(k)).copied().collect();
+        let gone: Vec<_> = self.terrain_chunks.keys().filter(|k| !wanted.contains(*k)).copied().collect();
         for key in gone {
             if let Some((_, Some(collider))) = self.terrain_chunks.remove(&key) {
                 self.world.remove_collider(collider);
@@ -402,7 +408,7 @@ impl Rigid {
         self.setup();
         self.sync_terrain(voxels, specs);
         let live: HashSet<InstanceId> = specs.iter().map(|s| s.id).collect();
-        let gone: Vec<InstanceId> = self.parts.keys().filter(|id| !live.contains(id)).copied().collect();
+        let gone: Vec<InstanceId> = self.parts.keys().filter(|id| !live.contains(*id)).copied().collect();
         for id in gone {
             self.remove_entry(id);
         }
@@ -624,7 +630,7 @@ impl Rigid {
     /// Makes, changes and removes joints to match `specs`.
     fn sync_joints(&mut self, specs: &[JointSpec]) {
         let live: HashSet<InstanceId> = specs.iter().map(|s| s.id).collect();
-        let gone: Vec<InstanceId> = self.joints.keys().filter(|id| !live.contains(id)).copied().collect();
+        let gone: Vec<InstanceId> = self.joints.keys().filter(|id| !live.contains(*id)).copied().collect();
         for id in gone {
             if let Some((handle, ..)) = self.joints.remove(&id) {
                 self.world.remove_impulse_joint(handle);

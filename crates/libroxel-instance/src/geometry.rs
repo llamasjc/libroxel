@@ -615,7 +615,7 @@ impl PartIndex {
             out.extend(self.placed.iter().filter(|(_, p)| p.is_some()).map(|(id, _)| *id));
             return out;
         }
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = foldhash::HashSet::default();
         for x in a.0..=b.0 {
             for y in a.1..=b.1 {
                 for z in a.2..=b.2 {
@@ -629,10 +629,10 @@ impl PartIndex {
     }
 
     /// The parts that might be in any of the boxes (each `(lo, hi)`), each
-    /// part once. Boxes that overlap (a character's parts, a crowd) look
-    /// each cell up only once.
+    /// part once, in id order. Boxes that overlap (a character's parts, a
+    /// crowd) look each cell up only once.
     pub fn near_boxes(&self, boxes: &[(Vec3, Vec3)]) -> Vec<InstanceId> {
-        let mut cells = std::collections::HashSet::new();
+        let mut cells = foldhash::HashSet::default();
         for (lo, hi) in boxes {
             let (a, b) = (index_cell(*lo), index_cell(*hi));
             let count = (i64::from(b.0) - i64::from(a.0) + 1)
@@ -640,7 +640,10 @@ impl PartIndex {
                 * (i64::from(b.2) - i64::from(a.2) + 1);
             if count > 4096 {
                 // A very big box: every part is a candidate anyway.
-                return self.near_box(*lo, *hi);
+                let mut out = self.near_box(*lo, *hi);
+                out.sort_unstable_by_key(|id| id.to_bits());
+                out.dedup();
+                return out;
             }
             for x in a.0..=b.0 {
                 for y in a.1..=b.1 {
@@ -650,13 +653,17 @@ impl PartIndex {
                 }
             }
         }
-        let mut seen = std::collections::HashSet::new();
-        let mut out: Vec<InstanceId> = self.huge.iter().copied().filter(|p| seen.insert(*p)).collect();
-        for cell in cells {
-            if let Some(list) = self.cells.get(&cell) {
-                out.extend(list.iter().copied().filter(|p| seen.insert(*p)));
+        // Everything found, then sorted once to drop repeats: much cheaper
+        // than checking each part against a set as it is found (a part is
+        // in every cell it covers, and crowded cells are looked at often).
+        let mut out: Vec<InstanceId> = self.huge.iter().copied().collect();
+        for cell in &cells {
+            if let Some(list) = self.cells.get(cell) {
+                out.extend_from_slice(list);
             }
         }
+        out.sort_unstable_by_key(|id| id.to_bits());
+        out.dedup();
         out
     }
 
@@ -688,7 +695,7 @@ impl PartIndex {
                 return;
             }
         }
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = foldhash::HashSet::default();
         let reach = reach.min(1.0e6);
         // Walk the cells the ray passes through, in order (a voxel walk).
         let mut cell = index_cell(origin);

@@ -13,7 +13,8 @@
 //! loose parts they walk into. Every frame we also work out which pairs of
 //! parts started touching, for the `Touched` event.
 
-use std::collections::{HashMap, HashSet};
+// A fast fixed hash: these maps are read thousands of times a step.
+use bevy::platform::collections::{HashMap, HashSet};
 
 use bevy::platform::collections::HashMap as FastMap;
 
@@ -369,11 +370,12 @@ fn mesh_bodies(
 
 /// The collision shape for a part's `MeshId`, if it has a model.
 fn mesh_shape(tree: &InstanceTree, id: InstanceId) -> Option<u32> {
-    let mesh = tree.get_string(id, Property::MeshId)?;
+    // (Borrowed: this is asked for every part, twice a step.)
+    let mesh = tree.get_str(id, Property::MeshId)?;
     if mesh.trim().is_empty() {
         return None;
     }
-    crate::collision_shapes::for_mesh(&mesh)
+    crate::collision_shapes::for_mesh(mesh)
 }
 
 /// Picks the cheapest exact collider for an anchored part.
@@ -634,9 +636,10 @@ impl Physics {
     /// step) and which pairs of parts belong together and ignore each other.
     pub fn set_assemblies(
         &mut self,
-        carried: HashSet<InstanceId>,
+        carried: impl IntoIterator<Item = InstanceId>,
         together: impl IntoIterator<Item = (InstanceId, InstanceId)>,
     ) {
+        let carried: HashSet<InstanceId> = carried.into_iter().collect();
         for id in &carried {
             self.velocities.remove(id);
             self.spins.remove(id);
@@ -1067,12 +1070,12 @@ impl Physics {
                 Some((pos - Vec3::new(r, r, r), pos + Vec3::new(r, r, r)))
             })
             .collect();
-        let mut out: HashSet<InstanceId> = index.near_boxes(&boxes).into_iter().collect();
+        let mut out = index.near_boxes(&boxes);
         out.extend(movers.iter().copied());
         out.extend(self.held.iter().copied());
         // In tree order, so steps don't depend on hashing.
-        let mut out: Vec<InstanceId> = out.into_iter().collect();
-        out.sort_by_key(|id| id.to_bits());
+        out.sort_unstable_by_key(|id| id.to_bits());
+        out.dedup();
         out
     }
 
@@ -1266,7 +1269,8 @@ impl Physics {
         let substeps = ((dt / MAX_SUBSTEP).ceil() as usize).clamp(1, MAX_SUBSTEPS);
         let h = dt / substeps as f32;
         lap();
-        let near = self.broadphase(&bodies, dt, gravity);
+        // (Only walking characters use this: loose parts go to the solver.)
+        let near = self.broadphase(&bodies, dt, gravity, true);
         let mut broadphase = lap();
         for step in 1..=substeps {
             let slowing = if step == substeps { dt } else { 0.0 };
@@ -1324,7 +1328,7 @@ impl Physics {
         lap();
         let bodies = self.collect_bodies(tree, &parts, dt, gravity, true);
         gather += lap();
-        let near = self.broadphase(&bodies, dt, gravity);
+        let near = self.broadphase(&bodies, dt, gravity, false);
         broadphase += lap();
         let mut current = HashSet::new();
         for (i, a) in bodies.iter().enumerate() {
@@ -1384,7 +1388,10 @@ impl Physics {
     /// put boxes (grown by how far they can move) in a grid of cells and
     /// only compare boxes that share a cell. Huge boxes, like a baseplate,
     /// are compared with everything instead of filling thousands of cells.
-    fn broadphase(&self, bodies: &[Body], dt: f32, gravity: f32) -> Vec<Vec<usize>> {
+    /// For each mover, the bodies whose boxes could meet it this step
+    /// (empty for anchored bodies). With `walkers_only`, only walking
+    /// characters get theirs; other movers' lists are left empty.
+    fn broadphase(&self, bodies: &[Body], dt: f32, gravity: f32, walkers_only: bool) -> Vec<Vec<usize>> {
         let n = bodies.len();
         if n <= BROADPHASE_MIN {
             return (0..n)
@@ -1436,7 +1443,12 @@ impl Physics {
                     }
                 }
             };
-        let movers: Vec<usize> = (0..n).filter(|i| !bodies[*i].anchored).collect();
+        let movers: Vec<usize> = (0..n)
+            .filter(|i| !bodies[*i].anchored && !(walkers_only && (bodies[*i].sim || bodies[*i].held)))
+            .collect();
+        if movers.is_empty() {
+            return vec![Vec::new(); n];
+        }
         for &i in &movers {
             let (lo, hi) = grown[i];
             let (a, b, cells) = span(lo, hi, &coarse_of);
