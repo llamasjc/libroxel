@@ -48,16 +48,17 @@ fn flag<'a>(call: &'a [String], name: &str) -> &'a str {
 }
 
 /// Announces the server a call started, as `libroxel server` would.
-fn announce(hub: &HubClient, call: &[String], code: &str, players: u32) {
+fn announce(hub: &HubClient, call: &[String], players: u32) -> String {
     let key: [u8; 32] = std::fs::read(flag(call, "--key")).unwrap().try_into().unwrap();
     let id = player_id_of(&key);
+    let code = libroxel_hub::code_for(&id);
     let secret = format!("{id}-secret-for-the-test");
     hub.heartbeat(&Heartbeat {
         server_id: id.clone(),
         secret: secret.clone(),
         name: "Sample obby".into(),
         game: "Sample obby".into(),
-        code: code.into(),
+        code: code.clone(),
         players,
         max_players: flag(call, "--max-players").parse().unwrap(),
         kind: HostKind::Official,
@@ -66,6 +67,7 @@ fn announce(hub: &HubClient, call: &[String], code: &str, players: u32) {
         host_signature: Some(sign(&key, &host_message(&id, &secret))),
     })
     .unwrap();
+    code
 }
 
 fn wait_for_calls(dir: &Path, count: usize) -> Vec<Vec<String>> {
@@ -115,25 +117,25 @@ fn play_fills_the_hubs_servers_and_starts_more() {
     assert_eq!(calls(&dir).len(), 1);
 
     // It comes up: the waiting player gets its code.
-    announce(&hub, call, "lrx1first", 0);
+    let first = announce(&hub, call, 0);
     let joined = play("ticketaaaa");
-    assert_eq!(joined.code.as_deref(), Some("lrx1first"));
+    assert_eq!(joined.code.as_deref(), Some(first.as_str()));
     let listed = hub.servers("").unwrap();
     assert!(listed[0].hub_server, "{listed:?}");
     assert_eq!(listed[0].kind, HostKind::Official);
 
     // A second player fills it, so the next server starts before anyone needs it.
-    assert_eq!(play("ticketbbbb").code.as_deref(), Some("lrx1first"));
+    assert_eq!(play("ticketbbbb").code.as_deref(), Some(first.as_str()));
     let started = wait_for_calls(&dir, 2);
     assert_eq!(flag(&started[1], "--udp-port"), "7501");
 
     // A third goes to the new one, and waits for it.
     assert!(play("ticketcccc").wait);
-    announce(&hub, &started[1], "lrx1second", 0);
-    assert_eq!(play("ticketcccc").code.as_deref(), Some("lrx1second"));
+    let second = announce(&hub, &started[1], 0);
+    assert_eq!(play("ticketcccc").code.as_deref(), Some(second.as_str()));
 
     // Both full, and no room for a third server: the Hub says it's busy.
-    assert_eq!(play("ticketdddd").code.as_deref(), Some("lrx1second"));
+    assert_eq!(play("ticketdddd").code.as_deref(), Some(second.as_str()));
     let busy = hub.play(&PlayRequest {
         game_id: "starter:Sample obby".into(),
         ticket: "ticketeeee".into(),

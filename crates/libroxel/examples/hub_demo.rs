@@ -156,9 +156,11 @@ fn main() {
         ("tower-1".into(), "Tower of Doom: floor 20+", "Tower of Doom", &tower, 6, 10, HostKind::Community),
         ("tower-2".into(), "DeeDev's game", "Tower of Doom", &tower, 2, 6, HostKind::Player),
     ];
-    let tunnels: Vec<HostTunnel> = servers
+    // Each server signs its listing with the key its join code reaches.
+    let hosts: Vec<Identity> = servers.iter().map(|_| Identity::generate()).collect();
+    let tunnels: Vec<HostTunnel> = hosts
         .iter()
-        .map(|_| HostTunnel::start(&Identity::generate(), Network::LocalOnly, 1).expect("networking starts"))
+        .map(|me| HostTunnel::start(me, Network::LocalOnly, 1).expect("networking starts"))
         .collect();
     let codes: Vec<String> = tunnels
         .iter()
@@ -185,8 +187,8 @@ fn main() {
                 max_players: *max,
                 kind: *kind,
                 game_id: Some((*game_id).into()),
-                host_id: None,
-                host_signature: None,
+                host_id: Some(hosts[i].player_id()),
+                host_signature: Some(hosts[i].sign(&libroxel_hub::host_message(id, &secrets[i]))),
             };
             if let Err(e) = hub.heartbeat(&beat) {
                 println!("{name}: {e}");

@@ -110,23 +110,26 @@ fn friends_party_up_and_follow_the_leader() {
         [("Alice", true), ("Ana", false)]
     );
 
-    hub.heartbeat(&Heartbeat {
-        server_id: alice.id.clone(),
-        secret: libroxel_hub::new_secret(),
-        name: "Alice's game".into(),
-        game: "Kart race".into(),
-        code: "lrx1alice".into(),
-        players: 1,
-        max_players: 8,
-        kind: HostKind::Player,
-        game_id: Some("starter:Kart race".into()),
-        host_id: None,
-        host_signature: None,
-    })
+    hub.heartbeat(&libroxel_hub::signed_heartbeat(
+        &alice.key,
+        Heartbeat {
+            server_id: alice.id.clone(),
+            secret: libroxel_hub::new_secret(),
+            name: "Alice's game".into(),
+            game: "Kart race".into(),
+            code: String::new(),
+            players: 1,
+            max_players: 8,
+            kind: HostKind::Player,
+            game_id: Some("starter:Kart race".into()),
+            host_id: None,
+            host_signature: None,
+        },
+    ))
     .unwrap();
     alice.presence(&hub, &alice.id);
     let party = ana.view(&hub).party.unwrap();
-    assert_eq!(party.leader().unwrap().server.as_ref().unwrap().code, "lrx1alice");
+    assert_eq!(party.leader().unwrap().server.as_ref().unwrap().code, libroxel_hub::code_for(&alice.id));
 
     let time = bo.tick();
     assert!(hub.party(&ana.id, time, &sign(&bo.key, &party_view_message(&ana.id, time))).is_err());

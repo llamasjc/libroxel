@@ -271,6 +271,42 @@ pub fn host_message(server_id: &str, secret: &str) -> Vec<u8> {
     format!("libroxel host\n{server_id}\n{secret}").into_bytes()
 }
 
+/// The start of every join code (as `libroxel_net` makes them).
+const CODE_PREFIX: &str = "lrx1";
+
+/// The player id of the computer a join code reaches, if it is a join code.
+/// A join code is the host's key and addresses, so this can't be faked: a
+/// connection made with the code only reaches the computer with that key.
+pub fn code_host(code: &str) -> Option<String> {
+    let code = code.trim().to_ascii_lowercase();
+    let body: String =
+        code.strip_prefix(CODE_PREFIX)?.chars().filter(|c| !c.is_whitespace() && *c != '-').collect();
+    let bytes = data_encoding::BASE32_NOPAD.decode(body.to_ascii_uppercase().as_bytes()).ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let id = json.get("id")?.as_str()?.parse::<iroh_base::PublicKey>().ok()?;
+    Some(id.to_string())
+}
+
+/// A join code for `player_id` that has no addresses in it, for tests and
+/// tools (a real code also says where the host is).
+pub fn code_for(player_id: &str) -> String {
+    let json = serde_json::json!({ "id": player_id, "addrs": [] });
+    let body = data_encoding::BASE32_NOPAD.encode(json.to_string().as_bytes()).to_ascii_lowercase();
+    format!("{CODE_PREFIX}{body}")
+}
+
+/// `beat` signed as hosted by the player whose key is `key`, with a join
+/// code that reaches them when it has none yet.
+pub fn signed_heartbeat(key: &[u8; 32], mut beat: Heartbeat) -> Heartbeat {
+    let id = player_id_of(key);
+    if beat.code.trim().is_empty() {
+        beat.code = code_for(&id);
+    }
+    beat.host_signature = Some(sign(key, &host_message(&beat.server_id, &beat.secret)));
+    beat.host_id = Some(id);
+    beat
+}
+
 /// A live server as the list shows it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ServerInfo {
@@ -686,6 +722,14 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
         None => Connection::open_in_memory(),
     }
     .map_err(|e| format!("could not open the Hub database: {e}"))?;
+    if path.is_some() {
+        // Readers don't wait for writers, and a write is one append rather
+        // than two copies: much faster with many players at once.
+        db.execute_batch(
+            "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;",
+        )
+        .map_err(|e| format!("could not set up the Hub database: {e}"))?;
+    }
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS servers (
             server_id   TEXT PRIMARY KEY,
@@ -755,6 +799,8 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     let _ = db.execute("ALTER TABLE servers ADD COLUMN game_id TEXT", []);
     // Hubs from before signed hosts.
     let _ = db.execute("ALTER TABLE servers ADD COLUMN host_id TEXT", []);
+    // A game's own server list is asked for often.
+    let _ = db.execute("CREATE INDEX IF NOT EXISTS servers_game ON servers(game_id, last_seen)", []);
     // Hubs from before account numbers: number everyone in the order they joined.
     let _ = db.execute("ALTER TABLE accounts ADD COLUMN number INTEGER", []);
     number_accounts(&db).map_err(|e| format!("could not number the Hub's accounts: {e}"))?;
@@ -818,6 +864,20 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
             loop {
                 tokio::time::sleep(Duration::from_secs(3)).await;
                 fleet.tidy(&db.lock().unwrap());
+            }
+        });
+    }
+    // Servers that stopped saying they're up are forgotten here, every so
+    // often, rather than on every look at the list (a write each time).
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        let db = hub.db.clone();
+        runtime.spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                let _ = db
+                    .lock()
+                    .unwrap()
+                    .execute("DELETE FROM servers WHERE last_seen < ?1", params![now() - EXPIRES_AFTER_SECS]);
             }
         });
     }
@@ -1705,18 +1765,17 @@ fn server_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<ServerInfo> {
 async fn list_servers(State(db): State<Db>, Query(query): Query<ListQuery>) -> Json<Vec<ServerInfo>> {
     let db = db.lock().unwrap();
     let now = now();
-    let _ = db.execute("DELETE FROM servers WHERE last_seen < ?1", params![now - EXPIRES_AFTER_SECS]);
     let pattern = format!("%{}%", query.q.unwrap_or_default().trim().replace(['%', '_'], ""));
     let game_id = query.game_id.filter(|g| !g.trim().is_empty());
     let mut statement = db
         .prepare(&format!(
             "SELECT {SERVER_COLUMNS} FROM servers
-             WHERE (name LIKE ?1 OR game LIKE ?1) AND (?2 IS NULL OR game_id = ?2)
+             WHERE (name LIKE ?1 OR game LIKE ?1) AND (?2 IS NULL OR game_id = ?2) AND last_seen >= ?3
              ORDER BY kind ASC, players DESC, first_seen ASC LIMIT 200"
         ))
         .expect("the list query is valid");
     let rows = statement
-        .query_map(params![pattern, game_id], |r| server_row(r, now))
+        .query_map(params![pattern, game_id, now - EXPIRES_AFTER_SECS], |r| server_row(r, now))
         .map(|rows| rows.filter_map(Result::ok).collect())
         .unwrap_or_default();
     Json(rows)
@@ -1747,10 +1806,23 @@ async fn heartbeat(
             if !verify(id, &host_message(&beat.server_id, &beat.secret), signature) {
                 return Err((StatusCode::FORBIDDEN, "the host's signature does not match".into()));
             }
+            // The code must reach the computer that signed, or anyone could
+            // list their own server under someone else's account.
+            if code_host(&beat.code).as_deref() != Some(id.as_str()) {
+                return Err((StatusCode::FORBIDDEN, "that join code reaches a different computer".into()));
+            }
             Some(id.clone())
         }
         _ => None,
     };
+    // Only a signed server goes on a game's own list, so nobody can put
+    // their server in front of a popular game's players anonymously.
+    if host_id.is_none() && beat.game_id.as_deref().is_some_and(|g| !g.trim().is_empty()) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "a server that runs a listed game must be signed by its host".into(),
+        ));
+    }
     if host_id.as_deref().is_some_and(|id| owner::is_banned(&db, id)) {
         return Err((StatusCode::FORBIDDEN, "this account is banned from Libroxel".into()));
     }

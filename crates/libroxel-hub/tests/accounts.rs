@@ -154,13 +154,21 @@ fn the_server_list_shows_who_really_hosts() {
     };
     let signer =
         HostSigner { player_id: player_id_of(&alice), sign: Arc::new(move |m: &[u8]| sign(&alice, m)) };
-    let _real =
-        Announcer::start_signed(hub.clone(), "real".into(), listing("alice2's game", "lrx1a"), Some(signer));
+    let _real = Announcer::start_signed(
+        hub.clone(),
+        "real".into(),
+        listing("alice2's game", &libroxel_hub::code_for(&player_id_of(&alice))),
+        Some(signer),
+    );
     // Someone names their server after Alice, and even says it's Alice's, signed with their own key.
     let eve = [3u8; 32];
     let fake = HostSigner { player_id: player_id_of(&alice), sign: Arc::new(move |m: &[u8]| sign(&eve, m)) };
-    let forged =
-        Announcer::start_signed(hub.clone(), "fake".into(), listing("alice2's game", "lrx1b"), Some(fake));
+    let forged = Announcer::start_signed(
+        hub.clone(),
+        "fake".into(),
+        listing("alice2's game", &libroxel_hub::code_for(&player_id_of(&alice))),
+        Some(fake),
+    );
     let _unsigned = Announcer::start(hub.clone(), "plain".into(), listing("alice2's game", "lrx1c"));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let servers = loop {
@@ -213,7 +221,7 @@ fn whoever_runs_the_hub_bans_accounts_and_names_its_owners() {
             server_id: id.into(),
             name: id.into(),
             game: "Obby".into(),
-            code: format!("lrx1{id}"),
+            code: libroxel_hub::code_for(&player_id_of(key)),
             players: 0,
             max_players: 0,
             kind: HostKind::Official,

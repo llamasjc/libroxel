@@ -102,26 +102,29 @@ fn friends_ask_accept_see_each_other_and_join() {
 
     // Ana hosts a Kart race server and says she's in it.
     let secret = new_secret();
-    hub.heartbeat(&Heartbeat {
-        server_id: ana.id.clone(),
-        secret: secret.clone(),
-        name: "Ana's game".into(),
-        game: "Kart race".into(),
-        code: "lrx1anascode".into(),
-        players: 1,
-        max_players: 8,
-        kind: HostKind::Player,
-        game_id: Some("starter:Kart race".into()),
-        host_id: None,
-        host_signature: None,
-    })
+    hub.heartbeat(&libroxel_hub::signed_heartbeat(
+        &ana.key,
+        Heartbeat {
+            server_id: ana.id.clone(),
+            secret: secret.clone(),
+            name: "Ana's game".into(),
+            game: "Kart race".into(),
+            code: String::new(),
+            players: 1,
+            max_players: 8,
+            kind: HostKind::Player,
+            game_id: Some("starter:Kart race".into()),
+            host_id: None,
+            host_signature: None,
+        },
+    ))
     .unwrap();
     ana.presence(&hub, true, Some(&ana.id));
     let friend = &alice.friends(&hub).friends[0];
     assert!(friend.online);
     assert_eq!(friend.game.as_deref(), Some("Kart race"));
     let server = friend.server.as_ref().expect("her server is listed");
-    assert_eq!(server.code, "lrx1anascode");
+    assert_eq!(server.code, libroxel_hub::code_for(&ana.id));
     assert_eq!(server.game_id.as_deref(), Some("starter:Kart race"));
 
     // Her server is on the Kart race list and no other.
@@ -182,19 +185,22 @@ fn published_games_count_their_players() {
         })
         .unwrap();
     for (i, players) in [3, 4].into_iter().enumerate() {
-        hub.heartbeat(&Heartbeat {
-            server_id: format!("s{i}"),
-            secret: new_secret(),
-            name: format!("Server {i}"),
-            game: "Tower".into(),
-            code: format!("lrx1s{i}"),
-            players,
-            max_players: 10,
-            kind: HostKind::Community,
-            game_id: Some(published.game_id.clone()),
-            host_id: None,
-            host_signature: None,
-        })
+        hub.heartbeat(&libroxel_hub::signed_heartbeat(
+            &[100 + i as u8; 32],
+            Heartbeat {
+                server_id: format!("s{i}"),
+                secret: new_secret(),
+                name: format!("Server {i}"),
+                game: "Tower".into(),
+                code: String::new(),
+                players,
+                max_players: 10,
+                kind: HostKind::Community,
+                game_id: Some(published.game_id.clone()),
+                host_id: None,
+                host_signature: None,
+            },
+        ))
         .unwrap();
     }
     let game = &hub.games("").unwrap()[0];

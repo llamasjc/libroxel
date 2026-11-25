@@ -327,22 +327,7 @@ fn move_account(db: &mut Connection, old: &str, password: &PasswordSet) -> Resul
             .map_err(internal)?;
         }
     }
-    tx.execute(
-        "INSERT INTO passwords (player_id, salt, memory_kib, passes, login_id, sealed, set_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-         ON CONFLICT(player_id) DO UPDATE SET salt = ?2, memory_kib = ?3, passes = ?4, login_id = ?5,
-             sealed = ?6, set_at = ?7",
-        params![
-            new,
-            password.salt,
-            password.memory_kib,
-            password.passes,
-            password.login_id,
-            password.sealed,
-            password.time
-        ],
-    )
-    .map_err(internal)?;
+    crate::password::store_password(&tx, new, password).map_err(internal)?;
     tx.execute("UPDATE moved SET new_id = ?2 WHERE new_id = ?1", params![old, new]).map_err(internal)?;
     tx.execute(
         "INSERT OR REPLACE INTO moved (old_id, new_id, at) VALUES (?1, ?2, ?3)",
@@ -423,7 +408,7 @@ pub(crate) async fn sign_out_everywhere(
     let mut db = db.lock().unwrap();
     let login: Option<(String, String)> = db
         .query_row(
-            "SELECT p.login_id, a.name FROM passwords p JOIN accounts a ON a.player_id = p.player_id
+            "SELECT unseal(p.login_id), a.name FROM passwords p JOIN accounts a ON a.player_id = p.player_id
              WHERE p.player_id = ?1",
             params![out.player_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
@@ -433,11 +418,11 @@ pub(crate) async fn sign_out_everywhere(
     let Some((login_id, name)) = login else {
         return Err((StatusCode::BAD_REQUEST, "set a password first".into()));
     };
-    if limits.over(Limit::WrongPassword, &name) {
+    if limits.too_many_wrong(&name, &caller.0) {
         return Err((StatusCode::TOO_MANY_REQUESTS, "too many wrong passwords; wait 15 minutes".into()));
     }
     if !verify(&login_id, &message, &out.login_signature) {
-        limits.take(Limit::WrongPassword, &name);
+        limits.wrong_password(&name, &caller.0);
         return Err((StatusCode::FORBIDDEN, "wrong password".into()));
     }
     if crate::owner::is_banned(&db, &out.player_id) {

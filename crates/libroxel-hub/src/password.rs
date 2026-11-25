@@ -389,15 +389,19 @@ pub(crate) async fn set_password(
     if last.is_some_and(|last| set.time <= last) {
         return Err((StatusCode::CONFLICT, "a newer password is already set".into()));
     }
+    store_password(&db, &set.player_id, &set).map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Keeps `set` as `player_id`'s password, encrypted with the Hub's key.
+pub(crate) fn store_password(db: &Connection, player_id: &str, set: &PasswordSet) -> rusqlite::Result<usize> {
     db.execute(
         "INSERT INTO passwords (player_id, salt, memory_kib, passes, login_id, sealed, set_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-         ON CONFLICT(player_id) DO UPDATE SET salt = ?2, memory_kib = ?3, passes = ?4, login_id = ?5,
-             sealed = ?6, set_at = ?7",
-        params![set.player_id, set.salt, set.memory_kib, set.passes, set.login_id, set.sealed, set.time],
+         VALUES (?1, seal(?2), ?3, ?4, seal(?5), seal(?6), ?7)
+         ON CONFLICT(player_id) DO UPDATE SET salt = seal(?2), memory_kib = ?3, passes = ?4,
+             login_id = seal(?5), sealed = seal(?6), set_at = ?7",
+        params![player_id, set.salt, set.memory_kib, set.passes, set.login_id, set.sealed, set.time],
     )
-    .map_err(internal)?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 /// The password row for an account name: (player_id, salt, memory, passes, login_id, sealed).
@@ -405,7 +409,7 @@ type PasswordRow = (String, String, u32, u32, String, String);
 
 fn password_for(db: &Connection, name: &str) -> Result<Option<PasswordRow>, Failure> {
     db.query_row(
-        "SELECT a.player_id, p.salt, p.memory_kib, p.passes, p.login_id, p.sealed
+        "SELECT a.player_id, unseal(p.salt), p.memory_kib, p.passes, unseal(p.login_id), unseal(p.sealed)
          FROM accounts a JOIN passwords p ON p.player_id = a.player_id WHERE a.name = ?1",
         params![name],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
@@ -425,9 +429,19 @@ pub(crate) async fn sign_in_salt(
     }
     let db = db.lock().unwrap();
     let Some((_, salt, memory_kib, passes, _, _)) = password_for(&db, &name)? else {
-        return Err((StatusCode::NOT_FOUND, "nobody with that name has a password".into()));
+        // A name with no password gets a made-up salt that stays the same,
+        // so this can't be used to find out which names have passwords.
+        return Ok(Json(made_up_salt(&db, &name)));
     };
     Ok(Json(SignInSalt { salt, memory_kib, passes }))
+}
+
+/// A salt for a name with no password, the same each time it is asked for
+/// (it comes from the Hub's key), and looking like a real one.
+fn made_up_salt(db: &Connection, name: &str) -> SignInSalt {
+    let peppered = crate::seal::pepper(db, &format!("libroxel made-up salt\n{}", name.to_ascii_lowercase()));
+    let hex: String = peppered.chars().filter(char::is_ascii_hexdigit).rev().take(32).collect();
+    SignInSalt { salt: hex, memory_kib: PASSWORD_MEMORY_KIB, passes: PASSWORD_PASSES }
 }
 
 pub(crate) async fn sign_in(
@@ -439,7 +453,7 @@ pub(crate) async fn sign_in(
     if !limits.take(Limit::SignIn, &caller.0) {
         return Err(too_many("sign-in attempts"));
     }
-    if limits.over(Limit::WrongPassword, &attempt.name) {
+    if limits.too_many_wrong(&attempt.name, &caller.0) {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             "too many wrong passwords for that name; wait 15 minutes and try again".into(),
@@ -450,7 +464,7 @@ pub(crate) async fn sign_in(
     }
     let db = db.lock().unwrap();
     let wrong = || {
-        limits.take(Limit::WrongPassword, &attempt.name);
+        limits.wrong_password(&attempt.name, &caller.0);
         Err((StatusCode::FORBIDDEN, "wrong name or password".to_owned()))
     };
     let Some((player_id, _, _, _, login_id, sealed)) = password_for(&db, &attempt.name)? else {
@@ -463,7 +477,7 @@ pub(crate) async fn sign_in(
         Ok(()) => {}
         Err(why) if why == crate::security::NEEDS_CODE => return Err((StatusCode::UNAUTHORIZED, why)),
         Err(why) => {
-            limits.take(Limit::WrongPassword, &attempt.name);
+            limits.wrong_password(&attempt.name, &caller.0);
             return Err((StatusCode::FORBIDDEN, why));
         }
     }
@@ -510,6 +524,36 @@ mod tests {
     fn short_or_named_passwords_are_turned_away() {
         assert!(password_problem("x7#kP2", "").is_some());
         assert!(password_problem("my name is Jose_99!", "jose").is_some());
+    }
+
+    #[test]
+    fn a_stolen_database_alone_has_nothing_to_guess_against() {
+        let db = crate::open_db(None).unwrap();
+        let key = [9u8; 32];
+        let set =
+            seal_password_with(&key, "correct horse battery", now(), MIN_MEMORY_KIB, MIN_PASSES).unwrap();
+        store_password(&db, &set.player_id, &set).unwrap();
+        let raw: (String, String, String) = db
+            .query_row("SELECT salt, login_id, sealed FROM passwords", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        for (kept, plain) in [(&raw.0, &set.salt), (&raw.1, &set.login_id), (&raw.2, &set.sealed)] {
+            assert!(kept.starts_with("enc1:") && !kept.contains(plain.as_str()), "{kept}");
+        }
+        let opened: String =
+            db.query_row("SELECT unseal(login_id) FROM passwords", [], |r| r.get(0)).unwrap();
+        assert_eq!(opened, set.login_id);
+    }
+
+    #[test]
+    fn names_without_passwords_get_a_salt_that_looks_real() {
+        let db = crate::open_db(None).unwrap();
+        let a = made_up_salt(&db, "Nobody");
+        assert_eq!(a, made_up_salt(&db, "nobody"), "the same every time");
+        assert_ne!(a.salt, made_up_salt(&db, "somebody").salt);
+        assert_eq!(a.salt.len(), 32);
+        assert!(data_encoding::HEXLOWER.decode(a.salt.as_bytes()).is_ok());
     }
 
     #[test]

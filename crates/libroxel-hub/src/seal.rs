@@ -153,9 +153,18 @@ pub(crate) fn pepper(db: &Connection, text: &str) -> String {
 
 /// Encrypts rows kept by Hubs from before encryption.
 fn seal_old_rows(db: &Connection) -> rusqlite::Result<()> {
-    for (table, column) in
-        [("emails", "email"), ("family", "parent_email"), ("two_step", "secret"), ("messages", "text")]
-    {
+    for (table, column) in [
+        ("emails", "email"),
+        ("family", "parent_email"),
+        ("two_step", "secret"),
+        ("messages", "text"),
+        // A stolen copy of the database alone gives nothing to guess
+        // passwords against: the salt, the key a password makes and the
+        // sealed identity key all need the Hub's key file too.
+        ("passwords", "salt"),
+        ("passwords", "login_id"),
+        ("passwords", "sealed"),
+    ] {
         db.execute(
             &format!("UPDATE {table} SET {column} = seal({column}) WHERE {column} IS NOT NULL AND {column} NOT LIKE '{SEALED}%'"),
             [],

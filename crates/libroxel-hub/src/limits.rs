@@ -23,8 +23,12 @@ pub(crate) enum Limit {
     NewAccount,
     /// Sign-in attempts (and the salt lookups before them), per IP.
     SignIn,
-    /// Sign-ins that got the password wrong, per account name.
+    /// Sign-ins that got the password wrong, per account name and IP (see
+    /// [`Limits::wrong_password`]).
     WrongPassword,
+    /// The same per account name from everyone together: much higher, so a
+    /// stranger can't lock someone out by guessing wrong on purpose.
+    WrongPasswordAnyone,
     /// Games published and items shared, per IP.
     Share,
     /// Reports, per IP.
@@ -51,6 +55,7 @@ impl Limit {
             Limit::NewAccount => (5, 60 * MINUTE),
             Limit::SignIn => (30, 15 * MINUTE),
             Limit::WrongPassword => (10, 15 * MINUTE),
+            Limit::WrongPasswordAnyone => (200, 15 * MINUTE),
             Limit::Share => (30, 60 * MINUTE),
             Limit::Report => (30, 60 * MINUTE),
             Limit::Comment => (20, 10 * MINUTE),
@@ -123,6 +128,19 @@ impl Limits {
     }
 
     /// Whether `who` is over `limit` right now, without counting anything.
+    /// Counts a wrong password for the account `name` from `caller`.
+    pub(crate) fn wrong_password(&self, name: &str, caller: &str) {
+        self.take(Limit::WrongPassword, &format!("{name}\n{caller}"));
+        self.take(Limit::WrongPasswordAnyone, name);
+    }
+
+    /// Whether `caller` has guessed wrong too often for `name`, or everyone
+    /// together has.
+    pub(crate) fn too_many_wrong(&self, name: &str, caller: &str) -> bool {
+        self.over(Limit::WrongPassword, &format!("{name}\n{caller}"))
+            || self.over(Limit::WrongPasswordAnyone, name)
+    }
+
     pub(crate) fn over(&self, limit: Limit, who: &str) -> bool {
         if self.off {
             return false;
@@ -196,11 +214,18 @@ mod tests {
         assert!(!limits.take(Limit::NewAccount, "1.2.3.4"));
         assert!(limits.over(Limit::NewAccount, "1.2.3.4"));
         assert!(limits.take(Limit::NewAccount, "5.6.7.8"));
-        // Names are counted whatever their case.
+        // Names are counted whatever their case, and per caller: someone
+        // guessing wrong doesn't lock Alice out where she is.
         for _ in 0..10 {
-            assert!(limits.take(Limit::WrongPassword, "Alice2"));
+            limits.wrong_password("Alice2", "6.6.6.6");
         }
-        assert!(limits.over(Limit::WrongPassword, "alice2"));
+        assert!(limits.too_many_wrong("alice2", "6.6.6.6"));
+        assert!(!limits.too_many_wrong("alice2", "1.2.3.4"));
+        // But everyone together can't guess for ever either.
+        for i in 0..200 {
+            limits.wrong_password("Alice2", &format!("10.0.{}.{}", i / 250, i % 250));
+        }
+        assert!(limits.too_many_wrong("alice2", "1.2.3.4"));
         for _ in 0..200 {
             assert!(limits.take_logged(Limit::Download, "9.9.9.9"));
         }
