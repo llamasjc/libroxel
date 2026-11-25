@@ -270,12 +270,16 @@ pub(crate) fn chunk_faces(voxels: &Voxels, chunk: (i32, i32, i32)) -> HashMap<Ma
     out
 }
 
+/// A chunk's mesh, packed small and kept only on the graphics side (it's
+/// made again from the cells when they change).
 fn mesh_of(faces: Faces) -> Mesh {
-    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, faces.positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, faces.normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, faces.uvs)
-        .with_inserted_indices(Indices::U32(faces.indices))
+        .with_inserted_indices(Indices::U32(faces.indices));
+    crate::view::pack_mesh(&mut mesh);
+    mesh
 }
 
 /// The colour each terrain material is drawn in.

@@ -373,5 +373,6 @@ fn merge(
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
     mesh.insert_indices(Indices::U32(indices));
+    crate::view::pack_mesh(&mut mesh);
     Some((mesh, Aabb::from_min_max(lo, hi)))
 }

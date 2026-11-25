@@ -444,6 +444,111 @@ pub fn decode(bytes: &[u8], sampler: ImageSampler) -> Option<Image> {
     }
 }
 
+/// The widest a picture on a part is drawn, in pixels: anything bigger is
+/// scaled down when it's read. A phone or tablet has far less graphics
+/// memory, and a part rarely covers more of its screen than this.
+pub const MAX_SIDE: u32 = if cfg!(any(target_os = "android", target_os = "ios")) { 1024 } else { 2048 };
+
+/// Decodes a picture for drawing on parts in the 3D view: no bigger than
+/// [`MAX_SIDE`], with every smaller size made up front (so far-off and
+/// slanted parts read a small one, which is quicker and doesn't shimmer),
+/// and kept only on the graphics side once it's there, instead of a second
+/// copy in memory.
+pub fn decode_for_view(bytes: &[u8], sampler: ImageSampler) -> Option<Image> {
+    let image = decode(bytes, ImageSampler::Default)?;
+    let (mut width, mut height) = (image.width(), image.height());
+    let mut level = image.data?;
+    if level.len() != (width * height * 4) as usize {
+        return None;
+    }
+    while width.max(height) > MAX_SIDE {
+        (level, width, height) = halve(&level, width, height);
+    }
+    let mut data = level.clone();
+    let mut levels = 1;
+    let (mut w, mut h) = (width, height);
+    while w > 1 || h > 1 {
+        (level, w, h) = halve(&level, w, h);
+        data.extend_from_slice(&level);
+        levels += 1;
+    }
+    let mut image = Image::new_uninit(
+        bevy::render::render_resource::Extent3d { width, height, depth_or_array_layers: 1 },
+        bevy::render::render_resource::TextureDimension::D2,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_descriptor.mip_level_count = levels;
+    image.data = Some(data);
+    image.sampler = sampler;
+    Some(image)
+}
+
+/// Brightness of each sRGB byte as light (pictures are averaged as light,
+/// or they'd darken as they shrink).
+fn to_light() -> &'static [f32; 256] {
+    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        std::array::from_fn(|i| {
+            let c = i as f32 / 255.0;
+            if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        })
+    })
+}
+
+/// The sRGB byte for an amount of light (0 to 1), from a table of 4096 steps.
+fn from_light(light: f32) -> u8 {
+    static TABLE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        (0..4096)
+            .map(|i| {
+                let l = i as f32 / 4095.0;
+                let c = if l <= 0.003_130_8 { l * 12.92 } else { 1.055 * l.powf(1.0 / 2.4) - 0.055 };
+                (c * 255.0).round().clamp(0.0, 255.0) as u8
+            })
+            .collect()
+    });
+    table[(light.clamp(0.0, 1.0) * 4095.0).round() as usize]
+}
+
+/// RGBA pixels at half the size each way (an odd last row or column is
+/// folded into the one before), each the average of the up to four it covers.
+fn halve(pixels: &[u8], width: u32, height: u32) -> (Vec<u8>, u32, u32) {
+    let light = to_light();
+    let (w, h) = ((width / 2).max(1), (height / 2).max(1));
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        let rows =
+            if height == 1 { 0..1 } else { y * 2..(y * 2 + 2 + u32::from(y + 1 == h && height % 2 == 1)) };
+        for x in 0..w {
+            let cols =
+                if width == 1 { 0..1 } else { x * 2..(x * 2 + 2 + u32::from(x + 1 == w && width % 2 == 1)) };
+            let mut sum = [0.0f32; 4];
+            let mut n = 0.0;
+            for py in rows.clone() {
+                for px in cols.clone() {
+                    let i = ((py * width + px) * 4) as usize;
+                    let p = &pixels[i..i + 4];
+                    // Weighted by how solid each is, so see-through pixels'
+                    // colour doesn't bleed into the edge.
+                    let a = f32::from(p[3]) / 255.0;
+                    for c in 0..3 {
+                        sum[c] += light[p[c] as usize] * a;
+                    }
+                    sum[3] += a;
+                    n += 1.0;
+                }
+            }
+            let a = sum[3] / n;
+            for c in sum.iter().take(3) {
+                out.push(if sum[3] > 0.0 { from_light(c / sum[3]) } else { 0 });
+            }
+            out.push((a * 255.0).round() as u8);
+        }
+    }
+    (out, w, h)
+}
+
 /// A PNG's size and pixels (RGBA, 8 bits each, row by row).
 pub fn decode_png(bytes: &[u8]) -> Option<([usize; 2], Vec<u8>)> {
     let image = decode(bytes, ImageSampler::Default)?;
@@ -455,6 +560,39 @@ pub fn decode_png(bytes: &[u8]) -> Option<([usize; 2], Vec<u8>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pictures_for_parts_come_with_every_smaller_size() {
+        let bytes = bytes_for(&format!("{BUILT_IN}coin")).unwrap();
+        let image = decode_for_view(&bytes, ImageSampler::linear()).unwrap();
+        // 64, 32, 16, 8, 4, 2 and 1 pixels wide.
+        assert_eq!(image.texture_descriptor.mip_level_count, 7);
+        let total: u32 = (0..7).map(|l| (64u32 >> l).pow(2) * 4).sum();
+        assert_eq!(image.data.as_ref().map(Vec::len), Some(total as usize));
+        assert_eq!(image.asset_usage, RenderAssetUsages::RENDER_WORLD);
+        // The smallest is the whole coin averaged: partly see-through, gold.
+        let last = &image.data.as_ref().unwrap()[total as usize - 4..];
+        assert!(last[3] > 0 && last[3] < 255, "{last:?}");
+        assert!(last[0] > last[2], "{last:?}");
+    }
+
+    #[test]
+    fn halving_keeps_flat_colour_and_odd_sizes() {
+        let grey = [[200u8, 100, 50, 255]; 15].concat();
+        let (half, w, h) = halve(&grey, 5, 3);
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(&half[..4], &[200, 100, 50, 255]);
+        assert_eq!(&half[4..], &[200, 100, 50, 255]);
+        let (one, w, h) = halve(&[10, 20, 30, 255], 1, 1);
+        assert_eq!((w, h, one), (1, 1, vec![10, 20, 30, 255]));
+    }
+
+    #[test]
+    fn big_pictures_are_scaled_down() {
+        let side = MAX_SIDE * 2;
+        let (half, w, h) = halve(&vec![255; (side * 8 * 4) as usize], side, 8);
+        assert_eq!((w, h, half.len()), (MAX_SIDE, 4, (MAX_SIDE * 4 * 4) as usize));
+    }
 
     #[test]
     fn built_in_pictures_decode() {

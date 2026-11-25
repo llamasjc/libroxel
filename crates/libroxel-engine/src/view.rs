@@ -539,7 +539,7 @@ fn sync_parts(
         let shadow = tree.get_bool(id, Property::CastShadow) != Some(false);
         let appearance =
             PartAppearance { color, transparency, material, texture_repeat, reflectance, shadow };
-        let name = PartName(tree.name(id).unwrap_or_default().to_owned());
+        let name = tree.name(id).unwrap_or_default();
         let geometry = PartGeometry(shape);
 
         match spawned.get(&id).and_then(|e| parts.get_mut(*e).ok()) {
@@ -548,13 +548,24 @@ fn sync_parts(
                 mt.set_if_neq(mesh_texture);
                 t.set_if_neq(transform);
                 a.set_if_neq(appearance);
-                n.set_if_neq(name);
+                // (Compared first: a part that moves every frame keeps its name.)
+                if n.0 != name {
+                    n.0 = name.to_owned();
+                }
                 g.set_if_neq(geometry);
                 seen.insert(id, revision);
             }
             None if !spawned.contains_key(&id) => {
                 let entity = commands
-                    .spawn((PartLink(id), name, transform, appearance, geometry, mesh_file, mesh_texture))
+                    .spawn((
+                        PartLink(id),
+                        PartName(name.to_owned()),
+                        transform,
+                        appearance,
+                        geometry,
+                        mesh_file,
+                        mesh_texture,
+                    ))
                     .id();
                 spawned.insert(id, entity);
                 seen.insert(id, revision);
@@ -634,6 +645,34 @@ impl PartMeshes {
             PartShape::Wedge => self.wedge.clone(),
         }
     }
+}
+
+/// Packs a mesh that is only drawn, never read back, into fewer bytes for
+/// the graphics chip (28 bytes a corner instead of 48 with colours, 20
+/// instead of 32 without): normals as two 16-bit numbers, texture
+/// positions and colours as 16-bit fractions, and 16-bit indices when
+/// there are few enough corners. Texture positions stay full size when
+/// they span so far that a step would show (a wobbling texture). Places
+/// stay full size: packed ones weren't drawn at all.
+pub(crate) fn pack_mesh(mesh: &mut Mesh) {
+    use bevy::mesh::{AttributeQuantization, VertexAttributeValues};
+    let uv_span = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+        Some(VertexAttributeValues::Float32x2(v)) => {
+            let (lo, hi) = v
+                .iter()
+                .fold((Vec2::MAX, Vec2::MIN), |(lo, hi), p| (lo.min(Vec2::from(*p)), hi.max(Vec2::from(*p))));
+            (hi - lo).max_element()
+        }
+        _ => f32::INFINITY,
+    };
+    let _ = mesh.compress_normals();
+    if uv_span <= 64.0 {
+        let _ = mesh.compress_uv0();
+    }
+    if mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_some() {
+        let _ = mesh.quantize_colors(AttributeQuantization::Unorm16);
+    }
+    mesh.compress_indices();
 }
 
 /// Whether the game's GUI covers the whole 3D view with something solid
@@ -1583,9 +1622,17 @@ fn use_mesh_files(
     part_meshes: Res<PartMeshes>,
     mut files: ResMut<crate::mesh_files::MeshFiles>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut parts: Query<(Ref<PartMeshFile>, &PartGeometry, &mut Mesh3d)>,
+    mut parts: Query<(Ref<PartMeshFile>, Ref<PartGeometry>, &mut Mesh3d)>,
+    mut generation: Local<u64>,
 ) {
+    // A model is read once (or found missing) and stays so until the
+    // game's files change: only parts whose file or shape changed since
+    // then need looking at.
+    let all = std::mem::replace(&mut *generation, crate::pictures::generation()) != *generation;
     for (file, geometry, mut mesh) in &mut parts {
+        if !all && !file.is_changed() && !geometry.is_changed() {
+            continue;
+        }
         let wanted = if file.0.is_empty() {
             if !file.is_changed() {
                 continue;
@@ -1600,7 +1647,9 @@ fn use_mesh_files(
     }
 }
 
-/// Pictures for parts' models, by name (None when one couldn't be read).
+/// Pictures for parts' models, by name (None when one couldn't be read),
+/// and one material for every part that shows the same picture the same
+/// way, so they draw together.
 #[derive(Resource, Default)]
 struct MeshTextures {
     loaded: std::collections::HashMap<String, Option<Handle<Image>>>,
@@ -1681,7 +1730,7 @@ fn use_mesh_textures(
                     let pool = bevy::tasks::AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
                     let task = pool.spawn(async move {
                         let bytes = crate::pictures::bytes_for(&name)?;
-                        crate::pictures::decode(&bytes, bevy::image::ImageSampler::linear())
+                        crate::pictures::decode_for_view(&bytes, bevy::image::ImageSampler::linear())
                     });
                     cache.loading.insert(texture.0.clone(), task);
                 }
@@ -2606,11 +2655,40 @@ struct DecalLook {
     tiles: Option<Vec2>,
 }
 
-/// Loaded pictures for decals: tiling ones repeat at the edges.
+/// Loaded pictures for decals (tiling ones repeat at the edges), and one
+/// material for every decal that looks the same, so they draw together.
 #[derive(Default)]
 struct DecalPictures {
     generation: u64,
     loaded: HashMap<(String, bool), Option<Handle<Image>>>,
+    materials: HashMap<DecalKey, Handle<StandardMaterial>>,
+}
+
+/// A decal's look, rounded to what can be told apart on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct DecalKey(AssetId<Image>, [u16; 3], u16, Option<[u32; 2]>);
+
+impl DecalKey {
+    fn of(picture: &Handle<Image>, look: &DecalLook) -> Self {
+        let q = |x: f32| (x.clamp(0.0, 1.0) * 1000.0).round() as u16;
+        let t = look.tint;
+        // Repeats to a sixteenth, as fine as shows.
+        let tiles = look.tiles.map(|v| [(v.x * 16.0).round() as u32, (v.y * 16.0).round() as u32]);
+        Self(picture.id(), [q(t.r), q(t.g), q(t.b)], q(look.transparency), tiles)
+    }
+}
+
+/// What [`sync_decals`] remembers between frames, to look again only at
+/// the decals whose instance or part changed.
+#[derive(Default)]
+struct DecalSync {
+    tree: usize,
+    epoch: u64,
+    read: usize,
+    structure: u64,
+    fade: (u32, Option<InstanceId>),
+    /// Every decal and texture in the workspace.
+    ids: Vec<InstanceId>,
 }
 
 /// Draws every decal and texture on the side of its part.
@@ -2622,12 +2700,44 @@ fn sync_decals(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut pictures: Local<DecalPictures>,
-    mut drawn: Query<(Entity, &mut DecalLink, &mut Transform, &MeshMaterial3d<StandardMaterial>)>,
+    mut sync: Local<DecalSync>,
+    mut drawn: Query<(Entity, &mut DecalLink, &mut Transform, &mut MeshMaterial3d<StandardMaterial>)>,
     own: Res<SelfFade>,
 ) {
     use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
     let Some(meshes) = meshes else { return };
     let tree = engine.tree.borrow();
+
+    // Most frames no decal or the part it's on changed: only the ones that
+    // did are looked at again (all of them when decals came or went, the
+    // pictures or the player's own fading changed, or the tree is new).
+    let tree_ptr = std::rc::Rc::as_ptr(&engine.tree) as usize;
+    let (epoch, _) = tree.touched_since(0);
+    let fade = (own.fade.to_bits(), own.model);
+    let generation = crate::pictures::generation();
+    let full = sync.tree != tree_ptr
+        || sync.epoch != epoch
+        || tree.touched_len() < sync.read
+        || sync.structure != tree.workspace_structure()
+        || sync.fade != fade
+        || pictures.generation != generation;
+    let touched: FastSet<InstanceId> =
+        if full { FastSet::default() } else { tree.touched_since(sync.read).1.iter().copied().collect() };
+    sync.read = tree.touched_len();
+    if !full && touched.is_empty() {
+        return;
+    }
+    if full {
+        sync.tree = tree_ptr;
+        sync.epoch = epoch;
+        sync.structure = tree.workspace_structure();
+        sync.fade = fade;
+        sync.ids = [ClassKind::Decal, ClassKind::Texture]
+            .into_iter()
+            .flat_map(|class| tree.descendants_of_class(tree.workspace(), class))
+            .collect();
+    }
+
     let faded = |part: InstanceId| {
         let Some(model) = own.model else { return false };
         let mut at = tree.parent(part).ok().flatten();
@@ -2642,26 +2752,24 @@ fn sync_decals(
         }
         false
     };
-    let mut wanted: HashMap<InstanceId, (Transform, DecalLook)> = HashMap::new();
-    for class in [ClassKind::Decal, ClassKind::Texture] {
-        for id in tree.descendants_of_class(tree.workspace(), class) {
-            let Some(part) =
-                tree.parent(id).ok().flatten().filter(|p| tree.class(*p).is_ok_and(|c| c.is_physical()))
-            else {
-                continue;
-            };
-            let (Some(pos), Some(size)) =
-                (tree.get_vec3(part, Property::Position), tree.get_vec3(part, Property::Size))
-            else {
-                continue;
-            };
+    // Each decal looked at, and how it should be drawn (None: not at all).
+    let mut wanted: FastMap<InstanceId, Option<(Transform, DecalLook)>> = FastMap::default();
+    for &id in &sync.ids {
+        let part = tree.parent(id).ok().flatten();
+        if !full && !touched.contains(&id) && !part.is_some_and(|p| touched.contains(&p)) {
+            continue;
+        }
+        let look = (|| {
+            let part = part.filter(|p| tree.class(*p).is_ok_and(|c| c.is_physical()))?;
+            let (pos, size) =
+                (tree.get_vec3(part, Property::Position)?, tree.get_vec3(part, Property::Size)?);
             let face = match tree.get_enum(id, Property::Face) {
                 Some(EnumValue::NormalId(face)) => face,
                 _ => NormalId::Front,
             };
             let orientation = tree.get_vec3(part, Property::Orientation).unwrap_or_default();
             let (transform, extent) = decal_transform(pos, size, orientation, face);
-            let tiles = (class == ClassKind::Texture).then(|| {
+            let tiles = (tree.class(id) == Ok(ClassKind::Texture)).then(|| {
                 let per = |p| (tree.get_number(id, p).unwrap_or(2.0) as f32).max(0.01);
                 extent / Vec2::new(per(Property::StudsPerTileU), per(Property::StudsPerTileV))
             });
@@ -2669,25 +2777,30 @@ fn sync_decals(
             if own.fade > 0.0 && faded(part) {
                 transparency = 1.0 - (1.0 - transparency) * (1.0 - own.fade);
             }
+            let picture = tree.get_string(id, Property::Texture).unwrap_or_default();
+            let picture = picture.trim();
+            if picture.is_empty() || transparency >= 0.999 {
+                return None;
+            }
             let look = DecalLook {
-                picture: tree.get_string(id, Property::Texture).unwrap_or_default().trim().to_owned(),
+                picture: picture.to_owned(),
                 tint: tree.get_color(id, Property::DecalColor).unwrap_or(libroxel_instance::Color3::WHITE),
                 transparency,
                 tiles,
             };
-            if look.picture.is_empty() || look.transparency >= 0.999 {
-                continue;
-            }
-            wanted.insert(id, (transform, look));
-        }
+            Some((transform, look))
+        })();
+        wanted.insert(id, look);
     }
     drop(tree);
 
-    if pictures.generation != crate::pictures::generation() {
-        pictures.generation = crate::pictures::generation();
+    if pictures.generation != generation {
+        pictures.generation = generation;
         pictures.loaded.clear();
+        pictures.materials.clear();
     }
-    let mut material_for = |look: &DecalLook| -> Option<StandardMaterial> {
+    let pictures = &mut *pictures;
+    let mut material_for = |look: &DecalLook| -> Option<Handle<StandardMaterial>> {
         let key = (look.picture.clone(), look.tiles.is_some());
         let picture = pictures
             .loaded
@@ -2702,31 +2815,41 @@ fn sync_decals(
                 } else {
                     ImageSampler::linear()
                 };
-                let image = crate::pictures::decode(&crate::pictures::bytes_for(&look.picture)?, sampler)?;
+                let bytes = crate::pictures::bytes_for(&look.picture)?;
+                let image = crate::pictures::decode_for_view(&bytes, sampler)?;
                 Some(images.add(image))
             })
             .clone()?;
-        let t = look.tint;
-        Some(StandardMaterial {
-            base_color: Color::srgba(t.r, t.g, t.b, (1.0 - look.transparency).clamp(0.0, 1.0)),
-            base_color_texture: Some(picture),
-            alpha_mode: AlphaMode::Blend,
-            perceptual_roughness: 0.8,
-            uv_transform: bevy::math::Affine2::from_scale(look.tiles.unwrap_or(Vec2::ONE)),
-            // Drawn over the part's own side rather than fighting it.
-            depth_bias: 1.0,
-            ..default()
-        })
+        let handle = pictures.materials.entry(DecalKey::of(&picture, look)).or_insert_with(|| {
+            let t = look.tint;
+            materials.add(StandardMaterial {
+                base_color: Color::srgba(t.r, t.g, t.b, (1.0 - look.transparency).clamp(0.0, 1.0)),
+                base_color_texture: Some(picture),
+                alpha_mode: AlphaMode::Blend,
+                perceptual_roughness: 0.8,
+                uv_transform: bevy::math::Affine2::from_scale(look.tiles.unwrap_or(Vec2::ONE)),
+                // Drawn over the part's own side rather than fighting it.
+                depth_bias: 1.0,
+                ..default()
+            })
+        });
+        Some(handle.clone())
     };
-    for (entity, mut link, mut transform, handle) in &mut drawn {
-        match wanted.remove(&link.0) {
+    for (entity, mut link, mut transform, mut handle) in &mut drawn {
+        let Some(now) = wanted.remove(&link.0) else {
+            if full {
+                commands.entity(entity).despawn();
+            }
+            continue;
+        };
+        match now {
             Some((t, look)) => {
                 transform.set_if_neq(t);
                 if link.1 != look {
                     match material_for(&look) {
                         Some(material) => {
-                            if let Some(mut m) = materials.get_mut(&handle.0) {
-                                *m = material;
+                            if handle.0 != material {
+                                handle.0 = material;
                             }
                             link.1 = look;
                         }
@@ -2737,15 +2860,26 @@ fn sync_decals(
             None => commands.entity(entity).despawn(),
         }
     }
-    for (id, (transform, look)) in wanted {
+    let mut spawned = Vec::new();
+    for (id, now) in wanted {
+        let Some((transform, look)) = now else { continue };
         let Some(material) = material_for(&look) else { continue };
+        spawned.push(material.id());
         commands.spawn((
             DecalLink(id, look),
             Mesh3d(meshes.quad.clone()),
-            MeshMaterial3d(materials.add(material)),
+            MeshMaterial3d(material),
             transform,
             bevy::light::NotShadowCaster,
         ));
+    }
+    // Looks no decal shows any more (one that faded out bit by bit made a
+    // look for every step) are let go once there are many of them.
+    let count = drawn.iter().len() + spawned.len();
+    if pictures.materials.len() > 2 * count + 64 {
+        let used: FastSet<AssetId<StandardMaterial>> =
+            drawn.iter().map(|(_, _, _, m)| m.0.id()).chain(spawned).collect();
+        pictures.materials.retain(|_, m| used.contains(&m.id()));
     }
 }
 

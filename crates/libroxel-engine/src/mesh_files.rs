@@ -210,14 +210,55 @@ pub fn parse(bytes: &[u8]) -> Option<Model> {
 }
 
 impl Model {
+    /// The model as a mesh for the graphics chip. Its triangles come as
+    /// three corners each, so most corners appear several times; each is
+    /// kept once and the triangles point at it, which the chip then works
+    /// out once instead of for every triangle that shares it. The mesh is
+    /// kept only on the graphics side once it's there (its bounds stay).
     pub fn to_mesh(&self) -> Mesh {
-        let count = self.positions.len() as u32;
-        Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions.clone())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals.clone())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs.clone())
-            .with_inserted_indices(Indices::U32((0..count).collect()))
+        let (positions, normals, uvs, indices) = weld(&self.positions, &self.normals, &self.uvs);
+        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+            .with_inserted_indices(indices);
+        crate::view::pack_mesh(&mut mesh);
+        mesh
     }
+}
+
+type Welded = (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 2]>, Indices);
+
+/// Corners that are exactly the same (place, normal and texture position)
+/// kept once, with the triangles as indices into them.
+fn weld(positions: &[[f32; 3]], normals: &[[f32; 3]], uvs: &[[f32; 2]]) -> Welded {
+    let mut seen: HashMap<[u32; 8], u32> = HashMap::with_capacity(positions.len() / 2);
+    let (mut p, mut n, mut t) = (Vec::new(), Vec::new(), Vec::new());
+    let mut indices = Vec::with_capacity(positions.len());
+    for (i, at) in positions.iter().enumerate() {
+        let normal = normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
+        let uv = uvs.get(i).copied().unwrap_or([0.0, 0.0]);
+        // (+0.0 and -0.0 are the same corner.)
+        let bits = |x: f32| (x + 0.0).to_bits();
+        let key = [
+            bits(at[0]),
+            bits(at[1]),
+            bits(at[2]),
+            bits(normal[0]),
+            bits(normal[1]),
+            bits(normal[2]),
+            bits(uv[0]),
+            bits(uv[1]),
+        ];
+        let index = *seen.entry(key).or_insert_with(|| {
+            p.push(*at);
+            n.push(normal);
+            t.push(uv);
+            (p.len() - 1) as u32
+        });
+        indices.push(index);
+    }
+    (p, n, t, Indices::U32(indices))
 }
 
 /// Reads the model a `MeshId` names, if it can be found and read: an
@@ -250,6 +291,9 @@ impl MeshFiles {
             self.loaded.clear();
             self.generation = generation;
         }
+        if let Some(known) = self.loaded.get(name) {
+            return known.clone();
+        }
         self.loaded
             .entry(name.to_owned())
             .or_insert_with(|| load(name).map(|m| meshes.add(m.to_mesh())))
@@ -279,6 +323,28 @@ mod tests {
         assert_eq!(model.uvs[2], [1.0, 0.0], "texture rows count down from the top");
         assert!(parse_obj("# nothing\nv 1 2 3\n").is_none());
         assert!(load("model.png").is_none(), "only .obj and .mesh files are models");
+    }
+
+    #[test]
+    fn shared_corners_are_kept_once() {
+        let model = parse_obj(PYRAMID).unwrap();
+        let (points, normals, uvs, indices) = weld(&model.positions, &model.normals, &model.uvs);
+        // 18 corners as triangles; the base's two triangles share two corners.
+        assert_eq!(indices.len(), 18);
+        assert_eq!(points.len(), 16);
+        assert_eq!((normals.len(), uvs.len()), (16, 16));
+        // Every triangle still has the same corners as in the file.
+        let rebuilt: Vec<[f32; 3]> = indices.iter().map(|i| points[i]).collect();
+        assert_eq!(rebuilt, model.positions);
+
+        // As drawn: 16-bit indices, packed corners, and its box kept.
+        let mesh = model.to_mesh();
+        assert!(matches!(mesh.indices(), Some(Indices::U16(i)) if i.len() == 18));
+        assert_eq!(mesh.count_vertices(), 16);
+        assert!(matches!(
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL),
+            Some(bevy::mesh::VertexAttributeValues::Snorm16x2(n)) if n.len() == 16
+        ));
     }
 
     #[test]
