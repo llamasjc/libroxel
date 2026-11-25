@@ -154,7 +154,7 @@ if [ ! -f /etc/libroxel/mail.conf ]; then
 #LIBROXEL_SMTP_PORT=587
 #LIBROXEL_SMTP_USER=resend
 #LIBROXEL_SMTP_PASSWORD=your-api-key
-#LIBROXEL_MAIL_FROM=Libroxel <no-reply@playlibre.net>
+#LIBROXEL_MAIL_FROM=PlayLibre <no-reply@playlibre.net>
 #LIBROXEL_MODERATION_KEY=your-openai-key
 MAIL
 fi

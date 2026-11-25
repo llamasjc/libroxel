@@ -9,7 +9,7 @@
 //! | `LIBROXEL_SMTP_HOST` | the server, such as `smtp.resend.com` |
 //! | `LIBROXEL_SMTP_PORT` | `587` (STARTTLS, the usual) or `465` (TLS from the start); a server on `localhost` is reached without TLS |
 //! | `LIBROXEL_SMTP_USER`, `LIBROXEL_SMTP_PASSWORD` | the login it gives you |
-//! | `LIBROXEL_MAIL_FROM` | who mail is from, such as `Libroxel <no-reply@playlibre.net>` |
+//! | `LIBROXEL_MAIL_FROM` | who mail is from, such as `PlayLibre <no-reply@playlibre.net>` |
 //!
 //! A Hub that can send mail asks every new account for an email. One that
 //! can't (on a LAN, or for trying things out) keeps emails people give but
@@ -113,7 +113,7 @@ pub struct SmtpSettings {
     pub port: u16,
     pub user: String,
     pub password: String,
-    /// Who mail is from, such as `Libroxel <no-reply@playlibre.net>`.
+    /// Who mail is from, such as `PlayLibre <no-reply@playlibre.net>`.
     pub from: String,
 }
 

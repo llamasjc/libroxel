@@ -83,7 +83,7 @@ provider; [Resend](https://resend.com) is free for 3,000 mails a month:
    LIBROXEL_SMTP_PORT=587
    LIBROXEL_SMTP_USER=resend
    LIBROXEL_SMTP_PASSWORD=re_your_key_here
-   LIBROXEL_MAIL_FROM=Libroxel <no-reply@playlibre.net>
+   LIBROXEL_MAIL_FROM=PlayLibre <no-reply@playlibre.net>
    EOF
    sudo chmod 600 /etc/libroxel/mail.conf
    sudo systemctl restart libroxel-hub
