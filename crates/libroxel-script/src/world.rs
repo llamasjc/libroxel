@@ -246,12 +246,26 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
             return crate::compat::model_move_to(lua, this.0, target);
         }
         require_class(lua, this.0, ClassKind::Humanoid, methods::MOVE_TO)?;
-        let mut at = as_vector3(&target).ok_or_else(|| runtime_err("MoveTo expects a Vector3"))?;
-        // With a part, the point is where the part is now.
-        if let Some(part) = crate::bindings::as_instance(&part)
-            && let Some(pos) = host(lua).tree.borrow().get_vec3(part, Property::Position)
+        let at = as_vector3(&target).ok_or_else(|| runtime_err("MoveTo expects a Vector3"))?;
+        // With a part, the point keeps where it is on the part: the walk
+        // follows the part as it moves.
+        use crate::names::character::{WALK_OFFSET, WALK_TO_PART};
+        let part = crate::bindings::as_instance(&part).filter(|p| {
+            host(lua).tree.borrow().class(*p).is_ok_and(|c| c.is_physical() && c != ClassKind::Terrain)
+        });
+        let follow = match part {
+            Some(part) => {
+                let local = crate::bindings::part_cframe(lua, part)?.inverse().point_to_world(at);
+                Some((PropertyValue::Ref(Some(part)), PropertyValue::Vec3(local)))
+            }
+            None => None,
+        };
         {
-            at = pos;
+            let host = host(lua);
+            let mut tree = host.tree.borrow_mut();
+            let (part, offset) = follow.unzip();
+            let _ = tree.set_extra(this.0, WALK_TO_PART, part);
+            let _ = tree.set_extra(this.0, WALK_OFFSET, offset);
         }
         host(lua).world.borrow_mut().moves.push((this.0, Some(at)));
         Ok(())

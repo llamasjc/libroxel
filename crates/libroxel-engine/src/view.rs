@@ -2219,9 +2219,11 @@ fn subject_followed(
             .or_else(|| tree.find_first_child(model, "HumanoidRootPart").ok().flatten())
             .or_else(|| tree.descendants_of_class(model, ClassKind::Part).into_iter().next())
     };
+    let mut humanoid = None;
     let (root, model) = match tree.class(subject).ok()? {
         ClassKind::Humanoid => {
             let model = tree.parent(subject).ok().flatten()?;
+            humanoid = Some(subject);
             (first_part(model)?, Some(model))
         }
         ClassKind::Model => (first_part(subject)?, Some(subject)),
@@ -2235,7 +2237,8 @@ fn subject_followed(
     if !tree.is_descendant_of(root, tree.workspace()).unwrap_or(false) {
         return None;
     }
-    let position = tree.get_vec3(root, Property::Position)?;
+    let offset = humanoid.map_or(Default::default(), |h| crate::character::camera_offset(tree, h, root));
+    let position = tree.get_vec3(root, Property::Position)? + offset;
     let yaw = tree.get_vec3(root, Property::Orientation).unwrap_or_default().y;
     Some(Followed { root, model, position, yaw, driving: None })
 }
@@ -2257,9 +2260,11 @@ fn follow_camera(
         if tree.is_destroyed(root).unwrap_or(true) {
             return None;
         }
-        let position = tree.get_vec3(root, Property::Position)?;
-        let yaw = tree.get_vec3(root, Property::Orientation).unwrap_or_default().y;
         let character = session.and_then(|s| s.character());
+        let offset = character
+            .map_or(Default::default(), |c| crate::character::camera_offset(&tree, c.humanoid, root));
+        let position = tree.get_vec3(root, Property::Position)? + offset;
+        let yaw = tree.get_vec3(root, Property::Orientation).unwrap_or_default().y;
         let model = character.map(|c| c.model);
         let driving = character.and_then(|c| {
             tree.descendants_of_class(tree.workspace(), ClassKind::VehicleSeat)

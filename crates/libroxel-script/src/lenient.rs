@@ -138,6 +138,22 @@ pub(crate) fn install(lua: &Lua, enum_lib: &Table) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
+    // The part a humanoid walks after (see `MoveTo`).
+    layer.set(
+        "walk_to_part",
+        lua.create_function(|lua, obj: Value| {
+            let Some(id) = crate::bindings::as_instance(&obj) else { return Ok(Value::Nil) };
+            let part = match crate::bindings::host(lua)
+                .tree
+                .borrow()
+                .get_extra(id, names::character::WALK_TO_PART)
+            {
+                Ok(Some(PropertyValue::Ref(Some(part)))) => part,
+                _ => return Ok(Value::Nil),
+            };
+            Ok(Value::UserData(crate::bindings::push_instance(lua, part)?))
+        })?,
+    )?;
     // A name for a new drawn picture, unique across every script runtime.
     layer.set("editable_key", lua.create_function(|_, ()| Ok(crate::drawn::new_key()))?)?;
     // A script's drawn picture changed: hand its pixels to the renderer.

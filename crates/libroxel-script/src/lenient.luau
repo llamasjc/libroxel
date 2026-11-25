@@ -942,7 +942,6 @@ add(props, "Humanoid", {
 	AutoJumpEnabled = true,
 	CameraOffset = Vector3.zero,
 	TargetPoint = Vector3.zero,
-	WalkToPart = NIL,
 	CollisionType = "HumanoidCollisionType.InnerBox",
 })
 add(getters, "Humanoid", {
@@ -968,11 +967,17 @@ add(getters, "Humanoid", {
 	WalkToPoint = function(self, s)
 		return stored(s, "WalkToPoint", Vector3.zero)
 	end,
+	WalkToPart = function(self)
+		return L.walk_to_part(self)
+	end,
 })
 add(setters, "Humanoid", {
 	WalkToPoint = function(self, v, s)
 		s.values.WalkToPoint = v
-		self:MoveTo(v)
+		self:MoveTo(v, L.walk_to_part(self))
+	end,
+	WalkToPart = function(self, part, s)
+		self:MoveTo(stored(s, "WalkToPoint", Vector3.zero), part)
 	end,
 })
 add(methods, "Humanoid", {

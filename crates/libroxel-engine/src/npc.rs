@@ -63,6 +63,27 @@ impl Npcs {
         replaced.map(|_| humanoid)
     }
 
+    /// Moves the end of each walk started with `MoveTo(point, part)` to
+    /// where that point on the part is now, so the walk follows the part.
+    pub fn follow_parts(&mut self, tree: &InstanceTree) {
+        use names::character::{WALK_OFFSET, WALK_TO_PART};
+        for (&humanoid, walk) in self.walks.iter_mut() {
+            let Ok(Some(PropertyValue::Ref(Some(part)))) = tree.get_extra(humanoid, WALK_TO_PART) else {
+                continue;
+            };
+            let Ok(Some(PropertyValue::Vec3(local))) = tree.get_extra(humanoid, WALK_OFFSET) else {
+                continue;
+            };
+            if tree.is_destroyed(part).unwrap_or(true) {
+                continue;
+            }
+            let Some(pos) = tree.get_vec3(part, Property::Position) else { continue };
+            let turn =
+                Rotation::from_orientation(tree.get_vec3(part, Property::Orientation).unwrap_or_default());
+            walk.target = pos + turn.apply(local);
+        }
+    }
+
     /// Whether `humanoid` is walking somewhere.
     pub fn is_walking(&self, humanoid: InstanceId) -> bool {
         self.walks.contains_key(&humanoid)

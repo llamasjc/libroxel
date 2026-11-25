@@ -926,11 +926,56 @@ pub fn drive(
     }
 }
 
+/// The humanoid whose neck a move broke, if it did: `id` (a Neck joint, or
+/// a head) left the body it was in (`old_parent` held it), and that body's
+/// humanoid needs its neck (RequiresNeck, on unless a script or the place
+/// turned it off) and still lives.
+pub fn neck_broken_by(tree: &InstanceTree, id: InstanceId, old_parent: InstanceId) -> Option<InstanceId> {
+    let class = tree.class(id).ok()?;
+    let model = match tree.name(id).ok()? {
+        n if n == names::NECK && class == ClassKind::Motor6D => tree.parent(old_parent).ok().flatten()?,
+        n if n == names::HEAD && class.is_physical() => old_parent,
+        _ => return None,
+    };
+    // Moved about inside the body, it still holds.
+    if !tree.is_destroyed(id).unwrap_or(true) && tree.is_descendant_of(id, model).unwrap_or(false) {
+        return None;
+    }
+    let humanoid = tree.find_first_child_of_class(model, ClassKind::Humanoid).ok().flatten()?;
+    if matches!(tree.get_extra(humanoid, names::REQUIRES_NECK), Ok(Some(PropertyValue::Bool(false)))) {
+        return None;
+    }
+    tree.get_number(humanoid, Property::Health).filter(|h| *h > 0.0)?;
+    Some(humanoid)
+}
+
+/// Whether a dead body stays in one piece: its humanoid's
+/// BreakJointsOnDeath was turned off.
+fn keeps_joints(tree: &InstanceTree, model: InstanceId) -> bool {
+    tree.find_first_child_of_class(model, ClassKind::Humanoid).ok().flatten().is_some_and(|h| {
+        matches!(tree.get_extra(h, names::BREAK_JOINTS_ON_DEATH), Ok(Some(PropertyValue::Bool(false))))
+    })
+}
+
+/// How far a humanoid's CameraOffset moves the camera's focus, turned with
+/// the root part (zero when none was set).
+pub fn camera_offset(tree: &InstanceTree, humanoid: InstanceId, root: InstanceId) -> Vec3 {
+    match tree.get_extra(humanoid, names::CAMERA_OFFSET) {
+        Ok(Some(PropertyValue::Vec3(v))) if v.x.is_finite() && v.y.is_finite() && v.z.is_finite() => {
+            let turn =
+                Rotation::from_orientation(tree.get_vec3(root, Property::Orientation).unwrap_or_default());
+            turn.apply(v)
+        }
+        _ => Vec3::ZERO,
+    }
+}
+
 /// Breaks a dead character (or any rigged model) apart, the classic way:
 /// its head, body and limbs become loose pieces that tumble to the ground,
 /// with a little push outwards from the middle. Eyes and hats stay stuck
 /// to the head. The root part is held still and stops colliding, so the
-/// pieces fall freely. Returns the pieces.
+/// pieces fall freely. With BreakJointsOnDeath off, the body stays in one
+/// piece and topples over as a whole. Returns the pieces.
 pub fn fall_apart(
     tree: &mut InstanceTree,
     physics: &mut crate::physics::Physics,
@@ -951,8 +996,9 @@ pub fn fall_apart(
             stuck.extend(tree.descendants_of_class(accessory, ClassKind::Part));
         }
     }
+    let together = keeps_joints(tree, model);
     // The body comes apart: its joints go, as they do on R6 bodies.
-    let holders = [Some(limbs.torso), root];
+    let holders = if together { [None, None] } else { [Some(limbs.torso), root] };
     for holder in holders.into_iter().flatten() {
         for name in joints::ALL {
             if let Ok(Some(joint)) = tree.find_first_child(holder, name)
@@ -969,6 +1015,20 @@ pub fn fall_apart(
     let turn = Rotation::from_orientation(facing);
     let (back, side) = (turn.apply(Vec3::new(0.0, 0.0, 1.0)), turn.apply(Vec3::new(1.0, 0.0, 0.0)));
     let floor = middle.y - 3.0;
+    if together {
+        // Held to the torso, the body falls back as one.
+        for &piece in &pieces[..] {
+            set(tree, piece, Property::Anchored, PropertyValue::Bool(false));
+            set(tree, piece, Property::CanCollide, PropertyValue::Bool(true));
+            if piece != limbs.torso {
+                weld(tree, limbs.torso, piece, "Together");
+            }
+        }
+        physics.set_velocity(limbs.torso, carried + back * 2.0);
+        physics.set_angular_velocity(limbs.torso, side * 2.5);
+        stick(tree, head, &stuck);
+        return pieces.to_vec();
+    }
     for (i, &piece) in pieces.iter().enumerate() {
         set(tree, piece, Property::Anchored, PropertyValue::Bool(false));
         set(tree, piece, Property::CanCollide, PropertyValue::Bool(true));
@@ -980,16 +1040,26 @@ pub fn fall_apart(
         let wobble = if i % 2 == 0 { 1.0 } else { -1.0 };
         physics.set_angular_velocity(piece, side * 4.0 + back * (2.0 * wobble));
     }
-    for &part in &stuck {
+    stick(tree, head, &stuck);
+    pieces.to_vec()
+}
+
+/// Welds `part` to `to` (the weld kept in `to`).
+fn weld(tree: &mut InstanceTree, to: InstanceId, part: InstanceId, name: &str) {
+    if let Ok(weld) = tree.create(ClassKind::WeldConstraint, name) {
+        set(tree, weld, Property::Part0, PropertyValue::Ref(Some(to)));
+        set(tree, weld, Property::Part1, PropertyValue::Ref(Some(part)));
+        let _ = tree.set_parent(weld, Some(to));
+    }
+}
+
+/// Keeps the eyes and hats on a falling head.
+fn stick(tree: &mut InstanceTree, head: InstanceId, stuck: &[InstanceId]) {
+    for &part in stuck {
         set(tree, part, Property::Anchored, PropertyValue::Bool(false));
         set(tree, part, Property::CanCollide, PropertyValue::Bool(false));
-        if let Ok(weld) = tree.create(ClassKind::WeldConstraint, "Stuck") {
-            set(tree, weld, Property::Part0, PropertyValue::Ref(Some(head)));
-            set(tree, weld, Property::Part1, PropertyValue::Ref(Some(part)));
-            let _ = tree.set_parent(weld, Some(head));
-        }
+        weld(tree, head, part, "Stuck");
     }
-    pieces.to_vec()
 }
 
 #[cfg(test)]

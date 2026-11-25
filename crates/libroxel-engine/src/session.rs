@@ -1384,6 +1384,23 @@ impl PlaySession {
         for humanoid in fallen {
             self.fire_died(humanoid);
         }
+        // A humanoid whose neck broke dies (its Died follows the health).
+        let broken: Vec<InstanceId> = {
+            let tree = self.runtime.tree().borrow();
+            changes
+                .iter()
+                .filter_map(|c| match c {
+                    libroxel_instance::Change::Reparented { id, old_parent: Some(old), .. } => {
+                        crate::character::neck_broken_by(&tree, *id, *old)
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut tree = self.runtime.tree().borrow_mut();
+        for humanoid in broken {
+            let _ = tree.set(humanoid, Property::Health, PropertyValue::Number(0.0));
+        }
     }
 
     /// Fires `humanoid`'s Died event, the first time only.
@@ -1429,6 +1446,7 @@ impl PlaySession {
         for (humanoid, target) in self.runtime.take_move_requests() {
             walks_ended.extend(self.npcs.request(humanoid, target).map(|h| (h, false)));
         }
+        self.npcs.follow_parts(&tree.borrow());
         let local = self.local();
         let mut inputs: Vec<CharacterInput> = self
             .avatars

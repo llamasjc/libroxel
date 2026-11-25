@@ -1051,6 +1051,20 @@ pub mod character {
     pub const HEAD_OFFSET: &str = "HeadOffset";
     /// The attribute on an accessory's part saying how it's turned on the head.
     pub const HEAD_ORIENTATION: &str = "HeadOrientation";
+    /// Humanoid settings scripts set that the engine acts on (kept on the
+    /// humanoid as plain values, like those read from place files). A humanoid dies when its neck breaks unless RequiresNeck
+    /// is false, and a dead body only comes apart if BreakJointsOnDeath is.
+    pub const REQUIRES_NECK: &str = "RequiresNeck";
+    pub const BREAK_JOINTS_ON_DEATH: &str = "BreakJointsOnDeath";
+    /// Moves the camera's focus, turned with the root part.
+    pub const CAMERA_OFFSET: &str = "CameraOffset";
+    /// The part a walk started with `MoveTo(point, part)` follows, and the
+    /// point in that part's space.
+    pub const WALK_TO_PART: &str = "libroxel.walk_to_part";
+    pub const WALK_OFFSET: &str = "libroxel.walk_offset";
+    /// The head and the joint that holds it on.
+    pub const HEAD: &str = "Head";
+    pub const NECK: &str = "Neck";
 }
 
 /// Constructors and constants on the global library tables.
