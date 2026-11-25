@@ -5,7 +5,8 @@
 # - every loadable segment aligned to 16 KB (Android 15+ devices with
 #   16 KB pages refuse anything less);
 # - exports the entry points GameActivity looks up;
-# - needs only libraries Android 8 (API 26) has, plus the libc++ we ship.
+# - needs only libraries Android 8 (API 26) has, plus the libc++ we ship;
+# - every symbol it needs is in one of those.
 set -euo pipefail
 lib="$1"; machine="$2"; class="$3"; target="$4"
 ndk="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64"
@@ -48,4 +49,12 @@ while IFS= read -r so; do
   [[ -z "$so" || "$so" == "libc++_shared.so" ]] && continue
   [[ -e "$system/$so" ]] || fail "needs $so, which Android 8 doesn't have"
 done <<< "$needed"
+
+names() { sed 's/@.*//' | LC_ALL=C sort -u; }
+have=$(for so in "$system"/*.so "$ndk/sysroot/usr/lib/$sysroot_arch/libc++_shared.so"; do
+  "$nm" -D --defined-only "$so" 2>/dev/null | awk '{print $NF}'
+done | names)
+missing=$("$nm" -D --undefined-only "$lib" | awk '$1 == "U" {print $2}' | names | LC_ALL=C comm -23 - <(echo "$have"))
+[[ -z "$missing" ]] || fail "needs symbols Android 8 doesn't have:
+$missing"
 echo "$(basename "$lib") ($target) would load."
