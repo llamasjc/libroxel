@@ -20,8 +20,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  LIBROXEL_NO_UPDATE: "1"
-  LIBROXEL_NO_COMMAND: "1"
+  PLAYLIBRE_NO_UPDATE: "1"
+  PLAYLIBRE_NO_COMMAND: "1"
 
 jobs:
   soak:
@@ -41,7 +41,7 @@ jobs:
           SOAK_ROUNDS: "20"
         run: |
           export SOAK_SECONDS=$((SOAK_SECONDS * 60))
-          cargo test --locked -p libroxel-tests --test soak -- --nocapture --test-threads 1
+          cargo test --locked -p playlibre-tests --test soak -- --nocapture --test-threads 1
 
   android-release-memory:
     # The release's Android libraries are linked with fat LTO, which once
@@ -103,7 +103,7 @@ jobs:
               (( used > peak )) && peak=$used && echo "$peak" > peak-mb
             done ) &
           watcher=$!
-          /usr/bin/time -v -o time.txt cargo rustc --locked --profile dist -p libroxel --lib --crate-type cdylib \
+          /usr/bin/time -v -o time.txt cargo rustc --locked --profile dist -p playlibre --lib --crate-type cdylib \
             --target ${{ matrix.target }} -- -C link-arg=-Wl,-z,max-page-size=16384
           kill $watcher || true
           rss=$(awk -F': ' '/Maximum resident set size/ {print int($2 / 1024)}' time.txt)
@@ -121,7 +121,7 @@ jobs:
           fi
       - name: Check the library
         run: |
-          packaging/ci/check-android-lib.sh target/${{ matrix.target }}/dist/liblibroxel.so \
+          packaging/ci/check-android-lib.sh target/${{ matrix.target }}/dist/libplaylibre.so \
             ${{ matrix.machine }} ${{ matrix.class }} ${{ matrix.target }}
 
   android-emulator:
@@ -154,11 +154,11 @@ jobs:
             CXX_x86_64_linux_android="$ndk/bin/x86_64-linux-android26-clang++" \
             AR_x86_64_linux_android="$ndk/bin/llvm-ar" \
             CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$ndk/bin/x86_64-linux-android26-clang"
-          cargo rustc --locked --profile ci -p libroxel --lib --crate-type cdylib --target x86_64-linux-android \
+          cargo rustc --locked --profile ci -p playlibre --lib --crate-type cdylib --target x86_64-linux-android \
             -- -C link-arg=-Wl,-z,max-page-size=16384
           libs=packaging/android/app/src/main/jniLibs/x86_64
           mkdir -p "$libs"
-          cp target/x86_64-linux-android/ci/liblibroxel.so "$libs/"
+          cp target/x86_64-linux-android/ci/libplaylibre.so "$libs/"
           cp "$ndk/sysroot/usr/lib/x86_64-linux-android/libc++_shared.so" "$libs/"
           ANDROID_ABIS=x86_64 gradle -p packaging/android --no-daemon assembleDebug
       - name: Enable KVM

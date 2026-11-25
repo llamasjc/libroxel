@@ -1,0 +1,68 @@
+//! Times play-session frames in a world with many parts:
+//! `cargo run -p playlibre-engine --example bench -- 2000`. A second number
+//! adds that many spinning parts, each turned by its own script every frame
+//! (as coins and spinners are): `-- 2000 300`.
+
+use playlibre_engine::CharacterInput;
+use playlibre_engine::session::start_on;
+use playlibre_instance::{ClassKind, InstanceTree, Property, PropertyValue, Vec3};
+
+fn main() {
+    let count: usize = std::env::args().nth(1).and_then(|n| n.parse().ok()).unwrap_or(1000);
+    let mut tree = InstanceTree::new();
+    let ws = tree.workspace();
+    let floor = tree.create(ClassKind::Part, "Floor").unwrap();
+    tree.set_parent(floor, Some(ws)).unwrap();
+    tree.set(floor, Property::Size, PropertyValue::Vec3(Vec3::new(400.0, 1.0, 400.0))).unwrap();
+    tree.set(floor, Property::Position, PropertyValue::Vec3(Vec3::new(0.0, -0.5, 0.0))).unwrap();
+    tree.set(floor, Property::Anchored, PropertyValue::Bool(true)).unwrap();
+    let side = (count as f32).sqrt().ceil() as usize;
+    for i in 0..count {
+        let id = tree.create(ClassKind::Part, "Brick").unwrap();
+        tree.set_parent(id, Some(ws)).unwrap();
+        let (x, z) = ((i % side) as f32 * 5.0 - 100.0, (i / side) as f32 * 5.0 - 100.0);
+        // Every fourth brick is loose and falls; the rest are scenery.
+        let loose = i % 4 == 0;
+        tree.set(id, Property::Position, PropertyValue::Vec3(Vec3::new(x, if loose { 4.0 } else { 1.0 }, z)))
+            .unwrap();
+        tree.set(id, Property::Size, PropertyValue::Vec3(Vec3::new(2.0, 2.0, 2.0))).unwrap();
+        tree.set(id, Property::Anchored, PropertyValue::Bool(!loose)).unwrap();
+    }
+    let spinners: usize = std::env::args().nth(2).and_then(|n| n.parse().ok()).unwrap_or(0);
+    for i in 0..spinners {
+        let id = tree.create(ClassKind::Part, "Coin").unwrap();
+        tree.set_parent(id, Some(ws)).unwrap();
+        let (x, z) = ((i % 20) as f32 * 4.0 - 40.0, (i / 20) as f32 * 4.0 - 40.0);
+        tree.set(id, Property::Position, PropertyValue::Vec3(Vec3::new(x, 6.0, z))).unwrap();
+        tree.set(id, Property::Anchored, PropertyValue::Bool(true)).unwrap();
+        let script = tree.create(ClassKind::Script, "Spin").unwrap();
+        tree.set_parent(script, Some(id)).unwrap();
+        let source = "local part = script.Parent\nwhile true do\n  task.wait()\n  part.CFrame = part.CFrame * CFrame.Angles(0, 0.05, 0)\n  part.Transparency = 0.5 + 0.5 * math.sin(os.clock())\nend\n";
+        tree.set(script, Property::Source, PropertyValue::String(source.into())).unwrap();
+    }
+    let began = std::time::Instant::now();
+    let mut session = start_on(tree, true).unwrap();
+    let start_ms = began.elapsed().as_secs_f64() * 1000.0;
+    // The first frame builds the physics world; time it on its own.
+    let began = std::time::Instant::now();
+    session.step(1.0 / 60.0, CharacterInput::default());
+    let first_ms = began.elapsed().as_secs_f64() * 1000.0;
+    session.physics_mut().take_timing();
+    let frames = 120;
+    let start = std::time::Instant::now();
+    for _ in 0..frames {
+        session.step(1.0 / 60.0, CharacterInput::default());
+    }
+    let ms = start.elapsed().as_secs_f64() * 1000.0 / frames as f64;
+    let t = session.physics_mut().take_timing();
+    let each = |s: f64| s * 1000.0 / t.steps.max(1) as f64;
+    println!(
+        "{count} parts, {spinners} spinners: {ms:.2} ms per frame (start {start_ms:.1} ms, first frame {first_ms:.1} ms; physics: \
+         gather {:.2}, broadphase {:.2}, characters {:.2}, loose {:.2}, touches {:.2})",
+        each(t.gather),
+        each(t.broadphase),
+        each(t.characters),
+        each(t.loose),
+        each(t.touches),
+    );
+}

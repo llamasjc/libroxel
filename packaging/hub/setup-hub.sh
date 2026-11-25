@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Sets up (or updates) the official Libroxel Hub on an Ubuntu server:
+# Sets up (or updates) the official PlayLibre Hub on an Ubuntu server:
 # the Hub as a service that always runs, HTTPS with Caddy, a firewall,
 # nightly backups, and updates from GitHub releases.
 #
 #   sudo bash setup-hub.sh --repo <owner>/<repo> [--domain hub.playlibre.net] [--from-source]
 #
-# With a libroxel-hub (or libroxel-hub-linux-x86_64) next to this script it
+# With a playlibre-hub (or playlibre-hub-linux-x86_64) next to this script it
 # installs that one. Otherwise, with --from-source it builds main on this
 # server (and keeps doing so whenever main changes), or else it downloads
 # the latest release. Run it again
@@ -16,7 +16,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ "$(id -u)" = 0 ] || { echo "Run it with sudo: sudo bash $0 $*"; exit 1; }
 
-conf=/etc/libroxel/hub.conf
+conf=/etc/playlibre/hub.conf
 # What an earlier run chose, unless told otherwise now.
 DOMAIN=hub.playlibre.net
 REPO=""
@@ -46,7 +46,7 @@ while [ $# -gt 0 ]; do
         *) DOMAIN="$1"; shift ;;
     esac
 done
-echo "Setting up the Libroxel Hub at https://$DOMAIN"
+echo "Setting up the PlayLibre Hub at https://$DOMAIN"
 
 echo "== Packages (Caddy for HTTPS, sqlite3 for backups, ufw firewall, jq for updates)"
 if ! command -v caddy >/dev/null || ! command -v sqlite3 >/dev/null || ! command -v jq >/dev/null \
@@ -56,10 +56,10 @@ if ! command -v caddy >/dev/null || ! command -v sqlite3 >/dev/null || ! command
 fi
 
 echo "== Settings in $conf"
-install -d -m 755 /etc/libroxel
+install -d -m 755 /etc/playlibre
 umask 077
 cat > "$conf" <<CONF
-# Read by setup-hub.sh and the updater. Edit, then run: sudo libroxel-hub-update --now
+# Read by setup-hub.sh and the updater. Edit, then run: sudo playlibre-hub-update --now
 DOMAIN="$DOMAIN"
 # The GitHub repository whose releases the Hub updates from (owner/name).
 REPO="$REPO"
@@ -67,7 +67,7 @@ REPO="$REPO"
 GITHUB_TOKEN="$GITHUB_TOKEN"
 # How updates come: "releases" (GitHub releases) or "source" (build main on
 # this server, as SOURCE_USER in SOURCE_DIR). Switch with
-# sudo libroxel-hub-update --from-source or --from-releases.
+# sudo playlibre-hub-update --from-source or --from-releases.
 UPDATE_FROM="$UPDATE_FROM"
 SOURCE_USER="$SOURCE_USER"
 SOURCE_DIR="$SOURCE_DIR"
@@ -84,39 +84,39 @@ umask 022
 
 echo "== The Hub program"
 binary=""
-for name in libroxel-hub libroxel-hub-linux-x86_64; do
+for name in playlibre-hub playlibre-hub-linux-x86_64; do
     [ -f "$here/$name" ] && binary="$here/$name" && break
 done
 if [ -z "$binary" ]; then
-    [ -n "$REPO" ] || { echo "Put libroxel-hub next to this script, or say --repo <owner>/<repo>."; exit 1; }
-    install -m 755 "$here/update-hub.sh" /usr/local/bin/libroxel-hub-update 2>/dev/null \
+    [ -n "$REPO" ] || { echo "Put playlibre-hub next to this script, or say --repo <owner>/<repo>."; exit 1; }
+    install -m 755 "$here/update-hub.sh" /usr/local/bin/playlibre-hub-update 2>/dev/null \
         || curl -fsSL "https://raw.githubusercontent.com/$REPO/main/packaging/hub/update-hub.sh" \
-            -o /usr/local/bin/libroxel-hub-update
-    chmod 755 /usr/local/bin/libroxel-hub-update
+            -o /usr/local/bin/playlibre-hub-update
+    chmod 755 /usr/local/bin/playlibre-hub-update
     if [ "$UPDATE_FROM" = source ]; then
-        echo "No libroxel-hub here: building main of $REPO on this server."
-        exec /usr/local/bin/libroxel-hub-update --from-source ${SOURCE_DIR:+"$SOURCE_DIR"}
+        echo "No playlibre-hub here: building main of $REPO on this server."
+        exec /usr/local/bin/playlibre-hub-update --from-source ${SOURCE_DIR:+"$SOURCE_DIR"}
     fi
-    echo "No libroxel-hub here: fetching the latest release of $REPO."
-    exec /usr/local/bin/libroxel-hub-update --now
+    echo "No playlibre-hub here: fetching the latest release of $REPO."
+    exec /usr/local/bin/playlibre-hub-update --now
 fi
 chmod +x "$binary"
-id libroxel >/dev/null 2>&1 || useradd --system --home-dir /var/lib/libroxel --shell /usr/sbin/nologin libroxel
-install -d -o libroxel -g libroxel -m 750 /var/lib/libroxel /var/lib/libroxel/backups
-[ -f /usr/local/bin/libroxel-hub ] && cp -p /usr/local/bin/libroxel-hub /usr/local/bin/libroxel-hub.previous
-install -m 755 "$binary" /usr/local/bin/libroxel-hub.new
-mv -f /usr/local/bin/libroxel-hub.new /usr/local/bin/libroxel-hub
+id playlibre >/dev/null 2>&1 || useradd --system --home-dir /var/lib/playlibre --shell /usr/sbin/nologin playlibre
+install -d -o playlibre -g playlibre -m 750 /var/lib/playlibre /var/lib/playlibre/backups
+[ -f /usr/local/bin/playlibre-hub ] && cp -p /usr/local/bin/playlibre-hub /usr/local/bin/playlibre-hub.previous
+install -m 755 "$binary" /usr/local/bin/playlibre-hub.new
+mv -f /usr/local/bin/playlibre-hub.new /usr/local/bin/playlibre-hub
 if [ -f "$here/update-hub.sh" ]; then
-    install -m 755 "$here/update-hub.sh" /usr/local/bin/libroxel-hub-update
+    install -m 755 "$here/update-hub.sh" /usr/local/bin/playlibre-hub-update
 fi
 
 echo "== Game servers"
 game_flags=""
-if [ -f "$here/libroxel" ]; then
-    install -m 755 "$here/libroxel" /usr/local/bin/libroxel.new
-    mv -f /usr/local/bin/libroxel.new /usr/local/bin/libroxel
+if [ -f "$here/playlibre" ]; then
+    install -m 755 "$here/playlibre" /usr/local/bin/playlibre.new
+    mv -f /usr/local/bin/playlibre.new /usr/local/bin/playlibre
 fi
-if [ -x /usr/local/bin/libroxel ]; then
+if [ -x /usr/local/bin/playlibre ]; then
     # What the app needs to run, even with no screen (sound and input libraries).
     if ! ldconfig -p | grep -q 'libasound.so.2' || ! ldconfig -p | grep -q 'libudev.so.1'; then
         apt-get update -q
@@ -125,61 +125,61 @@ if [ -x /usr/local/bin/libroxel ]; then
         DEBIAN_FRONTEND=noninteractive apt-get install -y -q libasound2t64 2>/dev/null \
             || DEBIAN_FRONTEND=noninteractive apt-get install -y -q libasound2
     fi
-    game_flags="--starters /usr/local/bin/libroxel"
+    game_flags="--starters /usr/local/bin/playlibre"
 fi
 if [ "$GAME_SERVERS" = yes ]; then
-    # The game server is the Libroxel app itself, run as `libroxel server` with no window.
-    if [ -x /usr/local/bin/libroxel ]; then
-        install -d -o libroxel -g libroxel -m 750 /var/lib/libroxel/game-servers
-        game_flags="$game_flags --game-servers /usr/local/bin/libroxel --game-server-dir /var/lib/libroxel/game-servers"
+    # The game server is the PlayLibre app itself, run as `playlibre server` with no window.
+    if [ -x /usr/local/bin/playlibre ]; then
+        install -d -o playlibre -g playlibre -m 750 /var/lib/playlibre/game-servers
+        game_flags="$game_flags --game-servers /usr/local/bin/playlibre --game-server-dir /var/lib/playlibre/game-servers"
         game_flags="$game_flags --max-game-servers $MAX_GAME_SERVERS --players-per-server $PLAYERS_PER_SERVER"
         game_flags="$game_flags --first-udp-port $FIRST_UDP_PORT"
         echo "Up to $MAX_GAME_SERVERS game servers of $PLAYERS_PER_SERVER players each."
     else
-        echo "No libroxel app here yet, so no game servers: Play falls back to players hosting."
-        echo "(libroxel-hub-update installs it: from source it builds it, from releases it unpacks it.)"
+        echo "No playlibre app here yet, so no game servers: Play falls back to players hosting."
+        echo "(playlibre-hub-update installs it: from source it builds it, from releases it unpacks it.)"
     fi
 else
     echo "Off (GAME_SERVERS=no in $conf): players host every game themselves."
 fi
 
-echo "== Mail settings in /etc/libroxel/mail.conf (for email codes)"
-if [ ! -f /etc/libroxel/mail.conf ]; then
-    install -m 600 /dev/null /etc/libroxel/mail.conf
-    cat > /etc/libroxel/mail.conf <<'MAIL'
+echo "== Mail settings in /etc/playlibre/mail.conf (for email codes)"
+if [ ! -f /etc/playlibre/mail.conf ]; then
+    install -m 600 /dev/null /etc/playlibre/mail.conf
+    cat > /etc/playlibre/mail.conf <<'MAIL'
 # How the Hub mails codes that prove players' emails. Fill these in from your
-# mail provider (Resend, Brevo, Postmark…), then: sudo systemctl restart libroxel-hub
-# Until LIBROXEL_SMTP_HOST is set, emails are kept but no codes are sent.
-#LIBROXEL_SMTP_HOST=smtp.resend.com
-#LIBROXEL_SMTP_PORT=587
-#LIBROXEL_SMTP_USER=resend
-#LIBROXEL_SMTP_PASSWORD=your-api-key
-#LIBROXEL_MAIL_FROM=PlayLibre <no-reply@playlibre.net>
-#LIBROXEL_MODERATION_KEY=your-openai-key
+# mail provider (Resend, Brevo, Postmark…), then: sudo systemctl restart playlibre-hub
+# Until PLAYLIBRE_SMTP_HOST is set, emails are kept but no codes are sent.
+#PLAYLIBRE_SMTP_HOST=smtp.resend.com
+#PLAYLIBRE_SMTP_PORT=587
+#PLAYLIBRE_SMTP_USER=resend
+#PLAYLIBRE_SMTP_PASSWORD=your-api-key
+#PLAYLIBRE_MAIL_FROM=PlayLibre <no-reply@playlibre.net>
+#PLAYLIBRE_MODERATION_KEY=your-openai-key
 MAIL
 fi
 
 echo "== The service: starts on boot, restarts if it ever stops"
-cat > /etc/systemd/system/libroxel-hub.service <<UNIT
+cat > /etc/systemd/system/playlibre-hub.service <<UNIT
 [Unit]
-Description=Libroxel Hub
+Description=PlayLibre Hub
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0
 
 [Service]
-User=libroxel
-Group=libroxel
-EnvironmentFile=-/etc/libroxel/mail.conf
-ExecStart=/usr/local/bin/libroxel-hub --port 7430 --data /var/lib/libroxel/hub.sqlite --behind-proxy $game_flags
-Environment=HOME=/var/lib/libroxel
+User=playlibre
+Group=playlibre
+EnvironmentFile=-/etc/playlibre/mail.conf
+ExecStart=/usr/local/bin/playlibre-hub --port 7430 --data /var/lib/playlibre/hub.sqlite --behind-proxy $game_flags
+Environment=HOME=/var/lib/playlibre
 Restart=always
 RestartSec=2
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/var/lib/libroxel
+ReadWritePaths=/var/lib/playlibre
 # Game servers are the Hub's children. Restarting the Hub (as every update
 # does) leaves them running, so nobody is thrown out of a game; each stops
 # on its own once empty. If memory runs short, a game server goes first.
@@ -190,19 +190,19 @@ OOMPolicy=continue
 WantedBy=multi-user.target
 UNIT
 
-echo "== Nightly backups (the last 14 are kept in /var/lib/libroxel/backups)"
-cat > /etc/systemd/system/libroxel-hub-backup.service <<UNIT
+echo "== Nightly backups (the last 14 are kept in /var/lib/playlibre/backups)"
+cat > /etc/systemd/system/playlibre-hub-backup.service <<UNIT
 [Unit]
-Description=Back up the Libroxel Hub
+Description=Back up the PlayLibre Hub
 
 [Service]
 Type=oneshot
-User=libroxel
-ExecStart=/bin/sh -c 'sqlite3 /var/lib/libroxel/hub.sqlite ".backup /var/lib/libroxel/backups/hub-\$(date +%%F).sqlite" && find /var/lib/libroxel/backups -name "hub-*.sqlite" -mtime +14 -delete'
+User=playlibre
+ExecStart=/bin/sh -c 'sqlite3 /var/lib/playlibre/hub.sqlite ".backup /var/lib/playlibre/backups/hub-\$(date +%%F).sqlite" && find /var/lib/playlibre/backups -name "hub-*.sqlite" -mtime +14 -delete'
 UNIT
-cat > /etc/systemd/system/libroxel-hub-backup.timer <<UNIT
+cat > /etc/systemd/system/playlibre-hub-backup.timer <<UNIT
 [Unit]
-Description=Back up the Libroxel Hub every night
+Description=Back up the PlayLibre Hub every night
 
 [Timer]
 OnCalendar=*-*-* 04:00:00
@@ -213,19 +213,19 @@ WantedBy=timers.target
 UNIT
 
 echo "== Updates: every 10 minutes, look for a new version on GitHub"
-cat > /etc/systemd/system/libroxel-hub-update.service <<UNIT
+cat > /etc/systemd/system/playlibre-hub-update.service <<UNIT
 [Unit]
-Description=Update the Libroxel Hub from GitHub
+Description=Update the PlayLibre Hub from GitHub
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/libroxel-hub-update
+ExecStart=/usr/local/bin/playlibre-hub-update
 UNIT
-cat > /etc/systemd/system/libroxel-hub-update.timer <<UNIT
+cat > /etc/systemd/system/playlibre-hub-update.timer <<UNIT
 [Unit]
-Description=Look for Libroxel Hub updates
+Description=Look for PlayLibre Hub updates
 
 [Timer]
 OnBootSec=2min
@@ -264,19 +264,19 @@ if [ -n "$game_flags" ]; then
 fi
 ufw --force enable >/dev/null
 
-# Shortcut for looking after it: sudo libroxel-admin accounts, owners, ban…
-cat > /usr/local/bin/libroxel-admin <<'ADMIN'
+# Shortcut for looking after it: sudo playlibre-admin accounts, owners, ban…
+cat > /usr/local/bin/playlibre-admin <<'ADMIN'
 #!/bin/sh
-exec sudo -u libroxel /usr/local/bin/libroxel-hub "$@" --data /var/lib/libroxel/hub.sqlite
+exec sudo -u playlibre /usr/local/bin/playlibre-hub "$@" --data /var/lib/playlibre/hub.sqlite
 ADMIN
-chmod 755 /usr/local/bin/libroxel-admin
+chmod 755 /usr/local/bin/playlibre-admin
 
 systemctl daemon-reload
-systemctl enable --now libroxel-hub libroxel-hub-backup.timer >/dev/null
-if [ -n "$REPO" ] && [ -x /usr/local/bin/libroxel-hub-update ]; then
-    systemctl enable --now libroxel-hub-update.timer >/dev/null
+systemctl enable --now playlibre-hub playlibre-hub-backup.timer >/dev/null
+if [ -n "$REPO" ] && [ -x /usr/local/bin/playlibre-hub-update ]; then
+    systemctl enable --now playlibre-hub-update.timer >/dev/null
 fi
-systemctl restart libroxel-hub
+systemctl restart playlibre-hub
 systemctl enable caddy >/dev/null 2>&1 || true
 systemctl reload caddy 2>/dev/null || systemctl restart caddy
 

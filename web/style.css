@@ -1,4 +1,4 @@
-/* The Libroxel website: the same look as the app's home screen, a bright
+/* The PlayLibre website: the same look as the app's home screen, a bright
    sky over green hills, with bubbles, glass bars and glossy buttons. */
 
 @font-face { font-family: "Selawik"; font-weight: 300; font-display: swap; src: url("fonts/Selawik-Semilight.woff2") format("woff2"); }
@@ -10,7 +10,7 @@
 @font-face { font-family: "Phosphor"; font-display: block; src: url("fonts/Phosphor-Bold.woff2") format("woff2"); }
 
 :root {
-  /* The app's colours (crates/libroxel/src/theme.rs). */
+  /* The app's colours (crates/playlibre/src/theme.rs). */
   --back: rgb(214, 232, 247);
   --panel: rgb(241, 246, 252);
   --card: rgb(255, 255, 255);
@@ -347,7 +347,7 @@ ol.steps { padding-left: 20px; max-width: 760px; }
 ol.steps li { margin-bottom: 8px; }
 code { font-family: ui-monospace, "IBM Plex Mono", monospace; font-size: 13px; background: rgb(246, 249, 252); border: 1px solid var(--line); padding: 1px 5px; border-radius: var(--corner); }
 
-/* --- The "opening Libroxel" box ------------------------------------------- */
+/* --- The "opening PlayLibre" box ------------------------------------------- */
 
 .overlay { position: fixed; inset: 0; z-index: 50; background: rgba(20, 60, 110, 0.35); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; padding: 16px; }
 .dialog { width: 440px; max-width: 100%; padding: 26px; background: linear-gradient(#fff, rgb(240, 247, 254)); border: 1px solid rgb(110, 150, 190); border-radius: 10px; box-shadow: inset 0 0 0 1px #fff, 0 8px 30px rgba(10, 40, 80, 0.4); text-align: center; }

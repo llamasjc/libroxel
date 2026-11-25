@@ -1,0 +1,37 @@
+[package]
+name = "playlibre-hub"
+description = "The PlayLibre Hub: a small self-hostable server that lists live games, and the client that talks to it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time", "sync", "signal"] }
+rusqlite = { version = "0.42", features = ["bundled", "functions", "hooks"] }
+serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
+playlibre-avatar.workspace = true
+ureq = { version = "3", features = ["json"] }
+data-encoding = "2"
+getrandom = "0.3"
+iroh-base = { version = "1.4", default-features = false, features = ["key"] }
+# Passwords: stretched on the player's computer, never sent to the Hub.
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+# Two-step codes and the bot check for new accounts.
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+# So web pages (such as the playlibre.net site) can call the Hub.
+tower-http = { version = "0.6", features = ["cors", "compression-gzip", "decompression-gzip"] }
+flate2 = "1"
+# Email codes, sent by SMTP (any mail provider: Resend, Brevo, Postmark, your own).
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "hostname", "rustls-tls"] }
+rustrict = "0.7"
+
+[lints]
+workspace = true

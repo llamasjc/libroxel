@@ -1,5 +1,5 @@
 name: An idea
-description: Something Libroxel could do, or do better.
+description: Something PlayLibre could do, or do better.
 labels: [idea]
 body:
   - type: textarea

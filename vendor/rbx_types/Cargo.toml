@@ -1,4 +1,4 @@
-# Libroxel's copy of rbx_types 3.1.0 (MIT, from rbx-dom), changed so a
+# PlayLibre's copy of rbx_types 3.1.0 (MIT, from rbx-dom), changed so a
 # damaged attribute blob can't close the app: lengths and counts read from
 # it no longer set aside memory before the bytes behind them arrive
 # (src/attributes/reader.rs). Comments name the engine generically and

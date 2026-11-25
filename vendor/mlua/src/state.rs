@@ -327,7 +327,7 @@ impl Default for Lua {
     }
 }
 
-/// Libroxel: switches a VM's interrupt on from any thread (see
+/// PlayLibre: switches a VM's interrupt on from any thread (see
 /// [`Lua::interrupt_arm`]). Does nothing once the VM is gone.
 #[cfg(any(feature = "luau", doc))]
 #[derive(Clone, Debug)]
@@ -362,7 +362,7 @@ unsafe extern "C-unwind" fn interrupt_proc(state: *mut ffi::lua_State, gc: c_int
         // We don't support GC interrupts since they cannot survive Lua exceptions
         return;
     }
-    // Libroxel: with a flag, the interrupt is only switched on while the
+    // PlayLibre: with a flag, the interrupt is only switched on while the
     // flag is up; once it is down again it switches itself off, so loops
     // don't pay for a call at every turn.
     let extra = ExtraData::get(state);
@@ -913,7 +913,7 @@ impl Lua {
         let lua = self.lock();
         unsafe {
             let _old_callback = (*lua.extra.get()).interrupt_callback.replace(XRc::new(callback));
-            // Libroxel: with a flag it starts switched off (see `interrupt_arm`).
+            // PlayLibre: with a flag it starts switched off (see `interrupt_arm`).
             let on = (*lua.extra.get()).interrupt_flag.is_none();
             (*ffi::lua_callbacks(lua.main_state())).interrupt = on.then_some(interrupt_proc as _);
             *(*lua.extra.get()).interrupt_arm.lock().unwrap_or_else(|e| e.into_inner()) =
@@ -921,7 +921,7 @@ impl Lua {
         }
     }
 
-    /// Libroxel: a handle another thread can use to switch the interrupt
+    /// PlayLibre: a handle another thread can use to switch the interrupt
     /// on (once its flag is up, see `set_interrupt_flag`); the interrupt
     /// switches itself off again when it finds the flag down.
     #[cfg(any(feature = "luau", doc))]
@@ -930,7 +930,7 @@ impl Lua {
         InterruptArm(unsafe { (*lua.extra.get()).interrupt_arm.clone() })
     }
 
-    /// Libroxel: only call the interrupt callback while `flag` is true (or
+    /// PlayLibre: only call the interrupt callback while `flag` is true (or
     /// always, with `None`). The flag can be raised from another thread, so a
     /// watchdog can ask for the callback only when a script runs too long.
     #[cfg(any(feature = "luau", doc))]

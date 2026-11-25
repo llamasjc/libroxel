@@ -1,4 +1,4 @@
-# Libroxel's copy of mlua 0.12.2 (MIT), with two changes: in src/state.rs,
+# PlayLibre's copy of mlua 0.12.2 (MIT), with two changes: in src/state.rs,
 # `Lua::set_interrupt_flag`, so the interrupt callback only runs when a
 # watchdog asks for it; and in src/util/error.rs, the C functions that
 # protect calls into Luau are made once and kept instead of made anew for

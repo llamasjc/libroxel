@@ -22,7 +22,7 @@ z = zipfile.ZipFile(apk)
 names = set(z.namelist())
 bad = []
 for abi in ("arm64-v8a", "armeabi-v7a"):
-    for lib in ("liblibroxel.so", "libc++_shared.so"):
+    for lib in ("libplaylibre.so", "libc++_shared.so"):
         if f"lib/{abi}/{lib}" not in names:
             bad.append(f"no lib/{abi}/{lib}")
 with open(apk, "rb") as f:

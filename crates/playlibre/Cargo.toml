@@ -1,0 +1,63 @@
+[package]
+name = "playlibre"
+description = "PlayLibre: play, host and make games, from one home screen."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+default-run = "playlibre"
+
+[lib]
+path = "src/lib.rs"
+
+# One app for everything: the home screen, the editor and `playlibre server`.
+[[bin]]
+name = "playlibre"
+path = "src/main.rs"
+
+[dependencies]
+playlibre-instance.workspace = true
+playlibre-script.workspace = true
+playlibre-engine.workspace = true
+playlibre-avatar.workspace = true
+playlibre-net.workspace = true
+playlibre-rbx.workspace = true
+playlibre-hub.workspace = true
+bevy.workspace = true
+bevy_egui = { version = "0.43", default-features = false, features = ["render", "default_fonts"] }
+transform-gizmo-egui = "0.11"
+egui-phosphor = { version = "0.14", default-features = false, features = ["bold"] }
+serde_json.workspace = true
+ureq = "3"
+sha2 = "0.10"
+ed25519-dalek = "3"
+data-encoding = "2"
+# Which language the computer is set to, for the app's text.
+sys-locale = "0.3"
+cpal = "0.17"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# `accesskit` hands the menus and panels to screen readers (Narrator on
+# Windows, VoiceOver on macOS, Orca on Linux). Not on phones and tablets yet:
+# it hasn't been tried there.
+bevy_egui = { version = "0.43", default-features = false, features = ["manage_clipboard", "accesskit"] }
+rfd = { version = "0.18", default-features = false, features = ["xdg-portal", "pollster"] }
+
+# Linux screen readers listen over D-Bus (AT-SPI).
+[target.'cfg(all(target_os = "linux", not(target_os = "android")))'.dependencies]
+bevy = { workspace = true, features = ["accesskit_unix"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+bevy = { workspace = true, features = ["android-game-activity"] }
+wgpu = { version = "30", default-features = false, features = ["gles"] }
+jni = "0.21"
+
+[lints]
+workspace = true
+
+# The PlayLibre icon on playlibre.exe (Explorer, the taskbar, shortcuts).
+[target.'cfg(windows)'.build-dependencies]
+winresource = { version = "0.1", default-features = false }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Puts the Libroxel website (the web/ folder) on an Ubuntu server, served by
+# Puts the PlayLibre website (the web/ folder) on an Ubuntu server, served by
 # Caddy with HTTPS, next to the official Hub.
 #
 #   sudo bash setup-site.sh --repo <owner>/<repo> [--domain playlibre.net] [--hub https://hub.playlibre.net]
@@ -9,7 +9,7 @@
 # update-site.sh). Without it, the web/ folder next to this script (or the
 # repository's own, two folders up) goes online as it is.
 #
-# Run it again to change the settings; downloads in /var/www/libroxel/downloads
+# Run it again to change the settings; downloads in /var/www/playlibre/downloads
 # stay. The domain and www.<domain> must already point at this server, so
 # Caddy can get their certificates.
 set -euo pipefail
@@ -17,7 +17,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 [ "$(id -u)" = 0 ] || { echo "Run it with sudo: sudo bash $0 $*"; exit 1; }
 
-conf=/etc/libroxel/site.conf
+conf=/etc/playlibre/site.conf
 REPO=""
 DOMAIN="playlibre.net"
 HUB="https://hub.playlibre.net"
@@ -36,11 +36,11 @@ while [ $# -gt 0 ]; do
     esac
 done
 case "$HUB" in https://*) ;; *) echo "The Hub address must start with https://"; exit 1 ;; esac
-case "$REPO" in ""|*/*) ;; *) echo "--repo is owner/name, such as someone/libroxel"; exit 1 ;; esac
+case "$REPO" in ""|*/*) ;; *) echo "--repo is owner/name, such as someone/playlibre"; exit 1 ;; esac
 
-install -d -m 755 /etc/libroxel
+install -d -m 755 /etc/playlibre
 cat > "$conf" <<CONF
-# The Libroxel website (setup-site.sh writes this; run it again to change it).
+# The PlayLibre website (setup-site.sh writes this; run it again to change it).
 # The GitHub repository whose latest release the site updates from (owner/name).
 REPO="$REPO"
 DOMAIN="$DOMAIN"
@@ -58,11 +58,11 @@ fi
 
 # From GitHub: fetch main, then the fetched copy's own scripts put it online.
 if [ -n "$REPO" ] && [ -z "$from" ]; then
-    checkout=/var/lib/libroxel-site/repo
+    checkout=/var/lib/playlibre-site/repo
     if [ ! -d "$checkout/.git" ]; then
         echo "== Getting the website from github.com/$REPO"
         rm -rf "$checkout"
-        install -d -m 755 /var/lib/libroxel-site
+        install -d -m 755 /var/lib/playlibre-site
         git clone -q --depth 1 --filter=blob:none --sparse "https://github.com/$REPO.git" "$checkout"
         git -C "$checkout" sparse-checkout set web packaging/web
     fi
@@ -81,19 +81,19 @@ fi
 [ -n "$site" ] && [ -f "$site/index.html" ] || { echo "Put the web folder next to this script, or use --repo."; exit 1; }
 site="$(cd "$site" && pwd)"
 
-echo "== The site's files, in /var/www/libroxel (Hub: $HUB)"
-install -d -m 755 /var/www/libroxel /var/www/libroxel/downloads
-new="$(mktemp -d /var/www/.libroxel-new.XXXXXX)"
+echo "== The site's files, in /var/www/playlibre (Hub: $HUB)"
+install -d -m 755 /var/www/playlibre /var/www/playlibre/downloads
+new="$(mktemp -d /var/www/.playlibre-new.XXXXXX)"
 cp -r "$site"/. "$new"/
 # Point the site at this Hub, and at the repository's releases for downloads.
-sed -i -e "s#<meta name=\"libroxel-hub\" content=\"[^\"]*\">#<meta name=\"libroxel-hub\" content=\"$HUB\">#" \
-    -e "s#<meta name=\"libroxel-repo\" content=\"[^\"]*\">#<meta name=\"libroxel-repo\" content=\"$REPO\">#" \
+sed -i -e "s#<meta name=\"playlibre-hub\" content=\"[^\"]*\">#<meta name=\"playlibre-hub\" content=\"$HUB\">#" \
+    -e "s#<meta name=\"playlibre-repo\" content=\"[^\"]*\">#<meta name=\"playlibre-repo\" content=\"$REPO\">#" \
     "$new/index.html"
 sed -i "s#https://playlibre.net#https://$DOMAIN#g" "$new/index.html" "$new/robots.txt" "$new/sitemap.xml"
 chmod -R a+rX "$new"
 # Swap the files in, keeping the downloads; files gone from the site go.
-find /var/www/libroxel -mindepth 1 -maxdepth 1 ! -name downloads -exec rm -rf {} +
-find "$new" -mindepth 1 -maxdepth 1 ! -name downloads -exec mv -t /var/www/libroxel {} +
+find /var/www/playlibre -mindepth 1 -maxdepth 1 ! -name downloads -exec rm -rf {} +
+find "$new" -mindepth 1 -maxdepth 1 ! -name downloads -exec mv -t /var/www/playlibre {} +
 rm -rf "$new"
 
 echo "== HTTPS with Caddy (/etc/caddy/sites/site.caddy)"
@@ -102,8 +102,8 @@ install -d /etc/caddy/sites
 # website goes on first, do the same, keeping a copy of what was there.
 if ! grep -q 'import /etc/caddy/sites/\*' /etc/caddy/Caddyfile 2>/dev/null; then
     if [ -s /etc/caddy/Caddyfile ]; then
-        cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.before-libroxel
-        echo "   (the old Caddyfile is kept as /etc/caddy/Caddyfile.before-libroxel)"
+        cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.before-playlibre
+        echo "   (the old Caddyfile is kept as /etc/caddy/Caddyfile.before-playlibre)"
     fi
     echo 'import /etc/caddy/sites/*.caddy' > /etc/caddy/Caddyfile
 fi
@@ -112,7 +112,7 @@ github=""
 cat > /etc/caddy/sites/site.caddy.new <<CADDY
 $DOMAIN {
     encode zstd gzip
-    root * /var/www/libroxel
+    root * /var/www/playlibre
     header {
         # Only this site's own files run, and they only talk to the Hub (and GitHub, for downloads).
         Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' $HUB$github; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
@@ -144,20 +144,20 @@ fi
 
 if [ -n "$REPO" ]; then
     echo "== Updates from github.com/$REPO every 10 minutes"
-    install -m 755 "$site/../packaging/web/update-site.sh" /usr/local/bin/libroxel-site-update
-    cat > /etc/systemd/system/libroxel-site-update.service <<UNIT
+    install -m 755 "$site/../packaging/web/update-site.sh" /usr/local/bin/playlibre-site-update
+    cat > /etc/systemd/system/playlibre-site-update.service <<UNIT
 [Unit]
-Description=Update the Libroxel website from GitHub
+Description=Update the PlayLibre website from GitHub
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/libroxel-site-update
+ExecStart=/usr/local/bin/playlibre-site-update
 UNIT
-    cat > /etc/systemd/system/libroxel-site-update.timer <<UNIT
+    cat > /etc/systemd/system/playlibre-site-update.timer <<UNIT
 [Unit]
-Description=Update the Libroxel website from GitHub every 10 minutes
+Description=Update the PlayLibre website from GitHub every 10 minutes
 
 [Timer]
 OnBootSec=2min
@@ -167,7 +167,7 @@ OnUnitActiveSec=10min
 WantedBy=timers.target
 UNIT
     systemctl daemon-reload
-    systemctl enable --now libroxel-site-update.timer >/dev/null
+    systemctl enable --now playlibre-site-update.timer >/dev/null
 fi
 
 fi

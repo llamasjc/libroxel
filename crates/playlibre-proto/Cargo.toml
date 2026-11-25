@@ -1,0 +1,18 @@
+[package]
+name = "playlibre-proto"
+description = "Plays a PlayLibre game (a .lrx place or a single .luau script) in a window."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+playlibre-instance.workspace = true
+playlibre-engine.workspace = true
+bevy.workspace = true
+
+[lints]
+workspace = true

@@ -1,4 +1,4 @@
 #!/bin/sh
-# Starts Libroxel from inside its AppImage.
+# Starts PlayLibre from inside its AppImage.
 here=$(dirname "$(readlink -f "$0")")
-exec "$here/usr/bin/libroxel" "$@"
+exec "$here/usr/bin/playlibre" "$@"

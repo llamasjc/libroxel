@@ -1,6 +1,6 @@
 # Code of Conduct
 
-Libroxel is a place for people of every background and experience level to
+PlayLibre is a place for people of every background and experience level to
 build games together. We want everyone who takes part, whether in issues,
 pull requests, chat, or community events, to feel welcome and safe.
 
@@ -34,7 +34,7 @@ project in public, for example by posting from an official account.
 ## Reporting
 
 If you experience or witness unacceptable behaviour, please report it to the
-maintainers at **conduct@libroxel.example** <!-- TODO: replace with a real
+maintainers at **conduct@playlibre.net** <!-- TODO: replace with a real
 contact address before publishing --> or by messaging a maintainer
 privately. Reports are handled confidentially, and we will not retaliate
 against anyone for reporting in good faith.
@@ -54,6 +54,6 @@ the same consequences.
 
 ## Attribution
 
-This code of conduct is written for Libroxel. Its structure was informed by
+This code of conduct is written for PlayLibre. Its structure was informed by
 the [Contributor Covenant](https://www.contributor-covenant.org/), which we
 recommend reading.

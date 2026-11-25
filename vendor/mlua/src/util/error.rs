@@ -218,7 +218,7 @@ unsafe fn push_protected_cfunctions(state: *mut ffi::lua_State, f: ffi::lua_CFun
     Ok(())
 }
 
-// Libroxel: in Luau every `lua_pushcfunction` makes a new closure, and this
+// PlayLibre: in Luau every `lua_pushcfunction` makes a new closure, and this
 // runs for nearly every call into the Lua API (two closures each time, for
 // the garbage collector to clean up). Each function is made once instead and
 // kept in the registry under its own address.

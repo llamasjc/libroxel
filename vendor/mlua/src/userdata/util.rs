@@ -309,7 +309,7 @@ unsafe fn init_userdata_metatable_index(state: *mut ffi::lua_State) -> Result<()
                 end
             end
 
-            -- (libroxel: what `__index` is, worked out once instead of on
+            -- (playlibre: what `__index` is, worked out once instead of on
             -- every lookup, which cost a call into C each time.)
             local index_is_function = isfunction(__index)
             return function (self, key)

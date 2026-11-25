@@ -80,10 +80,10 @@ jobs:
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
-            echo "LIBROXEL_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+            echo "PLAYLIBRE_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
           else
             echo "VERSION=dev-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
-            echo "LIBROXEL_VERSION=dev-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+            echo "PLAYLIBRE_VERSION=dev-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
           fi
 
       - name: Install dependencies
@@ -105,42 +105,43 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          cargo build --locked --profile dist -p libroxel --target ${{ matrix.target }}
+          cargo build --locked --profile dist -p playlibre --target ${{ matrix.target }}
 
       - name: Build AppImage and .deb
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          name="libroxel-$VERSION-${{ matrix.name }}"
-          bin="target/${{ matrix.target }}/dist/libroxel"
+          name="playlibre-$VERSION-${{ matrix.name }}"
+          bin="target/${{ matrix.target }}/dist/playlibre"
 
-          appdir="Libroxel.AppDir"
+          appdir="PlayLibre.AppDir"
           mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" "$appdir/usr/share/icons/hicolor/256x256/apps"
-          install -m 755 "$bin" "$appdir/usr/bin/libroxel"
+          install -m 755 "$bin" "$appdir/usr/bin/playlibre"
           install -m 755 packaging/linux/AppRun "$appdir/AppRun"
-          cp packaging/linux/libroxel.desktop "$appdir/libroxel.desktop"
-          cp packaging/linux/libroxel.desktop "$appdir/usr/share/applications/"
-          cp packaging/icons/libroxel-256.png "$appdir/libroxel.png"
-          cp packaging/icons/libroxel-256.png "$appdir/usr/share/icons/hicolor/256x256/apps/libroxel.png"
-          ln -s libroxel.png "$appdir/.DirIcon"
+          cp packaging/linux/playlibre.desktop "$appdir/playlibre.desktop"
+          cp packaging/linux/playlibre.desktop "$appdir/usr/share/applications/"
+          cp packaging/icons/playlibre-256.png "$appdir/playlibre.png"
+          cp packaging/icons/playlibre-256.png "$appdir/usr/share/icons/hicolor/256x256/apps/playlibre.png"
+          ln -s playlibre.png "$appdir/.DirIcon"
           arch="${{ matrix.arch }}"
           curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$arch.AppImage"
           chmod +x appimagetool
           ARCH="$arch" ./appimagetool --appimage-extract-and-run "$appdir" "$name.AppImage"
 
-          deb="deb/libroxel"
-          mkdir -p "$deb/DEBIAN" "$deb/usr/lib/libroxel" "$deb/usr/bin" "$deb/usr/share/applications" "$deb/usr/share/doc/libroxel"
+          deb="deb/playlibre"
+          mkdir -p "$deb/DEBIAN" "$deb/usr/lib/playlibre" "$deb/usr/bin" "$deb/usr/share/applications" "$deb/usr/share/doc/playlibre"
           debver="${VERSION//[^0-9A-Za-z.+~]/\~}"
           [[ "$debver" =~ ^[0-9] ]] || debver="0~$debver"
           debarch=$(dpkg --print-architecture)
           sed -e "s/@VERSION@/$debver/" -e "s/^Architecture: .*/Architecture: $debarch/" packaging/linux/deb/control > "$deb/DEBIAN/control"
-          install -m 755 "$bin" "$deb/usr/lib/libroxel/libroxel"
-          ln -s ../lib/libroxel/libroxel "$deb/usr/bin/libroxel"
-          cp packaging/linux/libroxel.desktop "$deb/usr/share/applications/"
+          install -m 755 "$bin" "$deb/usr/lib/playlibre/playlibre"
+          ln -s ../lib/playlibre/playlibre "$deb/usr/bin/playlibre"
+          ln -s playlibre "$deb/usr/bin/libroxel"
+          cp packaging/linux/playlibre.desktop "$deb/usr/share/applications/"
           for size in 16 24 32 48 64 128 256 512; do
-            install -D -m 644 "packaging/icons/libroxel-$size.png" "$deb/usr/share/icons/hicolor/${size}x${size}/apps/libroxel.png"
+            install -D -m 644 "packaging/icons/playlibre-$size.png" "$deb/usr/share/icons/hicolor/${size}x${size}/apps/playlibre.png"
           done
-          cp README.md LICENSE-MIT LICENSE-APACHE "$deb/usr/share/doc/libroxel/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$deb/usr/share/doc/playlibre/"
           dpkg-deb --root-owner-group --build "$deb" "$name.deb"
 
           mkdir dist && mv "$name.AppImage" "$name.deb" dist/
@@ -160,11 +161,11 @@ jobs:
               export PATH="$PATH:/c/Program Files (x86)/Inno Setup 6"
             fi
           fi
-          name="libroxel-$VERSION-${{ matrix.name }}-setup"
+          name="playlibre-$VERSION-${{ matrix.name }}-setup"
           numeric=$(echo "$VERSION" | grep -oE '^[0-9]+(\.[0-9]+){0,3}' || true)
           numeric="${numeric:-0}.0.0.0"; numeric=$(echo "$numeric" | cut -d. -f1-4)
           export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
-          iscc "/DVersion=$VERSION" "/DNumericVersion=$numeric" "/DArch=${{ matrix.arch }}" "/DSource=$(cygpath -w "$PWD/$src")" "/DOutput=$name" "/O$(cygpath -w "$PWD")" "$(cygpath -w packaging/windows/libroxel.iss)"
+          iscc "/DVersion=$VERSION" "/DNumericVersion=$numeric" "/DArch=${{ matrix.arch }}" "/DSource=$(cygpath -w "$PWD/$src")" "/DOutput=$name" "/O$(cygpath -w "$PWD")" "$(cygpath -w packaging/windows/playlibre.iss)"
           echo "ASSET=$name.exe" >> "$GITHUB_ENV"
 
       - name: Upload unsigned installer
@@ -227,15 +228,15 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
         run: |
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then export LIBROXEL_VERSION="${GITHUB_REF_NAME#v}"; else export LIBROXEL_VERSION="dev-${GITHUB_SHA::7}"; fi
-          cargo build --locked --profile dist -p libroxel --target ${{ matrix.target }}
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then export PLAYLIBRE_VERSION="${GITHUB_REF_NAME#v}"; else export PLAYLIBRE_VERSION="dev-${GITHUB_SHA::7}"; fi
+          cargo build --locked --profile dist -p playlibre --target ${{ matrix.target }}
       - name: Copy binary
         run: |
-          mkdir -p half && cp target/${{ matrix.target }}/dist/libroxel half/libroxel-${{ matrix.target }}
+          mkdir -p half && cp target/${{ matrix.target }}/dist/playlibre half/playlibre-${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
           name: half-${{ matrix.name }}
-          path: half/libroxel-${{ matrix.target }}
+          path: half/playlibre-${{ matrix.target }}
           if-no-files-found: error
           retention-days: 1
 
@@ -273,18 +274,18 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="dev-${GITHUB_SHA::7}"; fi
-          dir="libroxel-$VERSION-macos-universal"
-          app="$dir/Libroxel.app"
+          dir="playlibre-$VERSION-macos-universal"
+          app="$dir/PlayLibre.app"
           mkdir -p "$app/Contents/MacOS"
-          lipo -create -output "$app/Contents/MacOS/libroxel" \
-            half/libroxel-aarch64-apple-darwin half/libroxel-x86_64-apple-darwin
+          lipo -create -output "$app/Contents/MacOS/playlibre" \
+            half/playlibre-aarch64-apple-darwin half/playlibre-x86_64-apple-darwin
           sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
-          mkdir -p "$app/Contents/Resources" libroxel.iconset
+          mkdir -p "$app/Contents/Resources" playlibre.iconset
           for size in 16 32 128 256 512; do
-            cp "packaging/icons/libroxel-$size.png" "libroxel.iconset/icon_${size}x${size}.png"
-            cp "packaging/icons/libroxel-$((size * 2)).png" "libroxel.iconset/icon_${size}x${size}@2x.png"
+            cp "packaging/icons/playlibre-$size.png" "playlibre.iconset/icon_${size}x${size}.png"
+            cp "packaging/icons/playlibre-$((size * 2)).png" "playlibre.iconset/icon_${size}x${size}@2x.png"
           done
-          iconutil -c icns libroxel.iconset -o "$app/Contents/Resources/libroxel.icns"
+          iconutil -c icns playlibre.iconset -o "$app/Contents/Resources/playlibre.icns"
           if [[ "$NOTARIZE" == true ]]; then
             codesign --force --options runtime --timestamp --entitlements packaging/macos/entitlements.plist --sign "Developer ID Application" "$app"
           else
@@ -293,13 +294,13 @@ jobs:
           tiffutil -cathidpicheck packaging/macos/dmg-background.png packaging/macos/dmg-background@2x.png -out background.tiff
           HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install create-dmg
           create-dmg \
-            --volname "Libroxel" \
-            --volicon "$app/Contents/Resources/libroxel.icns" \
+            --volname "PlayLibre" \
+            --volicon "$app/Contents/Resources/playlibre.icns" \
             --background background.tiff \
             --window-pos 200 120 --window-size 660 442 \
             --icon-size 128 --text-size 13 \
-            --icon "Libroxel.app" 165 210 \
-            --hide-extension "Libroxel.app" \
+            --icon "PlayLibre.app" 165 210 \
+            --hide-extension "PlayLibre.app" \
             --app-drop-link 495 210 \
             --no-internet-enable \
             "$dir.dmg" "$dir/"
@@ -310,7 +311,7 @@ jobs:
             xcrun stapler staple "$app"
           fi
           mkdir dist
-          tar -czf "dist/$dir.app.tar.gz" -C "$dir" Libroxel.app
+          tar -czf "dist/$dir.app.tar.gz" -C "$dir" PlayLibre.app
           mv "$dir.dmg" dist/
       - uses: actions/upload-artifact@v4
         with:
@@ -331,9 +332,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
         run: |
-          cargo build --locked --profile dist -p libroxel-hub --bin libroxel-hub
+          cargo build --locked --profile dist -p playlibre-hub --bin playlibre-hub
           mkdir hub
-          cp target/dist/libroxel-hub hub/libroxel-hub-linux-x86_64
+          cp target/dist/playlibre-hub hub/playlibre-hub-linux-x86_64
           cp packaging/hub/setup-hub.sh packaging/hub/update-hub.sh hub/
       - uses: actions/upload-artifact@v4
         with:
@@ -392,9 +393,9 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            export VERSION="${GITHUB_REF_NAME#v}" LIBROXEL_VERSION="${GITHUB_REF_NAME#v}"
+            export VERSION="${GITHUB_REF_NAME#v}" PLAYLIBRE_VERSION="${GITHUB_REF_NAME#v}"
           else
-            export VERSION="dev-${GITHUB_SHA::7}" LIBROXEL_VERSION="dev-${GITHUB_SHA::7}"
+            export VERSION="dev-${GITHUB_SHA::7}" PLAYLIBRE_VERSION="dev-${GITHUB_SHA::7}"
           fi
           export VERSION_CODE="$GITHUB_RUN_NUMBER"
           ndk="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64"
@@ -403,18 +404,18 @@ jobs:
             env="${target//-/_}"
             export "CC_$env=$ndk/bin/${clang}26-clang" "CXX_$env=$ndk/bin/${clang}26-clang++" "AR_$env=$ndk/bin/llvm-ar"
             export "CARGO_TARGET_${env^^}_LINKER=$ndk/bin/${clang}26-clang"
-            cargo rustc --locked --profile dist -p libroxel --lib --crate-type cdylib --target "$target" \
+            cargo rustc --locked --profile dist -p playlibre --lib --crate-type cdylib --target "$target" \
               -- -C link-arg=-Wl,-z,max-page-size=16384
-            packaging/ci/check-android-lib.sh "target/$target/dist/liblibroxel.so" "$machine" "$class" "$target"
+            packaging/ci/check-android-lib.sh "target/$target/dist/libplaylibre.so" "$machine" "$class" "$target"
             libs="packaging/android/app/src/main/jniLibs/$name"
             mkdir -p "$libs"
-            cp "target/$target/dist/liblibroxel.so" "$libs/"
+            cp "target/$target/dist/libplaylibre.so" "$libs/"
             lib="${target/armv7/arm}"
             cp "$ndk/sysroot/usr/lib/$lib/libc++_shared.so" "$libs/"
             # A library that names a symbol phones don't have (as v0.1.15 did
             # with __clear_cache) makes the app close at launch, so it must
             # not ship.
-            packaging/ci/check-android-lib.sh "$libs/liblibroxel.so" "$machine" "$class" "$target"
+            packaging/ci/check-android-lib.sh "$libs/libplaylibre.so" "$machine" "$class" "$target"
           done
           export ANDROID_KEYSTORE="$RUNNER_TEMP/release.jks"
           if [[ -n "$ANDROID_KEYSTORE_BASE64" ]]; then
@@ -422,12 +423,12 @@ jobs:
           elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             # A throwaway key would make Android refuse the APK over any earlier
             # release ("App not installed"), so a release must use the real key.
-            echo "::error::ANDROID_KEYSTORE is not set, so this release can't be signed with Libroxel's key"
+            echo "::error::ANDROID_KEYSTORE is not set, so this release can't be signed with PlayLibre's key"
             exit 1
           else
-            export ANDROID_KEYSTORE_PASSWORD=android ANDROID_KEY_ALIAS=libroxel ANDROID_KEY_PASSWORD=android
+            export ANDROID_KEYSTORE_PASSWORD=android ANDROID_KEY_ALIAS=playlibre ANDROID_KEY_PASSWORD=android
             keytool -genkeypair -keystore "$ANDROID_KEYSTORE" -storepass android -keypass android \
-              -alias libroxel -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Libroxel"
+              -alias libroxel -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=PlayLibre"
           fi
           gradle -p packaging/android --no-daemon assembleRelease bundleRelease
           out=packaging/android/app/build/outputs
@@ -439,7 +440,7 @@ jobs:
             certs=$("$apksigner" verify --print-certs "$out/apk/release/app-release.apk")
             grep -qi "certificate SHA-256 digest: $ANDROID_CERT_SHA256" <<< "$certs" || {
               echo "$certs"
-              echo "::error::The APK isn't signed with Libroxel's release key ($ANDROID_CERT_SHA256), so Android would refuse it over earlier releases"
+              echo "::error::The APK isn't signed with PlayLibre's release key ($ANDROID_CERT_SHA256), so Android would refuse it over earlier releases"
               exit 1
             }
           fi
@@ -448,11 +449,11 @@ jobs:
           inside="$RUNNER_TEMP/apk-libs"
           rm -rf "$inside"
           unzip -q -o "$out/apk/release/app-release.apk" 'lib/*' -d "$inside"
-          packaging/ci/check-android-lib.sh "$inside/lib/arm64-v8a/liblibroxel.so" AArch64 ELF64 aarch64-linux-android
-          packaging/ci/check-android-lib.sh "$inside/lib/armeabi-v7a/liblibroxel.so" ARM ELF32 armv7-linux-androideabi
+          packaging/ci/check-android-lib.sh "$inside/lib/arm64-v8a/libplaylibre.so" AArch64 ELF64 aarch64-linux-android
+          packaging/ci/check-android-lib.sh "$inside/lib/armeabi-v7a/libplaylibre.so" ARM ELF32 armv7-linux-androideabi
           mkdir dist
-          cp "$out/apk/release/app-release.apk" "dist/libroxel-$VERSION-android.apk"
-          cp "$out/bundle/release/app-release.aab" "dist/libroxel-$VERSION-android.aab"
+          cp "$out/apk/release/app-release.apk" "dist/playlibre-$VERSION-android.apk"
+          cp "$out/bundle/release/app-release.aab" "dist/playlibre-$VERSION-android.aab"
       - uses: r0adkll/upload-google-play@v1
         if: env.PLAY == 'true'
         with:
@@ -506,15 +507,15 @@ jobs:
       - name: Build
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"; export LIBROXEL_VERSION="$VERSION"
+            VERSION="${GITHUB_REF_NAME#v}"; export PLAYLIBRE_VERSION="$VERSION"
           else
-            VERSION="dev-${GITHUB_SHA::7}"; export LIBROXEL_VERSION="$VERSION"
+            VERSION="dev-${GITHUB_SHA::7}"; export PLAYLIBRE_VERSION="$VERSION"
           fi
           export IPHONEOS_DEPLOYMENT_TARGET=15.0
-          cargo build --locked --profile dist -p libroxel --bin libroxel --target aarch64-apple-ios
-          app=Payload/Libroxel.app
+          cargo build --locked --profile dist -p playlibre --bin playlibre --target aarch64-apple-ios
+          app=Payload/PlayLibre.app
           mkdir -p "$app"
-          cp target/aarch64-apple-ios/dist/libroxel "$app/"
+          cp target/aarch64-apple-ios/dist/playlibre "$app/"
           short=$(echo "$VERSION" | grep -oE '^[0-9]+(\.[0-9]+){0,2}' || true)
           plist="$RUNNER_TEMP/Info.plist"
           sed -e "s/@SHORT_VERSION@/${short:-0.0.1}/" -e "s/@BUILD@/$GITHUB_RUN_NUMBER/" packaging/ios/Info.plist > "$plist"
@@ -542,9 +543,9 @@ jobs:
             cp "$profile" "$app/embedded.mobileprovision"
             codesign --force --timestamp=none --sign "Apple Distribution" \
               --entitlements "$RUNNER_TEMP/app.entitlements" "$app"
-            zip -qry "dist/libroxel-$VERSION-ios.ipa" Payload
+            zip -qry "dist/playlibre-$VERSION-ios.ipa" Payload
           else
-            zip -qry "dist/libroxel-$VERSION-ios-unsigned.ipa" Payload
+            zip -qry "dist/playlibre-$VERSION-ios-unsigned.ipa" Payload
           fi
       - name: Upload to TestFlight
         if: env.UPLOAD == 'true'
@@ -582,7 +583,7 @@ jobs:
         run: |
           for end in -windows-x86_64-setup.exe -macos-universal.dmg -macos-universal.app.tar.gz -linux-x86_64.AppImage -linux-x86_64.deb \
             -android.apk -android.aab "-ios*.ipa"; do
-            compgen -G "dist/libroxel-*$end" >/dev/null || { echo "::error::Missing libroxel-*$end"; exit 1; }
+            compgen -G "dist/playlibre-*$end" >/dev/null || { echo "::error::Missing playlibre-*$end"; exit 1; }
           done
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
@@ -592,7 +593,7 @@ jobs:
         run: |
           if [[ -z "$UPDATE_KEY" ]]; then echo "::warning::UPDATE_KEY is not set, so apps won't update to this release"; exit 0; fi
           cd dist
-          entry() { f=$(compgen -G "libroxel-*$1") || { echo null; return; }; jq -n --arg n "$f" --arg s "$(sha256sum "$f" | cut -d' ' -f1)" '{name: $n, sha256: $s}'; }
+          entry() { f=$(compgen -G "playlibre-*$1") || { echo null; return; }; jq -n --arg n "$f" --arg s "$(sha256sum "$f" | cut -d' ' -f1)" '{name: $n, sha256: $s}'; }
           jq -n --arg v "${GITHUB_REF_NAME#v}" \
             --argjson windows "$(entry -windows-x86_64-setup.exe)" \
             --argjson macos "$(entry -macos-universal.app.tar.gz)" \
@@ -621,16 +622,16 @@ jobs:
           files: dist/*
           draft: true
           body: |
-            ## Download Libroxel
+            ## Download PlayLibre
 
-            - **Windows:** `libroxel-…-windows-x86_64-setup.exe`, open it and follow the setup wizard
-            - **Mac** (Apple silicon and Intel): `libroxel-…-macos-universal.dmg`, open it and drag Libroxel onto Applications, then right-click it there and choose Open the first time
-            - **Linux:** `libroxel-…-linux-x86_64.AppImage` for any Linux (make it executable and open it), or `libroxel-…-linux-x86_64.deb` for Debian and Ubuntu
-            - **ARM computers:** `libroxel-…-windows-aarch64-setup.exe` for Windows on ARM (Snapdragon laptops), and `libroxel-…-linux-aarch64.AppImage` or `.deb` for ARM Linux (a Raspberry Pi 4 or 5 with 64-bit Raspberry Pi OS, for one)
+            - **Windows:** `playlibre-…-windows-x86_64-setup.exe`, open it and follow the setup wizard
+            - **Mac** (Apple silicon and Intel): `playlibre-…-macos-universal.dmg`, open it and drag PlayLibre onto Applications, then right-click it there and choose Open the first time
+            - **Linux:** `playlibre-…-linux-x86_64.AppImage` for any Linux (make it executable and open it), or `playlibre-…-linux-x86_64.deb` for Debian and Ubuntu
+            - **ARM computers:** `playlibre-…-windows-aarch64-setup.exe` for Windows on ARM (Snapdragon laptops), and `playlibre-…-linux-aarch64.AppImage` or `.deb` for ARM Linux (a Raspberry Pi 4 or 5 with 64-bit Raspberry Pi OS, for one)
 
-            After installing, typing `libroxel` in a new terminal opens it.
+            After installing, typing `playlibre` in a new terminal opens it.
 
-            The other files (`libroxel-hub-linux-x86_64`, `setup-hub.sh`, `update-hub.sh`) are for the Hub's server.
+            The other files (`playlibre-hub-linux-x86_64`, `setup-hub.sh`, `update-hub.sh`) are for the Hub's server.
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
       - name: Publish

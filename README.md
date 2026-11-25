@@ -1,8 +1,8 @@
-# Libroxel
+# PlayLibre
 
 **Build voxel worlds together, and script them in Luau.**
 
-Libroxel is an open-source, multiplayer game-creation platform. Worlds are
+PlayLibre is an open-source, multiplayer game-creation platform. Worlds are
 built from blocks and parts, behaviour is written in [Luau](https://luau.org),
 and the engine runs on [Bevy](https://bevy.org).
 
@@ -10,9 +10,9 @@ and the engine runs on [Bevy](https://bevy.org).
 > scripts and press Play to test it with a character, or host it and have
 > friends join from their own computers. Nothing is stable yet.
 
-![The Libroxel editor](docs/editor.png)
+![The PlayLibre editor](docs/editor.png)
 
-![Playing a game in Libroxel](docs/playing.png)
+![Playing a game in PlayLibre](docs/playing.png)
 
 ## Getting started
 
@@ -31,8 +31,8 @@ On Debian or Ubuntu the equivalent is
 Then:
 
 ```sh
-cargo run -p libroxel                             # the Libroxel app, opening on its home screen
-cargo run -p libroxel-proto -- my_game.lrx        # play a saved game without the editor
+cargo run -p playlibre                             # the PlayLibre app, opening on its home screen
+cargo run -p playlibre-proto -- my_game.lrx        # play a saved game without the editor
 cargo test --workspace                            # every test, no GPU needed
 ```
 
@@ -163,16 +163,16 @@ The first build compiles Bevy and takes a while. After that it is quick.
   computer runs its own player's `LocalScript`s, moves its own character
   straight away (telling the host where it went), and shows the rest of the
   world as the host sends it. The bar along the top shows how many have joined. To
-  host without a window, run `libroxel server mygame.lrx`, which prints a
+  host without a window, run `playlibre server mygame.lrx`, which prints a
   join code. Your player identity (a key made on first use) lives in
-  `~/.config/libroxel/identity.key`.
+  `~/.config/playlibre/identity.key`.
 - **Publishing:** **File → Publish…** puts the open game on the Hub with a
   title and a few words about it. It then shows on the home screen's
   **🌍 Online** tab under **Published games** for everyone,
   with **▶ Play** (play it on your own, no host needed) and **🌐 With
   friends** (host it so friends can join). Publishing the same file again
   puts out a new version; this computer keeps the secret that allows that
-  in `~/.config/libroxel/published.json`. Published games stay up when
+  in `~/.config/playlibre/published.json`. Published games stay up when
   you're away.
 - **Accounts:** the home screen's **👤 Avatar** tab has **Your account**:
   claim a name on the Hub (3 to 20 letters, digits or underscores, one per
@@ -199,12 +199,12 @@ The first build compiles Bevy and takes a while. After that it is quick.
   `identity.key`), and a **Switch to …** button swaps between them, no
   password needed.
 - **Two-step sign-in and alerts:** with a password set, **Set up two-step
-  sign-in** adds Libroxel to an authenticator app (Google Authenticator,
+  sign-in** adds PlayLibre to an authenticator app (Google Authenticator,
   Authy, 1Password…); signing in elsewhere then also needs its 6-digit code,
   and each code works once. The account page lists recent sign-ins on other
   computers and where they came from. New accounts work out a small puzzle
   on the player's computer first (a bot check), and whoever runs the Hub
-  hands out verified badges (`libroxel-hub verify <name>`).
+  hands out verified badges (`playlibre-hub verify <name>`).
 - **Names no one else can take:** a name stays yours on that Hub, whatever
   the case (`Admin`, `admin` and `ADMIN` are one name). Every account also
   gets a number in the order it joined, starting at 0, and profile links
@@ -226,9 +226,9 @@ The first build compiles Bevy and takes a while. After that it is quick.
   `player:Kick(reason)`; a removed player can't rejoin that game. Every
   published game and catalog hat has a **⚑** to report it. Once three
   different players report something, the Hub stops listing it until
-  whoever runs the Hub looks: `libroxel-hub reports` lists reports,
-  `libroxel-hub clear game <id>` lists one again, and
-  `libroxel-hub remove game <id>` takes it down (`item` for hats).
+  whoever runs the Hub looks: `playlibre-hub reports` lists reports,
+  `playlibre-hub clear game <id>` lists one again, and
+  `playlibre-hub remove game <id>` takes it down (`item` for hats).
 - **Editing together:** **Test > Edit together → Share this game**
   lets others edit the game you have open, live, while you work on it. Send
   them the code from **📋 Copy edit code** (or, on your own network, your
@@ -246,9 +246,9 @@ The first build compiles Bevy and takes a while. After that it is quick.
 - **Finding games:** **🌍 Browse** lists the games being hosted right now,
   community servers first, and joins one with a click. There is one Hub
   and everyone uses it; the app can't run its own. (For trying a Hub out
-  on one computer, such as the demo Hub, `LIBROXEL_HUB=host:port` points
+  on one computer, such as the demo Hub, `PLAYLIBRE_HUB=host:port` points
   the app at it.)
-- **One app, one home screen:** the build is a single `libroxel` program
+- **One app, one home screen:** the build is a single `playlibre` program
   (`cargo run` starts it) and it opens on a home screen with tabs.
   **▶ Play** shows your games as tiles (the starter games and every saved game):
   pick one and press Play, or double-click it, or **Play with friends** to
@@ -260,13 +260,13 @@ The first build compiles Bevy and takes a while. After that it is quick.
   hidden until you press Show IP). **👤 Avatar** picks your skin, shirt and
   trouser colours and a hat (a cap, a tall hat, a crown, a halo or an
   antenna); you look like that in every game you play, host or join, and
-  other players see it. The Libroxel mark at the left of the top bar is
+  other players see it. The PlayLibre mark at the left of the top bar is
   Home; Search and who you play as (your account's name, which can't be
   typed over) sit at the right. Games
   played from the home screen show only the game: **⏹ Leave game** (or Esc)
   goes back, and **File → Main menu** does from the editor. (For scripts
-  and servers without a screen, `libroxel server <game.lrx>` and
-  `libroxel help` still work.)
+  and servers without a screen, `playlibre server <game.lrx>` and
+  `playlibre help` still work.)
 - **Home and Friends:** the home screen opens on **Home**: your friends
   along the top (a green dot when they're online, blue with the game's name
   when they're in one; click one in a game to join them), then every game
@@ -279,15 +279,15 @@ The first build compiles Bevy and takes a while. After that it is quick.
   people by name, sends and answers friend requests, and lists every
   friend with where they are. Friends need a name claimed on the Avatar
   tab. Try it all on one computer with
-  `cargo run -p libroxel --example hub_demo` and
-  `LIBROXEL_HUB=127.0.0.1:7431 cargo run -p libroxel`, which fills a Hub
+  `cargo run -p playlibre --example hub_demo` and
+  `PLAYLIBRE_HUB=127.0.0.1:7431 cargo run -p playlibre`, which fills a Hub
   with pretend friends and servers.
 - **How the Hub and game servers split the work:** the Hub is one small
   program (axum and SQLite) that only keeps lists: accounts, friends and
   requests, who's online and in which server, and the live servers of each
   game. It never runs a game or carries its traffic. Games run on whoever
   hosts them, a player pressing Host or a server left running with
-  `libroxel server game.lrx --game-id <id>`, and each host tells the Hub
+  `playlibre server game.lrx --game-id <id>`, and each host tells the Hub
   every 15 seconds which game it runs, how many play and its join code;
   one that stops drops off. Players connect straight to the host, and the
   app pings each host itself for the ping column. Everything a player
@@ -296,12 +296,12 @@ The first build compiles Bevy and takes a while. After that it is quick.
   your friends are. Hosts sign their listing too, so server lists show
   "hosted by" with the account the Hub checked, whatever the server is
   called. Accounts, passwords and friends live in the Hub's SQLite file
-  (`hub.sqlite` on the Hub's server, or `--data` for `libroxel-hub`),
+  (`hub.sqlite` on the Hub's server, or `--data` for `playlibre-hub`),
   so they outlast a restart.
 - **One official Hub:** every copy of the app uses `https://hub.playlibre.net`
-  (`OFFICIAL_HUB` in `crates/libroxel-hub/src/lib.rs`) for accounts, friends, publishing
+  (`OFFICIAL_HUB` in `crates/playlibre-hub/src/lib.rs`) for accounts, friends, publishing
   and server lists; the app never runs a Hub of its own. Whoever runs it
-  owns it: only its owners list Official servers, and `libroxel-hub ban`, `owners` and
+  owns it: only its owners list Official servers, and `playlibre-hub ban`, `owners` and
   `accounts` look after it from its own computer.
   [docs/OFFICIAL_HUB.md](docs/OFFICIAL_HUB.md) covers running one with
   HTTPS. Forks set their own.
@@ -337,7 +337,7 @@ The first build compiles Bevy and takes a while. After that it is quick.
     line as it thinks, beside a bar for who is winning.
   - **Checkers**, **Connect 4** and **Kings in the Corner** (the card
     game, for 2 to 4 players) are table games made the same way. They
-    share one table server and one screen (`crates/libroxel/src/table_games/`):
+    share one table server and one screen (`crates/playlibre/src/table_games/`):
     a menu with a big **Play** button against an Easy, Medium or Hard
     computer player, or **Find a game** and **Play** buttons to sit down
     with people in the server. Wins are saved with the game's data.
@@ -349,22 +349,22 @@ The first build compiles Bevy and takes a while. After that it is quick.
   scripts and place files work the same. The help shown for each class is
   translated too, with the code in it left as it is. Chinese uses the computer's own Chinese font
   (Microsoft YaHei, PingFang, Noto Sans CJK or WenQuanYi); without one, it
-  can't be picked. Translations live in `crates/libroxel/assets/lang/`,
+  can't be picked. Translations live in `crates/playlibre/assets/lang/`,
   one file per language, keyed by the English text.
 - **Screen readers:** on Windows, macOS and Linux, the home screen, menus
   and editor panels are read out by Narrator, VoiceOver or Orca, and Tab
   moves between buttons. The 3D world itself isn't described yet, and
   phones and tablets don't support screen readers yet.
 - **Undo/redo** with Ctrl+Z and Ctrl+Y. **Save** with Ctrl+S. Games are
-  saved as `.lrx` files in `~/Projects/libroxel-games/` by default.
+  saved as `.lrx` files in `~/Projects/playlibre-games/` by default.
 - **Unsaved work is kept:** while a game has changes that aren't saved, a
-  copy is written every minute (to `recovery/` in Libroxel's settings
-  folder, `~/.config/libroxel/` on Linux and macOS). If the app crashes or
+  copy is written every minute (to `recovery/` in PlayLibre's settings
+  folder, `~/.config/playlibre/` on Linux and macOS). If the app crashes or
   closes first, the next start offers to open the copy. Saving deletes it.
 
 ## Bringing in games from the reference editor
 
-Libroxel opens your own files from the reference editor: places (`.rbxl` and `.rbxlx`)
+PlayLibre opens your own files from the reference editor: places (`.rbxl` and `.rbxlx`)
 and models (`.rbxm` and `.rbxmx`), saved in either the binary or the XML format.
 
 - **Open a place:** use File > Open, type its path on the Create tab, put it
@@ -380,9 +380,9 @@ is never changed. The Output panel lists what came across and what didn't.
 | Parts, spawn locations, seats | Position and rotation, size, colour, material, transparency, anchoring, collisions, shape. Wedge parts are wedges and corner wedges get their own model. |
 | Unions | Their real carved shape, read from the file. A published union keeps its drawn shape online, so it shows its collision shape instead, which is close. |
 | Mesh parts and special meshes | The mesh, when you put the mesh file in an `assets` folder (see below). Special meshes set to a sphere, cylinder or wedge change their part's shape. |
-| Terrain | Every voxel of the place's terrain, as Libroxel terrain. Each 4-stud voxel becomes 4 × 4 × 4 one-stud cells, and a half-full voxel at the surface fills its bottom half. |
+| Terrain | Every voxel of the place's terrain, as PlayLibre terrain. Each 4-stud voxel becomes 4 × 4 × 4 one-stud cells, and a half-full voxel at the surface fills its bottom half. |
 | Scripts | Scripts, local scripts and module scripts, with their source. A script set to run on the client becomes a local script. |
-| Containers | Models (with their primary part), actors, folders, every service Libroxel has, and StarterPlayerScripts and StarterCharacterScripts. SoundService's sounds are kept in ReplicatedStorage. |
+| Containers | Models (with their primary part), actors, folders, every service PlayLibre has, and StarterPlayerScripts and StarterCharacterScripts. SoundService's sounds are kept in ReplicatedStorage. |
 | GUIs | Screen, billboard and surface GUIs, frames, labels, buttons, text boxes, images, scrolling frames, and the UI layout, corner, stroke, padding, gradient and constraint objects. Viewport frames, canvas groups and video frames show as plain frames. |
 | Look | Lighting (clock time, ambient, fog), sky, atmosphere, bloom, colour correction, sun rays, lights, particles, fire, smoke, sparkles, beams, trails, highlights, decals and textures. |
 | Physics | Welds, motors, weld constraints, hinges, springs, ropes, rods, prismatic and ball-socket joints, attachments, and the body movers and constraint movers. |
@@ -392,7 +392,7 @@ is never changed. The Output panel lists what came across and what didn't.
 
 A file from the reference editor names its meshes, pictures and sounds by asset
 number, such as `rbxassetid://1234567`, and the files themselves live online.
-Libroxel never downloads them. Put your own copies in a folder called `assets`
+PlayLibre never downloads them. Put your own copies in a folder called `assets`
 next to the place file (or in the games folder), named by their number:
 
 ```
@@ -410,8 +410,8 @@ as before: a mesh part as a box, a picture as nothing, a sound silent.
 | --- | --- |
 | Shapes | Unions, mesh parts and trusses collide with their real shape (a union's own collision pieces, a model's separate pieces, a truss as a solid box). Union and subtraction made by a script while playing (`UnionAsync`, `SubtractAsync`) can't carve: a union becomes one part over all of them and a subtraction keeps the part. A special mesh's file is stretched to its part's size, ignoring its `Scale`. |
 | Terrain | Terrain saved in Studio's newer separate-asset format (expanded terrain) can't be read: the open-source readers leave that data out, so it's left out and the Output panel says so. Terrain is drawn in 1-stud cells, smoothed, rather than the reference platform's 4-stud voxels; `ReadVoxels` and `WriteVoxels` work in the reference platform's units. |
-| Animations | Animations kept online (`rbxassetid://`) can't be fetched, so their tracks play silently for a second (scripts that play, wait for and stop them still run). Libroxel's built-in `libroxel://` ones move the character. |
-| Other classes | API classes Libroxel has no engine side for (animation controllers, handle adornments, localization tables and so on) keep their class name and every property, so scripts read and set them as on the reference platform. Dialogs show a "Talk" prompt and their conversation. |
+| Animations | Animations kept online (`rbxassetid://`) can't be fetched, so their tracks play silently for a second (scripts that play, wait for and stop them still run). PlayLibre's built-in `libroxel://` ones move the character. |
+| Other classes | API classes PlayLibre has no engine side for (animation controllers, handle adornments, localization tables and so on) keep their class name and every property, so scripts read and set them as on the reference platform. Dialogs show a "Talk" prompt and their conversation. |
 | Online things | Purchases, badges, teleports, other players' avatars and `InsertService:LoadAsset` need the reference platform's servers, so they answer as if nothing was bought or found. |
 | Sound | Sounds play from the `assets` folder; effects such as reverb and equalizers are kept but not heard. |
 
@@ -419,14 +419,14 @@ as before: a mesh part as a box, a picture as nothing, a sound silent.
 
 | Crate | What it is |
 | --- | --- |
-| [`libroxel-instance`](crates/libroxel-instance) | The instance tree: classes, typed properties, parenting, destroy, a change journal, and the `.lrx` file format. No engine dependencies. |
-| [`libroxel-hub`](crates/libroxel-hub) | The Hub: a small self-hostable server (axum and SQLite) that lists live games per game, accounts, friends and who's online, and the client and background announcer the app uses. |
-| [`libroxel-net`](crates/libroxel-net) | Player identity (a keypair) and join codes. Carries a hosted game between computers over iroh, peer to peer with a relay fallback. |
-| [`libroxel-script`](crates/libroxel-script) | The sandboxed Luau runtime (via `mlua`) with a thread scheduler. Every name scripts can see lives in [`names.rs`](crates/libroxel-script/src/names.rs). |
-| [`libroxel-rbx`](crates/libroxel-rbx) | Opens place and model files saved by the reference editor (`.rbxl`, `.rbxlx`, `.rbxm`, `.rbxmx`) as instance trees, using the open-source rbx-dom readers. |
-| [`libroxel-engine`](crates/libroxel-engine) | Play sessions: physics, the player character, touch events, respawning, and the Bevy integration (rendering and cameras). |
-| [`libroxel`](crates/libroxel) | The Libroxel app: the home screen (Play, Online, Create, Host), the editor, plus `libroxel server`. |
-| [`libroxel-proto`](crates/libroxel-proto) | A minimal player that runs a saved game or a single script. |
+| [`playlibre-instance`](crates/playlibre-instance) | The instance tree: classes, typed properties, parenting, destroy, a change journal, and the `.lrx` file format. No engine dependencies. |
+| [`playlibre-hub`](crates/playlibre-hub) | The Hub: a small self-hostable server (axum and SQLite) that lists live games per game, accounts, friends and who's online, and the client and background announcer the app uses. |
+| [`playlibre-net`](crates/playlibre-net) | Player identity (a keypair) and join codes. Carries a hosted game between computers over iroh, peer to peer with a relay fallback. |
+| [`playlibre-script`](crates/playlibre-script) | The sandboxed Luau runtime (via `mlua`) with a thread scheduler. Every name scripts can see lives in [`names.rs`](crates/playlibre-script/src/names.rs). |
+| [`playlibre-rbx`](crates/playlibre-rbx) | Opens place and model files saved by the reference editor (`.rbxl`, `.rbxlx`, `.rbxm`, `.rbxmx`) as instance trees, using the open-source rbx-dom readers. |
+| [`playlibre-engine`](crates/playlibre-engine) | Play sessions: physics, the player character, touch events, respawning, and the Bevy integration (rendering and cameras). |
+| [`playlibre`](crates/playlibre) | The PlayLibre app: the home screen (Play, Online, Create, Host), the editor, plus `playlibre server`. |
+| [`playlibre-proto`](crates/playlibre-proto) | A minimal player that runs a saved game or a single script. |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit together.
 
@@ -499,7 +499,7 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
 - **Images:** `ImageLabel` and `ImageButton` (which has `MouseButton1Click`
   and `Activated` like a text button) show the PNG named by `Image`. A plain
   name is looked for beside the game file, in an `images` folder beside it,
-  and in `~/Projects/libroxel-games/images`. Built in are `libroxel://coin`,
+  and in `~/Projects/playlibre-games/images`. Built in are `libroxel://coin`,
   `smile`, `star`, `arrow` and `checker`, and the table games' pictures:
   chess pieces (`chess-wk` and so on, and wooden ones, `chess-wood-wk`),
   draughts pieces (`draughts-white`, `draughts-wood-white-king` and so on),
@@ -531,7 +531,7 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   starting over when it ends if `Looped`. `Play` and `Stop` go back to the
   start, `Pause` and `Resume` don't, and `Ended` fires when it finishes.
   `libroxel://coin`, `jump`, `boom`, `click`, `splash`, `chime` and `hum`
-  are made by Libroxel, and so are four sets of game sounds, `wood`, `glass`,
+  are made by PlayLibre, and so are four sets of game sounds, `wood`, `glass`,
   `retro` and `digital`, each with `move`, `capture`, `check`, `notify`,
   `victory`, `defeat`, `draw`, `lowtime`, `confirm`, `challenge` and
   `message` (`libroxel://glass/victory`), and `libroxel://table/drop`, `bad`,
@@ -751,7 +751,7 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   leaderboard.
 - **Characters:** each player's character is a `Model` named after them with a
   blocky body (`Head`, `Torso`, `LeftArm`, `RightArm`, `LeftLeg`, `RightLeg`
-  and two eyes, in Libroxel's own colours with a different shirt per player)
+  and two eyes, in PlayLibre's own colours with a different shirt per player)
   whose arms and legs swing as it walks, sit in seats and raise a held tool.
   Inside is an invisible `HumanoidRootPart` (the collision box) and a `Humanoid` (`Health`, `MaxHealth`, `WalkSpeed`,
   `JumpPower`, `TakeDamage(amount)` and the `Died` and `HealthChanged(health)`
@@ -778,13 +778,13 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   thread and `task.cancel` stops it; `AncestryChanged` fires; `IsA` knows
   families such as `BasePart`, `GuiButton`, `ValueBase` and `Light`;
   `WedgePart`, `MeshPart`, `TrussPart` and unions are made as parts. For
-  members libroxel has no engine side for yet (humanoid states, `Region3`,
+  members playlibre has no engine side for yet (humanoid states, `Region3`,
   `RichText`, `Font`, surfaces, `BindToRenderStep`, ordered data stores,
   `MemoryStoreService`, `TextChatService`, `shared`, about 80 enums, and
   classes like `Sky`, `Beam` or `UIGradient`), a lenient layer
-  (`crates/libroxel-script/src/lenient.luau`) gives sensible defaults,
+  (`crates/playlibre-script/src/lenient.luau`) gives sensible defaults,
   remembers what scripts set while the game runs, and does the nearest
-  thing libroxel can, so more existing scripts run unchanged.
+  thing playlibre can, so more existing scripts run unchanged.
 - **Seats:** a character that touches a `Seat` or `VehicleSeat` sits in it
   and moves with it; jumping gets up. `seat.Occupant` is the humanoid in it,
   `seat:Sit(humanoid)` sits one down, `Disabled` keeps everyone off, and the
@@ -894,7 +894,7 @@ first, especially the **clean-room rules**, and follow our
 
 ## License
 
-Libroxel is dual-licensed under either of
+PlayLibre is dual-licensed under either of
 
 - Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
 - MIT License ([LICENSE-MIT](LICENSE-MIT))
@@ -908,17 +908,17 @@ conditions.
 
 ### Fonts and icons
 
-Libroxel's interface uses fonts and icons under their own open licences,
+PlayLibre's interface uses fonts and icons under their own open licences,
 included with the program:
 
 - [Selawik](https://github.com/microsoft/Selawik) for headings and text, with
   [Atkinson Hyperlegible](https://fonts.google.com/specimen/Atkinson+Hyperlegible)
   filling in characters it lacks, and [IBM Plex Mono](https://github.com/IBM/plex)
   for code, all under the SIL Open Font License 1.1 (see
-  `crates/libroxel/assets/fonts/` and `web/fonts/`).
+  `crates/playlibre/assets/fonts/` and `web/fonts/`).
 - [Phosphor](https://phosphoricons.com) icons, under the MIT License, through the
   `egui-phosphor` crate.
-- Everything else is Libroxel's own, under the same MIT or Apache 2.0
+- Everything else is PlayLibre's own, under the same MIT or Apache 2.0
   license: the chess, checkers and Connect 4 pieces, the cards and table
   cloth are drawn by `packaging/art/game_art.py`, and every game sound is
-  made in code (`crates/libroxel-engine/src/sounds.rs`).
+  made in code (`crates/playlibre-engine/src/sounds.rs`).

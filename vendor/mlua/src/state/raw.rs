@@ -71,7 +71,7 @@ impl Drop for RawLua {
 
             #[cfg(feature = "luau")]
             {
-                // Libroxel: no other thread may switch the interrupt on now.
+                // PlayLibre: no other thread may switch the interrupt on now.
                 if let Ok(mut arm) = (*self.extra.get()).interrupt_arm.lock() {
                     *arm = 0;
                 }

@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Libroxel"
+rootProject.name = "PlayLibre"
 include(":app")

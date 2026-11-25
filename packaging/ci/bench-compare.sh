@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # bench-compare.sh <base commit>: builds the benchmarks for the base commit
 # and this one, runs them in turn on this computer, and fails when this
-# commit is much slower (see crates/libroxel-tests/src/bin/bench.rs).
+# commit is much slower (see crates/playlibre-tests/src/bin/bench.rs).
 #
 # The base is benchmarked with this commit's benchmark code, so a new or
 # changed workload is timed the same way on both sides. If that code
@@ -14,17 +14,17 @@ out="$(mktemp -d)"
 summary="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
 target="$PWD/target"
 # Both sides play this commit's corpus.
-export LIBROXEL_CORPUS="$PWD/crates/libroxel-tests/corpus"
+export PLAYLIBRE_CORPUS="$PWD/crates/playlibre-tests/corpus"
 
-cargo build --locked -p libroxel-tests --bin bench
+cargo build --locked -p playlibre-tests --bin bench
 cp "$target/debug/bench" "$out/bench-new"
 
 git fetch --no-tags --depth=1 origin "$base"
 rm -rf "$out/base"
 git worktree add --detach "$out/base" "$base"
-rm -rf "$out/base/crates/libroxel-tests"
-cp -r crates/libroxel-tests "$out/base/crates/libroxel-tests"
-if ! (cd "$out/base" && CARGO_TARGET_DIR="$target" cargo build -p libroxel-tests --bin bench); then
+rm -rf "$out/base/crates/playlibre-tests"
+cp -r crates/playlibre-tests "$out/base/crates/playlibre-tests"
+if ! (cd "$out/base" && CARGO_TARGET_DIR="$target" cargo build -p playlibre-tests --bin bench); then
   echo "::notice::The benchmarks don't build against ${base::7}, so there is nothing to compare with."
   echo "Benchmarks: no comparison (they don't build against ${base::7})." >> "$summary"
   "$out/bench-new" run --repeat 1

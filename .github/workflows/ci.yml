@@ -12,9 +12,9 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   # Launch checks must not update the app, ping the Hub or set up the
-  # `libroxel` command on the runner.
-  LIBROXEL_NO_UPDATE: "1"
-  LIBROXEL_NO_COMMAND: "1"
+  # `playlibre` command on the runner.
+  PLAYLIBRE_NO_UPDATE: "1"
+  PLAYLIBRE_NO_COMMAND: "1"
 
 jobs:
   check:
@@ -34,12 +34,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      # Includes the golden corpus (crates/libroxel-tests) and a short soak.
+      # Includes the golden corpus (crates/playlibre-tests) and a short soak.
       - run: cargo test --workspace
       - name: Build the app
-        run: cargo build --locked -p libroxel
+        run: cargo build --locked -p playlibre
       - name: Launch check
-        run: packaging/ci/smoke.sh target/debug/libroxel window
+        run: packaging/ci/smoke.sh target/debug/playlibre window
 
   check-other-platforms:
     name: check (${{ matrix.os }})
@@ -55,15 +55,15 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --locked -p libroxel --all-targets -- -D warnings
+      - run: cargo clippy --locked -p playlibre --all-targets -- -D warnings
       # Scripts run through a JIT that differs per platform, so the corpus
       # runs everywhere.
-      - run: cargo test --locked -p libroxel-tests --test corpus
+      - run: cargo test --locked -p playlibre-tests --test corpus
       - name: Build the app
-        run: cargo build --locked -p libroxel
+        run: cargo build --locked -p playlibre
       - name: Launch check
         shell: bash
-        run: packaging/ci/smoke.sh target/debug/libroxel${{ runner.os == 'Windows' && '.exe' || '' }} server
+        run: packaging/ci/smoke.sh target/debug/playlibre${{ runner.os == 'Windows' && '.exe' || '' }} server
 
   android:
     # Both Android libraries build and would load on Android 8 (API 26):
@@ -102,11 +102,11 @@ jobs:
           env="${{ matrix.target }}"; env="${env//-/_}"
           export "CC_$env=$ndk/bin/${{ matrix.clang }}26-clang" "CXX_$env=$ndk/bin/${{ matrix.clang }}26-clang++" "AR_$env=$ndk/bin/llvm-ar"
           export "CARGO_TARGET_${env^^}_LINKER=$ndk/bin/${{ matrix.clang }}26-clang"
-          cargo rustc --locked --profile ci -p libroxel --lib --crate-type cdylib --target ${{ matrix.target }} \
+          cargo rustc --locked --profile ci -p playlibre --lib --crate-type cdylib --target ${{ matrix.target }} \
             -- -C link-arg=-Wl,-z,max-page-size=16384
       - name: Check the library
         run: |
-          packaging/ci/check-android-lib.sh target/${{ matrix.target }}/ci/liblibroxel.so \
+          packaging/ci/check-android-lib.sh target/${{ matrix.target }}/ci/libplaylibre.so \
             ${{ matrix.machine }} ${{ matrix.class }} ${{ matrix.target }}
 
   bench:

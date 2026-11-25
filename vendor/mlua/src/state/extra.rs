@@ -90,10 +90,10 @@ pub(crate) struct ExtraData {
     pub(super) warn_callback: Option<crate::types::WarnCallback>,
     #[cfg(feature = "luau")]
     pub(super) interrupt_callback: Option<crate::types::InterruptCallback>,
-    // Libroxel: while set and false, the interrupt callback is skipped.
+    // PlayLibre: while set and false, the interrupt callback is skipped.
     #[cfg(feature = "luau")]
     pub(super) interrupt_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    // Libroxel: where another thread may switch the interrupt on (the
+    // PlayLibre: where another thread may switch the interrupt on (the
     // address of the VM's callbacks, or 0 once the VM is closing).
     #[cfg(feature = "luau")]
     pub(crate) interrupt_arm: std::sync::Arc<std::sync::Mutex<usize>>,

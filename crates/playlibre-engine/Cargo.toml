@@ -1,0 +1,27 @@
+[package]
+name = "playlibre-engine"
+description = "PlayLibre's game loop: play sessions, physics, characters, and the Bevy integration."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+rbx_mesh.workspace = true
+playlibre-instance.workspace = true
+playlibre-avatar.workspace = true
+playlibre-script.workspace = true
+bevy.workspace = true
+rapier3d.workspace = true
+# Compresses long network messages (pure Rust).
+flate2 = "1"
+data-encoding = "2"
+# Encrypts every connection (the Noise protocol, pure Rust).
+snow = "0.10"
+# Random edit passwords.
+getrandom = "0.3"
+
+[lints]
+workspace = true

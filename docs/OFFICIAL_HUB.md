@@ -1,12 +1,12 @@
 # Running the official Hub
 
-Libroxel works best with **one Hub everyone uses**: one place for accounts,
+PlayLibre works best with **one Hub everyone uses**: one place for accounts,
 friends, published games, the catalog and server lists. Whoever runs that Hub
 owns it. A fork runs its own and points its copies of the app at it.
 
-Libroxel's official Hub is `https://hub.playlibre.net` (`OFFICIAL_HUB` in
-`crates/libroxel-hub/src/lib.rs`). An app built with an empty
-`LIBROXEL_OFFICIAL_HUB=` runs a small Hub of its own instead.
+PlayLibre's official Hub is `https://hub.playlibre.net` (`OFFICIAL_HUB` in
+`crates/playlibre-hub/src/lib.rs`). An app built with an empty
+`PLAYLIBRE_OFFICIAL_HUB=` runs a small Hub of its own instead.
 
 ## 1. A server and a domain
 
@@ -20,8 +20,8 @@ The server builds the Hub itself from the repository's `main` branch, so a
 change only has to be pushed, with no release to wait for. On the server:
 
 ```sh
-git clone https://github.com/<owner>/<repo>.git ~/libroxel
-sudo bash ~/libroxel/packaging/hub/setup-hub.sh --repo <owner>/<repo> --domain hub.playlibre.net --from-source
+git clone https://github.com/<owner>/<repo>.git ~/playlibre
+sudo bash ~/playlibre/packaging/hub/setup-hub.sh --repo <owner>/<repo> --domain hub.playlibre.net --from-source
 ```
 
 The first build takes a few minutes (it installs Rust for your user the
@@ -29,29 +29,29 @@ first time). The script installs the Hub as a service that starts on boot
 and restarts whenever it stops, puts Caddy in front of it for HTTPS (each
 site has its own file in `/etc/caddy/sites`, so a website can sit beside
 it), opens only SSH, HTTP and HTTPS in the firewall, and backs the database
-up every night (the last 14 are kept in `/var/lib/libroxel/backups`).
+up every night (the last 14 are kept in `/var/lib/playlibre/backups`).
 
 For a private repository, add `--token <a token that can read it>`.
 
 ### Updates
 
 Every 10 minutes the server looks at `main` on GitHub. When it has changed,
-it builds it in `~/libroxel`, backs the database up
+it builds it in `~/playlibre`, backs the database up
 (`backups/before-main-<commit>.sqlite`), sets itself up again with that
 version's own `setup-hub.sh`, and checks the Hub answers. If it doesn't
 within 30 seconds, the old Hub goes back and that version is tried again an hour later.
-`~/libroxel` always matches `main`, so don't keep changes of your own there.
+`~/playlibre` always matches `main`, so don't keep changes of your own there.
 
-- Update now: `sudo libroxel-hub-update --now`
-- What happened: `journalctl -u libroxel-hub-update -n 30`
-- Settings (domain, repository, token, how it updates): `/etc/libroxel/hub.conf`
+- Update now: `sudo playlibre-hub-update --now`
+- What happened: `journalctl -u playlibre-hub-update -n 30`
+- Settings (domain, repository, token, how it updates): `/etc/playlibre/hub.conf`
 
 #### Or from GitHub releases
 
 To install only releases instead (built by GitHub, checked against each
 release's `SHA256SUMS.txt`, nothing to build on the server; see
-[RELEASING.md](RELEASING.md)), run `sudo libroxel-hub-update --from-releases`.
-`sudo libroxel-hub-update --from-source` switches back. A fresh server can
+[RELEASING.md](RELEASING.md)), run `sudo playlibre-hub-update --from-releases`.
+`sudo playlibre-hub-update --from-source` switches back. A fresh server can
 also start from a release:
 
 ```sh
@@ -75,19 +75,19 @@ provider; [Resend](https://resend.com) is free for 3,000 mails a month:
    land in inboxes: `TXT` on `_dmarc.playlibre.net` with
    `v=DMARC1; p=none;`. Wait until Resend says the domain is verified.
 3. Open **API Keys → Create API key** (sending access is enough).
-4. On the server, put the key in `/etc/libroxel/mail.conf`:
+4. On the server, put the key in `/etc/playlibre/mail.conf`:
 
    ```sh
-   sudo tee /etc/libroxel/mail.conf >/dev/null <<'EOF'
-   LIBROXEL_SMTP_HOST=smtp.resend.com
-   LIBROXEL_SMTP_PORT=587
-   LIBROXEL_SMTP_USER=resend
-   LIBROXEL_SMTP_PASSWORD=re_your_key_here
-   LIBROXEL_MAIL_FROM=PlayLibre <no-reply@playlibre.net>
+   sudo tee /etc/playlibre/mail.conf >/dev/null <<'EOF'
+   PLAYLIBRE_SMTP_HOST=smtp.resend.com
+   PLAYLIBRE_SMTP_PORT=587
+   PLAYLIBRE_SMTP_USER=resend
+   PLAYLIBRE_SMTP_PASSWORD=re_your_key_here
+   PLAYLIBRE_MAIL_FROM=PlayLibre <no-reply@playlibre.net>
    EOF
-   sudo chmod 600 /etc/libroxel/mail.conf
-   sudo systemctl restart libroxel-hub
-   journalctl -u libroxel-hub -n 5
+   sudo chmod 600 /etc/playlibre/mail.conf
+   sudo systemctl restart playlibre-hub
+   journalctl -u playlibre-hub -n 5
    ```
 
    The log says `Mailing email codes through smtp.resend.com:587`. Any
@@ -99,25 +99,25 @@ provider; [Resend](https://resend.com) is free for 3,000 mails a month:
 
 Friends can message each other. Bad words are masked on the Hub. To also
 check every message with OpenAI's free moderation API, add
-`LIBROXEL_MODERATION_KEY=sk-...` to `/etc/libroxel/mail.conf` and restart
-the Hub. Reported messages show in `libroxel-hub reports`;
-`libroxel-hub remove message <id>` deletes one.
+`PLAYLIBRE_MODERATION_KEY=sk-...` to `/etc/playlibre/mail.conf` and restart
+the Hub. Reported messages show in `playlibre-hub reports`;
+`playlibre-hub remove message <id>` deletes one.
 
 ### Game servers
 
 The Hub runs the games players join, on its own computer. Pressing **Play**
 on a game asks the Hub for a server: it puts the player on the fullest of
 its servers for that game that still has room, or starts a new one
-(`libroxel server --game <id>`, the app with no window) and the app waits a
+(`playlibre server --game <id>`, the app with no window) and the app waits a
 few seconds for it. When a server fills up the Hub starts the next one early,
 and each server stops on its own once nobody has been in it for two minutes.
 Players join friends' servers first, and anyone can still press **Host it
 myself** to run a server on their own computer.
 
 The setup script turns this on: it installs the app as
-`/usr/local/bin/libroxel` (built from source, or unpacked from the release),
+`/usr/local/bin/playlibre` (built from source, or unpacked from the release),
 and opens UDP ports 7500 and up so players connect straight to the server
-instead of through a relay. The settings are in `/etc/libroxel/hub.conf`:
+instead of through a relay. The settings are in `/etc/playlibre/hub.conf`:
 
 | Setting | What it does |
 | --- | --- |
@@ -126,11 +126,11 @@ instead of through a relay. The settings are in `/etc/libroxel/hub.conf`:
 | `PLAYERS_PER_SERVER` | players on each one (default 12) |
 | `FIRST_UDP_PORT` | the first UDP port (default 7500; two per server are opened) |
 
-Change them, then `sudo libroxel-hub-update --now` (or run
+Change them, then `sudo playlibre-hub-update --now` (or run
 `setup-hub.sh` again). Updating the Hub doesn't throw anyone out of a game:
 running servers carry on, and new ones use the new version. Each server's
-log is in `/var/lib/libroxel/game-servers/<game>.log`; `journalctl -u
-libroxel-hub` says when servers start and stop. If your provider has a
+log is in `/var/lib/playlibre/game-servers/<game>.log`; `journalctl -u
+playlibre-hub` says when servers start and stop. If your provider has a
 firewall of its own, open the same UDP ports there too.
 
 ## 3. HTTPS and who is calling
@@ -144,17 +144,17 @@ CORS), so a website can show its lists.
 
 ## 4. Point the app at it
 
-Set the address in `crates/libroxel-hub/src/lib.rs` (Libroxel's is
+Set the address in `crates/playlibre-hub/src/lib.rs` (PlayLibre's is
 `https://hub.playlibre.net`):
 
 ```rust
     None => Some("https://hub.playlibre.net"),
 ```
 
-(or build with `LIBROXEL_OFFICIAL_HUB=https://hub.example.com`). Every copy
+(or build with `PLAYLIBRE_OFFICIAL_HUB=https://hub.example.com`). Every copy
 built from then on uses it: Online, accounts, friends, publishing and
-`libroxel server`. Players can still type another Hub into Online, and
-`LIBROXEL_HUB` still picks another one, for testing or a LAN party.
+`playlibre server`. Players can still type another Hub into Online, and
+`PLAYLIBRE_HUB` still picks another one, for testing or a LAN party.
 
 ## 5. Give your account admin powers
 
@@ -162,12 +162,12 @@ Make an account in the app like anyone else, with any name you like. Then, on
 the Hub's computer, make it an owner:
 
 ```sh
-sudo libroxel-admin owner add <your name>
+sudo playlibre-admin owner add <your name>
 ```
 
 That's all it takes. Owners are the Hub's admins: their page says so, servers
 they host show an **Admin** badge, and only their servers list as
-**Official**. Nothing in Libroxel is tied to any particular name.
+**Official**. Nothing in PlayLibre is tied to any particular name.
 
 Names are first come, first served, whatever the case, so make your
 account (for example `Admin`) before you open the Hub to players. Accounts
@@ -177,36 +177,36 @@ so on, and profile links use the number (`/accounts/0` on the Hub,
 nobody uses yet, stop it, delete its database and start it again:
 
 ```sh
-sudo systemctl stop libroxel-hub
-sudo rm /var/lib/libroxel/hub.sqlite
-sudo systemctl start libroxel-hub
+sudo systemctl stop playlibre-hub
+sudo rm /var/lib/playlibre/hub.sqlite
+sudo systemctl start playlibre-hub
 ```
 
 To run an official game server, start it with
-`libroxel server game.lrx --official`. It prints its id. Add that id as an
+`playlibre server game.lrx --official`. It prints its id. Add that id as an
 owner too.
 
 ## Looking after it
 
-All of these run on the Hub's server with the `libroxel-hub` program,
+All of these run on the Hub's server with the `playlibre-hub` program,
 straight on its database, so no one can do them over the network (the
-Libroxel app itself can't run or look after a Hub):
+PlayLibre app itself can't run or look after a Hub):
 
 | Command | What it does |
 | --- | --- |
-| `libroxel-hub accounts [search]` | Lists accounts, with owners, passwords and bans |
-| `libroxel-hub owners` | Lists the owners |
-| `libroxel-hub owner add\|remove <name or id>` | Adds or removes an owner |
-| `libroxel-hub ban <name> [reason]` | Bans an account: it can't sign in, host, publish, share, report or befriend anyone, and its page, games and hats stop being listed |
-| `libroxel-hub unban <name>` | Lets it back |
-| `libroxel-hub verify\|unverify <name>` | Gives or takes away a verified badge |
-| `libroxel-hub rename <name> <new name>` | Renames an account |
-| `libroxel-hub reports` | Lists reported games and hats |
-| `libroxel-hub clear <game\|item> <id>` | Lists a reported one again |
-| `libroxel-hub remove <game\|item> <id>` | Takes one down for good |
+| `playlibre-hub accounts [search]` | Lists accounts, with owners, passwords and bans |
+| `playlibre-hub owners` | Lists the owners |
+| `playlibre-hub owner add\|remove <name or id>` | Adds or removes an owner |
+| `playlibre-hub ban <name> [reason]` | Bans an account: it can't sign in, host, publish, share, report or befriend anyone, and its page, games and hats stop being listed |
+| `playlibre-hub unban <name>` | Lets it back |
+| `playlibre-hub verify\|unverify <name>` | Gives or takes away a verified badge |
+| `playlibre-hub rename <name> <new name>` | Renames an account |
+| `playlibre-hub reports` | Lists reported games and hats |
+| `playlibre-hub clear <game\|item> <id>` | Lists a reported one again |
+| `playlibre-hub remove <game\|item> <id>` | Takes one down for good |
 
-On a server set up with the script, run these as `sudo libroxel-admin …`
-(for example `sudo libroxel-admin owner add <your name>`); elsewhere add
+On a server set up with the script, run these as `sudo playlibre-admin …`
+(for example `sudo playlibre-admin owner add <your name>`); elsewhere add
 `--data <file>` to say where the Hub keeps its data.
 
 Emails, two-step secrets and messages are encrypted with the key in

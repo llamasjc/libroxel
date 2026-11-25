@@ -47,7 +47,7 @@ body:
       label: Error or log
       description: >-
         The crash screen's text, or the end of the log
-        (`~/.config/libroxel/logs/latest.log` on Linux and macOS,
-        `%APPDATA%\Libroxel\logs\latest.log` on Windows). On Android,
+        (`~/.config/playlibre/logs/latest.log` on Linux and macOS,
+        `%APPDATA%\PlayLibre\logs\latest.log` on Windows). On Android,
         `adb logcat` output.
       render: text

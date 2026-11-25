@@ -16,7 +16,7 @@ import androidx.core.view.WindowInsetsControllerCompat;
 import com.google.androidgamesdk.GameActivity;
 
 /**
- * Libroxel's window: the game fills the whole screen, under the notch too,
+ * PlayLibre's window: the game fills the whole screen, under the notch too,
  * and the status and navigation bars stay hidden as in other games. A swipe
  * in from the edge shows them for a moment.
  */
@@ -46,7 +46,7 @@ public class MainActivity extends GameActivity {
     /**
      * Runs the vibration motor at {@code strength}, from 0 (off) to 1, until
      * it is set again, for HapticService:SetMotor in games. Called from
-     * Libroxel's native code.
+     * PlayLibre's native code.
      */
     public void setMotor(float strength) {
         Vibrator vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
@@ -68,7 +68,7 @@ public class MainActivity extends GameActivity {
 
     /**
      * How far in from each edge (left, top, right, bottom, in pixels) the
-     * screen is clear of a notch or camera cut-out, so Libroxel keeps its
+     * screen is clear of a notch or camera cut-out, so PlayLibre keeps its
      * menus and buttons out from under it. Called from native code.
      */
     public int[] getSafeInsets() {

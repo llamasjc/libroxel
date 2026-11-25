@@ -268,7 +268,7 @@ fn read_f64<R: Read>(mut reader: R) -> io::Result<f64> {
 }
 
 /// How many entries a count read from the data may set aside room for
-/// before they are read. Libroxel's change: a damaged count could otherwise
+/// before they are read. PlayLibre's change: a damaged count could otherwise
 /// ask for more memory than exists, and a failed allocation closes the app.
 const EARLY_ROOM: usize = 1024;
 

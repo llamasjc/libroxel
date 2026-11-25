@@ -1,6 +1,6 @@
-# Contributing to Libroxel
+# Contributing to PlayLibre
 
-Thanks for helping build Libroxel! This guide covers how to get set up, how
+Thanks for helping build PlayLibre! This guide covers how to get set up, how
 we work, and the rules that keep the project legally clean.
 
 ## Ground rules
@@ -15,13 +15,13 @@ we work, and the rules that keep the project legally clean.
 
 ## Clean-room rules (please read)
 
-Libroxel's scripting API follows a familiar, widely used style. To keep the
+PlayLibre's scripting API follows a familiar, widely used style. To keep the
 project free of anyone else's copyrights and trade secrets, **every
 contribution must be clean-room**:
 
 1. **Only public behaviour.** You may use publicly available documentation,
    tutorials and your own experience of how an API behaves to decide *what*
-   Libroxel should do.
+   PlayLibre should do.
 2. **Never decompile, disassemble or reverse-engineer** any proprietary game
    client, engine, server or tool, and never use code, symbols or data that
    came from doing so. Don't submit work based on leaked source code either.
@@ -31,9 +31,9 @@ contribution must be clean-room**:
 4. **Never copy assets.** No models, textures, sounds, fonts, icons, logos or
    UI designs from other platforms, even "just as placeholders".
 5. **No third-party trademarks in branding.** Don't use other companies'
-   product names in Libroxel's name, logo, taglines, crate names or marketing.
+   product names in PlayLibre's name, logo, taglines, crate names or marketing.
 6. **Keep API names in the naming layer.** Script-facing names belong in
-   [`crates/libroxel-script/src/names.rs`](crates/libroxel-script/src/names.rs),
+   [`crates/playlibre-script/src/names.rs`](crates/playlibre-script/src/names.rs),
    not scattered through the engine, so the API can be renamed in one place.
    Engine code uses its own internal names (`ClassKind`, `Property`).
 
@@ -51,7 +51,7 @@ from public information only, and it follows the clean-room rules."*
 
    ```sh
    cargo test --workspace
-   cargo run -p libroxel-proto
+   cargo run -p playlibre-proto
    ```
 
 ## Before you open a pull request
@@ -75,9 +75,9 @@ Also:
 
 ## Project structure
 
-- `crates/libroxel-instance`: the engine-agnostic instance tree.
-- `crates/libroxel-script`: the Luau runtime and the script-facing API.
-- `crates/libroxel-proto`: the Phase 0 Bevy prototype.
+- `crates/playlibre-instance`: the engine-agnostic instance tree.
+- `crates/playlibre-script`: the Luau runtime and the script-facing API.
+- `crates/playlibre-proto`: the Phase 0 Bevy prototype.
 
 ## Reporting bugs and security issues
 

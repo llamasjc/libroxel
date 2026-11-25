@@ -1,7 +1,7 @@
 # Architecture
 
 ```
- Luau scripts ──▶ libroxel-script ──▶ libroxel-instance ◀── libroxel-engine ◀── libroxel (app)
+ Luau scripts ──▶ playlibre-script ──▶ playlibre-instance ◀── playlibre-engine ◀── playlibre (app)
    (sandboxed)     names.rs maps          InstanceTree         play sessions,       panels, gizmo,
                    script names to        + change journal     physics, character,  undo, files
                    engine names           + .lrx files         Bevy rendering
@@ -11,9 +11,9 @@
   editor all change the tree; the Bevy side mirrors parts onto entities
   (`PartLink`, `Transform`, `PartAppearance`) each frame. Rendering never
   writes back.
-- **The naming layer.** `libroxel-instance` uses internal enums
+- **The naming layer.** `playlibre-instance` uses internal enums
   (`ClassKind`, `Property`) and stable file names for saving.
-  `libroxel-script/src/names.rs` is the only place that knows the strings
+  `playlibre-script/src/names.rs` is the only place that knows the strings
   scripts use, so the public API can be renamed or versioned without
   touching the engine or breaking saved games.
 - **Ids are generational.** A destroyed instance stays readable (its parent
@@ -72,7 +72,7 @@
   land on a GUI). The session forwards them to `UserInputService` and keeps
   track of the nearest proximity prompt in reach, how long its key has been
   held, and fires `Triggered` once the hold is long enough.
-- **Raycasts** live in `libroxel-instance::geometry`, so scripts and the
+- **Raycasts** live in `playlibre-instance::geometry`, so scripts and the
   editor's picking share one exact test per shape (box planes, a wedge's
   slope, a sphere, a cylinder along X), done in the part's own space.
 - **Saved data.** Data stores are an in-memory map of store, key and JSON
@@ -124,7 +124,7 @@
   box being typed into gets an egui text field over it, which writes into
   `Text`; focus changes go through the runtime so `Focused`, `FocusLost`
   and `CaptureFocus` agree with the editor.
-- **NPCs** live in `libroxel-engine/src/npc.rs`. Before physics, every
+- **NPCs** live in `playlibre-engine/src/npc.rs`. Before physics, every
   humanoid model other than the player's character is driven with the same
   walk code as the player (`character::drive`), steered toward its `MoveTo`
   target. After physics its other parts are carried along with the root
@@ -134,7 +134,7 @@
 - **Teams.** Before `PlayerAdded` fires the session puts the player on the
   auto-assignable team with the fewest players. Spawning prefers a
   non-neutral spawn of the player's team colour, then a neutral spawn.
-- **Welds** live in `libroxel-engine/src/weld.rs`. Each step, enabled
+- **Welds** live in `playlibre-engine/src/weld.rs`. Each step, enabled
   welds in the workspace are grouped into assemblies (union-find). Each
   assembly has one root, the part physics moves: its `HumanoidRootPart`,
   else an anchored part, else the biggest. The other parts are carried: they
@@ -149,7 +149,7 @@
   Every instance has a *revision* that changes whenever a property does
   (from one counter shared by all trees, so undo snapshots never reuse a
   number); the renderer skips parts whose revision it has already shown.
-  `cargo run -p libroxel-engine --example bench -- 2000` times frames in a
+  `cargo run -p playlibre-engine --example bench -- 2000` times frames in a
   world of 2000 parts.
 - **Bodies.** A character's `HumanoidRootPart` is the invisible collision
   box; the visible body (`character::build_rig`) is anchored, non-colliding
@@ -160,7 +160,7 @@
   remembers the script instance that made it. When that script is destroyed
   (as a GUI's local scripts are when it is replaced on respawn), its
   connections are dropped and its threads never resume.
-- **Seats and vehicles** live in `libroxel-engine/src/seat.rs`. A sitting
+- **Seats and vehicles** live in `playlibre-engine/src/seat.rs`. A sitting
   character is carried like a welded part: physics holds it still and lets
   it pass through the seat's assembly, and after the step it is put on the
   seat. Before physics, every vehicle seat with a `Throttle` or `Steer`
@@ -168,7 +168,7 @@
   welds then carry the rest of the vehicle (and the seat) round with it.
   The player's raw W/S and A/D keys come in with the character input as
   `throttle` and `steer`.
-- **Movers and constraints** live in `libroxel-engine/src/movers.rs`. After
+- **Movers and constraints** live in `playlibre-engine/src/movers.rs`. After
   the welds are worked out and before the physics step, each enabled
   `LinearVelocity`, `VectorForce`, `AlignPosition`, `RopeConstraint`,
   `SpringConstraint` and legacy `Body*` mover changes the velocity of the
@@ -182,7 +182,7 @@
   `BodyAngularVelocity` change the root's angular velocity the same way,
   using a rough moment of inertia for the assembly.
 - **Terrain** is a `Terrain` instance whose cells live beside its
-  properties (`libroxel-instance/src/voxels.rs`): chunks of 16³ one-byte
+  properties (`playlibre-instance/src/voxels.rs`): chunks of 16³ one-byte
   cells, a code per material, saved and sent as run-length text.
   `InstanceTree::edit_voxels` bumps the terrain's revision and journals a
   `VoxelsChanged`, so the replicator resends the cells (as `x`) and the
@@ -194,7 +194,7 @@
   and pass through water.
   `terrain_view.rs` draws a mesh per chunk and material from the faces that
   look onto air, rebuilding only chunks whose cells (or neighbours) changed.
-- **Hinges** live in `libroxel-engine/src/hinge.rs`. Each enabled
+- **Hinges** live in `playlibre-engine/src/hinge.rs`. Each enabled
   `HingeConstraint` has a base (Attachment0's part, unless only the other
   side is anchored) and an arm (the other part and everything welded to it).
   The hinge keeps its own angle and speed: gravity's torque about the axis
@@ -205,13 +205,13 @@
   when the hinge started (so nothing drifts). Bases are placed before the
   arms hanging from them, so hinges can chain. A script moving an arm part
   starts the hinge again from where it is.
-- **Pictures** are found and decoded by `libroxel-engine/src/pictures.rs`
+- **Pictures** are found and decoded by `playlibre-engine/src/pictures.rs`
   (folders set by the editor, plus built-in PNGs in `engine/assets`), for
   both egui images and decals. `view::sync_decals` draws each `Decal` and
   `Texture` as a square on its part's side (`decal_transform`), lifted a
   hundredth of a stud with a depth bias; textures tile with a repeating
   sampler and the material's `uv_transform`.
-- **Sounds** live in `libroxel-engine/src/sounds.rs`. Scripts only change
+- **Sounds** live in `playlibre-engine/src/sounds.rs`. Scripts only change
   `Playing` (and `Play`/`Stop` queue a restart); each frame `play_sounds`
   turns the sounds under Workspace and Players into Bevy audio players,
   pausing, resuming and adjusting them, and tells the session when one has
@@ -232,7 +232,7 @@
 - **Tool swings:** the script runtime notes each `Activated`; the session
   gives the holder's avatar a short `slash` timer, and `character::slash_angle`
   turns it into extra right-arm tilt that the pose and the tool handle share.
-- **Effects** live in `libroxel-engine/src/effects.rs` and only exist on
+- **Effects** live in `playlibre-engine/src/effects.rs` and only exist on
   screen. Each particle is a small entity; each emitter has four materials
   from the start of a particle's life to its end, and particles switch
   material as they age, so fades and colour changes cost nothing per
@@ -251,7 +251,7 @@
   seat and respawn timer. Every step drives each character from its own
   input, so the same code serves one player or many; NPC code leaves all
   players' characters alone.
-- **Networking** lives in `libroxel-engine/src/net.rs`. A hosted session
+- **Networking** lives in `playlibre-engine/src/net.rs`. A hosted session
   is an ordinary session (scripts, physics, the host's own player) that
   also accepts TCP connections. Each connection starts with a Noise key
   exchange (`Noise_NN_25519_ChaChaPoly_BLAKE2s`, with the `snow` crate):

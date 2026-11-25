@@ -1,0 +1,17 @@
+[package]
+name = "playlibre-instance"
+description = "The instance tree: the hierarchical object model behind every PlayLibre world."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde_json.workspace = true
+foldhash.workspace = true
+
+[lints]
+workspace = true

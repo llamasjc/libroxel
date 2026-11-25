@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Launch check for a built app: smoke.sh <path to libroxel> <server|window>
+# Launch check for a built app: smoke.sh <path to playlibre> <server|window>
 #
-# server: `libroxel help` works, and every starter game hosts with no window
+# server: `playlibre help` works, and every starter game hosts with no window
 #         and shuts down cleanly.
 # window: the same, then the app opens its window and draws frames for a
 #         while (Linux: under xvfb with Mesa's software Vulkan).
@@ -14,7 +14,7 @@ seconds="${SMOKE_SECONDS:-20}"
 HOME="$(mktemp -d)"
 export HOME
 unset XDG_CONFIG_HOME APPDATA XDG_DATA_HOME
-export LIBROXEL_NO_UPDATE=1 LIBROXEL_NO_COMMAND=1 RUST_BACKTRACE=1
+export PLAYLIBRE_NO_UPDATE=1 PLAYLIBRE_NO_COMMAND=1 RUST_BACKTRACE=1
 
 fail() { echo "::error::$1"; exit 1; }
 
@@ -22,14 +22,14 @@ if ! command -v timeout > /dev/null; then
   timeout() { perl -e 'alarm shift; exec @ARGV' "$@"; }
 fi
 
-echo "== libroxel help"
+echo "== playlibre help"
 "$app" help | tee help.txt
-grep -q "usage:" help.txt || fail "libroxel help printed no usage"
+grep -q "usage:" help.txt || fail "playlibre help printed no usage"
 
 echo "== starter games, hosted with no window"
 python=$(command -v python3 || command -v python)
 names=$("$app" starters | "$python" -c 'import json,sys; print("\n".join(g["name"] for g in json.load(sys.stdin)))' | tr -d "\r")
-[[ -n "$names" ]] || fail "libroxel starters listed no games"
+[[ -n "$names" ]] || fail "playlibre starters listed no games"
 while IFS= read -r name; do
   echo "-- $name"
   set +e
@@ -51,7 +51,7 @@ if [[ "$mode" == "window" ]]; then
     export WGPU_BACKEND=vulkan VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
   fi
   set +e
-  LIBROXEL_SMOKE_SECONDS="$seconds" timeout $((seconds + 240)) "${run[@]}" > window.log 2>&1
+  PLAYLIBRE_SMOKE_SECONDS="$seconds" timeout $((seconds + 240)) "${run[@]}" > window.log 2>&1
   code=$?
   set -e
   tail -n 60 window.log

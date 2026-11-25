@@ -8,9 +8,9 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application
-        android:label="Libroxel"
+        android:label="PlayLibre"
         android:icon="@mipmap/ic_launcher"
-        android:theme="@style/Libroxel"
+        android:theme="@style/PlayLibre"
         android:appCategory="game"
         android:enableOnBackInvokedCallback="false"
         android:hasCode="true">
@@ -20,7 +20,7 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|uiMode|density"
             android:screenOrientation="sensorLandscape"
             android:launchMode="singleTask">
-            <meta-data android:name="android.app.lib_name" android:value="libroxel" />
+            <meta-data android:name="android.app.lib_name" android:value="playlibre" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

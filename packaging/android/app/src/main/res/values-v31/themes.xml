@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Android 12 and later draw their own opening screen: the icon on Libroxel's blue. -->
-    <style name="Libroxel" parent="Theme.AppCompat.NoActionBar">
+    <!-- Android 12 and later draw their own opening screen: the icon on PlayLibre's blue. -->
+    <style name="PlayLibre" parent="Theme.AppCompat.NoActionBar">
         <item name="android:windowFullscreen">true</item>
         <item name="android:windowBackground">@drawable/splash</item>
-        <item name="android:windowSplashScreenBackground">@color/libroxel_blue</item>
+        <item name="android:windowSplashScreenBackground">@color/playlibre_blue</item>
     </style>
 </resources>

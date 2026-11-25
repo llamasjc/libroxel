@@ -5324,154 +5324,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libroxel"
-version = "0.1.17"
-dependencies = [
- "bevy",
- "bevy_egui",
- "cpal",
- "data-encoding",
- "ed25519-dalek",
- "egui-phosphor",
- "jni 0.21.1",
- "libroxel-avatar",
- "libroxel-engine",
- "libroxel-hub",
- "libroxel-instance",
- "libroxel-net",
- "libroxel-rbx",
- "libroxel-script",
- "rfd",
- "serde_json",
- "sha2 0.10.9",
- "sys-locale",
- "transform-gizmo-egui",
- "ureq",
- "wgpu",
- "winresource",
-]
-
-[[package]]
-name = "libroxel-avatar"
-version = "0.1.17"
-dependencies = [
- "flate2",
- "libroxel-instance",
-]
-
-[[package]]
-name = "libroxel-engine"
-version = "0.1.17"
-dependencies = [
- "bevy",
- "data-encoding",
- "flate2",
- "getrandom 0.3.4",
- "libroxel-avatar",
- "libroxel-instance",
- "libroxel-script",
- "rapier3d",
- "rbx_mesh",
- "snow",
-]
-
-[[package]]
-name = "libroxel-hub"
-version = "0.1.17"
-dependencies = [
- "argon2",
- "axum",
- "chacha20poly1305",
- "data-encoding",
- "flate2",
- "getrandom 0.3.4",
- "hmac",
- "iroh-base",
- "lettre",
- "libroxel-avatar",
- "rusqlite",
- "rustrict",
- "serde",
- "serde_json",
- "sha1",
- "sha2 0.10.9",
- "tokio",
- "tower-http",
- "ureq",
-]
-
-[[package]]
-name = "libroxel-instance"
-version = "0.1.17"
-dependencies = [
- "foldhash 0.2.0",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "libroxel-net"
-version = "0.1.17"
-dependencies = [
- "data-encoding",
- "iroh",
- "libroxel-engine",
- "libroxel-instance",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "libroxel-proto"
-version = "0.1.17"
-dependencies = [
- "bevy",
- "libroxel-engine",
- "libroxel-instance",
-]
-
-[[package]]
-name = "libroxel-rbx"
-version = "0.1.17"
-dependencies = [
- "foldhash 0.2.0",
- "libroxel-engine",
- "libroxel-instance",
- "libroxel-script",
- "rbx_binary",
- "rbx_dom_weak",
- "rbx_mesh",
- "rbx_reflection",
- "rbx_reflection_database",
- "rbx_xml",
-]
-
-[[package]]
-name = "libroxel-script"
-version = "0.1.17"
-dependencies = [
- "getrandom 0.3.4",
- "libroxel-instance",
- "mlua",
- "rbx_reflection",
- "rbx_reflection_database",
- "rbx_types",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "libroxel-tests"
-version = "0.1.17"
-dependencies = [
- "libroxel-engine",
- "libroxel-instance",
- "libroxel-rbx",
- "libroxel-script",
- "serde_json",
-]
-
-[[package]]
 name = "libsqlite3-sys"
 version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7142,6 +6994,154 @@ name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+
+[[package]]
+name = "playlibre"
+version = "0.1.17"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "cpal",
+ "data-encoding",
+ "ed25519-dalek",
+ "egui-phosphor",
+ "jni 0.21.1",
+ "playlibre-avatar",
+ "playlibre-engine",
+ "playlibre-hub",
+ "playlibre-instance",
+ "playlibre-net",
+ "playlibre-rbx",
+ "playlibre-script",
+ "rfd",
+ "serde_json",
+ "sha2 0.10.9",
+ "sys-locale",
+ "transform-gizmo-egui",
+ "ureq",
+ "wgpu",
+ "winresource",
+]
+
+[[package]]
+name = "playlibre-avatar"
+version = "0.1.17"
+dependencies = [
+ "flate2",
+ "playlibre-instance",
+]
+
+[[package]]
+name = "playlibre-engine"
+version = "0.1.17"
+dependencies = [
+ "bevy",
+ "data-encoding",
+ "flate2",
+ "getrandom 0.3.4",
+ "playlibre-avatar",
+ "playlibre-instance",
+ "playlibre-script",
+ "rapier3d",
+ "rbx_mesh",
+ "snow",
+]
+
+[[package]]
+name = "playlibre-hub"
+version = "0.1.17"
+dependencies = [
+ "argon2",
+ "axum",
+ "chacha20poly1305",
+ "data-encoding",
+ "flate2",
+ "getrandom 0.3.4",
+ "hmac",
+ "iroh-base",
+ "lettre",
+ "playlibre-avatar",
+ "rusqlite",
+ "rustrict",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2 0.10.9",
+ "tokio",
+ "tower-http",
+ "ureq",
+]
+
+[[package]]
+name = "playlibre-instance"
+version = "0.1.17"
+dependencies = [
+ "foldhash 0.2.0",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "playlibre-net"
+version = "0.1.17"
+dependencies = [
+ "data-encoding",
+ "iroh",
+ "playlibre-engine",
+ "playlibre-instance",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "playlibre-proto"
+version = "0.1.17"
+dependencies = [
+ "bevy",
+ "playlibre-engine",
+ "playlibre-instance",
+]
+
+[[package]]
+name = "playlibre-rbx"
+version = "0.1.17"
+dependencies = [
+ "foldhash 0.2.0",
+ "playlibre-engine",
+ "playlibre-instance",
+ "playlibre-script",
+ "rbx_binary",
+ "rbx_dom_weak",
+ "rbx_mesh",
+ "rbx_reflection",
+ "rbx_reflection_database",
+ "rbx_xml",
+]
+
+[[package]]
+name = "playlibre-script"
+version = "0.1.17"
+dependencies = [
+ "getrandom 0.3.4",
+ "mlua",
+ "playlibre-instance",
+ "rbx_reflection",
+ "rbx_reflection_database",
+ "rbx_types",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "playlibre-tests"
+version = "0.1.17"
+dependencies = [
+ "playlibre-engine",
+ "playlibre-instance",
+ "playlibre-rbx",
+ "playlibre-script",
+ "serde_json",
+]
 
 [[package]]
 name = "plist"

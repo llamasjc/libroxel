@@ -3,34 +3,34 @@
 # (its release tag, or its commit when built from source), or from the latest
 # GitHub release when there is no Hub here. When that changes, it sets the
 # site up again with the fetched copy's own setup-site.sh. A timer runs it
-# every 10 minutes; run it by hand with: sudo libroxel-site-update --now
+# every 10 minutes; run it by hand with: sudo playlibre-site-update --now
 set -euo pipefail
 
 [ "$(id -u)" = 0 ] || { echo "Run it with sudo."; exit 1; }
-conf=/etc/libroxel/site.conf
+conf=/etc/playlibre/site.conf
 [ -f "$conf" ] || { echo "No $conf: run setup-site.sh first."; exit 1; }
 REPO=""
 . "$conf"
 [ -n "$REPO" ] || { echo "No REPO in $conf, so there is nothing to update from."; exit 0; }
 
-log() { echo "libroxel-site-update: $*"; }
-checkout=/var/lib/libroxel-site/repo
+log() { echo "playlibre-site-update: $*"; }
+checkout=/var/lib/playlibre-site/repo
 if [ ! -d "$checkout/.git" ]; then
     rm -rf "$checkout"
-    install -d -m 755 /var/lib/libroxel-site
+    install -d -m 755 /var/lib/playlibre-site
     git clone -q --depth 1 --filter=blob:none --sparse "https://github.com/$REPO.git" "$checkout"
     git -C "$checkout" sparse-checkout set web packaging/web
 fi
 git -C "$checkout" remote set-url origin "https://github.com/$REPO.git"
-done_file=/var/lib/libroxel-site/online
+done_file=/var/lib/playlibre-site/online
 before="$(cat "$done_file" 2>/dev/null || true)"
-hub=/var/lib/libroxel-update
+hub=/var/lib/playlibre-update
 hub_on="$(cat "$hub/release" 2>/dev/null || true)"
 case "$hub_on" in
     main-*)
         now="$(cat "$hub/commit" 2>/dev/null || true)"
         if [ -z "$now" ]; then
-            source_dir="$(SOURCE_DIR=""; . /etc/libroxel/hub.conf 2>/dev/null; echo "$SOURCE_DIR")"
+            source_dir="$(SOURCE_DIR=""; . /etc/playlibre/hub.conf 2>/dev/null; echo "$SOURCE_DIR")"
             now="$(git -c safe.directory='*' -C "$source_dir" rev-parse "${hub_on#main-}" 2>/dev/null || true)"
         fi
         [ -n "$now" ] || { log "the Hub is on $hub_on but its commit isn't known yet; leaving the site as it is"; exit 0; }

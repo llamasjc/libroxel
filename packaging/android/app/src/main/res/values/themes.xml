@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Libroxel" parent="Theme.AppCompat.NoActionBar">
+    <style name="PlayLibre" parent="Theme.AppCompat.NoActionBar">
         <item name="android:windowFullscreen">true</item>
-        <!-- Shown while Libroxel starts: the logo on Libroxel's blue. -->
+        <!-- Shown while PlayLibre starts: the logo on PlayLibre's blue. -->
         <item name="android:windowBackground">@drawable/splash</item>
     </style>
 </resources>

@@ -1,4 +1,4 @@
-# The Libroxel website
+# The PlayLibre website
 
 `web/` is the website: the app's home screen in a browser. It shows the same
 things from the same Hub as the app:
@@ -45,23 +45,23 @@ scripts run and only lets them talk to the Hub.
 
 ## Play opens the app
 
-Play and Join open a `libroxel://` link:
+Play and Join open a `playlibre://` link:
 
 | Link | What the app does |
 | --- | --- |
-| `libroxel://join/<join code>` | Joins that server |
-| `libroxel://play/<game id>` | Opens the game's page, then joins its best server or starts one |
-| `libroxel://host/<game id>` | Starts a new server of the game |
+| `playlibre://join/<join code>` | Joins that server |
+| `playlibre://play/<game id>` | Opens the game's page, then joins its best server or starts one |
+| `playlibre://host/<game id>` | Starts a new server of the game |
 
 Game ids are `starter:<name>` for the starter games, or a published game's
 id; the part after the action is URL-encoded. The app registers itself for
 these links each time it starts (on Linux in
-`~/.local/share/applications/libroxel-links.desktop`, on Windows in
-`HKEY_CURRENT_USER\Software\Classes\libroxel`; on macOS `Info.plist` does it),
+`~/.local/share/applications/playlibre-links.desktop`, on Windows in
+`HKEY_CURRENT_USER\Software\Classes\playlibre`; on macOS `Info.plist` does it),
 so opening a copy once is enough. If nothing opens, the website offers the
 download.
 
-On macOS the link opens Libroxel but doesn't yet go straight into the game:
+On macOS the link opens PlayLibre but doesn't yet go straight into the game:
 macOS hands the link over in a way the app doesn't read yet, so press Play
 again in the app. If the app is already open, a link opens a second copy.
 
@@ -84,7 +84,7 @@ the Hub's `hub.caddy` and leaves the rest alone.
    ```
 
    It installs Caddy and git if they aren't there, fetches `web/` from the
-   repository's `main`, copies it to `/var/www/libroxel`, writes
+   repository's `main`, copies it to `/var/www/playlibre`, writes
    `/etc/caddy/sites/site.caddy` (with `www` sending people on to the domain
    itself), and reloads Caddy, which gets the HTTPS certificates by itself.
 
@@ -92,9 +92,9 @@ From then on it **updates itself**: every 10 minutes a timer puts online the
 same version the Hub on that server runs (its release, or its commit when it
 builds from `main`), with that version's own `setup-site.sh`, so the site never
 asks the Hub for something it doesn't have. Without a Hub there, it follows the
-latest release. To update at once: `sudo libroxel-site-update --now`. The
-settings are in `/etc/libroxel/site.conf`; run `setup-site.sh` again with new
-options to change them. `journalctl -u libroxel-site-update` shows what the
+latest release. To update at once: `sudo playlibre-site-update --now`. The
+settings are in `/etc/playlibre/site.conf`; run `setup-site.sh` again with new
+options to change them. `journalctl -u playlibre-site-update` shows what the
 updates did.
 
 **Downloads** come from the repository's newest GitHub release: the Download
@@ -102,7 +102,7 @@ page asks GitHub for it and links each platform's installer
 (`…-windows-x86_64-setup.exe`, `…-macos-universal.dmg`, `…-linux-x86_64.AppImage`,
 and `…-linux-x86_64.deb` beside it). Before the first release it
 says there's nothing to download yet. Without `--repo`, it links to
-`/var/www/libroxel/downloads/libroxel-windows-x86_64-setup.exe` and so on instead,
+`/var/www/playlibre/downloads/playlibre-windows-x86_64-setup.exe` and so on instead,
 for files you put there yourself.
 
 Without GitHub, put a `web/` folder next to `setup-site.sh` and run it without
@@ -115,7 +115,7 @@ with `?hub=` to point it at your Hub (it is remembered in that browser; `?hub=`
 on its own forgets it):
 
 ```sh
-cargo run -p libroxel-hub -- --port 7430 &
+cargo run -p playlibre-hub -- --port 7430 &
 python3 -m http.server 8080 --directory web
 # open http://127.0.0.1:8080/?hub=http://127.0.0.1:7430
 ```

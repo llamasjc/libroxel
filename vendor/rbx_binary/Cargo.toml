@@ -1,4 +1,4 @@
-# Libroxel's copy of rbx_binary 3.0.1 (MIT, from rbx-dom), changed so a
+# PlayLibre's copy of rbx_binary 3.0.1 (MIT, from rbx-dom), changed so a
 # damaged or deliberately broken file can't close the app: sizes and counts
 # read from a file no longer set aside memory before the bytes behind them
 # arrive (src/core.rs, src/chunk.rs, src/deserializer/state.rs), and a

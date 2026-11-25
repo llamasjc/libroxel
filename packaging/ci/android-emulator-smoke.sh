@@ -13,7 +13,7 @@ adb logcat -c
 adb shell am start -W -n "$package/.MainActivity"
 sleep 30
 adb logcat -d > logcat.txt
-grep -E "RustStdoutStderr|libroxel|$package" logcat.txt | tail -n 80 || true
+grep -E "RustStdoutStderr|playlibre|$package" logcat.txt | tail -n 80 || true
 pid=$(adb shell pidof "$package" | tr -d '\r' || true)
 [[ -n "$pid" ]] || fail "the app isn't running 30 seconds after it was opened"
 if grep -qE "FATAL EXCEPTION|panicked at|Fatal signal|UnsatisfiedLinkError" logcat.txt; then

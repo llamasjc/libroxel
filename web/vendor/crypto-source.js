@@ -1,4 +1,4 @@
-// The cryptography the website needs to sign in to a Libroxel Hub, the same
+// The cryptography the website needs to sign in to a PlayLibre Hub, the same
 // way the app does: Argon2id, ChaCha20-Poly1305, Ed25519 and SHA-256.
 import * as ed from '@noble/ed25519';
 import { sha512, sha256 } from '@noble/hashes/sha2';

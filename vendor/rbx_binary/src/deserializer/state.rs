@@ -64,7 +64,7 @@ pub(super) struct DeserializerState<'db, R> {
 
 
 /// How many entries a count read from a file may set aside room for before
-/// the entries themselves are read. Libroxel's change: counts come from the
+/// the entries themselves are read. PlayLibre's change: counts come from the
 /// file, so a damaged one could otherwise ask for more memory than exists,
 /// and a failed allocation closes the app outright.
 const EARLY_ROOM: usize = 1 << 16;

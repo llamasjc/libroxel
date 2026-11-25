@@ -1,7 +1,7 @@
-// The Libroxel website: the app's home screen in a browser. It reads the
+// The PlayLibre website: the app's home screen in a browser. It reads the
 // same Hub as the app (games, server lists, friends and accounts), signs in
 // the same way (the password is stretched here and never sent), and Play
-// opens the installed app through a libroxel:// link.
+// opens the installed app through a playlibre:// link.
 
 import * as crypto from './vendor/crypto.js';
 import { ROUTES, href, routeOf } from './routes.js';
@@ -13,14 +13,14 @@ import { ROUTES, href, routeOf } from './routes.js';
 // The Hub this site talks to. `?hub=http://127.0.0.1:7430` picks another
 // one for testing (remembered in this browser; `?hub=` alone forgets it).
 const HUB = (() => {
-  const official = document.querySelector('meta[name="libroxel-hub"]')?.content || 'https://hub.playlibre.net';
+  const official = document.querySelector('meta[name="playlibre-hub"]')?.content || 'https://hub.playlibre.net';
   try {
     const asked = new URLSearchParams(location.search).get('hub');
     if (asked !== null) {
-      if (asked) localStorage.setItem('libroxel.hub', asked);
-      else localStorage.removeItem('libroxel.hub');
+      if (asked) localStorage.setItem('playlibre.hub', asked);
+      else localStorage.removeItem('playlibre.hub');
     }
-    return (localStorage.getItem('libroxel.hub') || official).replace(/\/+$/, '');
+    return (localStorage.getItem('playlibre.hub') || official).replace(/\/+$/, '');
   } catch {
     return official;
   }
@@ -202,7 +202,7 @@ async function api(path, { method = 'GET', body, query } = {}) {
 // Signing in: the identity key lives in this browser once signed in
 // ---------------------------------------------------------------------------
 
-const SESSION_KEY = 'libroxel.session';
+const SESSION_KEY = 'playlibre.session';
 let session = loadSession();
 let lastSigned = { friends: 0, party: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0, wallet: 0, badge: 0 };
 
@@ -522,7 +522,7 @@ function isRemembered() {
 /** Every game worth showing, with its live servers, busiest first. */
 function entries() {
   const list = data.official.map((g) => ({
-    key: `starter:${g.name}`, title: g.name, by: 'Libroxel', about: g.about, symbol: g.symbol || ICON.games,
+    key: `starter:${g.name}`, title: g.name, by: 'PlayLibre', about: g.about, symbol: g.symbol || ICON.games,
     source: 'starter', servers: [],
   }));
   for (const game of data.games) {
@@ -570,7 +570,7 @@ function bestServer(servers) {
  * A game's picture from its id: a cluster of cubes on a 4×4 patch of
  * grass, mirrored along the diagonal so it looks the same on the left and
  * the right. The app makes the same one (`blocks` in
- * crates/libroxel/src/menu.rs).
+ * crates/playlibre/src/menu.rs).
  */
 function blocks(id) {
   let h = fnv(id);
@@ -714,7 +714,7 @@ function logo() {
 // ---------------------------------------------------------------------------
 
 /**
- * Opens the installed app at `link` (libroxel://…). Browsers say nothing
+ * Opens the installed app at `link` (playlibre://…). Browsers say nothing
  * when no app takes the link, so if the page is still in front after a
  * moment, offer the download.
  */
@@ -732,7 +732,7 @@ function launch(link, what) {
   };
   show(
     el('div', { class: 'spinner' }),
-    el('h2', {}, 'Opening Libroxel…'),
+    el('h2', {}, 'Opening PlayLibre…'),
     el('p', {}, what),
     el('div', { class: 'actions' }, el('button', { class: 'btn small', onclick: close }, 'Cancel')),
   );
@@ -740,8 +740,8 @@ function launch(link, what) {
   const left = () => {
     opened = true;
     show(
-      el('h2', {}, 'Libroxel is opening'),
-      el('p', {}, `${what} If nothing happens, open Libroxel yourself and try again.`),
+      el('h2', {}, 'PlayLibre is opening'),
+      el('p', {}, `${what} If nothing happens, open PlayLibre yourself and try again.`),
       el('div', { class: 'actions' }, el('button', { class: 'btn small', onclick: close }, 'Close')),
     );
   };
@@ -750,10 +750,10 @@ function launch(link, what) {
   const timer = setTimeout(() => {
     if (opened) return;
     show(
-      el('h2', {}, 'Did Libroxel open?'),
-      el('p', {}, "If your browser asked, choose Open Libroxel. If nothing happened, you may not have Libroxel yet: download it, open it once, then press Play again."),
+      el('h2', {}, 'Did PlayLibre open?'),
+      el('p', {}, "If your browser asked, choose Open PlayLibre. If nothing happened, you may not have PlayLibre yet: download it, open it once, then press Play again."),
       el('div', { class: 'actions' },
-        el('a', { class: 'btn go small', href: '/download', onclick: close }, icon(ICON.download), 'Download Libroxel'),
+        el('a', { class: 'btn go small', href: '/download', onclick: close }, icon(ICON.download), 'Download PlayLibre'),
         el('button', { class: 'btn small', onclick: () => { close(); launch(link, what); } }, 'Try again')),
     );
   }, 2500);
@@ -761,7 +761,7 @@ function launch(link, what) {
   window.location.href = link;
 }
 
-const appLink = (action, value) => `libroxel://${action}/${encodeURIComponent(value)}`;
+const appLink = (action, value) => `playlibre://${action}/${encodeURIComponent(value)}`;
 const joinServer = (server) => launch(appLink('join', server.code), `Joining ${server.name}.`);
 
 // ---------------------------------------------------------------------------
@@ -791,7 +791,7 @@ function tabs() {
   const who = document.getElementById('who');
   // Search sits at the right, by who you play as, as in the app.
   const search = el('a', { class: `tab iconbtn${route.name === 'search' ? ' active' : ''}`, href: '/search', title: 'Search for players and games' }, icon(ICON.search));
-  const donate = el('a', { class: 'btn small donate-btn', href: '/donate', title: 'Libroxel is open source. Donations are highly appreciated.' }, icon(ICON.heart), 'Donate');
+  const donate = el('a', { class: 'btn small donate-btn', href: '/donate', title: 'PlayLibre is open source. Donations are highly appreciated.' }, icon(ICON.heart), 'Donate');
   if (session) {
     const unread = chats.list?.reduce((n, c) => n + c.unread, 0) || 0;
     const messages = el('a', { class: `tab iconbtn${route.name === 'messages' ? ' active' : ''}`, href: '/messages', title: 'Messages' },
@@ -912,28 +912,28 @@ function render() {
   const banned = session && bannedBar();
   if (banned) nodes.push(banned);
   page.replaceChildren(...nodes, ...[view()].flat(Infinity).filter(Boolean));
-  document.title = route.name === 'home' ? 'Libroxel: play games people make' : `${titleFor(route)} · Libroxel`;
+  document.title = route.name === 'home' ? 'PlayLibre: play games people make' : `${titleFor(route)} · PlayLibre`;
   const description = DESCRIPTIONS[route.name] || DESCRIPTIONS.home;
   document.querySelector('meta[name="description"]')?.setAttribute('content', description);
   document.querySelector('link[rel="canonical"]')?.setAttribute('href', location.origin + location.pathname);
 }
 
 const DESCRIPTIONS = {
-  home: 'Play games people make, with your friends. Press Play and Libroxel opens straight into the game.',
-  download: 'Download Libroxel for Windows, macOS and Linux. Free and open source.',
-  privacy: 'What Libroxel keeps about you, why, and how to have it removed.',
-  donate: 'Libroxel is free and open source. Donations are highly appreciated.',
-  charts: 'The games people play most on Libroxel, trending, top rated and new.',
-  market: 'Models and plugins creators share for the Libroxel editor.',
-  search: 'Find players and games on Libroxel.',
-  'sign-in': 'Sign in to Libroxel.',
-  create: 'Make a Libroxel account.',
+  home: 'Play games people make, with your friends. Press Play and PlayLibre opens straight into the game.',
+  download: 'Download PlayLibre for Windows, macOS and Linux. Free and open source.',
+  privacy: 'What PlayLibre keeps about you, why, and how to have it removed.',
+  donate: 'PlayLibre is free and open source. Donations are highly appreciated.',
+  charts: 'The games people play most on PlayLibre, trending, top rated and new.',
+  market: 'Models and plugins creators share for the PlayLibre editor.',
+  search: 'Find players and games on PlayLibre.',
+  'sign-in': 'Sign in to PlayLibre.',
+  create: 'Make a PlayLibre account.',
 };
 
 function titleFor(r) {
   if (r.name === 'game') return entries().find((e) => e.key === r.key)?.title || 'Game';
   if (r.name === 'group') return groupPages.get(r.id)?.group?.name || 'Group';
-  return ROUTES[r.name]?.title || 'Libroxel';
+  return ROUTES[r.name]?.title || 'PlayLibre';
 }
 
 function whereabouts(friend) {
@@ -978,7 +978,7 @@ function home() {
     out.push(el('div', { class: 'hello' },
       el('div', {},
         el('h1', {}, 'Play games people make'),
-        el('div', { class: 'soft' }, 'Find a game, press Play, and Libroxel opens straight into it. ',
+        el('div', { class: 'soft' }, 'Find a game, press Play, and PlayLibre opens straight into it. ',
           el('a', { href: '/sign-in' }, 'Sign in'), ' to see your friends.'))));
   }
   out.push(...picksRows());
@@ -2511,7 +2511,7 @@ function twoStepPanel() {
     out.push(el('p', { class: 'soft' }, `Recovery codes left: ${s.recovery_codes_left} `,
       el('button', { class: 'link', type: 'button', onclick: newRecoveryCodes }, 'New codes')));
   } else if (twoStep.secret) {
-    const link = `otpauth://totp/Libroxel:${encodeURIComponent(session.name)}?secret=${twoStep.secret}&issuer=Libroxel&digits=6&period=30`;
+    const link = `otpauth://totp/PlayLibre:${encodeURIComponent(session.name)}?secret=${twoStep.secret}&issuer=PlayLibre&digits=6&period=30`;
     const box = code();
     out.push(el('p', {}, el('code', {}, twoStep.secret), ' ',
       el('button', { class: 'link', type: 'button', onclick: () => navigator.clipboard?.writeText(twoStep.secret) }, 'Copy'), ' ',
@@ -3105,7 +3105,7 @@ function marketItemPage(id) {
       ` · version ${item.version} · ${count(item.installs)} uses · ${ago(item.updated_secs_ago)}`),
     item.about && el('p', {}, item.about),
     permissionsLine(item),
-    el('p', { class: 'soft' }, item.price ? 'Paid' : 'Free', ' · Open Libroxel, then Model › Marketplace in the editor to use it.'),
+    el('p', { class: 'soft' }, item.price ? 'Paid' : 'Free', ' · Open PlayLibre, then Model › Marketplace in the editor to use it.'),
     el('div', { class: 'buttons' },
       session && !mine && el('button', { class: 'chip', onclick: () => startReport('market', item.asset_id, item.name) }, icon(ICON.flag), 'Report'),
       mine && el('button', { class: 'chip', onclick: () => takeDown(item) }, icon(ICON.trash), 'Take down')),
@@ -3480,7 +3480,7 @@ function signInPage() {
       const n = name.value.trim();
       const existing = await accountNamed(n).catch(() => null);
       if (existing) {
-        return fail(`${existing.name} has no password yet, so it can only be used on the computer it was made on. Open Libroxel there and set a password on the Profile tab, then sign in here.`);
+        return fail(`${existing.name} has no password yet, so it can only be used on the computer it was made on. Open PlayLibre there and set a password on the Profile tab, then sign in here.`);
       }
       carry = { name: n, password: password.value };
       goTo('/create');
@@ -3634,12 +3634,12 @@ function platform() {
   return null;
 }
 
-const REPO = (document.querySelector('meta[name="libroxel-repo"]')?.content || '').trim();
+const REPO = (document.querySelector('meta[name="playlibre-repo"]')?.content || '').trim();
 let release = null; // The newest release with every installer on it, once GitHub has said.
 
 const INSTALLERS = ['-windows-x86_64-setup.exe', '-macos-universal.dmg', '-linux-x86_64.AppImage', '-linux-x86_64.deb'];
-const RELEASE_KEY = 'libroxel-release';
-const assetFor = (r, end) => (r.assets || []).find((a) => a.name.startsWith('libroxel-') && a.name.endsWith(end));
+const RELEASE_KEY = 'playlibre-release';
+const assetFor = (r, end) => (r.assets || []).find((a) => a.name.startsWith('playlibre-') && a.name.endsWith(end));
 
 /**
  * Asks GitHub for the newest release that has the installer for every
@@ -3672,20 +3672,20 @@ function download() {
   const mine = platform();
   loadRelease();
   const builds = [
-    { id: 'windows', name: 'Windows', file: 'libroxel-windows-x86_64-setup.exe', ends: '-windows-x86_64-setup.exe', about: 'Windows 10 or 11. Open the setup wizard and press Next until it\'s done. Libroxel then sits in the Start menu. If SmartScreen warns you, choose More info, then Run anyway.' },
-    { id: 'macos', name: 'macOS', file: 'libroxel-macos-universal.dmg', ends: '-macos-universal.dmg', about: 'macOS 11 or newer. Open it and drag Libroxel onto the Applications folder. The first time, right-click Libroxel in Applications and choose Open.' },
-    { id: 'linux', name: 'Linux', file: 'libroxel-linux-x86_64.AppImage', ends: '-linux-x86_64.AppImage', about: 'Any x86-64 Linux with Vulkan. Make the file executable (right-click, Properties, Allow running as a program) and open it. It adds itself to your app menu.',
-      alt: { label: '.deb for Debian and Ubuntu', file: 'libroxel-linux-x86_64.deb', ends: '-linux-x86_64.deb' } },
+    { id: 'windows', name: 'Windows', file: 'playlibre-windows-x86_64-setup.exe', ends: '-windows-x86_64-setup.exe', about: 'Windows 10 or 11. Open the setup wizard and press Next until it\'s done. PlayLibre then sits in the Start menu. If SmartScreen warns you, choose More info, then Run anyway.' },
+    { id: 'macos', name: 'macOS', file: 'playlibre-macos-universal.dmg', ends: '-macos-universal.dmg', about: 'macOS 11 or newer. Open it and drag PlayLibre onto the Applications folder. The first time, right-click PlayLibre in Applications and choose Open.' },
+    { id: 'linux', name: 'Linux', file: 'playlibre-linux-x86_64.AppImage', ends: '-linux-x86_64.AppImage', about: 'Any x86-64 Linux with Vulkan. Make the file executable (right-click, Properties, Allow running as a program) and open it. It adds itself to your app menu.',
+      alt: { label: '.deb for Debian and Ubuntu', file: 'playlibre-linux-x86_64.deb', ends: '-linux-x86_64.deb' } },
   ].sort((a, b) => (b.id === mine) - (a.id === mine));
   // From the repository's newest release when there is one, else from this server.
   const link = (b) => {
     if (!REPO) return `downloads/${b.file}`;
-    const asset = release?.assets?.find((a) => a.name.startsWith('libroxel-') && a.name.endsWith(b.ends));
+    const asset = release?.assets?.find((a) => a.name.startsWith('playlibre-') && a.name.endsWith(b.ends));
     return asset ? asset.browser_download_url : null;
   };
   const out = [
-    el('h1', { class: 'title' }, 'Download Libroxel'),
-    el('p', { class: 'note' }, 'Libroxel is free. Get the app to play, make and host games.',
+    el('h1', { class: 'title' }, 'Download PlayLibre'),
+    el('p', { class: 'note' }, 'PlayLibre is free. Get the app to play, make and host games.',
       release?.tag ? ` The newest version is ${release.tag.replace(/^v/, '')}.` : ''),
   ];
   if (REPO && release?.loading) out.push(el('p', { class: 'soft' }, 'Looking for the newest version…'));
@@ -3706,8 +3706,8 @@ function download() {
   out.push(
     el('h2', { class: 'section' }, 'Then press Play here'),
     el('ol', { class: 'steps' },
-      el('li', {}, 'Install Libroxel and open it once. That tells your computer that Play buttons on this site open Libroxel, and typing libroxel in a terminal opens it too.'),
-      el('li', {}, 'Come back here, pick a game, and press Play. Your browser may ask whether to open Libroxel: say yes (and tick Always allow, if it offers).'),
+      el('li', {}, 'Install PlayLibre and open it once. That tells your computer that Play buttons on this site open PlayLibre, and typing playlibre in a terminal opens it too.'),
+      el('li', {}, 'Come back here, pick a game, and press Play. Your browser may ask whether to open PlayLibre: say yes (and tick Always allow, if it offers).'),
       el('li', {}, 'Sign in to the app with the same name and password as here, so your friends see you.')),
   );
   return out;
@@ -3766,8 +3766,8 @@ function donatePage() {
   update();
   return el('div', { class: 'donate' },
     el('div', { class: 'donate-heart' }, icon(ICON.heart)),
-    el('h1', { class: 'title' }, 'Donate to Libroxel'),
-    el('p', { class: 'note' }, 'Libroxel is free and open source. Donations are highly appreciated.'),
+    el('h1', { class: 'title' }, 'Donate to PlayLibre'),
+    el('p', { class: 'note' }, 'PlayLibre is free and open source. Donations are highly appreciated.'),
     el('div', { class: 'segs' }, segs.map(([, b]) => b)),
     el('div', { class: 'amounts' }, presets, el('label', { class: 'other' }, el('span', {}, '$'), other)),
     el('div', { class: 'givers' }, paypal, sponsors, note),
@@ -3786,7 +3786,7 @@ function privacy() {
   return el('div', { class: 'privacy' },
     el('h1', { class: 'title' }, 'Privacy policy'),
     p(el('span', { class: 'soft' }, 'Last updated 23 November 2026')),
-    p('This policy covers the Libroxel app, this website and the Libroxel Hub (hub.playlibre.net), which keeps accounts, friends, games and server lists.'),
+    p('This policy covers the PlayLibre app, this website and the PlayLibre Hub (hub.playlibre.net), which keeps accounts, friends, games and server lists.'),
     h('What we keep'),
     list(
       'Your account: your name, player number, avatar (colours and hat), the few words about yourself, and when the account was made.',
@@ -3811,7 +3811,7 @@ function privacy() {
     h('Your choices'),
     p('You can change your name, avatar, about, email and password at any time on the Avatar and Profile pages or in the app. To get a copy of your information, or to have your account and everything in it deleted, email ', mail, ' from the address on your account, or tell us your name and player number. We answer within 30 days.'),
     h('Children'),
-    p('Libroxel is not meant for children under 13. If you believe a child under 13 has an account, email ', mail.cloneNode(true), ' and we will delete it.'),
+    p('PlayLibre is not meant for children under 13. If you believe a child under 13 has an account, email ', mail.cloneNode(true), ' and we will delete it.'),
     h('Changes'),
     p('When this policy changes, the new one goes on this page with a new date.'),
     h('Contact'),

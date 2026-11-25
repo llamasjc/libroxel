@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=PlayLibre
+Comment=Make and play 3D games with friends
+Exec=playlibre %u
+Icon=playlibre
+Terminal=false
+Categories=Game;
+StartupWMClass=playlibre
+MimeType=x-scheme-handler/playlibre;

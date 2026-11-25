@@ -33,7 +33,7 @@ impl Chunk {
 
         log::trace!("{header}");
 
-        // Libroxel's change: a chunk's sizes come from the file, so they are
+        // PlayLibre's change: a chunk's sizes come from the file, so they are
         // checked before anything is set aside for them, and buffers grow
         // only as bytes actually arrive.
         if header.len as usize > MAX_CHUNK_LEN {

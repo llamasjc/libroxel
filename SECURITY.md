@@ -1,6 +1,6 @@
 # Security
 
-Libroxel runs other people's games, and the Hub keeps accounts, passwords,
+PlayLibre runs other people's games, and the Hub keeps accounts, passwords,
 email addresses and two-step sign-in secrets, so security problems matter
 here. Thank you for reporting them carefully.
 
@@ -28,7 +28,7 @@ described publicly, with credit to you if you'd like it.
 - **The app:** a game's scripts getting out of the sandbox, a game or a
   joined player crashing or freezing someone else's computer, reading or
   changing files outside the games folder, or the updater installing
-  something that isn't a signed Libroxel release.
+  something that isn't a signed PlayLibre release.
 - **Multiplayer:** a joined computer taking control of the host, of other
   players, or of what the host's scripts do in ways a normal player can't.
 - **The Hub and the website:** getting into someone else's account, seeing

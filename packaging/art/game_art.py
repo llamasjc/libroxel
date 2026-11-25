@@ -2,11 +2,11 @@
 """Draws the pictures the table games use: chess and draughts pieces,
 Connect 4 discs and board tiles, and a deck of cards with its back and a
 table cloth. Everything is drawn here from simple shapes, so it is
-Libroxel's own work, under the same MIT or Apache 2.0 license as the rest.
+PlayLibre's own work, under the same MIT or Apache 2.0 license as the rest.
 
     python3 packaging/art/game_art.py
 
-writes into crates/libroxel-engine/assets/. Needs Pillow.
+writes into crates/playlibre-engine/assets/. Needs Pillow.
 """
 
 import math
@@ -16,8 +16,8 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 ROOT = Path(__file__).resolve().parents[2]
-ASSETS = ROOT / "crates/libroxel-engine/assets"
-FONT = ROOT / "crates/libroxel/assets/fonts/AtkinsonHyperlegible-Bold.ttf"
+ASSETS = ROOT / "crates/playlibre-engine/assets"
+FONT = ROOT / "crates/playlibre/assets/fonts/AtkinsonHyperlegible-Bold.ttf"
 S = 4  # drawn this many times larger, then shrunk, for smooth edges
 
 
@@ -361,7 +361,7 @@ def card_back():
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((1 * S, 1 * S, (CW - 2) * S, (CH - 2) * S), 10 * S, fill=(255, 255, 255), outline=(150, 150, 150), width=2 * S)
     d.rounded_rectangle((9 * S, 9 * S, (CW - 10) * S, (CH - 10) * S), 6 * S, fill=(30, 96, 170))
-    # Rows of little cubes, Libroxel's building block.
+    # Rows of little cubes, PlayLibre's building block.
     for row in range(14):
         for col in range(8):
             x = (20 + col * 17 + (8 if row % 2 else 0)) * S
