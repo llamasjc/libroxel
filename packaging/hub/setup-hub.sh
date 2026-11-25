@@ -3,7 +3,7 @@
 # the Hub as a service that always runs, HTTPS with Caddy, a firewall,
 # nightly backups, and updates from GitHub releases.
 #
-#   sudo bash setup-hub.sh --repo <owner>/<repo> [--domain hub.playlibre.net] [--from-source]
+#   sudo bash setup-hub.sh --repo <owner>/<repo> [--domain hub.playlibre.net] [--also "other.names"] [--from-source]
 #
 # With a playlibre-hub (or playlibre-hub-linux-x86_64) next to this script it
 # installs that one. Otherwise, with --from-source it builds main on this
@@ -16,9 +16,78 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ "$(id -u)" = 0 ] || { echo "Run it with sudo: sudo bash $0 $*"; exit 1; }
 
+# PlayLibre used to be called Libroxel. A Hub set up back then moves to the new
+# names once: settings, data, programs, the service account and the
+# services. The old folders stay as links to the new ones, so an updater
+# from before the rename that is running this script keeps working.
+moved() { # old new: move a folder, leaving a link at the old place
+    if [ -e "$1" ] && [ ! -L "$1" ] && [ ! -e "$2" ]; then
+        mv "$1" "$2" && ln -s "$2" "$1"
+    fi
+}
+resolves() { getent ahosts "$1" >/dev/null 2>&1; }
+if [ -e /etc/libroxel/hub.conf ] && [ ! -L /etc/libroxel ] && [ ! -e /etc/playlibre/hub.conf ]; then
+    echo "== Moving the Hub from its old name (Libroxel) to PlayLibre"
+    systemctl disable --now libroxel-hub-update.timer libroxel-hub-backup.timer >/dev/null 2>&1 || true
+    systemctl disable --now libroxel-hub >/dev/null 2>&1 || true
+    # Game servers outlive the Hub's restarts (KillMode=process): stop them
+    # too, once, so the account they run as can take its new name.
+    if pgrep -u libroxel >/dev/null 2>&1; then
+        pkill -TERM -u libroxel || true
+        for _ in $(seq 1 10); do pgrep -u libroxel >/dev/null || break; sleep 1; done
+        pkill -KILL -u libroxel 2>/dev/null || true
+        sleep 1
+    fi
+    rm -f /etc/systemd/system/libroxel-hub.service /etc/systemd/system/libroxel-hub-backup.service \
+        /etc/systemd/system/libroxel-hub-backup.timer /etc/systemd/system/libroxel-hub-update.service \
+        /etc/systemd/system/libroxel-hub-update.timer
+    systemctl daemon-reload
+    if [ -d /etc/playlibre ]; then
+        # The website's settings got there first: bring the Hub's beside them.
+        for f in /etc/libroxel/*; do [ -e "/etc/playlibre/${f##*/}" ] || mv "$f" /etc/playlibre/; done
+        find /etc/libroxel -maxdepth 1 -type l -delete
+        rmdir /etc/libroxel 2>/dev/null && ln -s /etc/playlibre /etc/libroxel
+    else
+        moved /etc/libroxel /etc/playlibre
+    fi
+    if id libroxel >/dev/null 2>&1 && ! id playlibre >/dev/null 2>&1; then
+        usermod -l playlibre -d /var/lib/playlibre libroxel
+        getent group libroxel >/dev/null && groupmod -n playlibre libroxel
+    fi
+    moved /var/lib/libroxel /var/lib/playlibre
+    moved /var/lib/libroxel-update /var/lib/playlibre-update
+    [ -f /var/lib/playlibre-update/libroxel-hub.previous ] \
+        && mv /var/lib/playlibre-update/libroxel-hub.previous /var/lib/playlibre-update/playlibre-hub.previous
+    for name in libroxel-hub libroxel-hub.previous libroxel; do
+        [ -f "/usr/local/bin/$name" ] && [ ! -L "/usr/local/bin/$name" ] \
+            && mv "/usr/local/bin/$name" "/usr/local/bin/${name/libroxel/playlibre}"
+    done
+    # The old commands go on working, now as the new ones.
+    rm -f /usr/local/bin/libroxel-admin /usr/local/bin/libroxel-hub-update
+    ln -s playlibre-admin /usr/local/bin/libroxel-admin
+    ln -s playlibre-hub-update /usr/local/bin/libroxel-hub-update
+    # Settings: the mail ones are read under their new names (the Hub reads
+    # the old ones too), the Hub answers on the new domain as well as the
+    # old one, which every copy of the app from before the rename uses, and
+    # the repository is the renamed one (GitHub sends the old name on).
+    [ -f /etc/playlibre/mail.conf ] && sed -i 's/^\(#\{0,1\}\)LIBROXEL_/\1PLAYLIBRE_/' /etc/playlibre/mail.conf
+    if grep -q '^DOMAIN="hub.libroxel.com"' /etc/playlibre/hub.conf; then
+        if resolves hub.playlibre.net; then
+            sed -i 's/^DOMAIN=.*/DOMAIN="hub.playlibre.net"/' /etc/playlibre/hub.conf
+            echo 'ALSO_DOMAINS="hub.libroxel.com"' >> /etc/playlibre/hub.conf
+        else
+            echo "   hub.playlibre.net doesn't point anywhere yet: staying on hub.libroxel.com for now."
+            echo 'ALSO_DOMAINS="hub.playlibre.net"' >> /etc/playlibre/hub.conf
+        fi
+    fi
+    sed -i 's#^REPO="llamasjc/libroxel"#REPO="llamasjc/playlibre"#' /etc/playlibre/hub.conf
+fi
+
 conf=/etc/playlibre/hub.conf
 # What an earlier run chose, unless told otherwise now.
 DOMAIN=hub.playlibre.net
+# More names the Hub answers to, such as the one it had before (space between them).
+ALSO_DOMAINS=""
 REPO=""
 GITHUB_TOKEN=""
 UPDATE_FROM=releases
@@ -34,6 +103,7 @@ check=yes
 while [ $# -gt 0 ]; do
     case "$1" in
         --domain) DOMAIN="$2"; shift 2 ;;
+        --also) ALSO_DOMAINS="$2"; shift 2 ;;
         --repo) REPO="$2"; shift 2 ;;
         --token) GITHUB_TOKEN="$2"; shift 2 ;;
         --no-check) check=no; shift ;;
@@ -61,6 +131,9 @@ umask 077
 cat > "$conf" <<CONF
 # Read by setup-hub.sh and the updater. Edit, then run: sudo playlibre-hub-update --now
 DOMAIN="$DOMAIN"
+# More names it answers to (space between them), such as hub.libroxel.com,
+# which copies of the app from before the rename to PlayLibre still use.
+ALSO_DOMAINS="$ALSO_DOMAINS"
 # The GitHub repository whose releases the Hub updates from (owner/name).
 REPO="$REPO"
 # Only for a private repository: a token that can read it.
@@ -84,7 +157,8 @@ umask 022
 
 echo "== The Hub program"
 binary=""
-for name in playlibre-hub playlibre-hub-linux-x86_64; do
+# (An updater from before the rename fetches it as libroxel-hub-linux-x86_64.)
+for name in playlibre-hub playlibre-hub-linux-x86_64 libroxel-hub-linux-x86_64; do
     [ -f "$here/$name" ] && binary="$here/$name" && break
 done
 if [ -z "$binary" ]; then
@@ -112,8 +186,13 @@ fi
 
 echo "== Game servers"
 game_flags=""
-if [ -f "$here/playlibre" ]; then
-    install -m 755 "$here/playlibre" /usr/local/bin/playlibre.new
+# (An updater from before the rename unpacks it as libroxel.)
+app=""
+for name in playlibre libroxel; do
+    [ -f "$here/$name" ] && app="$here/$name" && break
+done
+if [ -n "$app" ]; then
+    install -m 755 "$app" /usr/local/bin/playlibre.new
     mv -f /usr/local/bin/playlibre.new /usr/local/bin/playlibre
 fi
 if [ -x /usr/local/bin/playlibre ]; then
@@ -241,8 +320,10 @@ echo "== HTTPS with Caddy"
 install -d /etc/caddy/sites
 grep -q 'import /etc/caddy/sites/\*' /etc/caddy/Caddyfile 2>/dev/null \
     || echo 'import /etc/caddy/sites/*.caddy' > /etc/caddy/Caddyfile
+names="$DOMAIN"
+for also in $ALSO_DOMAINS; do names="$names, $also"; done
 cat > /etc/caddy/sites/hub.caddy <<CADDY
-$DOMAIN {
+$names {
     encode gzip
     header {
         Strict-Transport-Security "max-age=31536000"

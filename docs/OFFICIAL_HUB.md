@@ -212,3 +212,26 @@ On a server set up with the script, run these as `sudo playlibre-admin …`
 Emails, two-step secrets and messages are encrypted with the key in
 `hub.key` beside the data file. Keep it with your backups: without it they
 can't be read.
+
+## A server set up before the rename
+
+PlayLibre was called Libroxel. A server set up back then (with
+`/etc/libroxel`, the `libroxel-hub` service and `hub.libroxel.com`) moves to
+the new names by itself the first time the new `setup-hub.sh` runs: the
+settings go to `/etc/playlibre`, the data to `/var/lib/playlibre`, the
+service account and services take the new names, and the old folders stay
+as links to the new ones. Game servers running then are stopped once, so
+their account can be renamed. The Hub then answers on `hub.playlibre.net`
+and on `hub.libroxel.com`, which copies of the app from before the rename
+use (or stays on the old name, with the new one added, until
+`hub.playlibre.net` points at the server). Mail settings are renamed from
+`LIBROXEL_…` to `PLAYLIBRE_…` in `mail.conf` (the Hub reads either).
+
+A server on releases does this with its next update. One that builds from
+source can't build the renamed code with its old updater, so run the new
+script once by hand:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/llamasjc/playlibre/main/packaging/hub/setup-hub.sh -o /tmp/setup-hub.sh
+sudo bash /tmp/setup-hub.sh
+```

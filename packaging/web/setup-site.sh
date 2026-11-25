@@ -2,7 +2,7 @@
 # Puts the PlayLibre website (the web/ folder) on an Ubuntu server, served by
 # Caddy with HTTPS, next to the official Hub.
 #
-#   sudo bash setup-site.sh --repo <owner>/<repo> [--domain playlibre.net] [--hub https://hub.playlibre.net]
+#   sudo bash setup-site.sh --repo <owner>/<repo> [--domain playlibre.net] [--hub https://hub.playlibre.net] [--old-domains "libroxel.com"]
 #
 # With --repo the site comes from that GitHub repository's main branch, and
 # a timer checks it every 10 minutes and puts any change online (see
@@ -17,10 +17,56 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 [ "$(id -u)" = 0 ] || { echo "Run it with sudo: sudo bash $0 $*"; exit 1; }
 
+# PlayLibre used to be called Libroxel. A site set up back then moves to the new
+# names once, leaving links at the old places (an updater from before the
+# rename may be the one running this), and the old domain sends visitors on
+# to the new one once the new one points somewhere.
+moved() { # old new: move a folder, leaving a link at the old place
+    if [ -e "$1" ] && [ ! -L "$1" ] && [ ! -e "$2" ]; then
+        mv "$1" "$2" && ln -s "$2" "$1"
+    fi
+}
+resolves() { getent ahosts "$1" >/dev/null 2>&1; }
+# (The Hub's own setup may have moved /etc/libroxel already, site.conf too.)
+if [ -e /etc/libroxel/site.conf ] && [ ! -L /etc/libroxel/site.conf ] && [ ! -e /etc/playlibre/site.conf ]; then
+    install -d -m 755 /etc/playlibre
+    mv /etc/libroxel/site.conf /etc/playlibre/site.conf
+    if [ ! -L /etc/libroxel ]; then
+        # The Hub's settings move when its own setup runs. Until then, a
+        # link keeps the site's settings where an older updater looks.
+        ln -sf /etc/playlibre/site.conf /etc/libroxel/site.conf
+    fi
+fi
+if [ -e /etc/systemd/system/libroxel-site-update.timer ] || { [ -d /var/www/libroxel ] && [ ! -L /var/www/libroxel ]; }; then
+    echo "== Moving the website from its old name (Libroxel) to PlayLibre"
+    systemctl disable --now libroxel-site-update.timer >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/libroxel-site-update.service /etc/systemd/system/libroxel-site-update.timer
+    systemctl daemon-reload
+    moved /var/lib/libroxel-site /var/lib/playlibre-site
+    moved /var/www/libroxel /var/www/playlibre
+    if [ -f /usr/local/bin/libroxel-site-update ] && [ ! -L /usr/local/bin/libroxel-site-update ]; then
+        rm -f /usr/local/bin/libroxel-site-update
+        ln -s playlibre-site-update /usr/local/bin/libroxel-site-update
+    fi
+fi
+if [ -f /etc/playlibre/site.conf ]; then
+    sed -i 's#^REPO="llamasjc/libroxel"#REPO="llamasjc/playlibre"#' /etc/playlibre/site.conf
+    if grep -q '^DOMAIN="libroxel.com"' /etc/playlibre/site.conf && resolves playlibre.net; then
+        sed -i 's/^DOMAIN=.*/DOMAIN="playlibre.net"/' /etc/playlibre/site.conf
+        grep -q '^OLD_DOMAINS=' /etc/playlibre/site.conf || echo 'OLD_DOMAINS="libroxel.com"' >> /etc/playlibre/site.conf
+    fi
+    if grep -q '^HUB="https://hub.libroxel.com"' /etc/playlibre/site.conf && resolves hub.playlibre.net; then
+        sed -i 's#^HUB=.*#HUB="https://hub.playlibre.net"#' /etc/playlibre/site.conf
+    fi
+fi
+
 conf=/etc/playlibre/site.conf
 REPO=""
 DOMAIN="playlibre.net"
 HUB="https://hub.playlibre.net"
+# Domains the site had before (space between them): they and their www.
+# send visitors on to the same page on DOMAIN.
+OLD_DOMAINS=""
 [ -f "$conf" ] && . "$conf"
 from=""
 check=yes
@@ -28,6 +74,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --repo) REPO="$2"; shift 2 ;;
         --domain) DOMAIN="$2"; shift 2 ;;
+        --old-domains) OLD_DOMAINS="$2"; shift 2 ;;
         --hub) HUB="${2%/}"; shift 2 ;;
         # The web folder to put online (the updater passes its checkout).
         --from) from="$2"; shift 2 ;;
@@ -44,6 +91,8 @@ cat > "$conf" <<CONF
 # The GitHub repository whose latest release the site updates from (owner/name).
 REPO="$REPO"
 DOMAIN="$DOMAIN"
+# Old domains that send visitors on to DOMAIN (space between them).
+OLD_DOMAINS="$OLD_DOMAINS"
 HUB="$HUB"
 CONF
 
@@ -133,6 +182,14 @@ www.$DOMAIN {
     redir https://$DOMAIN{uri} permanent
 }
 CADDY
+for old in $OLD_DOMAINS; do
+    cat >> /etc/caddy/sites/site.caddy.new <<CADDY
+
+$old, www.$old {
+    redir https://$DOMAIN{uri} permanent
+}
+CADDY
+done
 if ! cmp -s /etc/caddy/sites/site.caddy.new /etc/caddy/sites/site.caddy; then
     mv /etc/caddy/sites/site.caddy.new /etc/caddy/sites/site.caddy
     caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null

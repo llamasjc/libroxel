@@ -85,9 +85,8 @@ pub struct Moderation {
 impl Moderation {
     /// From `PLAYLIBRE_MODERATION_KEY` (and `PLAYLIBRE_MODERATION_URL`); `None` when unset.
     pub fn from_env() -> Option<Moderation> {
-        let key = std::env::var("PLAYLIBRE_MODERATION_KEY").ok().filter(|k| !k.trim().is_empty())?;
-        let url = std::env::var("PLAYLIBRE_MODERATION_URL")
-            .ok()
+        let key = crate::setting("PLAYLIBRE_MODERATION_KEY").filter(|k| !k.trim().is_empty())?;
+        let url = crate::setting("PLAYLIBRE_MODERATION_URL")
             .filter(|u| !u.trim().is_empty())
             .unwrap_or_else(|| "https://api.openai.com/v1/moderations".to_owned());
         Some(Moderation { url, key: key.trim().to_owned() })

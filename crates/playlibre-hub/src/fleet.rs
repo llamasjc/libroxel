@@ -356,6 +356,8 @@ impl Fleet {
                 .args(["--stop-when-empty", &o.stop_when_empty.as_secs().to_string()])
                 .arg("--official")
                 .env("PLAYLIBRE_HUB", &o.hub_url)
+                // A game server built before the rename reads this name.
+                .env("LIBROXEL_HUB", &o.hub_url)
                 .stdin(Stdio::null())
                 .stdout(log.try_clone()?)
                 .stderr(log)

@@ -59,8 +59,7 @@ impl std::fmt::Debug for Mail {
 impl Mail {
     /// The settings in `PLAYLIBRE_SMTP_*` and `PLAYLIBRE_MAIL_FROM`, if there are any.
     pub fn from_env() -> Result<Mail, String> {
-        let var =
-            |name: &str| std::env::var(name).ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty());
+        let var = |name: &str| crate::setting(name).map(|v| v.trim().to_owned()).filter(|v| !v.is_empty());
         let Some(host) = var("PLAYLIBRE_SMTP_HOST") else { return Ok(Mail::Off) };
         let port = match var("PLAYLIBRE_SMTP_PORT") {
             Some(p) => p.parse().map_err(|_| format!("PLAYLIBRE_SMTP_PORT needs a number, not {p}"))?,

@@ -6,6 +6,19 @@ its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 ## Unreleased
 
 - **Android:** menus stay clear of the notch again in release builds.
+- **Moving from Libroxel to PlayLibre without losing anyone:**
+  - Macs on a Libroxel version update to PlayLibre by themselves (the update
+    archive also holds the app under its old name, which their updater
+    looks for).
+  - A Hub or website server set up as Libroxel moves itself to the new
+    names (settings, data, service account, services and commands) the
+    first time the new `setup-hub.sh` or `setup-site.sh` runs. The old
+    folders stay as links, and `libroxel-admin` keeps working.
+  - The Hub answers on both `hub.playlibre.net` and `hub.libroxel.com`,
+    which older copies of the app use, and reads `LIBROXEL_…` settings
+    where there is no `PLAYLIBRE_…` one, so email codes keep going out.
+  - libroxel.com (and www.libroxel.com) sends every page on to the same
+    page on playlibre.net.
 
 ## 0.1.16 (2026-11-24)
 

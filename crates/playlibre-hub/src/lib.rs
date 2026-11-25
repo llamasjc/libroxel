@@ -170,11 +170,20 @@ pub use email::{
 /// names another address (for trying a Hub out on one computer, such as
 /// the demo Hub or tests).
 pub fn hub_address() -> String {
-    std::env::var("PLAYLIBRE_HUB")
-        .ok()
+    setting("PLAYLIBRE_HUB")
         .map(|a| a.trim().to_owned())
         .filter(|a| !a.is_empty())
         .unwrap_or_else(|| OFFICIAL_HUB.to_owned())
+}
+
+/// A `PLAYLIBRE_…` setting from the environment, or the same setting under
+/// its name from before the rename (`LIBROXEL_…`), so a server or computer
+/// set up back then keeps its settings. `None` when it is unset or not text.
+pub fn setting(name: &str) -> Option<String> {
+    std::env::var(name).ok().or_else(|| {
+        let rest = name.strip_prefix("PLAYLIBRE_")?;
+        std::env::var(format!("LIBROXEL_{rest}")).ok()
+    })
 }
 
 /// How a Hub is run.

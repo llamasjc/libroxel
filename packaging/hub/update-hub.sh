@@ -124,7 +124,8 @@ if [ "$UPDATE_FROM" = source ]; then
         log "fetching $REPO into $dir"
         as_user "git clone --quiet '$url' '$dir'"
     fi
-    as_user "cd '$dir' && git fetch --quiet origin main"
+    # Follows REPO when it changes (such as after the repository's rename).
+    as_user "cd '$dir' && git remote set-url origin '$url' && git fetch --quiet origin main"
     commit="$(as_user "cd '$dir' && git rev-parse origin/main")"
     version="main-${commit:0:7}"
     current="$(cat "$state/release" 2>/dev/null || true)"
@@ -170,7 +171,7 @@ api() { local accept="$1"; shift; curl -fsSL --retry 3 -H "Accept: $accept" "${a
 releases="$(api application/vnd.github+json "https://api.github.com/repos/$REPO/releases?per_page=30")" \
     || { log "could not ask GitHub about $REPO's releases"; exit 1; }
 release="$(jq -c '[.[] | select((.draft | not) and (.prerelease | not))
-    | select(any(.assets[]; .name == "playlibre-hub-linux-x86_64"))]
+    | select(any(.assets[]; .name == "playlibre-hub-linux-x86_64" or .name == "libroxel-hub-linux-x86_64"))]
     | sort_by(.published_at) | last // empty' <<<"$releases")"
 [ -n "$release" ] || { log "no release of $REPO carries the Hub yet"; exit 0; }
 tag="$(jq -r .tag_name <<<"$release")"
@@ -183,23 +184,26 @@ if skipped "$tag"; then
     exit 0
 fi
 asset_url() { jq -r --arg n "$1" '.assets[] | select(.name == $n) | .url' <<<"$release"; }
-for name in playlibre-hub-linux-x86_64 setup-hub.sh update-hub.sh SHA256SUMS.txt; do
+# Releases from before the rename (Libroxel) call the Hub libroxel-hub-linux-x86_64.
+hub_file=playlibre-hub-linux-x86_64
+[ -n "$(asset_url "$hub_file")" ] || hub_file=libroxel-hub-linux-x86_64
+for name in "$hub_file" setup-hub.sh update-hub.sh SHA256SUMS.txt; do
     [ -n "$(asset_url "$name")" ] || { log "release $tag has no $name; leaving the Hub as it is"; exit 0; }
 done
 
 log "updating to $tag"
-for name in playlibre-hub-linux-x86_64 setup-hub.sh update-hub.sh SHA256SUMS.txt; do
+for name in "$hub_file" setup-hub.sh update-hub.sh SHA256SUMS.txt; do
     api application/octet-stream "$(asset_url "$name")" -o "$work/$name"
 done
-(cd "$work" && grep -E ' (playlibre-hub-linux-x86_64|setup-hub.sh|update-hub.sh)$' SHA256SUMS.txt | sha256sum --check --strict --quiet) \
+(cd "$work" && grep -E " ($hub_file|setup-hub.sh|update-hub.sh)\$" SHA256SUMS.txt | sha256sum --check --strict --quiet) \
     || { log "checksums don't match; not installing $tag"; exit 1; }
 # The app, from the release's Debian package.
-app="$(jq -r '.assets[] | select(.name | test("^playlibre-.*linux-x86_64\\.deb$")) | .name' <<<"$release" | head -n 1)"
+app="$(jq -r '.assets[] | select(.name | test("^(playlibre|libroxel)-.*linux-x86_64\\.deb$")) | .name' <<<"$release" | head -n 1)"
 if [ -n "$app" ]; then
     api application/octet-stream "$(asset_url "$app")" -o "$work/$app"
     if (cd "$work" && grep -F " $app" SHA256SUMS.txt | sha256sum --check --strict --quiet); then
         dpkg-deb -x "$work/$app" "$work/app"
-        found="$(find "$work/app" -type f -name playlibre -perm -u+x | head -n 1)"
+        found="$(find "$work/app" -type f \( -name playlibre -o -name libroxel \) -perm -u+x | head -n 1)"
         [ -n "$found" ] && cp "$found" "$work/playlibre"
     else
         log "the app's checksum doesn't match; leaving game servers as they are"

@@ -122,3 +122,12 @@ python3 -m http.server 8080 --directory web
 
 The online site's security policy only lets it talk to its own Hub, so
 `?hub=` only works on a copy like this.
+
+## Old domains
+
+`setup-site.sh --old-domains "libroxel.com"` sends every page of those
+domains (and their `www.`) on to the same page on `--domain`, for good
+(HTTP 301). A site set up before the rename to PlayLibre gets this by itself
+once `playlibre.net` points at the server; until then it stays on
+libroxel.com. The old domains need to point at the server too, so Caddy can
+get their certificates.

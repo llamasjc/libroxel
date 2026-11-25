@@ -311,7 +311,11 @@ jobs:
             xcrun stapler staple "$app"
           fi
           mkdir dist
-          tar -czf "dist/$dir.app.tar.gz" -C "$dir" PlayLibre.app
+          # Copies from before the rename (Libroxel, up to 0.1.17) update from
+          # this archive and look for Libroxel.app in it: put the same app in
+          # under that name too, as hard links, so it costs no extra space.
+          mkdir old-name && (cd "$dir" && pax -rwl PlayLibre.app ../old-name) && mv old-name/PlayLibre.app "$dir/Libroxel.app"
+          tar -czf "dist/$dir.app.tar.gz" -C "$dir" PlayLibre.app Libroxel.app
           mv "$dir.dmg" dist/
       - uses: actions/upload-artifact@v4
         with:
@@ -335,6 +339,9 @@ jobs:
           cargo build --locked --profile dist -p playlibre-hub --bin playlibre-hub
           mkdir hub
           cp target/dist/playlibre-hub hub/playlibre-hub-linux-x86_64
+          # The name a Hub server set up before the rename looks for when it
+          # updates itself; the new setup-hub.sh then moves it to the new names.
+          cp target/dist/playlibre-hub hub/libroxel-hub-linux-x86_64
           cp packaging/hub/setup-hub.sh packaging/hub/update-hub.sh hub/
       - uses: actions/upload-artifact@v4
         with:
