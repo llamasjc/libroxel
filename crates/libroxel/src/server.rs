@@ -272,6 +272,8 @@ pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicB
     // Port 0 picks a free one: the tunnel needs the one it got.
     let port = session.host_address().map_or(port, |a| a.port());
     let tunnel = HostTunnel::start_on(&identity, Network::Internet, port, udp_port)?;
+    // Players who come through it are known by their keys.
+    session.set_guest_lookup(Box::new(tunnel.guest_lookup()));
     say(format!("Hosting {game} on port {port}. Getting a join code…"));
 
     let hub = match hub {

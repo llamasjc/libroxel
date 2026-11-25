@@ -156,10 +156,22 @@ pub struct MouseRay {
 /// don't ignore the inset start.
 pub const GUI_INSET: f32 = 58.0;
 
-/// How much memory one game's scripts may use together. A script that
-/// tries to use more gets a "not enough memory" error instead of taking
-/// the whole computer (or server) down with it.
+/// How much memory one game's scripts may use together on a computer. A
+/// script that tries to use more gets a "not enough memory" error instead
+/// of taking the whole computer (or server) down with it.
 pub const MEMORY_LIMIT: usize = 2048 * 1024 * 1024;
+
+/// The same on a phone or tablet, which has far less to spare.
+pub const MOBILE_MEMORY_LIMIT: usize = 768 * 1024 * 1024;
+
+/// The same for a computer that joined someone else's game: it runs only
+/// its own player's local scripts, and the game is someone else's code.
+pub const JOINED_MEMORY_LIMIT: usize = 512 * 1024 * 1024;
+
+/// [`MEMORY_LIMIT`], or [`MOBILE_MEMORY_LIMIT`] on a phone or tablet.
+pub fn device_memory_limit() -> usize {
+    if cfg!(any(target_os = "android", target_os = "ios")) { MOBILE_MEMORY_LIMIT } else { MEMORY_LIMIT }
+}
 
 /// Script threads waiting at one place: see [`ScriptRuntime::waiting_report`].
 #[derive(Debug, Clone, PartialEq)]
@@ -207,7 +219,7 @@ impl ScriptRuntime {
         // own global environment on top.
         lua.sandbox(true)?;
         lenient::after_sandbox(&lua)?;
-        lua.set_memory_limit(MEMORY_LIMIT)?;
+        lua.set_memory_limit(device_memory_limit())?;
         Ok(Self { lua, tree })
     }
 
@@ -623,6 +635,20 @@ impl ScriptRuntime {
     /// fired toward the other side become [`NetMessage`]s.
     pub fn set_net_role(&self, role: NetRole) {
         bindings::host(&self.lua).net.borrow_mut().role = role;
+        if role == NetRole::Client {
+            self.set_memory_limit(JOINED_MEMORY_LIMIT.min(device_memory_limit()));
+        }
+    }
+
+    /// Changes how much memory the game's scripts may use together.
+    pub fn set_memory_limit(&self, bytes: usize) {
+        bindings::host(&self.lua).memory_limit.set(bytes);
+        let _ = self.lua.set_memory_limit(bytes);
+    }
+
+    /// How much memory the game's scripts may use together.
+    pub fn memory_limit(&self) -> usize {
+        bindings::host(&self.lua).memory_limit.get()
     }
 
     /// Runs every waiting thread each step, however long it takes, so a

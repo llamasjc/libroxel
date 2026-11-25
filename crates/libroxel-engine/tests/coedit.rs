@@ -22,7 +22,17 @@ struct Desk {
 impl Desk {
     fn step(&mut self) {
         self.edit.step(&mut self.tree);
+        // The sharing computer's person lets everyone in.
+        for (ticket, _) in self.edit.asking() {
+            self.edit.answer(ticket, true);
+        }
     }
+}
+
+/// The address to join `host` with, password and all.
+fn address(host: &Desk) -> String {
+    let port = host.edit.local_addr().unwrap().port();
+    format!("127.0.0.1:{port}#{}", host.edit.password().unwrap())
 }
 
 /// Steps every computer until `done` holds (or gives up).
@@ -48,9 +58,7 @@ fn shared() -> (Desk, Desk) {
     let script = add(&mut tree, ClassKind::Script, sss, "Main");
     tree.set(script, Property::Source, PropertyValue::String("print('hi')".into())).unwrap();
     let mut host = Desk { edit: CoEdit::host(0).unwrap(), tree };
-    let port = host.edit.local_addr().unwrap().port();
-    let mut guest =
-        Desk { edit: CoEdit::join(&format!("127.0.0.1:{port}"), "Sam").unwrap(), tree: InstanceTree::new() };
+    let mut guest = Desk { edit: CoEdit::join(&address(&host), "Sam").unwrap(), tree: InstanceTree::new() };
     until(&mut [&mut host, &mut guest], |d| {
         d[1].edit.ready() && named(&d[1].tree, d[1].tree.workspace(), "Floor").is_some()
     });
@@ -144,9 +152,7 @@ fn a_dragged_part_does_not_jump_back_and_everyone_ends_up_agreeing() {
 #[test]
 fn a_second_guest_sees_what_the_first_one_made() {
     let (mut host, mut sam) = shared();
-    let port = host.edit.local_addr().unwrap().port();
-    let mut ana =
-        Desk { edit: CoEdit::join(&format!("127.0.0.1:{port}"), "Ana").unwrap(), tree: InstanceTree::new() };
+    let mut ana = Desk { edit: CoEdit::join(&address(&host), "Ana").unwrap(), tree: InstanceTree::new() };
     until(&mut [&mut host, &mut sam, &mut ana], |d| d[2].edit.ready());
     let ws = sam.tree.workspace();
     let tower = add(&mut sam.tree, ClassKind::Part, ws, "Tower");
@@ -177,4 +183,61 @@ fn opening_another_game_starts_every_guest_over() {
         let t = &d[1].tree;
         named(t, t.workspace(), "Island").is_some() && named(t, t.workspace(), "Floor").is_none()
     });
+}
+
+/// Steps the host (without letting anyone in) and `guest` a while.
+fn wait_a_while(host: &mut CoEdit, host_tree: &mut InstanceTree, guest: &mut Desk) {
+    for _ in 0..60 {
+        host.step(host_tree);
+        guest.edit.step(&mut guest.tree);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+fn secret_game() -> InstanceTree {
+    let mut tree = InstanceTree::new();
+    let sss = tree.service(ClassKind::ServerScriptService).unwrap();
+    let script = add(&mut tree, ClassKind::Script, sss, "Secret");
+    tree.set(script, Property::Source, PropertyValue::String("print('mine')".into())).unwrap();
+    tree
+}
+
+#[test]
+fn nobody_gets_in_without_the_password() {
+    let mut tree = secret_game();
+    let mut host = CoEdit::host(0).unwrap();
+    let port = host.local_addr().unwrap().port();
+    assert!(CoEdit::join(&format!("127.0.0.1:{port}"), "Eve").is_err(), "a password is needed");
+    let mut eve = Desk {
+        edit: CoEdit::join(&format!("127.0.0.1:{port}#wrong-guess"), "Eve").unwrap(),
+        tree: InstanceTree::new(),
+    };
+    wait_a_while(&mut host, &mut tree, &mut eve);
+    assert!(host.asking().is_empty(), "a wrong password isn't even asked about");
+    assert!(!eve.edit.ready());
+    let sss = eve.tree.service(ClassKind::ServerScriptService).unwrap();
+    assert!(named(&eve.tree, sss, "Secret").is_none());
+}
+
+#[test]
+fn the_sharing_person_decides_who_gets_in() {
+    let mut tree = secret_game();
+    let mut host = CoEdit::host(0).unwrap();
+    let port = host.local_addr().unwrap().port();
+    let password = host.password().unwrap().to_owned();
+    let mut eve = Desk {
+        edit: CoEdit::join(&format!("127.0.0.1:{port}#{}", password.to_uppercase()), "Eve").unwrap(),
+        tree: InstanceTree::new(),
+    };
+    wait_a_while(&mut host, &mut tree, &mut eve);
+    let asking = host.asking();
+    assert_eq!(asking.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>(), ["Eve"]);
+    assert!(eve.edit.waiting() && !eve.edit.ready(), "nothing is sent while the host decides");
+    assert!(host.people().is_empty());
+    host.answer(asking[0].0, false);
+    wait_a_while(&mut host, &mut tree, &mut eve);
+    assert!(!eve.edit.ready());
+    let sss = eve.tree.service(ClassKind::ServerScriptService).unwrap();
+    assert!(named(&eve.tree, sss, "Secret").is_none());
+    assert!(host.asking().is_empty() && host.people().is_empty());
 }

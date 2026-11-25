@@ -344,6 +344,30 @@ fn the_host_removes_a_player_who_then_cannot_come_back() {
 }
 
 #[test]
+fn a_removed_player_with_a_proved_id_cant_come_back_under_another_name() {
+    let tree = Rc::new(RefCell::new(game()));
+    let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+    // Stands in for the tunnel: every connection is the same player's key.
+    host.set_guest_lookup(Box::new(|_| Some("griefer-key".to_owned())));
+    let port = host.host_address().unwrap().port();
+    let join = |name: &str| {
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), name)
+            .unwrap()
+    };
+    let mut guest = join("Griefer");
+    until(&mut host, &mut guest, CharacterInput::default(), |h, _| h.joined_players().len() == 1);
+    let (player, _) = host.joined_players()[0].clone();
+    assert_eq!(host.account_of(player).as_deref(), Some("griefer-key"));
+    host.kick(player, "no griefing");
+    until(&mut host, &mut guest, CharacterInput::default(), |h, g| {
+        g.disconnected() && h.joined_players().is_empty()
+    });
+    let mut again = join("TotallySomeoneElse");
+    until(&mut host, &mut again, CharacterInput::default(), |_, g| g.disconnected());
+    assert!(host.joined_players().is_empty());
+}
+
+#[test]
 fn bad_words_are_not_allowed_in_names() {
     let tree = Rc::new(RefCell::new(game()));
     let mut host = PlaySession::host(tree, 0, None, true).unwrap();

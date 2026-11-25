@@ -2803,6 +2803,7 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
                 }
                 ui.separator();
                 ui.label(t("Or edit a game someone else shares. Its game replaces the one open here."));
+                ui.label(t("Ask them for the edit code, or their address then # and the edit password."));
                 egui::Grid::new("edit-together").num_columns(2).show(ui, |ui| {
                     ui.label(t("Join code or address"));
                     theme::hidden_field(ui, address, "lrx1… or 192.168.1.20", 220.0);
@@ -2945,8 +2946,27 @@ fn edit_together(engine: &mut EngineState, editor: &mut Editor) {
 }
 
 /// The toolbar's word on editing together.
-fn together_status(ui: &mut egui::Ui, coedit: &libroxel_engine::coedit::CoEdit, tunnel: Option<&Tunnel>) {
+fn together_status(ui: &mut egui::Ui, coedit: &mut libroxel_engine::coedit::CoEdit, tunnel: Option<&Tunnel>) {
     let red = theme::RED;
+    // Nobody edits a shared game until the person sharing it lets them in.
+    let mut answers = Vec::new();
+    for (ticket, name) in coedit.asking() {
+        theme::status(ui, theme::AMBER, &tf("{name} asks to edit this game", &[("name", &name)]));
+        if ui
+            .button(t("Let in"))
+            .on_hover_text(t("They will see and can change everything, scripts too"))
+            .clicked()
+        {
+            answers.push((ticket, true));
+        }
+        if ui.button(t("Turn away")).clicked() {
+            answers.push((ticket, false));
+        }
+    }
+    for (ticket, allow) in answers {
+        coedit.answer(ticket, allow);
+    }
+    let password = coedit.password().unwrap_or_default().to_owned();
     if let Some(address) = coedit.local_addr() {
         let people = coedit.people();
         let who = if people.is_empty() { t("no one yet").to_owned() } else { people.join(", ") };
@@ -2955,9 +2975,19 @@ fn together_status(ui: &mut egui::Ui, coedit: &libroxel_engine::coedit::CoEdit, 
             theme::GREEN,
             &tf("Sharing on port {port} · {who}", &[("port", &address.port()), ("who", &who)]),
         )
-        .on_hover_text(t("Others on your network join with this computer's address and this port"));
+        .on_hover_text(t("Others on your network join with this computer's address and this port, then # and the edit password"));
+        if ui
+            .button(format!("{}  {}", icon::COPY, t("Copy edit password")))
+            .on_hover_text(t(
+                "For joining by address on your network. It isn't shown here, so it stays off streams.",
+            ))
+            .clicked()
+        {
+            ui.ctx().copy_text(password.clone());
+        }
         if let Some(Tunnel::Host(tunnel)) = tunnel {
             if let Some(code) = tunnel.code() {
+                let code = format!("{code}{}{password}", libroxel_engine::coedit::PASSWORD_MARK);
                 let copy = ui
                     .button(format!("{}  {}", icon::COPY, t("Copy edit code")))
                     .on_hover_text(t("Friends anywhere paste it into Edit together. It isn't shown here, so it stays off streams."));
@@ -2979,6 +3009,8 @@ fn together_status(ui: &mut egui::Ui, coedit: &libroxel_engine::coedit::CoEdit, 
         crate::report::button(ui, &format!("Could not reach the shared game: {error}"));
     } else if coedit.disconnected() {
         theme::status(ui, theme::RED, "Disconnected");
+    } else if coedit.waiting() {
+        theme::status(ui, theme::AMBER, "Waiting to be let in…");
     } else if !coedit.ready() {
         theme::status(ui, theme::AMBER, "Getting the shared game…");
     } else {
@@ -3434,6 +3466,8 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                         });
                         match tunnel {
                             Ok(tunnel) => {
+                                // Players who come through it are known by their keys.
+                                session.set_guest_lookup(Box::new(tunnel.guest_lookup()));
                                 editor.tunnel = Some(Tunnel::Host(tunnel));
                                 if let Ok(me) = crate::identity() {
                                     let game = editor.file.as_ref().and_then(|f| f.file_stem()).map_or_else(
@@ -3484,9 +3518,11 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                 Ok(coedit) => {
                     let port = coedit.local_addr().map_or(0, |a| a.port());
                     log(engine, LogLevel::Info, format!("Sharing this game for editing on port {port}"));
-                    match crate::identity().and_then(|me| {
-                        libroxel_net::HostTunnel::start(&me, libroxel_net::Network::Internet, port)
-                    }) {
+                    // A key made just for this share, so the edit code says
+                    // nothing about who is sharing and can't be worked out
+                    // from their player id.
+                    let me = libroxel_net::Identity::generate();
+                    match libroxel_net::HostTunnel::start(&me, libroxel_net::Network::Internet, port) {
                         Ok(tunnel) => editor.edit_tunnel = Some(Tunnel::Host(tunnel)),
                         Err(e) => log(engine, LogLevel::Warn, format!("Only your network can join: {e}")),
                     }
@@ -3497,13 +3533,19 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
         }
         Action::JoinEdits { address, name } => {
             let name = if name.is_empty() { "Someone" } else { name.as_str() };
-            let joined = if libroxel_net::is_join_code(&address) {
+            let (target, password) = libroxel_engine::coedit::split_password(&address);
+            let password = password.unwrap_or_default();
+            let joined = if libroxel_net::is_join_code(target) {
                 crate::identity()
                     .and_then(|me| {
-                        libroxel_net::JoinTunnel::start(&me, libroxel_net::Network::Internet, &address)
+                        libroxel_net::JoinTunnel::start(&me, libroxel_net::Network::Internet, target)
                     })
                     .and_then(|tunnel| {
-                        let local = tunnel.local_addr().to_string();
+                        let local = format!(
+                            "{}{}{password}",
+                            tunnel.local_addr(),
+                            libroxel_engine::coedit::PASSWORD_MARK
+                        );
                         let coedit = libroxel_engine::coedit::CoEdit::join(&local, name)?;
                         Ok((coedit, Some(Tunnel::Join(tunnel))))
                     })
@@ -4149,7 +4191,7 @@ fn ribbon(
         }
         ui.add_space(12.0);
         session_status(ui, editor, session, actions);
-        if let Some(coedit) = &editor.coedit {
+        if let Some(coedit) = &mut editor.coedit {
             together_status(ui, coedit, editor.edit_tunnel.as_ref());
         }
         if playing {

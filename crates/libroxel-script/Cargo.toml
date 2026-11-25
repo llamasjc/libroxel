@@ -16,6 +16,8 @@ serde_json.workspace = true
 rbx_reflection = "7.0"
 rbx_reflection_database = "3.0"
 rbx_types = "3.1"
+# Unguessable GUIDs (HttpService:GenerateGUID).
+getrandom = "0.3"
 
 # Luau's JIT only makes code for 64-bit processors. On 32-bit ARM it would do
 # nothing, and its code needs `__clear_cache`, which 32-bit Android doesn't

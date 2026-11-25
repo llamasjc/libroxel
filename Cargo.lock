@@ -5366,6 +5366,7 @@ dependencies = [
  "bevy",
  "data-encoding",
  "flate2",
+ "getrandom 0.3.4",
  "libroxel-avatar",
  "libroxel-instance",
  "libroxel-script",
@@ -5448,6 +5449,7 @@ dependencies = [
 name = "libroxel-script"
 version = "0.1.5"
 dependencies = [
+ "getrandom 0.3.4",
  "libroxel-instance",
  "mlua",
  "rbx_reflection",

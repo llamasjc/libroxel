@@ -40,3 +40,32 @@ fn a_joiner_reaches_the_host_game() {
     assert!(join.connected());
     server.join().unwrap();
 }
+
+#[test]
+fn the_host_learns_who_really_joined() {
+    let game = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = game.local_addr().unwrap().port();
+    let host = HostTunnel::start(&Identity::generate(), Network::LocalOnly, port).unwrap();
+    let who = host.guest_lookup();
+    let start = Instant::now();
+    let code = loop {
+        if let Some(code) = host.code() {
+            break code;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "no join code");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let ana = Identity::generate();
+    let join = JoinTunnel::start(&ana, Network::LocalOnly, &code).unwrap();
+    let mut player = TcpStream::connect(join.local_addr()).unwrap();
+    player.write_all(b"hi\n").unwrap();
+    let (mut stream, from) = game.accept().unwrap();
+    let mut buf = [0u8; 8];
+    let _ = stream.read(&mut buf).unwrap();
+    assert_eq!(who(from), Some(ana.player_id()), "the tunnel vouches for the joiner's key");
+    // Anything that didn't come through the tunnel is nobody in particular.
+    let direct = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let (_, from_direct) = game.accept().unwrap();
+    assert_eq!(who(from_direct), None);
+    drop(direct);
+}

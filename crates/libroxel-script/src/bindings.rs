@@ -333,6 +333,8 @@ impl Watchdog {
 
 /// Host state stored in the VM's app data.
 pub(crate) struct Host {
+    /// How much memory the game's scripts may use (see [`crate::MEMORY_LIMIT`]).
+    pub(crate) memory_limit: Cell<usize>,
     /// The weak-valued table of each instance's one userdata, by its id's
     /// bits (kept here so finding it doesn't go through the registry).
     instance_cache: RefCell<Option<Table>>,
@@ -2260,6 +2262,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         destroys_seen: Cell::new(None),
         part_index: RefCell::new(libroxel_instance::geometry::PartIndex::new()),
         tweens: RefCell::new(Vec::new()),
+        memory_limit: Cell::new(crate::device_memory_limit()),
         tween_drops: Rc::new(RefCell::new(Vec::new())),
         next_tween: Cell::new(1),
         inputs_down: RefCell::new(Default::default()),
@@ -2790,7 +2793,7 @@ const LOADING_SHARE: f32 = 0.6;
 pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
     // The collector lets garbage pile up to about twice what is in use
     // before it catches up: past half the limit, collect it all now.
-    if lua.used_memory() > crate::MEMORY_LIMIT / 2 {
+    if lua.used_memory() > host(lua).memory_limit.get() / 2 {
         let _ = lua.gc_collect();
     }
     let now = {

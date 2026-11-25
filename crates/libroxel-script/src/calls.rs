@@ -147,32 +147,18 @@ const INVOKE_PRELUDE: &str = r#"
 
 struct HttpService;
 
-/// A fresh random 64-bit number (not for security).
-fn random_u64(lua: &Lua) -> u64 {
-    use std::cell::Cell;
-    thread_local!(static STATE: Cell<u64> = const { Cell::new(0) });
-    STATE.with(|s| {
-        let mut x = s.get();
-        if x == 0 {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(1);
-            x = now ^ host(lua).clock.get().to_bits() ^ 0x9E37_79B9_7F4A_7C15;
-        }
-        // splitmix64
-        x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        s.set(x);
-        let mut z = x;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    })
+/// A fresh random 64-bit number from the system's secure random source:
+/// games use GUIDs as hard-to-guess keys (trade offers, codes, sessions),
+/// so the next one mustn't be workable out from the clock or the last one.
+fn random_u64() -> u64 {
+    let mut bytes = [0u8; 8];
+    getrandom::fill(&mut bytes).expect("the system has a random number source");
+    u64::from_le_bytes(bytes)
 }
 
 /// A random version-4 GUID in upper case, like `1B4E28BA-2FA1-41D2-883F-0016D3CCA427`.
-fn guid(lua: &Lua) -> String {
-    let (a, b) = (random_u64(lua), random_u64(lua));
+fn guid() -> String {
+    let (a, b) = (random_u64(), random_u64());
     let a = (a & !0xF000) | 0x4000; // version 4
     let b = (b & !(0xC << 60)) | (0x8 << 60); // variant 1
     format!(
@@ -209,8 +195,8 @@ impl UserData for HttpService {
                 serde_json::from_str(&text).map_err(|e| runtime_err(format!("can't decode JSON: {e}")))?;
             crate::services::from_json(lua, &json)
         });
-        m.add_method(http::GENERATE_GUID, |lua, _, braces: Option<bool>| {
-            let id = guid(lua);
+        m.add_method(http::GENERATE_GUID, |_, _, braces: Option<bool>| {
+            let id = guid();
             Ok(if braces.unwrap_or(true) { format!("{{{id}}}") } else { id })
         });
         m.add_method(http::URL_ENCODE, |_, _, text: String| Ok(url_encode(&text)));

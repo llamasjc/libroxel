@@ -105,6 +105,41 @@ fn unshared(class: ClassKind) -> bool {
     matches!(class, ClassKind::Camera | ClassKind::PlayerGui)
 }
 
+/// Whether a joined computer can know of `id`: it is in one of the
+/// [`SHARED`] services and not inside a camera or someone's GUIs. Like
+/// Roblox, an instance a player's computer names in `FireServer` or
+/// `InvokeServer` reaches the game's scripts only when it is one of these,
+/// so a cheat can't hand a server script something from `ServerStorage`.
+fn shared_with_guests(tree: &InstanceTree, id: InstanceId) -> bool {
+    let mut current = id;
+    loop {
+        let Ok(class) = tree.class(current) else { return false };
+        if unshared(class) || tree.is_destroyed(current).unwrap_or(true) {
+            return false;
+        }
+        match tree.parent(current) {
+            Ok(Some(parent)) if parent == tree.root() => {
+                return SHARED.iter().any(|c| tree.service(*c) == Some(current));
+            }
+            Ok(Some(parent)) => current = parent,
+            _ => return false,
+        }
+    }
+}
+
+/// `args` from a joined computer with every instance it couldn't have been
+/// sent made `nil`: anything not [`shared_with_guests`], and, when the game
+/// streams, anything not streamed to it.
+fn guest_args(tree: &InstanceTree, message: &Json, stream: Option<&Replicator>) -> Json {
+    let mut args = message.get("a").cloned().unwrap_or(Json::Array(Vec::new()));
+    map_instances(&mut args, &mut |id| {
+        let streamed = stream
+            .is_none_or(|s| s.sent.contains_key(&id) || SHARED.iter().any(|c| tree.service(*c) == Some(id)));
+        (streamed && shared_with_guests(tree, id)).then_some(id)
+    });
+    args
+}
+
 // ---------------------------------------------------------------------------
 // Connections
 // ---------------------------------------------------------------------------
@@ -119,7 +154,10 @@ pub(crate) enum Side {
 
 /// The Noise handshake every connection starts with: fresh keys on both
 /// sides, nothing known in advance. It keeps what's sent private and
-/// unchanged on the way, but doesn't prove who the host is.
+/// unchanged on the way, but doesn't prove who the host is. Joining by code
+/// does (the tunnel checks the host's key); joining by address, both sides
+/// see a [safety code](Conn::safety_code) that someone in the middle can't
+/// make match, the way Signal's safety numbers work.
 const NOISE: &str = "Noise_NN_25519_ChaChaPoly_BLAKE2s";
 /// The first bytes a joining computer sends, so a host can tell an
 /// encrypted connection from an older copy of Libroxel talking plain JSON.
@@ -164,6 +202,18 @@ pub(crate) struct Conn {
     /// A thread of its own for reading long messages (a newcomer's world),
     /// started when the first arrives.
     parser: Option<Parser>,
+    /// The key exchange's [`safety code`](Self::safety_code), once done.
+    safety: Option<String>,
+}
+
+/// Eight digits from the key exchange: the same on both ends of one
+/// connection, and different on each side when someone sits in the middle
+/// (they can't make two exchanges come out alike).
+fn safety_code(handshake_hash: &[u8]) -> String {
+    let mut bytes = [0u8; 8];
+    bytes[..5].copy_from_slice(&handshake_hash[..5]);
+    let n = u64::from_le_bytes(bytes) % 100_000_000;
+    format!("{:04} {:04}", n / 10_000, n % 10_000)
 }
 
 /// Messages longer than this are read on the [`Parser`]'s thread: reading
@@ -248,6 +298,7 @@ impl Conn {
             max_message,
             bytes_read: 0,
             parser: None,
+            safety: None,
         };
         if side == Side::Joining {
             conn.unsent.extend_from_slice(MAGIC);
@@ -261,6 +312,17 @@ impl Conn {
         matches!(self.noise, Noise::Ready(_))
     }
 
+    /// Eight digits both ends of this connection see alike, once the keys
+    /// are agreed. Someone listening in the middle makes them differ.
+    pub(crate) fn safety_code(&self) -> Option<&str> {
+        self.safety.as_deref()
+    }
+
+    /// Whether the other end is on this computer (as an internet tunnel is).
+    fn is_local(&self) -> bool {
+        self.stream.peer_addr().is_ok_and(|a| a.ip().is_loopback())
+    }
+
     /// Queues `message` to go out. A long one goes compressed, as
     /// `{"t":"z","d":<base64 of the deflated message>}`: a newcomer's copy
     /// of the world is several times smaller that way.
@@ -268,11 +330,18 @@ impl Conn {
         if self.closed {
             return;
         }
-        let Ok(line) = serde_json::to_vec(message) else { return };
-        match (line.len() > COMPRESS_OVER).then(|| pack(&line)).flatten() {
-            Some(packed) => self.plain_out.extend_from_slice(&packed),
-            None => self.plain_out.extend_from_slice(&line),
+        let Some(body) = encode(message) else { return };
+        self.send_encoded(&body);
+    }
+
+    /// A message [`encode`]d already: the same bytes can go to every
+    /// player, so a step's changes are written out and compressed once,
+    /// not once per player.
+    fn send_encoded(&mut self, body: &[u8]) {
+        if self.closed {
+            return;
         }
+        self.plain_out.extend_from_slice(body);
         self.plain_out.push(b'\n');
         self.seal();
     }
@@ -362,6 +431,7 @@ impl Conn {
             }
         }
         if handshake.is_handshake_finished() {
+            self.safety = Some(safety_code(handshake.get_handshake_hash()));
             let Noise::Handshake(handshake) = std::mem::replace(&mut self.noise, Noise::Failed) else {
                 unreachable!()
             };
@@ -569,6 +639,39 @@ impl Conn {
 }
 
 /// `line` deflated and wrapped in a `z` message, if that's shorter.
+/// The whole world written out once, on a thread of its own, for `count`
+/// players who join in the same step: one copy of the tree and one pass
+/// over it, however many join at once.
+fn worlds_for(
+    tree: InstanceTree,
+    count: usize,
+    primed: Option<Sender<Replicator>>,
+) -> Vec<Receiver<Vec<Vec<u8>>>> {
+    let (senders, receivers): (Vec<_>, Vec<_>) = (0..count).map(|_| channel()).unzip();
+    std::thread::spawn(move || {
+        let mut replicator = Replicator::default();
+        let lines = world_lines(&replicator.delta(&tree));
+        drop(tree);
+        for tx in senders {
+            let _ = tx.send(lines.clone());
+        }
+        if let Some(primed) = primed {
+            let _ = primed.send(replicator);
+        }
+    });
+    receivers
+}
+
+/// `message` as it goes on the wire, before encryption: JSON, compressed
+/// when long (without the newline that ends it).
+fn encode(message: &Json) -> Option<std::sync::Arc<[u8]>> {
+    let line = serde_json::to_vec(message).ok()?;
+    Some(match (line.len() > COMPRESS_OVER).then(|| pack(&line)).flatten() {
+        Some(packed) => packed.into(),
+        None => line.into(),
+    })
+}
+
 fn pack(line: &[u8]) -> Option<Vec<u8>> {
     use flate2::{Compression, write::DeflateEncoder};
     let mut encoder = DeflateEncoder::new(Vec::with_capacity(line.len() / 4), Compression::fast());
@@ -662,8 +765,28 @@ pub(crate) struct Hosting {
     priming: Option<Receiver<Replicator>>,
     /// Teleports found but not sent yet: player, number, where, facing.
     teleports: Vec<(InstanceId, u64, Vec3, f32)>,
-    /// The names of players removed from this game, who can't join again.
-    banned: Vec<String>,
+    /// Players removed from this game, who can't join again.
+    banned: Vec<Ban>,
+    /// Who a connection really is, for connections through an internet
+    /// tunnel (see [`PlaySession::set_guest_lookup`]).
+    who: Option<GuestLookup>,
+    /// Whether computers on the network may join by address while there is
+    /// a tunnel (see [`PlaySession::allow_network_joins`]).
+    network_joins: bool,
+}
+
+/// Says which player's computer a connection to the game comes from (by
+/// the address it connects from), when something can vouch for it.
+pub type GuestLookup = Box<dyn Fn(SocketAddr) -> Option<String> + Send + Sync>;
+
+/// Someone removed from a hosted game.
+#[derive(Debug, Clone, PartialEq)]
+enum Ban {
+    /// A player whose id was proved: renaming doesn't get them back in.
+    Account(String),
+    /// A player who joined without a proved id, by the name they gave and
+    /// the address they came from.
+    Unproved { name: String, ip: Option<std::net::IpAddr> },
 }
 
 struct Peer {
@@ -674,6 +797,9 @@ struct Peer {
     fresh: bool,
     /// The name they asked to play as.
     asked: String,
+    /// Where they connected from, and their player id when it was proved.
+    from: Option<SocketAddr>,
+    account: Option<String>,
     queue: VecDeque<Out>,
     world: Option<Receiver<Vec<Vec<u8>>>>,
     /// When they connected.
@@ -694,16 +820,20 @@ struct Peer {
 enum Out {
     Message(Json),
     Line(Vec<u8>),
+    /// A message [`encode`]d once for everyone.
+    Encoded(std::sync::Arc<[u8]>),
     World,
 }
 
 impl Peer {
-    fn new(conn: Conn, now: Instant) -> Self {
+    fn new(conn: Conn, from: Option<SocketAddr>, now: Instant) -> Self {
         Self {
             conn,
             player: None,
             fresh: true,
             asked: String::new(),
+            from,
+            account: None,
             queue: VecDeque::new(),
             world: None,
             since: now,
@@ -727,18 +857,20 @@ impl Peer {
         }
     }
 
-    fn send_world(&mut self, tree: InstanceTree, primed: Option<Sender<Replicator>>) {
-        let (tx, rx) = channel();
-        std::thread::spawn(move || {
-            let mut replicator = Replicator::default();
-            let lines = world_lines(&replicator.delta(&tree));
-            drop(tree);
-            let _ = tx.send(lines);
-            if let Some(primed) = primed {
-                let _ = primed.send(replicator);
+    fn send_encoded(&mut self, body: std::sync::Arc<[u8]>) {
+        if self.queue.is_empty() && self.conn.unsent_len() < SEND_AHEAD {
+            self.conn.send_encoded(&body);
+        } else {
+            self.queue.push_back(Out::Encoded(body));
+            if self.queue.len() > MAX_QUEUED {
+                self.conn.closed = true;
             }
-        });
-        self.world = Some(rx);
+        }
+    }
+
+    /// Queues the whole world, as [`worlds_for`] writes it out.
+    fn send_world(&mut self, world: Receiver<Vec<Vec<u8>>>) {
+        self.world = Some(world);
         self.queue.push_back(Out::World);
     }
 
@@ -771,6 +903,7 @@ impl Peer {
                     Some(_) => match self.queue.pop_front() {
                         Some(Out::Message(message)) => self.conn.send(&message),
                         Some(Out::Line(line)) => self.conn.send_line(&line),
+                        Some(Out::Encoded(body)) => self.conn.send_encoded(&body),
                         _ => {}
                     },
                 }
@@ -1682,6 +1815,29 @@ fn move_json(input: CharacterInput) -> Json {
     })
 }
 
+/// Whether a solid wall stands between where a character was and where its
+/// computer says it went: a cheat walking through walls ("noclip"). Two
+/// rays, at the middle of the character and a stud higher, must both be
+/// stopped, so steps, slopes and low ledges never count. Terrain and parts
+/// that don't collide don't count either.
+pub(crate) fn walls_between(tree: &InstanceTree, model: InstanceId, from: Vec3, to: Vec3) -> bool {
+    let step = Vec3::new(to.x - from.x, to.y - from.y, to.z - from.z);
+    let length = step.length();
+    if !length.is_finite() || length < 0.25 {
+        return false;
+    }
+    let solid = |part: InstanceId| {
+        tree.class(part).is_ok_and(|c| c != ClassKind::Terrain)
+            && tree.get_bool(part, Property::CanCollide) != Some(false)
+            && !tree.is_descendant_of(part, model).unwrap_or(false)
+    };
+    [0.0, 1.0].iter().all(|up| {
+        let start = Vec3::new(from.x, from.y + up, from.z);
+        libroxel_instance::geometry::raycast(tree, start, step, solid)
+            .is_some_and(|hit| hit.distance < length - 0.1)
+    })
+}
+
 /// How far a joined computer may say its character went. Generous, so
 /// lag, knocks and launch pads still get through, but nowhere near what a
 /// teleport or a speed hack needs.
@@ -1789,6 +1945,8 @@ impl PlaySession {
             priming: None,
             teleports: Vec::new(),
             banned: Vec::new(),
+            who: None,
+            network_joins: true,
         }));
         Ok(session)
     }
@@ -1861,7 +2019,13 @@ impl PlaySession {
             peer.conn.send(&json!({ "t": "kicked", "why": why }));
             peer.conn.flush();
             peer.conn.closed = true;
-            host.banned.push(peer.asked.clone());
+            host.banned.push(match &peer.account {
+                Some(id) => Ban::Account(id.clone()),
+                None => Ban::Unproved {
+                    name: peer.asked.clone(),
+                    ip: peer.from.map(|f| f.ip()).filter(|ip| !ip.is_loopback()),
+                },
+            });
             self.info(format!("{shown} was removed: {why}"));
             return;
         }
@@ -1880,6 +2044,38 @@ impl PlaySession {
             .filter_map(|p| p.player)
             .map(|p| (p, tree.name(p).unwrap_or("Player").to_owned()))
             .collect()
+    }
+
+    /// The proved player id of a player who joined from another computer,
+    /// when their connection came through a tunnel that vouches for it
+    /// (see [`set_guest_lookup`](Self::set_guest_lookup)). A player's name
+    /// is whatever they typed; this is who they really are.
+    pub fn account_of(&self, player: InstanceId) -> Option<String> {
+        let Link::Host(host) = &self.link else { return None };
+        host.peers.iter().find(|p| p.player == Some(player)).and_then(|p| p.account.clone())
+    }
+
+    /// While hosting: how to tell who a connection really is, such as
+    /// `libroxel_net::HostTunnel::guest_lookup`. Players removed from the
+    /// game are then kept out by who they are, not by the name they give.
+    ///
+    /// From then on only connections from this computer (the tunnel's) are
+    /// taken, so nobody on the network gets in without the join code; see
+    /// [`allow_network_joins`](Self::allow_network_joins).
+    pub fn set_guest_lookup(&mut self, lookup: GuestLookup) {
+        if let Link::Host(host) = &mut self.link {
+            host.who = Some(lookup);
+            host.network_joins = false;
+        }
+    }
+
+    /// Lets computers on the network join by address too, after
+    /// [`set_guest_lookup`](Self::set_guest_lookup). They have no proved id
+    /// and see a safety code instead.
+    pub fn allow_network_joins(&mut self) {
+        if let Link::Host(host) = &mut self.link {
+            host.network_joins = true;
+        }
     }
 
     /// Where a hosted game listens.
@@ -1967,7 +2163,12 @@ impl PlaySession {
         // command, say); catch it before the player's moves overwrite it.
         host.teleports.extend(self.find_teleports());
         let now = Instant::now();
-        while let Ok((stream, _)) = host.listener.accept() {
+        while let Ok((stream, from)) = host.listener.accept() {
+            // With a tunnel, everyone comes through it (and so has a proved
+            // id and needs the code), unless the host asked otherwise.
+            if host.who.is_some() && !host.network_joins && !from.ip().is_loopback() {
+                continue;
+            }
             // Computers that connect and never say hello are hung up on, and
             // only a few may wait at once, so they can't pile up.
             let waiting = host.peers.iter().filter(|p| p.player.is_none() && !p.conn.closed).count();
@@ -1975,7 +2176,7 @@ impl PlaySession {
                 continue;
             }
             if let Ok(conn) = Conn::with_limit(stream, Side::Hosting, MAX_FROM_GUEST) {
-                host.peers.push(Peer::new(conn, now));
+                host.peers.push(Peer::new(conn, Some(from), now));
             }
         }
         for peer in &mut host.peers {
@@ -2026,7 +2227,16 @@ impl PlaySession {
                         } else {
                             name
                         };
-                        if host.banned.contains(&name) {
+                        peer.account = peer.from.and_then(|from| host.who.as_ref().and_then(|who| who(from)));
+                        let ip = peer.from.map(|f| f.ip()).filter(|ip| !ip.is_loopback());
+                        let banned = host.banned.iter().any(|ban| match (ban, &peer.account) {
+                            (Ban::Account(id), Some(account)) => id == account,
+                            (Ban::Unproved { name: n, ip: i }, None) => {
+                                n == &name || (i.is_some() && *i == ip)
+                            }
+                            _ => false,
+                        });
+                        if banned {
                             peer.conn.send(
                                 &json!({ "t": "refused", "why": "the host removed you from this game" }),
                             );
@@ -2038,7 +2248,13 @@ impl PlaySession {
                         let player = self.add_player(&name, true);
                         peer.player = Some(player);
                         let shown = tree.borrow().name(player).unwrap_or("A player").to_owned();
-                        self.info(format!("{shown} joined"));
+                        match peer.conn.safety_code() {
+                            // By address: the host can check the player sees the same digits.
+                            Some(code) if peer.account.is_none() && !peer.conn.is_local() => {
+                                self.info(format!("{shown} joined (safety code {code})"));
+                            }
+                            _ => self.info(format!("{shown} joined")),
+                        }
                     }
                     continue;
                 };
@@ -2060,7 +2276,8 @@ impl PlaySession {
                     }
                     "fire" => {
                         if let Some(remote) = id_in(&message, "r") {
-                            let args = message.get("a").cloned().unwrap_or(Json::Array(Vec::new()));
+                            let stream = host.streaming.then_some(&peer.stream);
+                            let args = guest_args(&tree.borrow(), &message, stream);
                             let errors = self.runtime.deliver_server_event(remote, player, &args);
                             self.collect(errors);
                         }
@@ -2068,7 +2285,8 @@ impl PlaySession {
                     "invoke" => {
                         let call = message.get("call").and_then(Json::as_u64).unwrap_or(0);
                         if let Some(remote) = id_in(&message, "r") {
-                            let args = message.get("a").cloned().unwrap_or(Json::Array(Vec::new()));
+                            let stream = host.streaming.then_some(&peer.stream);
+                            let args = guest_args(&tree.borrow(), &message, stream);
                             let errors = self.runtime.deliver_invoke(call, remote, player, &args);
                             self.collect(errors);
                         }
@@ -2195,7 +2413,13 @@ impl PlaySession {
             }
         }
         let delta = host.replicator.as_mut().map(|r| r.delta(&tree.borrow())).unwrap_or_default();
-        let delta = (!delta.is_empty()).then(|| json!({ "t": "rep", "ops": delta }));
+        // Everyone joining this step shares one copy of the world.
+        let joining = host.peers.iter().filter(|p| p.fresh && p.player.is_some()).count();
+        let mut worlds =
+            if joining > 0 { worlds_for(tree.borrow().clone(), joining, primed.take()) } else { Vec::new() };
+        // Written out and compressed once, then sent to every player as is.
+        let delta =
+            (!delta.is_empty()).then(|| json!({ "t": "rep", "ops": delta })).as_ref().and_then(encode);
         for peer in &mut host.peers {
             let Some(player) = peer.player else { continue };
             for (who, seq, pos, yaw) in &teleports {
@@ -2218,11 +2442,13 @@ impl PlaySession {
                     .sum();
                 peer.send(json!({ "t": "welcome", "services": services, "total": total }));
                 drop(t);
-                peer.send_world(tree.borrow().clone(), primed.take());
+                if let Some(world) = worlds.pop() {
+                    peer.send_world(world);
+                }
                 peer.send(json!({ "t": "you", "player": bits(player) }));
                 peer.fresh = false;
             } else if let Some(delta) = &delta {
-                peer.send(delta.clone());
+                peer.send_encoded(delta.clone());
             }
             for message in &messages {
                 match message {
@@ -2370,6 +2596,7 @@ impl PlaySession {
         let mut slowest_apply = 0.0f64;
         let mut ops_applied = 0u64;
         let mut marks: Vec<String> = Vec::new();
+        let mut infos: Vec<String> = Vec::new();
         joined.clock.frames += 1;
         if !joined.clock.ready && joined.conn.ready() {
             joined.clock.ready = true;
@@ -2389,6 +2616,11 @@ impl PlaySession {
                     joined.total = message.get("total").and_then(Json::as_u64).unwrap_or(0) as usize;
                     joined.got = 0;
                     if !joined.clock.welcomed {
+                        if let Some(code) = joined.conn.safety_code().filter(|_| !joined.conn.is_local()) {
+                            infos.push(format!(
+                                "Connected. Safety code {code}: the host sees the same one unless someone is listening in"
+                            ));
+                        }
                         joined.clock.welcomed = true;
                         marks.push(joined.clock.mark(&format!(
                             "the host said hello, {} instances in the first batch,",
@@ -2509,6 +2741,9 @@ impl PlaySession {
             c.apply += applying;
             c.slowest = c.slowest.max(slowest_apply);
             c.bytes += bytes_in;
+        }
+        for line in infos {
+            self.info(line);
         }
         for mark in marks {
             self.info(mark);
@@ -2647,11 +2882,12 @@ impl PlaySession {
             let jump = t.get_number(c.humanoid, Property::JumpPower).unwrap_or(50.0) as f32;
             (from, MoveLimits::for_character(walk, jump))
         };
+        let through_wall = walls_between(&tree.borrow(), c.model, from, pos);
         let avatar = &mut self.avatars[index];
         let travel = avatar.travel.get_or_insert_with(|| limits.allowance(now));
         travel.per_second = limits.speed;
         travel.most = limits.burst;
-        if !travel.spend(limits.distance(from, pos), now) {
+        if !travel.spend(limits.distance(from, pos), now) || through_wall {
             avatar.teleports += 1;
             avatar.moved_to = Some(from);
             let facing = tree.borrow().get_vec3(c.root, Property::Orientation).unwrap_or_default().y;
@@ -2838,6 +3074,62 @@ mod tests {
     fn pair(limit: usize) -> (Conn, Conn) {
         let (host, other) = raw_pair(limit);
         (host, Conn::new(other, Side::Joining).unwrap())
+    }
+
+    #[test]
+    fn both_ends_see_the_same_safety_code() {
+        let (mut host, mut guest) = pair(MAX_BACKLOG);
+        connect(&mut host, &mut guest);
+        let code = host.safety_code().unwrap().to_owned();
+        assert_eq!(guest.safety_code(), Some(code.as_str()));
+        assert_eq!(code.len(), 9, "{code}");
+        // Another connection gets other digits.
+        let (mut host2, mut guest2) = pair(MAX_BACKLOG);
+        connect(&mut host2, &mut guest2);
+        assert_ne!(host2.safety_code(), Some(code.as_str()));
+    }
+
+    #[test]
+    fn walking_through_a_wall_is_caught_but_not_walking_past_one() {
+        let mut tree = InstanceTree::new();
+        let ws = tree.workspace();
+        let wall = tree.create(ClassKind::Part, "Wall").unwrap();
+        tree.set_parent(wall, Some(ws)).unwrap();
+        tree.set(wall, Property::Size, PropertyValue::Vec3(Vec3::new(1.0, 10.0, 20.0))).unwrap();
+        tree.set(wall, Property::Position, PropertyValue::Vec3(Vec3::new(0.0, 5.0, 0.0))).unwrap();
+        tree.set(wall, Property::Anchored, PropertyValue::Bool(true)).unwrap();
+        let model = tree.create(ClassKind::Model, "Sam").unwrap();
+        tree.set_parent(model, Some(ws)).unwrap();
+        let at = |x: f32, z: f32| Vec3::new(x, 3.0, z);
+        assert!(walls_between(&tree, model, at(-2.0, 0.0), at(2.0, 0.0)), "straight through");
+        assert!(!walls_between(&tree, model, at(-2.0, 0.0), at(-0.8, 0.0)), "up to it");
+        assert!(!walls_between(&tree, model, at(-2.0, 15.0), at(2.0, 15.0)), "round the end");
+        // A wall players walk through on purpose.
+        tree.set(wall, Property::CanCollide, PropertyValue::Bool(false)).unwrap();
+        assert!(!walls_between(&tree, model, at(-2.0, 0.0), at(2.0, 0.0)));
+    }
+
+    #[test]
+    fn guests_can_only_name_what_they_were_sent() {
+        let mut tree = InstanceTree::new();
+        let ws = tree.workspace();
+        let shared = tree.create(ClassKind::Part, "Coin").unwrap();
+        tree.set_parent(shared, Some(ws)).unwrap();
+        let storage = tree.service(ClassKind::ServerStorage).unwrap();
+        let sword = tree.create(ClassKind::Tool, "AdminSword").unwrap();
+        tree.set_parent(sword, Some(storage)).unwrap();
+        let message = json!({ "t": "fire", "a": [
+            { "$i": shared.to_bits() },
+            { "$i": sword.to_bits() },
+            { "list": [{ "$i": sword.to_bits() }] },
+            { "$i": storage.to_bits() },
+            { "$i": ws.to_bits() },
+        ]});
+        let args = guest_args(&tree, &message, None);
+        assert_eq!(
+            args,
+            json!([{ "$i": shared.to_bits() }, null, { "list": [null] }, null, { "$i": ws.to_bits() }])
+        );
     }
 
     /// Steps both ends until their keys are agreed.

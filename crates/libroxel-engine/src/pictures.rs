@@ -3,7 +3,10 @@
 //! A picture name is a PNG file. A plain name is looked for in each folder
 //! given to [`set_folders`] (the editor gives the game file's folder, an
 //! `images` folder beside it and the games folder's `images` folder); a full
-//! path is used as it is. Names starting with `libroxel://` are pictures
+//! path is used only when it is inside one of those folders. A game is
+//! someone else's code, so its names never reach the rest of this computer:
+//! no `..`, no network shares (which would make Windows sign in to someone
+//! else's computer), and only ordinary files no bigger than [`MAX_FILE`]. Names starting with `libroxel://` are pictures
 //! built into Libroxel: `coin`, `smile`, `star`, `arrow`, `checker`, and
 //! chess pieces named `chess-` then `w` or `b` then `k`, `q`, `r`, `b`, `n` or `p`,
 //! cards named `card-` then `a`, `2` to `10`, `j`, `q` or `k` then `c`, `d`,
@@ -18,7 +21,8 @@
 //! looked for as `123.png` (or `.jpg`, or `123` with no ending) in an `assets` folder
 //! inside each of the folders, so a creator can drop in their own files.
 
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -129,6 +133,70 @@ pub const PICTURES: &[(&str, &[u8])] = &[
 ];
 
 static FOLDERS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// The biggest picture, sound or model file read.
+pub const MAX_FILE: u64 = 64 * 1024 * 1024;
+
+/// Whether `name` names a network share or a device (`\\server\share`,
+/// `//server/share`, `\\?\`, `\\.\`): never opened, since just looking
+/// makes Windows hand the other computer the user's sign-in.
+fn remote_or_device(name: &str) -> bool {
+    let name = name.trim_start();
+    let slashes = |s: &str| {
+        s.starts_with("\\\\") || s.starts_with("//") || s.starts_with("\\/") || s.starts_with("/\\")
+    };
+    slashes(name)
+        || Path::new(name)
+            .components()
+            .any(|c| matches!(c, Component::Prefix(p) if !matches!(p.kind(), std::path::Prefix::Disk(_))))
+}
+
+/// `relative` if it stays inside whatever folder it is joined to.
+fn inside_relative(relative: &str) -> Option<&Path> {
+    if relative.is_empty() || remote_or_device(relative) {
+        return None;
+    }
+    if relative.split(['/', '\\']).any(|part| part == "..") {
+        return None;
+    }
+    let path = Path::new(relative);
+    path.components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir)).then_some(path)
+}
+
+/// Reads an ordinary file of at most [`MAX_FILE`] bytes.
+fn read_file(path: &Path) -> Option<Vec<u8>> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_FILE {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).ok()?.take(MAX_FILE + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= MAX_FILE).then_some(bytes)
+}
+
+/// Reads `relative` inside `dir`, if it really is inside (not through a
+/// link to somewhere else).
+fn read_in(dir: &Path, relative: &str) -> Option<Vec<u8>> {
+    let path = dir.join(inside_relative(relative)?);
+    let (Ok(real), Ok(root)) = (path.canonicalize(), dir.canonicalize()) else { return None };
+    if !real.starts_with(&root) {
+        return None;
+    }
+    read_file(&real)
+}
+
+/// Reads a full path, if it is inside one of `folders`.
+fn read_absolute(path: &Path, folders: &[PathBuf]) -> Option<Vec<u8>> {
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return None;
+    }
+    let real = path.canonicalize().ok()?;
+    folders
+        .iter()
+        .filter_map(|f| f.canonicalize().ok())
+        .any(|f| real.starts_with(f))
+        .then(|| read_file(&real))?
+}
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub const HUB_ASSET: &str = "asset://";
@@ -160,7 +228,7 @@ fn hub_asset(rest: &str) -> Option<Vec<u8>> {
     let hash = hash.to_ascii_lowercase();
     let mut assets = HUB_ASSETS.lock().unwrap_or_else(|e| e.into_inner());
     let assets = assets.as_mut()?;
-    if let Ok(bytes) = std::fs::read(assets.dir.join(&hash)) {
+    if let Some(bytes) = read_file(&assets.dir.join(&hash)) {
         return Some(bytes);
     }
     if assets.asked.insert(hash.clone()) {
@@ -198,12 +266,10 @@ pub fn local_file(name: &str) -> Option<(Vec<u8>, String)> {
         return ENDINGS
             .iter()
             .find_map(|e| {
-                folders.iter().find_map(|dir| {
-                    std::fs::read(dir.join(format!("{id}.{e}"))).ok().map(|b| (b, e.to_string()))
-                })
+                folders.iter().find_map(|dir| read_in(dir, &format!("{id}.{e}")).map(|b| (b, e.to_string())))
             })
             .or_else(|| {
-                folders.iter().find_map(|dir| std::fs::read(dir.join(&id)).ok()).map(|b| {
+                folders.iter().find_map(|dir| read_in(dir, &id)).map(|b| {
                     let e = ending_of(&b).to_owned();
                     (b, e)
                 })
@@ -247,12 +313,17 @@ pub fn bytes_for(name: &str) -> Option<Vec<u8>> {
     if let Some(rest) = name.strip_prefix("rbxasset://") {
         return find_file(rest);
     }
-    let path = PathBuf::from(name);
-    if path.is_absolute() {
-        return std::fs::read(path).ok();
+    if remote_or_device(name) {
+        return None;
     }
     let folders = FOLDERS.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    folders.iter().find_map(|dir| std::fs::read(dir.join(&path)).ok())
+    let path = Path::new(name);
+    if path.is_absolute() || path.has_root() {
+        let mut allowed = folders.clone();
+        allowed.extend(asset_folders());
+        return read_absolute(path, &allowed);
+    }
+    folders.iter().find_map(|dir| read_in(dir, name))
 }
 
 /// The asset number in an address such as `rbxassetid://123` or
@@ -284,18 +355,15 @@ pub fn find_asset(id: &str, endings: &[&str]) -> Option<Vec<u8>> {
     let folders = asset_folders();
     endings
         .iter()
-        .find_map(|e| folders.iter().find_map(|dir| std::fs::read(dir.join(format!("{id}.{e}"))).ok()))
-        .or_else(|| folders.iter().find_map(|dir| std::fs::read(dir.join(id)).ok()))
+        .find_map(|e| folders.iter().find_map(|dir| read_in(dir, &format!("{id}.{e}"))))
+        .or_else(|| folders.iter().find_map(|dir| read_in(dir, id)))
 }
 
 /// A path relative to the folders or their `assets` folders.
 fn find_file(relative: &str) -> Option<Vec<u8>> {
     let relative = relative.trim_start_matches('/');
-    if relative.split(['/', '\\']).any(|part| part == "..") {
-        return None;
-    }
     let folders = FOLDERS.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    folders.iter().chain(&asset_folders()).find_map(|dir| std::fs::read(dir.join(relative)).ok())
+    folders.iter().chain(&asset_folders()).find_map(|dir| read_in(dir, relative))
 }
 
 /// The file a name means, trying `endings` for asset numbers.
@@ -307,7 +375,59 @@ pub fn bytes_for_kind(name: &str, endings: &[&str]) -> Option<Vec<u8>> {
 }
 
 /// Decodes a PNG (or JPEG) into an image with 8-bit RGBA pixels.
+/// The widest or tallest picture decoded, and the most pixels in one. A
+/// small file can say it holds a vast picture; this keeps one from taking
+/// gigabytes when it is unpacked (a phone would just close the app).
+pub const MAX_PICTURE_SIDE: u32 = 8192;
+pub const MAX_PICTURE_PIXELS: u64 = 4096 * 4096;
+
+/// The width and height a PNG or JPEG file says it has, read from its
+/// header without unpacking it.
+pub fn picture_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        // The first chunk is IHDR: width then height, big-endian.
+        let word = |at: usize| Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
+        return (bytes.get(12..16) == Some(b"IHDR")).then(|| Some((word(16)?, word(20)?)))?;
+    }
+    if bytes.starts_with(&[0xFF, 0xD8]) {
+        // Walk the markers to the first start-of-frame, which holds the size.
+        let mut at = 2;
+        while at + 4 <= bytes.len() {
+            if bytes[at] != 0xFF {
+                return None;
+            }
+            let marker = bytes[at + 1];
+            if marker == 0xFF {
+                at += 1;
+                continue;
+            }
+            let len = u16::from_be_bytes([bytes[at + 2], bytes[at + 3]]) as usize;
+            let frame = matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC);
+            if frame {
+                let b = bytes.get(at + 5..at + 9)?;
+                let height = u16::from_be_bytes([b[0], b[1]]) as u32;
+                let width = u16::from_be_bytes([b[2], b[3]]) as u32;
+                return Some((width, height));
+            }
+            at += 2 + len;
+        }
+    }
+    None
+}
+
+/// Whether a picture of this size may be decoded.
+fn size_ok((width, height): (u32, u32)) -> bool {
+    width > 0
+        && height > 0
+        && width <= MAX_PICTURE_SIDE
+        && height <= MAX_PICTURE_SIDE
+        && u64::from(width) * u64::from(height) <= MAX_PICTURE_PIXELS
+}
+
 pub fn decode(bytes: &[u8], sampler: ImageSampler) -> Option<Image> {
+    if !picture_size(bytes).is_some_and(size_ok) {
+        return None;
+    }
     let image = Image::from_buffer(
         bytes,
         // A creator's own asset files may be JPEGs.
@@ -370,5 +490,49 @@ mod tests {
         assert_eq!(asset_id("coin.png"), None);
         assert_eq!(asset_id("rbxassetid://"), None);
         assert!(find_file("../secret").is_none());
+    }
+
+    #[test]
+    fn pictures_that_claim_to_be_huge_are_not_unpacked() {
+        let (_, bytes) = PICTURES[0];
+        assert_eq!(picture_size(bytes), Some((64, 64)));
+        assert_eq!(picture_size(include_bytes!("../assets/cards/baize.jpg")), Some((512, 512)));
+        // A real PNG header that says 60000 by 60000 pixels.
+        let mut bomb = bytes.to_vec();
+        bomb[16..20].copy_from_slice(&60_000u32.to_be_bytes());
+        bomb[20..24].copy_from_slice(&60_000u32.to_be_bytes());
+        assert_eq!(picture_size(&bomb), Some((60_000, 60_000)));
+        assert!(decode(&bomb, ImageSampler::Default).is_none());
+        assert!(decode(b"not a picture", ImageSampler::Default).is_none());
+    }
+
+    #[test]
+    fn a_game_cant_read_files_outside_its_folders() {
+        let root = std::env::temp_dir().join(format!("libroxel-pictures-{}", std::process::id()));
+        let game = root.join("game");
+        let outside = root.join("private");
+        std::fs::create_dir_all(&game).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(game.join("ok.png"), b"inside").unwrap();
+        std::fs::write(outside.join("secret.png"), b"secret").unwrap();
+        let folders = vec![game.clone()];
+        assert_eq!(read_in(&game, "ok.png").as_deref(), Some(&b"inside"[..]));
+        assert!(read_in(&game, "../private/secret.png").is_none());
+        assert!(read_in(&game, "..\\private\\secret.png").is_none());
+        assert_eq!(read_absolute(&game.join("ok.png"), &folders).as_deref(), Some(&b"inside"[..]));
+        assert!(read_absolute(&outside.join("secret.png"), &folders).is_none());
+        assert!(read_absolute(&game.join("../private/secret.png"), &folders).is_none());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.join("secret.png"), game.join("link.png")).unwrap();
+            assert!(read_in(&game, "link.png").is_none(), "a link out of the folder is not followed");
+            assert!(read_absolute(Path::new("/dev/zero"), &[PathBuf::from("/dev")]).is_none());
+        }
+        for share in ["\\\\evil\\share\\x.png", "//evil/share/x.png", "\\\\?\\C:\\x.png", "\\\\.\\pipe\\x"] {
+            assert!(remote_or_device(share), "{share}");
+            assert!(inside_relative(share).is_none(), "{share}");
+        }
+        assert!(!remote_or_device("images/coin.png"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -20,6 +20,8 @@ flate2 = "1"
 data-encoding = "2"
 # Encrypts every connection (the Noise protocol, pure Rust).
 snow = "0.10"
+# Random edit passwords.
+getrandom = "0.3"
 
 [lints]
 workspace = true

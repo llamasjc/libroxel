@@ -251,6 +251,10 @@ struct Status {
     /// The endpoint, once bound, so stopping can close it politely and the
     /// other side hears about it at once.
     endpoint: Mutex<Option<Endpoint>>,
+    /// Who each of the tunnel's connections to the game is: the local
+    /// address it connects from, and the player id the other computer
+    /// proved by its key.
+    guests: Mutex<std::collections::HashMap<SocketAddr, String>>,
 }
 
 impl Status {
@@ -372,9 +376,18 @@ impl HostTunnel {
                         connection.close(1u32.into(), b"game not running");
                         return;
                     };
+                    // Noted before any of the player's bytes reach the game,
+                    // so the game always finds them.
+                    let from = tcp.local_addr().ok();
+                    if let Some(from) = from {
+                        shared.guests.lock().unwrap().insert(from, connection.remote_id().to_string());
+                    }
                     shared.connections.fetch_add(1, Ordering::Relaxed);
                     pipe(tcp, connection, false).await;
                     shared.connections.fetch_sub(1, Ordering::Relaxed);
+                    if let Some(from) = from {
+                        shared.guests.lock().unwrap().remove(&from);
+                    }
                 });
             }
         })?;
@@ -394,6 +407,16 @@ impl HostTunnel {
     /// How many players are connected through the tunnel right now.
     pub fn connections(&self) -> usize {
         self.status.connections.load(Ordering::Relaxed)
+    }
+
+    /// Tells the game who connected: give it the address a connection to
+    /// the game came from, and it says which player's computer is at the
+    /// other end of the tunnel. The id is proved by that computer's key,
+    /// so unlike the name a player gives, it can't be made up. `None` for
+    /// connections that didn't come through this tunnel.
+    pub fn guest_lookup(&self) -> impl Fn(SocketAddr) -> Option<String> + Send + Sync + 'static {
+        let status = self.status.clone();
+        move |from| status.guests.lock().unwrap().get(&from).cloned()
     }
 }
 
