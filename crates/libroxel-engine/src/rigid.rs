@@ -82,7 +82,7 @@ pub(crate) struct Spec {
     pub can_collide: bool,
     /// In water: `Some(true)` floats up.
     pub floats: Option<bool>,
-    /// How heavy it is for its size (Roblox-like units).
+    /// How heavy it is for its size (reference-like units).
     pub density: f32,
     pub friction: f32,
     pub elasticity: f32,
@@ -190,7 +190,7 @@ fn id_bits(id: InstanceId) -> u128 {
     u128::from(id.to_bits())
 }
 
-/// Roblox cylinders lie along their X axis; the engine's stand up along Y.
+/// The reference platform's cylinders lie along their X axis; the engine's stand up along Y.
 fn shape_for(size: Vec3, shape: PartShape) -> (SharedShape, Pose) {
     let h = GVec3::new(size.x, size.y, size.z) * 0.5;
     let h = h.max(GVec3::splat(0.01));

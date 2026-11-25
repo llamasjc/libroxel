@@ -51,7 +51,7 @@ fn material_value(lua: &mlua::Lua, material: Option<Material>) -> mlua::Result<V
     crate::bindings::property_to_lua(lua, libroxel_instance::PropertyValue::Enum(EnumValue::Material(m)))
 }
 
-/// A grid of `size` blocks, each `resolution` studs, as Roblox's
+/// A grid of `size` blocks, each `resolution` studs, as the reference platform's
 /// three-deep tables with a `Size` field.
 fn grid(lua: &mlua::Lua, size: [usize; 3]) -> mlua::Result<mlua::Table> {
     let t = lua.create_table()?;

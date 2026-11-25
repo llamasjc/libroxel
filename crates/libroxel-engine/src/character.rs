@@ -396,7 +396,7 @@ fn joint_place(
             }
             _ => None,
         };
-    // As on Roblox, a script's Transform holds for the frame it was set in:
+    // As on the reference platform, a script's Transform holds for the frame it was set in:
     // scripts that pose a joint set it every frame.
     if script.is_some() {
         let _ = tree.set_extra(joint, "TransformPosition", None);

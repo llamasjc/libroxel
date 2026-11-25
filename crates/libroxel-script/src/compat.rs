@@ -1490,8 +1490,8 @@ fn actions(lua: &Lua, t: &Table) -> mlua::Result<()> {
             Ok(())
         })?;
     }
-    // Roblox hands back the button as a GUI object; scripts get nil, as
-    // they do in Roblox where no button was made (on a computer).
+    // The reference platform hands back the button as a GUI object; scripts get nil, as
+    // they do on the reference platform where no button was made (on a computer).
     method(lua, t, names::compat::GET_BUTTON, |_, _name: String| Ok(Value::Nil))
 }
 
@@ -1521,7 +1521,7 @@ pub(crate) fn touch_buttons(lua: &Lua) -> mlua::Result<Vec<crate::TouchButton>> 
     Ok(out.into_iter().map(|(_, b)| b).collect())
 }
 
-/// A touch button went down or up: runs its action as Roblox does, with
+/// A touch button went down or up: runs its action as the reference platform does, with
 /// the action's name, Begin or End, and a touch input.
 pub(crate) fn press_touch_button(lua: &Lua, name: &str, pressed: bool) -> mlua::Result<()> {
     let Value::Table(bound) = lua.named_registry_value::<Value>(ACTIONS_KEY)? else { return Ok(()) };

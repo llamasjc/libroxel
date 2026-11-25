@@ -1,4 +1,4 @@
-//! Roblox's rich text: the tags a text object reads when its RichText is on
+//! The reference platform's rich text: the tags a text object reads when its RichText is on
 //! (`<b>`, `<i>`, `<u>`, `<s>`, `<font color size transparency>`, `<br/>`,
 //! `<uc>`, `<sc>`, `<mark>`, `<stroke>`, comments) and the escapes `&lt;`
 //! `&gt;` `&amp;` `&quot;` `&apos;`, turned into an egui layout.

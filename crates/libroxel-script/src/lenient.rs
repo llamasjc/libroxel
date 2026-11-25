@@ -239,8 +239,8 @@ fn store(
     new_index.call((key_id, obj, key, value, groups, known))
 }
 
-/// The Roblox-style class name scripts see for an instance.
-pub(crate) fn roblox_class(lua: &Lua, id: InstanceId, class: ClassKind) -> String {
+/// The API-style class name scripts see for an instance.
+pub(crate) fn api_class(lua: &Lua, id: InstanceId, class: ClassKind) -> String {
     let host = crate::bindings::host(lua);
     let tree = host.tree.borrow();
     if class == ClassKind::Other
@@ -270,17 +270,17 @@ pub(crate) fn index(
     obj: AnyUserData,
     key: &str,
 ) -> mlua::Result<Option<Value>> {
-    let roblox = roblox_class(lua, id, class);
+    let api_name = api_class(lua, id, class);
     let kept = crate::bindings::host(lua).tree.borrow().get_extra(id, key).ok().flatten();
     if let Some(kept) = kept {
-        return crate::reflection::extra_to_lua(lua, &roblox, key, kept).map(Some);
+        return crate::reflection::extra_to_lua(lua, &api_name, key, kept).map(Some);
     }
-    let other = (roblox != names::class_name(class)).then_some(roblox.as_str());
+    let other = (api_name != names::class_name(class)).then_some(api_name.as_str());
     if let Some(found) = lookup(lua, instance_key(id), Value::UserData(obj), key, groups(lua, class, other)?)?
     {
         return Ok(Some(found));
     }
-    crate::reflection::default_value(lua, &roblox, key)
+    crate::reflection::default_value(lua, &api_name, key)
 }
 
 /// Sets `key` on an instance through the layer; false when neither it nor
@@ -293,15 +293,15 @@ pub(crate) fn new_index(
     key: &str,
     value: Value,
 ) -> mlua::Result<bool> {
-    let roblox = roblox_class(lua, id, class);
-    let other = (roblox != names::class_name(class)).then_some(roblox.as_str());
+    let api_name = api_class(lua, id, class);
+    let other = (api_name != names::class_name(class)).then_some(api_name.as_str());
     let groups = groups(lua, class, other)?;
     let host = crate::bindings::host(lua);
     let kept = host.tree.borrow().get_extra(id, key).ok().flatten().is_some();
-    let in_database = crate::reflection::has_property(&roblox, key);
+    let in_database = crate::reflection::has_property(&api_name, key);
     if kept || in_database {
         // Plain values are kept on the instance, so saving keeps them.
-        if let Some(plain) = crate::reflection::extra_from_lua(&roblox, key, &value) {
+        if let Some(plain) = crate::reflection::extra_from_lua(&api_name, key, &value) {
             let has_setter: bool = layer(lua)?.get::<Function>("has_setter")?.call((groups.clone(), key))?;
             if has_setter {
                 // The layer has its own handling: it owns the value.

@@ -43,7 +43,7 @@ The first build compiles Bevy and takes a while. After that it is quick.
 - **File → Open a starter game → Kart race** loads an arcade kart race
   made only of parts and Luau scripts. Press **Play** (or F5), pick a
   track and press **START RACE**.
-- **Layout:** the editor is laid out the way Roblox Studio users know it.
+- **Layout:** the editor is laid out the way users of the reference editor know it.
   Along the top is a **File** menu and a ribbon with **Home**, **Model**,
   **Test** and **View** tabs. The **Toolbox** sits on the left, the
   **Explorer** sits top right with **Properties** under it, and the
@@ -345,8 +345,8 @@ The first build compiles Bevy and takes a while. After that it is quick.
   and dialogs are in English, Chinese (Simplified), Spanish, Portuguese
   (Brazil) and French, following the computer's language until you pick
   one with the 🌐 button on the top bar. Class, property and enum names,
-  and Luau, stay as they are in every language (as in Roblox Studio), so
-  scripts and Roblox files work the same. The help shown for each class is
+  and Luau, stay as they are in every language (as in the reference editor), so
+  scripts and place files work the same. The help shown for each class is
   translated too, with the code in it left as it is. Chinese uses the computer's own Chinese font
   (Microsoft YaHei, PingFang, Noto Sans CJK or WenQuanYi); without one, it
   can't be picked. Translations live in `crates/libroxel/assets/lang/`,
@@ -362,9 +362,9 @@ The first build compiles Bevy and takes a while. After that it is quick.
   folder, `~/.config/libroxel/` on Linux and macOS). If the app crashes or
   closes first, the next start offers to open the copy. Saving deletes it.
 
-## Bringing in games from Roblox Studio
+## Bringing in games from the reference editor
 
-Libroxel opens your own Roblox Studio files: places (`.rbxl` and `.rbxlx`)
+Libroxel opens your own files from the reference editor: places (`.rbxl` and `.rbxlx`)
 and models (`.rbxm` and `.rbxmx`), saved in either the binary or the XML format.
 
 - **Open a place:** use File > Open, type its path on the Create tab, put it
@@ -390,7 +390,7 @@ is never changed. The Output panel lists what came across and what didn't.
 
 ### Your meshes, pictures and sounds
 
-A file from Roblox Studio names its meshes, pictures and sounds by asset
+A file from the reference editor names its meshes, pictures and sounds by asset
 number, such as `rbxassetid://1234567`, and the files themselves live online.
 Libroxel never downloads them. Put your own copies in a folder called `assets`
 next to the place file (or in the games folder), named by their number:
@@ -409,10 +409,10 @@ as before: a mesh part as a box, a picture as nothing, a sound silent.
 | What's still different | |
 | --- | --- |
 | Shapes | Unions, mesh parts and trusses collide with their real shape (a union's own collision pieces, a model's separate pieces, a truss as a solid box). Union and subtraction made by a script while playing (`UnionAsync`, `SubtractAsync`) can't carve: a union becomes one part over all of them and a subtraction keeps the part. A special mesh's file is stretched to its part's size, ignoring its `Scale`. |
-| Terrain | Terrain saved in Studio's newer separate-asset format (expanded terrain) can't be read: the open-source readers leave that data out, so it's left out and the Output panel says so. Terrain is drawn in 1-stud cells, smoothed, rather than Roblox's 4-stud voxels; `ReadVoxels` and `WriteVoxels` work in Roblox's units. |
+| Terrain | Terrain saved in Studio's newer separate-asset format (expanded terrain) can't be read: the open-source readers leave that data out, so it's left out and the Output panel says so. Terrain is drawn in 1-stud cells, smoothed, rather than the reference platform's 4-stud voxels; `ReadVoxels` and `WriteVoxels` work in the reference platform's units. |
 | Animations | Animations kept online (`rbxassetid://`) can't be fetched, so their tracks play silently for a second (scripts that play, wait for and stop them still run). Libroxel's built-in `libroxel://` ones move the character. |
-| Other classes | Roblox classes Libroxel has no engine side for (animation controllers, handle adornments, localization tables and so on) keep their class name and every property, so scripts read and set them as on Roblox. Dialogs show a "Talk" prompt and their conversation. |
-| Online things | Purchases, badges, teleports, other players' avatars and `InsertService:LoadAsset` need Roblox's servers, so they answer as if nothing was bought or found. |
+| Other classes | API classes Libroxel has no engine side for (animation controllers, handle adornments, localization tables and so on) keep their class name and every property, so scripts read and set them as on the reference platform. Dialogs show a "Talk" prompt and their conversation. |
+| Online things | Purchases, badges, teleports, other players' avatars and `InsertService:LoadAsset` need the reference platform's servers, so they answer as if nothing was bought or found. |
 | Sound | Sounds play from the `assets` folder; effects such as reverb and equalizers are kept but not heard. |
 
 ## Layout
@@ -423,7 +423,7 @@ as before: a mesh part as a box, a picture as nothing, a sound silent.
 | [`libroxel-hub`](crates/libroxel-hub) | The Hub: a small self-hostable server (axum and SQLite) that lists live games per game, accounts, friends and who's online, and the client and background announcer the app uses. |
 | [`libroxel-net`](crates/libroxel-net) | Player identity (a keypair) and join codes. Carries a hosted game between computers over iroh, peer to peer with a relay fallback. |
 | [`libroxel-script`](crates/libroxel-script) | The sandboxed Luau runtime (via `mlua`) with a thread scheduler. Every name scripts can see lives in [`names.rs`](crates/libroxel-script/src/names.rs). |
-| [`libroxel-rbx`](crates/libroxel-rbx) | Opens place and model files saved by Roblox Studio (`.rbxl`, `.rbxlx`, `.rbxm`, `.rbxmx`) as instance trees, using the open-source rbx-dom readers. |
+| [`libroxel-rbx`](crates/libroxel-rbx) | Opens place and model files saved by the reference editor (`.rbxl`, `.rbxlx`, `.rbxm`, `.rbxmx`) as instance trees, using the open-source rbx-dom readers. |
 | [`libroxel-engine`](crates/libroxel-engine) | Play sessions: physics, the player character, touch events, respawning, and the Bevy integration (rendering and cameras). |
 | [`libroxel`](crates/libroxel) | The Libroxel app: the home screen (Play, Online, Create, Host), the editor, plus `libroxel server`. |
 | [`libroxel-proto`](crates/libroxel-proto) | A minimal player that runs a saved game or a single script. |

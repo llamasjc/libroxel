@@ -311,7 +311,7 @@ pub enum ClassKind {
     PlayerScripts,
     /// Inside a character: a shield that stops damage while it's there.
     ForceField,
-    /// A Roblox-style class libroxel has no behaviour for, such as a
+    /// An API-style class libroxel has no behaviour for, such as a
     /// Dialog or an AnimationController. Its real class name is kept in
     /// [`Property::OtherClass`], and scripts see it as that class.
     Other,

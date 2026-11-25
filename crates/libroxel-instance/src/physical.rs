@@ -1,6 +1,6 @@
 //! What a part is made of, for physics: how heavy it is for its size, how
 //! much it grips, and how much it bounces. Each material has its own, as
-//! Roblox documents them, and a part's `CustomPhysicalProperties` can set
+//! the reference platform documents them, and a part's `CustomPhysicalProperties` can set
 //! its own instead.
 
 use crate::{EnumValue, InstanceId, InstanceTree, Material, Property, PropertyValue};
@@ -70,7 +70,7 @@ impl Physical {
         [self.density, self.friction, self.elasticity, self.friction_weight, self.elasticity_weight]
     }
 
-    /// From the five numbers, kept to the ranges Roblox allows.
+    /// From the five numbers, kept to the ranges the reference platform allows.
     pub fn from_array(n: [f32; 5]) -> Physical {
         Physical {
             density: n[0].clamp(0.01, 100.0),
@@ -149,7 +149,7 @@ mod tests {
         assert!((mass(&tree, part) - 8.0).abs() < 1e-4);
         set_custom(&mut tree, part, None).unwrap();
         assert!(of_part(&tree, part).friction < 0.05);
-        // Out of Roblox's ranges: kept inside them.
+        // Out of the reference platform's ranges: kept inside them.
         assert_eq!(Physical::from_array([0.0, 9.0, -1.0, 1.0, 1.0]).friction, 2.0);
     }
 }

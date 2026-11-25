@@ -1,6 +1,6 @@
-//! Roblox classes, properties and enumerations libroxel has no engine side
+//! API classes, properties and enumerations libroxel has no engine side
 //! for still work in scripts, and the helpers games lean on (require from
-//! several scripts at once, dialogs, terrain voxels) behave as on Roblox.
+//! several scripts at once, dialogs, terrain voxels) behave as on the reference platform.
 
 use libroxel_instance::{ClassKind, InstanceTree, Property, PropertyValue};
 use libroxel_script::ScriptRuntime;
@@ -27,7 +27,7 @@ fn printed(rt: &ScriptRuntime) -> Vec<String> {
 }
 
 #[test]
-fn any_roblox_class_can_be_made_and_keeps_its_properties() {
+fn any_api_class_can_be_made_and_keeps_its_properties() {
     let rt = ScriptRuntime::new_with_tree(tree_with_player().0).unwrap();
     run(
         &rt,
@@ -333,7 +333,7 @@ fn more_of_the_script_library_is_there() {
 }
 
 #[test]
-fn attributes_hold_any_roblox_value() {
+fn attributes_hold_any_api_value() {
     let rt = ScriptRuntime::new_with_tree(tree_with_player().0).unwrap();
     run(
         &rt,

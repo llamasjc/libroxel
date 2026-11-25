@@ -16,7 +16,7 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
     files up to 64 MB. Pictures that claim to be huge are not unpacked.
   - Instances a player's computer names in `FireServer` and
     `InvokeServer` reach the server's scripts only if that computer was
-    sent them, as in Roblox: nothing from `ServerStorage`.
+    sent them, as on the reference platform: nothing from `ServerStorage`.
   - Walking through walls is caught like moving too fast.
   - Players who join by code are known to the host by their key: someone
     removed from a game can't come back under another name. While a game
@@ -52,12 +52,12 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
 - **Avatar pictures:** profile pictures in the app and on the website
   are now 3D renders of your character, head and full body, redrawn
   when your look changes.
-- **Roblox places keep more:** attributes holding a NumberRange,
+- **Imported places keep more:** attributes holding a NumberRange,
   NumberSequence, ColorSequence, Rect or CFrame, particle emitters'
   Lifetime and Speed, and parts' `CustomPhysicalProperties` now come
   across (they were dropped).
 - **Materials have physics:** parts weigh, grip and bounce by their
-  material as in Roblox (ice slides, metal is heavy; plastic is as
+  material as on the reference platform (ice slides, metal is heavy; plastic is as
   before), and `CustomPhysicalProperties` sets a part's own.
 - **Fixes:** attributes of the kinds above now save and reach joined
   players (they read nil before); any humanoid whose health reaches 0
@@ -96,13 +96,13 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
 - **Faster on phones:** automatic graphics starts low and stays in the
   middle, without the effects that cost phones most, and 32-bit Android
   uses the chip's vector maths.
-- **Touch input for scripts,** as in Roblox: `TouchStarted`, `TouchMoved`,
+- **Touch input for scripts,** as on the reference platform: `TouchStarted`, `TouchMoved`,
   `TouchEnded`, `TouchTap`, `TouchTapInWorld`, `TouchLongPress`,
   `TouchPan`, `TouchPinch`, `TouchRotate`, `TouchSwipe`,
   `LastInputTypeChanged`, and InputBegan/InputChanged/InputEnded for
   fingers. Games can hide the stick and jump button with `ModalEnabled`,
   `GuiService.TouchControlsEnabled` or `DevTouchMovementMode` Scriptable.
-- **More of Roblox on phones:** `ContextActionService:BindAction` touch
+- **More of the reference platform on phones:** `ContextActionService:BindAction` touch
   buttons (with `SetTitle` and `SetPosition`), `HapticService` vibration on
   Android, and `TouchTap` and `TouchLongPress` on GUI objects.
 - **Sharper and faster on phones:** the 3D view draws with fewer pixels
@@ -114,10 +114,10 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
 - **Languages:** the home screen and the editor in Chinese (Simplified),
   Spanish, Portuguese (Brazil) and French, picked with the 🌐 button or
   following the computer's language. API names stay in English.
-- **Streaming,** as Roblox documents it: `Workspace.StreamingEnabled`,
+- **Streaming,** as the reference platform documents it: `Workspace.StreamingEnabled`,
   `StreamingTargetRadius`, `StreamingMinRadius`, `StreamOutBehavior`,
   `Model.ModelStreamingMode`, `Player.ReplicationFocus` and
-  `Player:RequestStreamAroundAsync`. Places saved with them in Roblox
+  `Player:RequestStreamAroundAsync`. Places saved with them on the reference platform
   Studio keep them.
 - **Multiplayer:** every connection is encrypted, direct joins by address
   included. Long messages are compressed, so joining a big game sends up to

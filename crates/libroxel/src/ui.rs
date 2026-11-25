@@ -56,7 +56,7 @@ enum Action {
     Rotate90(InstanceId),
     /// Add a 3D model file (dropped on the window) as a part.
     ImportMesh(PathBuf),
-    /// Add the instances in a Roblox model file (.rbxm or .rbxmx) to the workspace.
+    /// Add the instances in a model file (.rbxm or .rbxmx) to the workspace.
     InsertModelFile(PathBuf),
     Delete(InstanceId),
     Duplicate(InstanceId),
@@ -2323,7 +2323,7 @@ pub enum OutputView {
     Log,
     /// Errors and warnings grouped by what they say.
     Problems,
-    /// Roblox members and classes scripts asked for that Libroxel lacks.
+    /// API members and classes scripts asked for that Libroxel lacks.
     Missing,
 }
 
@@ -2848,7 +2848,7 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
             Dialog::Join { .. } | Dialog::EditTogether { .. } | Dialog::Publish { .. } => return,
         };
         ui.label(if opening {
-            "File path: a Libroxel game (.lrx), or a place or model from Roblox Studio (.rbxl, .rbxlx, .rbxm, .rbxmx):"
+            "File path: a Libroxel game (.lrx), or a place or model from the reference editor (.rbxl, .rbxlx, .rbxm, .rbxmx):"
         } else {
             "File path (places use the .lrx extension):"
         });
@@ -3311,7 +3311,7 @@ fn menu_pick(pick: crate::menu::Pick, engine: &mut EngineState, editor: &mut Edi
             Game::Blank => apply(Action::New, engine, editor, now),
             Game::File(path) => {
                 apply(Action::Open(path.clone()), engine, editor, now);
-                // A file from Roblox Studio opens as a new, unsaved game.
+                // A file from the reference editor opens as a new, unsaved game.
                 if editor.file.as_ref() != Some(path) && editor.imported_from.as_ref() != Some(path) {
                     editor.menu.error = Some(format!("Could not open {}.", path.display()));
                     return false;
@@ -4720,7 +4720,7 @@ fn toolbox(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut 
                 });
                 ui.add_space(8.0);
             }
-            theme::label_caps(ui, "From Roblox Studio");
+            theme::label_caps(ui, "From place files");
             ui.label(
                 RichText::new(t("Drop a .rbxm model on the window to add it, or a .rbxl place to open it."))
                     .color(theme::MUTED),
@@ -4730,7 +4730,7 @@ fn toolbox(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut 
 }
 
 /// Frame rate and where each frame's time goes, shown with Shift+F1 while
-/// playing (like Roblox's own stats). While playing, a fuller report is also
+/// playing (like the reference platform's own stats). While playing, a fuller report is also
 /// written every few seconds to `speed.txt` in the logs folder, to send when
 /// a game runs slowly.
 #[derive(Default)]

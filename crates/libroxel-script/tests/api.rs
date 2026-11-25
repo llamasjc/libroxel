@@ -1186,7 +1186,7 @@ fn destroying_disconnects() {
 }
 
 #[test]
-fn touches_reach_scripts_as_roblox_sends_them() {
+fn touches_reach_scripts_as_the_docs_describe() {
     use libroxel_script::TouchPhase::{Began, Ended, Moved};
     let rt = runtime();
     run(

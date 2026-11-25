@@ -1,4 +1,4 @@
-//! What a Roblox-style class has, from the open-source reflection
+//! What an API-style class has, from the open-source reflection
 //! database (rbx-dom): every property a script can read or set. The
 //! lenient layer uses it for members libroxel has no engine side for, so
 //! a script that sets one remembers the value and a script that reads one
@@ -246,7 +246,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_database_knows_roblox_classes() {
+    fn the_database_knows_api_classes() {
         assert!(class_is_a("Part", "BasePart"));
         assert!(has_property("Lighting", "TimeOfDay"));
         assert!(has_property("Part", "Position"));

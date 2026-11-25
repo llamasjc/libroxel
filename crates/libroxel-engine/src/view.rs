@@ -127,7 +127,7 @@ const DETAIL_MIN: f32 = 150.0;
 const SPAWN_BUDGET: usize = 1500;
 
 /// How far from the camera parts are drawn while playing: the workspace's
-/// `StreamingTargetRadius` (Roblox's default is 1024 studs), or everything
+/// `StreamingTargetRadius` (the reference platform's default is 1024 studs), or everything
 /// when its `StreamingEnabled` is off.
 fn streaming_radius(tree: &libroxel_instance::InstanceTree) -> f32 {
     let ws = tree.workspace();
@@ -364,11 +364,11 @@ fn sync_parts(
     sync.tree = tree_ptr;
     sync.epoch = epoch;
     sync.read = tree.touched_len();
-    // Like Roblox's streaming: while playing, only parts within the
+    // Like the reference platform's streaming: while playing, only parts within the
     // workspace's streaming radius of the camera are drawn, and new parts
     // come in nearest first, a batch a frame, so a big map opens at once
     // instead of building every part before the first frame.
-    // Like Roblox at lower graphics levels, small parts stop being drawn
+    // Like the reference platform at lower graphics levels, small parts stop being drawn
     // sooner than big ones: a pebble far off can't be seen anyway. How
     // far a part is past where it stops being drawn (1 = right there).
     let reach = |id: InstanceId| -> f32 {
@@ -515,7 +515,7 @@ fn sync_parts(
         let color =
             tree.get_color(id, Property::Color).map(|c| Color::srgb(c.r, c.g, c.b)).unwrap_or(Color::WHITE);
         // A local modifier (set by camera scripts to see through walls) fades
-        // the part further, as in Roblox.
+        // the part further, as on the reference platform.
         let modifier = match tree.get_extra(id, "LocalTransparencyModifier") {
             Ok(Some(libroxel_instance::PropertyValue::Number(m))) => m.clamp(0.0, 1.0) as f32,
             _ => 0.0,
@@ -1019,7 +1019,7 @@ fn setup_scene(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ima
 #[derive(Component)]
 struct Sun;
 
-/// How much the 3D view draws, like Roblox's graphics quality: 1 is the
+/// How much the 3D view draws, like the reference platform's graphics quality: 1 is the
 /// least and 10 everything. On automatic it steps down when frames come
 /// slower than the screen shows them (up to 60 a second) and back up once
 /// there is room again.
@@ -1288,7 +1288,7 @@ fn update_lighting(
         (
             read(Property::ClockTime).unwrap_or(14.0),
             read(Property::Brightness).unwrap_or(2.0),
-            // Outdoors, Roblox lights with OutdoorAmbient (Ambient is for indoors);
+            // Outdoors, the reference platform lights with OutdoorAmbient (Ambient is for indoors);
             // the brighter of the two lights the world here.
             {
                 let ambient =
@@ -1319,7 +1319,7 @@ fn update_lighting(
     let exposure = 2f32.powf(exposure);
     let illuminance = illuminance * exposure;
     // The ambient colour lights every face the same at any time of day, as in
-    // Roblox: a game that keeps it bright at night has bright nights. 0.5 grey
+    // the reference platform: a game that keeps it bright at night has bright nights. 0.5 grey
     // is the normal amount; coloured ambient tints the shadows.
     let strongest = tint.r.max(tint.g).max(tint.b);
     let ambient_brightness = 400.0 * strongest * 2.0 * exposure;

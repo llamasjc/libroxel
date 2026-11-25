@@ -207,7 +207,7 @@ pub struct MouseRay {
     pub y: f32,
 }
 
-/// The space Roblox's top bar takes at the top of the screen, in pixels:
+/// The space the reference platform's top bar takes at the top of the screen, in pixels:
 /// what `GuiService:GetGuiInset()` reports, and where screen GUIs that
 /// don't ignore the inset start.
 pub const GUI_INSET: f32 = 58.0;
@@ -252,9 +252,9 @@ impl ScriptRuntime {
     /// Creates a runtime bound to `tree`.
     pub fn new(tree: SharedTree) -> mlua::Result<Self> {
         let lua = Lua::new();
-        // As Roblox runs live games: optimised, with inlining, and turned
+        // As the reference platform runs live games: optimised, with inlining, and turned
         // into machine code where the computer allows it.
-        // Like Roblox: these globals are instances whose members change, so
+        // Like the reference platform: these globals are instances whose members change, so
         // reads through them (`workspace.CurrentCamera`) are never cached.
         lua.set_compiler(
             mlua::chunk::Compiler::new().set_optimization_level(2).set_debug_level(1).set_mutable_globals([
@@ -575,7 +575,7 @@ impl ScriptRuntime {
     }
 
     /// Whether the game wants the on-screen stick and jump button (scripts
-    /// can hide them as in Roblox).
+    /// can hide them as on the reference platform).
     pub fn touch_controls_shown(&self) -> bool {
         lenient::touch_controls_shown(&self.lua)
     }
@@ -587,7 +587,7 @@ impl ScriptRuntime {
     }
 
     /// Tells scripts how big the 3D view is, in pixels (for the camera).
-    /// Whether scripts left one of Roblox's own on-screen parts on
+    /// Whether scripts left one of the reference platform's own on-screen parts on
     /// (`StarterGui:SetCoreGuiEnabled`), such as "PlayerList".
     pub fn core_gui_enabled(&self, kind: &str) -> bool {
         self.lua

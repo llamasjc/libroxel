@@ -107,7 +107,7 @@ fn unshared(class: ClassKind) -> bool {
 
 /// Whether a joined computer can know of `id`: it is in one of the
 /// [`SHARED`] services and not inside a camera or someone's GUIs. Like
-/// Roblox, an instance a player's computer names in `FireServer` or
+/// the reference platform, an instance a player's computer names in `FireServer` or
 /// `InvokeServer` reaches the game's scripts only when it is one of these,
 /// so a cheat can't hand a server script something from `ServerStorage`.
 fn shared_with_guests(tree: &InstanceTree, id: InstanceId) -> bool {

@@ -1,5 +1,5 @@
 //! Opening a game from a file: Libroxel's own `.lrx` places, and place
-//! and model files saved by Roblox Studio.
+//! and model files saved by the reference editor.
 
 use std::path::Path;
 
@@ -17,7 +17,7 @@ pub struct Opened {
 
 /// Whether `path` is a file [`open`] understands.
 pub fn is_game_file(path: &Path) -> bool {
-    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("lrx")) || libroxel_rbx::is_roblox_file(path)
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("lrx")) || libroxel_rbx::is_place_file(path)
 }
 
 /// Whether `path` holds a model (instances to add to a game) rather than a whole place.
@@ -29,7 +29,7 @@ pub fn is_model_file(path: &Path) -> bool {
 
 /// Opens a place (or a model, set in an empty world).
 pub fn open(path: &Path) -> Result<Opened, String> {
-    if libroxel_rbx::is_roblox_file(path) {
+    if libroxel_rbx::is_place_file(path) {
         let (tree, report) = libroxel_rbx::open(path).map_err(|e| e.to_string())?;
         let mut notes = report.summary();
         notes.extend(save_made_files(&report));

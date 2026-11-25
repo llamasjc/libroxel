@@ -16,7 +16,7 @@
 //! chess and draughts pieces also come carved in wood: `chess-wood-wk`,
 //! `draughts-wood-white-king` and so on.
 //!
-//! Games brought in from Roblox Studio name their files by asset number
+//! Games brought in from the reference editor name their files by asset number
 //! (`rbxassetid://123`, or a web address ending `?id=123`). Those are
 //! looked for as `123.png` (or `.jpg`, or `123` with no ending) in an `assets` folder
 //! inside each of the folders, so a creator can drop in their own files.
@@ -327,7 +327,7 @@ pub fn bytes_for(name: &str) -> Option<Vec<u8>> {
 }
 
 /// The asset number in an address such as `rbxassetid://123` or
-/// `https://www.roblox.com/asset/?id=123`, if `name` is one.
+/// `https://assets.example/asset/?id=123`, if `name` is one.
 pub fn asset_id(name: &str) -> Option<String> {
     let name = name.trim();
     let lower = name.to_ascii_lowercase();
@@ -623,8 +623,8 @@ mod tests {
     fn asset_numbers_are_found_in_addresses() {
         assert_eq!(asset_id("rbxassetid://12345").as_deref(), Some("12345"));
         assert_eq!(asset_id(" rbxassetid://77/ ").as_deref(), Some("77"));
-        assert_eq!(asset_id("http://www.roblox.com/asset/?id=987").as_deref(), Some("987"));
-        assert_eq!(asset_id("https://www.roblox.com/asset?id=5&v=2").as_deref(), Some("5"));
+        assert_eq!(asset_id("http://assets.example/asset/?id=987").as_deref(), Some("987"));
+        assert_eq!(asset_id("https://assets.example/asset?id=5&v=2").as_deref(), Some("5"));
         assert_eq!(asset_id("coin.png"), None);
         assert_eq!(asset_id("rbxassetid://"), None);
         assert!(find_file("../secret").is_none());

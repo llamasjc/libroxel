@@ -281,7 +281,7 @@ fn sync_beams(
 }
 
 /// How far away the sun, moon and stars are drawn: behind anything a map
-/// holds, as Roblox's sky is. The camera's depth reaches to infinity, so only
+/// holds, as the reference platform's sky is. The camera's depth reaches to infinity, so only
 /// culling has to be told to keep them (see [`NoFrustumCulling`]).
 const SKY_DISTANCE: f32 = 60_000.0;
 

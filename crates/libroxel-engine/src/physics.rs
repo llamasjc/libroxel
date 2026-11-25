@@ -65,7 +65,7 @@ pub const TERRAIN_STEP: f32 = 1.05;
 const SHOVE_REACH: f32 = 0.15;
 
 /// Turns an orientation in degrees (Y, then X, then Z) into a rotation.
-/// How far a humanoid's legs reach below its root part: Roblox's
+/// How far a humanoid's legs reach below its root part: the reference platform's
 /// `HipHeight` for an R15 rig, else the lowest of the rig's other parts.
 fn hip_height(tree: &InstanceTree, root: InstanceId) -> f32 {
     let Some(model) = tree.parent(root).ok().flatten() else { return 0.0 };
@@ -167,9 +167,9 @@ struct Body {
     /// A loose part the rigid-body simulation moves (characters don't
     /// move it themselves; it is in their way like a wall, though they shove it).
     sim: bool,
-    /// For a humanoid's root that doesn't collide itself (as in most Roblox
+    /// For a humanoid's root that doesn't collide itself (as in most games for the reference platform
     /// rigs): how far its legs reach below it. The body is stretched down by
-    /// this much so the humanoid stands on its feet, like Roblox's hip height.
+    /// this much so the humanoid stands on its feet, like the reference platform's hip height.
     hip: f32,
 }
 
@@ -456,7 +456,7 @@ pub struct Physics {
     groups: Groups,
     /// Where steps have spent their time, for the speed report.
     timing: PhysicsTiming,
-    /// Loose parts that have stood still, and those asleep: like Roblox, a
+    /// Loose parts that have stood still, and those asleep: like the reference platform, a
     /// part at rest is left out of the simulation (and costs nothing) until
     /// something moves it or comes near it.
     rest: HashMap<InstanceId, Rest>,
@@ -1127,7 +1127,7 @@ impl Physics {
                     collider_for(size, shape, orientation)
                 };
                 // A humanoid stands on its legs even when its root doesn't
-                // collide (Roblox floats it at its hip height).
+                // collide (the reference platform floats it at its hip height).
                 let hip = if character && !anchored && !can_collide && !held {
                     self.hips.get(&id).copied().unwrap_or_else(|| hip_height(tree, id))
                 } else {
@@ -1654,8 +1654,8 @@ impl Physics {
     }
 }
 
-/// How much a part bounces in the simulation, for Roblox's Elasticity:
-/// up to plastic's 0.5, barely (as parts in Roblox do), then more and
+/// How much a part bounces in the simulation, for the reference platform's Elasticity:
+/// up to plastic's 0.5, barely (as parts on the reference platform do), then more and
 /// more, to almost all the way back up at 1.
 fn bounce(elasticity: f32) -> f32 {
     let e = elasticity.clamp(0.0, 1.0);

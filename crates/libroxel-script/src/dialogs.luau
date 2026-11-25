@@ -1,4 +1,4 @@
--- Roblox-style conversations: a Dialog inside a part (an NPC's head, say)
+-- API-style conversations: a Dialog inside a part (an NPC's head, say)
 -- gets a "Talk" prompt there. Talking shows the dialog's InitialPrompt and
 -- its DialogChoices as buttons; picking one fires DialogChoiceSelected,
 -- shows the choice's ResponseDialog and its own choices, and so on.

@@ -394,7 +394,7 @@ fn gradients_keep_both_ends_of_their_sequences() {
 }
 
 #[test]
-fn a_motor_transform_moves_its_part_like_roblox() {
+fn a_motor_transform_moves_its_part_like_the_docs() {
     use libroxel_engine::{CharacterInput, PlaySession};
     let tree = std::rc::Rc::new(std::cell::RefCell::new(libroxel_instance::InstanceTree::new()));
     let mut session = PlaySession::start(tree.clone(), false).unwrap();

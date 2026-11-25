@@ -13,7 +13,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         let p = e.path();
         if p.is_dir() {
             walk(&p, out);
-        } else if libroxel_rbx::is_roblox_file(&p) {
+        } else if libroxel_rbx::is_place_file(&p) {
             out.push(p);
         }
     }

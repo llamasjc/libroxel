@@ -25,7 +25,7 @@ pub struct TextBoxes {
     pub rects: Vec<(InstanceId, Rect)>,
     /// The topmost object under the pointer that takes input while playing:
     /// a button, a text box or an Active object. Labels and frames let the
-    /// press through to what's under them, as in Roblox.
+    /// press through to what's under them, as on the reference platform.
     pub input: GuiHit,
     /// Where every object that takes input while playing shows, so a
     /// finger on one isn't taken for the touch controls.
@@ -170,7 +170,7 @@ pub fn canvas_size(tree: &InstanceTree, id: InstanceId, frame: Rect, k: f32) -> 
     egui::vec2(canvas.x.max(frame.width()), canvas.y.max(frame.height()))
 }
 
-/// The space Roblox's top bar takes at the top of the screen, in pixels.
+/// The space the reference platform's top bar takes at the top of the screen, in pixels.
 /// Screen GUIs start below it unless they ignore the inset.
 pub const GUI_INSET: f32 = libroxel_script::GUI_INSET;
 
@@ -317,7 +317,7 @@ fn arrange_unsorted(
             (c, class, egui::vec2(size.x.max(0.0), size.y.max(0.0)))
         })
         .collect();
-    // Alignment, as Roblox numbers it: Center = 0, Left/Top = 1, Right/Bottom = 2.
+    // Alignment, as the reference platform numbers it: Center = 0, Left/Top = 1, Right/Bottom = 2.
     let h_align = extra_enum(tree, list, "HorizontalAlignment").unwrap_or(1);
     let v_align = extra_enum(tree, list, "VerticalAlignment").unwrap_or(1);
     let place = |align: i64, free: f32| match align {
@@ -436,7 +436,7 @@ fn automatic(tree: &InstanceTree, id: InstanceId, size: Vec2, k: f32) -> Vec2 {
         let text = tree.get_string(id, Property::Text).unwrap_or_default();
         let text_size = tree.get_number(id, Property::TextSize).unwrap_or(14.0).max(1.0) as f32 * k;
         // Wrapped text that can't grow sideways wraps at its own width, so it
-        // grows downwards by as many lines as it wraps to, as in Roblox.
+        // grows downwards by as many lines as it wraps to, as on the reference platform.
         let wraps = tree.get_bool(id, Property::TextWrapped) == Some(true) && !grow_x;
         let width = if wraps { inner.width().max(1.0) } else { f32::INFINITY };
         let (w, h) = measure_text(&text, text_size, width, is_rich(tree, id).then_some(k));
@@ -505,7 +505,7 @@ pub fn draw(
         draw_children(&painter, tree, screen, screen_area, k, pointer, selected, &mut hit, boxes);
     }
     libroxel_engine::view::VIEW_COVERED.store(COVER.get().1, std::sync::atomic::Ordering::Relaxed);
-    // Roblox measures AbsolutePosition from just below the top bar.
+    // The reference platform measures AbsolutePosition from just below the top bar.
     let origin = area.min.to_vec2() + egui::vec2(0.0, GUI_INSET);
     for (_, r) in &mut boxes.rects {
         *r = r.translate(-origin);
@@ -1557,7 +1557,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_size_and_list_alignment_work_like_roblox() {
+    fn automatic_size_and_list_alignment_work_like_the_docs() {
         let mut tree = InstanceTree::new();
         let root = tree.root();
         let screen = gui(&mut tree, ClassKind::ScreenGui, root, "Screen");

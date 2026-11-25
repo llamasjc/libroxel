@@ -112,7 +112,7 @@ fn the_engine_can_supply_a_sequence_for_an_asset_id() {
         r##"
         local humanoid = Instance.new("Humanoid")
         local animation = Instance.new("Animation")
-        animation.AnimationId = "http://www.roblox.com/asset/?id=4242"
+        animation.AnimationId = "http://assets.example/asset/?id=4242"
         local track = humanoid:LoadAnimation(animation)
         print(track.Length, track.Name)
         local unknown = Instance.new("Animation")

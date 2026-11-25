@@ -1,7 +1,7 @@
-//! Parts that keep still are drawn merged, like Roblox's clusters.
+//! Parts that keep still are drawn merged, like the reference platform's clusters.
 //!
 //! A big map has tens of thousands of parts, and every one drawn on its own
-//! costs the CPU and the graphics driver a little each frame. Roblox merges
+//! costs the CPU and the graphics driver a little each frame. The reference platform merges
 //! parts that don't move into one mesh per area; this does the same: once a
 //! part has kept still for a while, it joins a merged mesh with the other
 //! still parts near it of the same surface material and see-through-ness, whatever their colour

@@ -1,5 +1,5 @@
 //! 3D models from files, for parts with a `MeshId`: Wavefront .obj files
-//! and Roblox Studio's .mesh files, found the same way as pictures (see [`pictures`](crate::pictures)). A
+//! and the reference editor's .mesh files, found the same way as pictures (see [`pictures`](crate::pictures)). A
 //! model is stretched to fit its part's Size, as a box would be; it still
 //! bumps into things as that box.
 
@@ -107,9 +107,9 @@ fn fit(corners: Vec<Corner>) -> Option<Model> {
     Some(model)
 }
 
-/// Reads a mesh file in the format Roblox Studio saves and serves meshes
+/// Reads a mesh file in the format the reference editor saves and serves meshes
 /// in (versions 1 to 5), using its most detailed level.
-pub fn parse_roblox_mesh(bytes: &[u8]) -> Option<Model> {
+pub fn parse_asset_mesh(bytes: &[u8]) -> Option<Model> {
     use rbx_mesh::mesh::{Mesh, Vertices2};
     let mesh = rbx_mesh::read_mesh_versioned(std::io::Cursor::new(bytes)).ok()?;
     let corner = |pos: [f32; 3], tex: [f32; 2], norm: [f32; 3]| -> Corner {
@@ -152,7 +152,7 @@ pub fn parse_roblox_mesh(bytes: &[u8]) -> Option<Model> {
     fit(soup)
 }
 
-/// Reads a union's shape as Roblox serves it for a union's asset.
+/// Reads a union's shape as the reference platform serves it for a union's asset.
 pub fn parse_union(bytes: &[u8]) -> Option<Model> {
     use rbx_mesh::union_graphics::UnionGraphics;
     let corner = |pos: [f32; 3], tex: [f32; 2], norm: [f32; 3]| -> Corner {
@@ -201,7 +201,7 @@ pub fn parse_union(bytes: &[u8]) -> Option<Model> {
 /// Reads a model from a file's bytes, whichever kind it is.
 pub fn parse(bytes: &[u8]) -> Option<Model> {
     if bytes.starts_with(b"version ") {
-        parse_roblox_mesh(bytes)
+        parse_asset_mesh(bytes)
     } else if bytes.starts_with(b"CSG") {
         parse_union(bytes)
     } else {
@@ -348,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn a_roblox_mesh_file_is_read() {
+    fn an_asset_mesh_file_is_read() {
         // Version 1.00 files are twice the size they mean.
         let text = "version 1.00\n1\n[0,0,0][0,1,0][0,0,0][4,0,0][0,1,0][1,0,0][0,0,8][0,1,0][0,1,0]";
         let model = parse(text.as_bytes()).unwrap();

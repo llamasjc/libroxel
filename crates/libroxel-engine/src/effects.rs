@@ -413,7 +413,7 @@ fn highlight_materials(look: HighlightLook) -> (StandardMaterial, StandardMateri
         StandardMaterial {
             base_color: Color::srgba(fill.x, fill.y, fill.z, alpha(fill_t)),
             unlit: true,
-            // Roblox draws a highlight after the atmosphere, so haze never fades it.
+            // The reference platform draws a highlight after the atmosphere, so haze never fades it.
             fog_enabled: false,
             alpha_mode: mode(alpha(fill_t)),
             ..default()
@@ -525,7 +525,7 @@ fn sync_highlights(
             commands.entity(o.outline).despawn();
             false
         });
-        // Roblox outlines a highlighted model once, around its silhouette.
+        // The reference platform outlines a highlighted model once, around its silhouette.
         // Outlining each of many parts instead (a dome of a thousand
         // triangles) piles the outlines up where the parts meet, as dots
         // and seams, so a model of many parts gets the fill only.

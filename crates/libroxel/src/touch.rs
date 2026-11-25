@@ -87,7 +87,7 @@ pub fn action_radius(view: Rect) -> f32 {
 /// Where the game's action buttons go: where a script put one with
 /// SetPosition (its corner, as a UDim2 across the view), and the rest in
 /// arcs above and left of the jump button, where the thumb already is, as
-/// Roblox lays them out.
+/// the reference platform lays them out.
 pub fn lay_out_actions(view: Rect, buttons: &[libroxel_script::TouchButton]) -> Vec<ActionButton> {
     let (jump, jr, r) = (jump_center(view), jump_radius(view), action_radius(view));
     let gap = 12.0 * scale(view);

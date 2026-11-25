@@ -257,7 +257,7 @@ local function item_list(t)
 	return list
 end
 
--- `database`: every enumeration Roblox has, as name -> { {item, number} }.
+-- `database`: every enumeration the reference platform has, as name -> { {item, number} }.
 function L.add_enums(lib, database)
 	for name, items in pairs(ENUMS) do
 		if rawget(lib, name) == nil then
@@ -359,7 +359,7 @@ local function viewport()
 	return camera and camera.ViewportSize or Vector2.new(1280, 720)
 end
 
--- Roblox's top bar: screen GUIs start below it unless they ignore the inset.
+-- The reference platform's top bar: screen GUIs start below it unless they ignore the inset.
 local GUI_INSET = 58
 -- Where a screen GUI's area starts (measured from below the top bar) and how big it is.
 local function screen_rect(layer)
@@ -790,7 +790,7 @@ add(methods, "Model", {
 		end
 		local by = scale / stored(s, "__scale", 1)
 		local pivot = self:GetPivot().Position
-		-- Like Roblox: parts, and everything that places things relative to
+		-- Like the reference platform: parts, and everything that places things relative to
 		-- them (joint offsets, attachments, meshes, hip height), scale together,
 		-- so a scaled rig keeps its shape when animated.
 		local function scaled(cf)
@@ -1568,7 +1568,7 @@ add(methods, "Actor", {
 	end,
 	SendMessage = function(_, topic, ...)
 		local list = CURRENT.topics and CURRENT.topics[topic]
-		-- On Roblox handlers run on the Actor's own core: never held back for the frame.
+		-- On the reference platform handlers run on the Actor's own core: never held back for the frame.
 		for _, fn in ipairs(list and table.clone(list) or {}) do
 			task.__parallel_defer(fn, ...)
 		end
@@ -2458,7 +2458,7 @@ local SERVICES = {
 			DisableGamepadCursor = NOOP,
 		},
 	},
-	-- Roblox's own menus live here; scripts can't put things in it there
+	-- The reference platform's own menus live here; scripts can't put things in it there
 	-- either, so it only needs to exist.
 	CoreGui = { props = { SelectionImageObject = NIL } },
 	AnimationClipProvider = {
@@ -3140,7 +3140,7 @@ function L.service(name)
 end
 
 
--- More of Roblox's members ----------------------------------------------------
+-- More of the reference platform's members ----------------------------------------------------
 
 local function cell(v)
 	return math.floor(v / 4)
@@ -4758,8 +4758,8 @@ end
 
 -- Touches ---------------------------------------------------------------
 -- The app passes every finger on the screen here; scripts hear of them as
--- in Roblox: TouchStarted, TouchMoved and TouchEnded with one InputObject
--- per finger (the same one from start to end, as Roblox gives), InputBegan,
+-- on the reference platform: TouchStarted, TouchMoved and TouchEnded with one InputObject
+-- per finger (the same one from start to end, as the reference platform gives), InputBegan,
 -- InputChanged and InputEnded with it too, and the gestures made of them:
 -- TouchTap, TouchTapInWorld, TouchLongPress, TouchPan, TouchPinch,
 -- TouchRotate and TouchSwipe.
@@ -4794,7 +4794,7 @@ local function two()
 	return nil
 end
 
--- Ends whichever gestures are going on, as Roblox does when a finger lifts.
+-- Ends whichever gestures are going on, as the reference platform does when a finger lifts.
 local function end_two(processed)
 	if gesture.pinch then
 		uis_event("TouchPinch", positions(), gesture.scale or 1, 0, Enum.UserInputState.End, processed)

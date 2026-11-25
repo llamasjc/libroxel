@@ -279,7 +279,7 @@ struct Waiting {
     args: Option<Vec<Value>>,
     script: String,
     owner: Option<InstanceId>,
-    /// An Actor's message handler: on Roblox it runs on another core, so
+    /// An Actor's message handler: on the reference platform it runs on another core, so
     /// it is never held back for the frame's sake.
     parallel: bool,
 }
@@ -653,7 +653,7 @@ pub(crate) fn as_number(value: &Value) -> Option<f32> {
     }
 }
 
-/// Like Roblox, a Vector3 is Luau's built-in vector: made, read and
+/// Like the reference platform, a Vector3 is Luau's built-in vector: made, read and
 /// added up by the VM itself, with no allocation. Its members (Magnitude,
 /// Unit, Dot...) come from the vector type's metatable, set up in
 /// [`install_vector3`].
@@ -682,7 +682,7 @@ pub(crate) fn vector_value(v: Vec3) -> Value {
 }
 
 /// Vector3's members, on Luau's vector type (so every vector has them), and
-/// `typeof` saying "Vector3" for one, as in Roblox.
+/// `typeof` saying "Vector3" for one, as on the reference platform.
 fn install_vector3(lua: &Lua) -> mlua::Result<()> {
     let mt: Table = lua.load(VECTOR3_MEMBERS).set_name("=Vector3").eval()?;
     mt.set("__tostring", lua.create_function(|_, v: mlua::Vector| Ok(vector_text(v)))?)?;
@@ -957,7 +957,7 @@ fn property_from_lua(property: Property, value: &Value) -> Option<PropertyValue>
     })
 }
 
-/// Roblox's error for a member an instance doesn't have, naming its class
+/// The reference platform's error for a member an instance doesn't have, naming its class
 /// and where it is: `Foo is not a valid member of Part "Workspace.Crate"`.
 /// Where a part's pivot is, from its centre (its PivotOffset).
 fn pivot_offset(lua: &Lua, id: InstanceId) -> mlua::Result<CFrame> {
@@ -1012,7 +1012,7 @@ pub(crate) fn waiting_report(lua: &Lua) -> Vec<crate::WaitingThread> {
 }
 
 pub(crate) fn not_a_member(lua: &Lua, id: InstanceId, key: &str) -> mlua::Error {
-    let class = class_of(lua, id).map(|c| crate::lenient::roblox_class(lua, id, c)).unwrap_or_default();
+    let class = class_of(lua, id).map(|c| crate::lenient::api_class(lua, id, c)).unwrap_or_default();
     let host = host(lua);
     let tree = host.tree.borrow();
     let mut parts = Vec::new();
@@ -1044,9 +1044,9 @@ pub(crate) fn is_a(lua: &Lua, id: InstanceId, name: &str) -> mlua::Result<bool> 
             None => crate::reflection::class_is_a(names::class_name(class), name),
         });
     }
-    let roblox = crate::lenient::roblox_class(lua, id, class);
-    if roblox != names::class_name(class) {
-        return Ok(name == "Instance" || crate::reflection::class_is_a(&roblox, name));
+    let api_name = crate::lenient::api_class(lua, id, class);
+    if api_name != names::class_name(class) {
+        return Ok(name == "Instance" || crate::reflection::class_is_a(&api_name, name));
     }
     if let Some(answer) = names::is_a_family(class, name) {
         return Ok(answer);
@@ -1061,7 +1061,7 @@ pub(crate) fn is_a(lua: &Lua, id: InstanceId, name: &str) -> mlua::Result<bool> 
 /// Whether instance `id`'s class is exactly `name`, as `FindFirstChildOfClass` asks.
 pub(crate) fn is_class(lua: &Lua, id: InstanceId, name: &str) -> mlua::Result<bool> {
     let class = class_of(lua, id)?;
-    Ok(crate::lenient::roblox_class(lua, id, class) == name)
+    Ok(crate::lenient::api_class(lua, id, class) == name)
 }
 
 fn class_arg(name: &str) -> mlua::Result<ClassKind> {
@@ -1298,8 +1298,8 @@ impl UserData for LuaInstance {
             // Members kept beyond the saved properties (CurrentCamera,
             // ViewportSize, AbsoluteSize, values the class database knows):
             // an event that fires when a script or libroxel changes them.
-            let roblox = crate::lenient::roblox_class(lua, this.0, class);
-            let known = crate::reflection::has_property(&roblox, &name)
+            let api_name = crate::lenient::api_class(lua, this.0, class);
+            let known = crate::reflection::has_property(&api_name, &name)
                 || push_instance(lua, this.0)?.get::<Value>(name.as_str()).is_ok();
             if !known {
                 return Err(not_a_member(lua, this.0, &name));
@@ -1403,7 +1403,7 @@ impl UserData for LuaInstance {
             }
             if key == CLASS_NAME {
                 let class = host(lua).tree.borrow().class(id).map_err(tree_err)?;
-                let name = crate::lenient::roblox_class(lua, id, class);
+                let name = crate::lenient::api_class(lua, id, class);
                 return Ok(Value::String(lua.create_string(name)?));
             }
             if key == PARENT {
@@ -2031,7 +2031,7 @@ impl UserData for LuaTween {
                 t.elapsed = 0.0;
                 was
             });
-            // As in Roblox, Completed fires with Cancelled for a tween that was going.
+            // As on the reference platform, Completed fires with Cancelled for a tween that was going.
             if matches!(was, Some(TweenPhase::Playing | TweenPhase::Paused)) {
                 let state = playback_state(lua, "Cancelled")?;
                 fire(lua, SignalKind::TweenCompleted(this.0), || Ok(MultiValue::from_iter([state.clone()])));
@@ -2186,7 +2186,7 @@ pub(crate) fn fire(lua: &Lua, signal: SignalKind, args: impl Fn() -> mlua::Resul
     if handlers.is_empty() {
         return;
     }
-    // The same arguments for every handler (Roblox passes the same values).
+    // The same arguments for every handler (the reference platform passes the same values).
     let args = match args() {
         Ok(a) => a,
         Err(err) => {
@@ -2239,7 +2239,7 @@ fn prelude() -> String {
             end
         end
         -- Each module runs once per side (the server's scripts and the
-        -- player's local scripts each get their own copy, as on Roblox, where
+        -- player's local scripts each get their own copy, as on the reference platform, where
         -- they run on different computers); later requires get the same
         -- value back.
         local by_side = {{}}
@@ -2257,7 +2257,7 @@ fn prelude() -> String {
             if loader then
                 -- Only a module that (through others) requires itself is a
                 -- loop. Another script asking while it's still loading (it
-                -- waited) waits for it, as Roblox does.
+                -- waited) waits for it, as the reference platform does.
                 if loader == coroutine.running() then
                     error("require loop: " .. tostring(module) .. " requires itself", 2)
                 end
@@ -2402,7 +2402,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
                 None if other => (ClassKind::Other, None),
                 None => (class_arg(&class)?, None),
             };
-            let roblox = class;
+            let api_name = class;
             let class = kind;
             if !class.is_user_creatable() {
                 return Err(tree_err(TreeError::NotCreatable(class)));
@@ -2411,16 +2411,17 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
             let id = {
                 let host = host(lua);
                 let mut tree = host.tree.borrow_mut();
-                let name = if other || shape.is_none() && names::stand_in(&roblox).is_some() {
-                    roblox.as_str()
+                let name = if other || shape.is_none() && names::stand_in(&api_name).is_some() {
+                    api_name.as_str()
                 } else {
                     names::class_name(class)
                 };
                 let id = tree.create(class, name).map_err(tree_err)?;
                 if other {
-                    let _ = tree.set(id, Property::OtherClass, PropertyValue::String(roblox.clone()));
-                } else if names::stand_in(&roblox).is_some() {
-                    let _ = tree.set_extra(id, names::STAND_IN, Some(PropertyValue::String(roblox.clone())));
+                    let _ = tree.set(id, Property::OtherClass, PropertyValue::String(api_name.clone()));
+                } else if names::stand_in(&api_name).is_some() {
+                    let _ =
+                        tree.set_extra(id, names::STAND_IN, Some(PropertyValue::String(api_name.clone())));
                 }
                 if let Some(shape) = shape {
                     let _ = tree.set(id, Property::Shape, PropertyValue::Enum(EnumValue::Shape(shape)));
@@ -2628,7 +2629,7 @@ fn script_env(lua: &Lua, script_instance: Option<InstanceId>) -> mlua::Result<Ta
     if let Some(id) = script_instance {
         env.raw_set(globals::SCRIPT, push_instance(lua, id)?)?;
     }
-    // Marked safe, as Roblox does for each script: Luau then looks built-in
+    // Marked safe, as the reference platform does for each script: Luau then looks built-in
     // globals (math.floor, Vector3.new, ...) up once when the script loads
     // instead of on every use, and the JIT can inline them. Without it every
     // global read went through the fallback metatable, several times slower.
@@ -2746,7 +2747,7 @@ pub(crate) fn is_script_class(class: ClassKind) -> bool {
 }
 
 /// Starts or stops a script whose `Enabled` (or `Disabled`) a script set,
-/// as Roblox does: an enabled script where scripts of its kind run starts
+/// as the reference platform does: an enabled script where scripts of its kind run starts
 /// on the next step, and a disabled one stops where it is.
 pub(crate) fn script_toggled(lua: &Lua, id: InstanceId) {
     let host = host(lua);
@@ -2924,7 +2925,7 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
     let started = start_enabled_scripts(lua);
     host(lua).errors.borrow_mut().extend(started);
     // Waiting threads get a share of each frame, so that long background work
-    // can't stall it (on Roblox such work runs on the server, another
+    // can't stall it (on the reference platform such work runs on the server, another
     // computer, and never holds up the player's frames). Each frame runs at
     // least one piece of heavy work, then only as much more as fits in the
     // share; the rest waits one more frame (first in line then). Quick
@@ -2944,7 +2945,7 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
     // The share is a part of the frame's real length, not a fixed time: on a
     // slower computer frames are longer and fewer, and a fixed few ms a frame
     // starved background work (building the world took minutes there, while
-    // on Roblox it runs on the server at full speed).
+    // on the reference platform it runs on the server at full speed).
     let frame = host(lua)
         .last_step
         .replace(Some(budget_start))
@@ -2954,7 +2955,7 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
     } else {
         RESUME_BUDGET.max(frame.mul_f32(PLAYING_SHARE))
     };
-    // Like Roblox's scheduler under load: heavy background work gets a
+    // Like the reference platform's scheduler under load: heavy background work gets a
     // share of each frame on average. One long piece (a 12 ms scan, say)
     // still runs whole, but then the next ones wait the frames it
     // borrowed, instead of a long piece running every single frame.
@@ -3053,7 +3054,7 @@ pub(crate) fn disconnect_where(lua: &Lua, gone: impl Fn(SignalKind) -> bool) {
     }
 }
 
-/// Like Roblox, a destroyed instance's events are disconnected (after its
+/// Like the reference platform, a destroyed instance's events are disconnected (after its
 /// `Destroying` fired), and what scripts kept on it is let go.
 fn forget_destroyed(lua: &Lua, changes: &[Change]) {
     let mut dead: Vec<InstanceId> = Vec::new();
@@ -3354,9 +3355,9 @@ pub(crate) fn fire_touched(lua: &Lua, part: InstanceId, other: InstanceId) -> Ve
 pub(crate) const CLOSE_KEY: &str = "libroxel.bind_to_close";
 const CLOSING: &str = "BindToClose";
 
-/// Shuts the game down as Roblox does: every function given to
+/// Shuts the game down as the reference platform does: every function given to
 /// `game:BindToClose` runs, and the game keeps going (up to 30 seconds of
-/// game time, as on Roblox) until they have all finished.
+/// game time, as on the reference platform) until they have all finished.
 pub(crate) fn close(lua: &Lua) -> Vec<ScriptError> {
     let funcs: Vec<Function> = match lua.named_registry_value::<Value>(CLOSE_KEY) {
         Ok(Value::Table(t)) => t.sequence_values::<Function>().filter_map(Result::ok).collect(),

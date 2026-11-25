@@ -1,4 +1,4 @@
-//! Opening files saved by Roblox Studio: real sample files (from the
+//! Opening files saved by the reference editor: real sample files (from the
 //! rbx-test-files collection, MIT licensed, in `tests/files`), and a small
 //! game built here and saved in both formats.
 

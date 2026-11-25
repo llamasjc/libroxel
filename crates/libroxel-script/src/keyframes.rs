@@ -328,7 +328,7 @@ mod tests {
     fn asset_addresses_share_a_key() {
         assert_eq!(id_key("rbxassetid://123"), "123");
         assert_eq!(id_key(" RBXASSETID://123 "), "123");
-        assert_eq!(id_key("http://www.roblox.com/asset/?id=123"), "123");
+        assert_eq!(id_key("http://assets.example/asset/?id=123"), "123");
         assert_eq!(id_key("rbxtemp://4"), "rbxtemp://4");
     }
 

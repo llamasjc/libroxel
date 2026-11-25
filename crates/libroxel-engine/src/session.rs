@@ -15,7 +15,7 @@ use crate::physics::Physics;
 pub const RESPAWN_DELAY: f32 = 5.0;
 
 /// Seconds after joining before a player's first character appears by
-/// itself. Like Roblox, where it waits for the player's game to load: the
+/// itself. Like the reference platform, where it waits for the player's game to load: the
 /// place's scripts get to run first, and one that turns
 /// `CharacterAutoLoads` off in that time spawns the character itself.
 pub const FIRST_SPAWN_DELAY: f32 = 0.5;
@@ -446,7 +446,7 @@ impl PlaySession {
         let _ = tree.destroy(player);
     }
 
-    /// Kills the local player's character, as Roblox's Reset Character does.
+    /// Kills the local player's character, as the reference platform's Reset Character does.
     pub fn reset_character(&mut self) {
         if self.runtime.net_role() == NetRole::Client {
             self.send_to_server(crate::net::ClientSays::Reset);
@@ -1312,7 +1312,7 @@ impl PlaySession {
 
     /// Fires the Changed events of what scripts changed this frame, and of
     /// what those handlers change in turn, before the frame is drawn (as
-    /// Roblox does): a screen that a handler turns straight back on never
+    /// the reference platform does): a screen that a handler turns straight back on never
     /// shows off for a frame.
     pub(crate) fn settle_changes(&mut self) {
         for _ in 0..4 {
@@ -1327,7 +1327,7 @@ impl PlaySession {
     }
 
     /// Fires Died for humanoids whose health a change took to 0, whatever
-    /// they belong to (as Roblox does): players' characters and walking
+    /// they belong to (as the reference platform does): players' characters and walking
     /// characters are noticed as they move too, but a humanoid with no
     /// body to move only through this.
     fn notice_deaths(&mut self, changes: &[libroxel_instance::Change]) {

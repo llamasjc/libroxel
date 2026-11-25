@@ -98,7 +98,7 @@ struct InstanceData {
     props: Vec<(Property, PropertyValue)>,
     /// Values scripts and the editor attach by name.
     attributes: std::collections::BTreeMap<String, PropertyValue>,
-    /// Properties of the Roblox-style class that libroxel has no setting
+    /// Properties of the API-style class that libroxel has no setting
     /// for, kept by their script name so files and scripts don't lose them.
     extras: std::collections::BTreeMap<String, PropertyValue>,
     /// Labels for grouping instances, kept sorted.

@@ -107,7 +107,7 @@ fn is_layer(class: ClassKind) -> bool {
     matches!(class, ClassKind::ScreenGui | ClassKind::BillboardGui | ClassKind::SurfaceGui)
 }
 
-/// Class names `Instance.new` (and opening a Roblox Studio file) makes as
+/// Class names `Instance.new` (and opening a file from the reference editor) makes as
 /// another class: parts with special meshes become plain parts (wedges
 /// keep their shape), a manual weld is a weld, a viewport frame a plain
 /// frame, an actor a model, and so on.

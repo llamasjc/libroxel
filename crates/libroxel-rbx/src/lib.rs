@@ -1,4 +1,4 @@
-//! Opens place and model files saved by Roblox Studio (binary `.rbxl` and
+//! Opens place and model files saved by the reference editor (binary `.rbxl` and
 //! `.rbxm`, XML `.rbxlx` and `.rbxmx`) as Libroxel instance trees.
 //!
 //! The files are read with the open-source rbx-dom crates. Each instance
@@ -31,7 +31,7 @@ mod unions;
 pub enum ImportError {
     Read(std::io::Error),
     /// Neither a binary nor an XML file of this kind.
-    NotARobloxFile,
+    NotAPlaceFile,
     Binary(String),
     Xml(String),
 }
@@ -40,7 +40,7 @@ impl std::fmt::Display for ImportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ImportError::Read(e) => write!(f, "could not read the file: {e}"),
-            ImportError::NotARobloxFile => write!(f, "this isn't a .rbxl, .rbxlx, .rbxm or .rbxmx file"),
+            ImportError::NotAPlaceFile => write!(f, "this isn't a .rbxl, .rbxlx, .rbxm or .rbxmx file"),
             ImportError::Binary(e) => write!(f, "could not read the binary file: {e}"),
             ImportError::Xml(e) => write!(f, "could not read the XML file: {e}"),
         }
@@ -123,7 +123,7 @@ impl Report {
     }
 }
 
-/// Reads a Roblox file of either kind from its bytes.
+/// Reads a place file of either kind from its bytes.
 pub fn read_dom(bytes: &[u8]) -> Result<WeakDom, ImportError> {
     read_dom_noting(bytes, &mut Vec::new())
 }
@@ -139,7 +139,7 @@ pub fn read_dom_noting(bytes: &[u8], notes: &mut Vec<String>) -> Result<WeakDom,
     } else if body.starts_with(b"<roblox") || body.starts_with(b"<?xml") {
         rbx_xml::from_reader_default(body).map_err(|e| ImportError::Xml(e.to_string()))
     } else {
-        Err(ImportError::NotARobloxFile)
+        Err(ImportError::NotAPlaceFile)
     }
 }
 
@@ -215,7 +215,7 @@ fn forget_property(
 }
 
 /// Whether a file name looks like one this crate opens.
-pub fn is_roblox_file(path: &Path) -> bool {
+pub fn is_place_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "rbxl" | "rbxlx" | "rbxm" | "rbxmx"))
@@ -669,15 +669,15 @@ impl<'a> Importer<'a> {
         self.db.classes.get(class).is_some_and(|c| c.tags.contains(&rbx_reflection::ClassTag::Service))
     }
 
-    /// Whether `value` is what Roblox gives `class.property` anyway, so
+    /// Whether `value` is what the reference platform gives `class.property` anyway, so
     /// leaving it out loses nothing.
     fn is_default(&self, class: &str, property: &str, value: &Variant) -> bool {
         let Some(descriptor) = self.db.classes.get(class) else { return false };
         self.db.find_default_property(descriptor, property).is_some_and(|d| d == value)
     }
 
-    fn enum_item_name(&self, roblox_enum: &str, value: u32) -> Option<&'static str> {
-        let e = self.db.enums.get(roblox_enum)?;
+    fn enum_item_name(&self, api_enum: &str, value: u32) -> Option<&'static str> {
+        let e = self.db.enums.get(api_enum)?;
         e.items.iter().find(|(_, v)| **v == value).map(|(k, _)| *k)
     }
 
@@ -693,7 +693,7 @@ impl<'a> Importer<'a> {
         false
     }
 
-    /// The Roblox enum a class's property holds, from the reflection database.
+    /// The API enum a class's property holds, from the reflection database.
     fn enum_of(&self, class: &str, property: &str) -> Option<&'static str> {
         let mut class = self.db.classes.get(class)?;
         loop {
@@ -1119,7 +1119,7 @@ fn renamed(name: &str) -> &str {
 }
 
 /// The bytes of a binary property, however the file stored them.
-/// The number in `rbxassetid://123` or `https://www.roblox.com/asset/?id=123`.
+/// The number in `rbxassetid://123` or `https://assets.example/asset/?id=123`.
 fn asset_number(url: &str) -> Option<String> {
     let lower = url.trim().to_ascii_lowercase();
     let rest = match lower.strip_prefix("rbxassetid://") {
