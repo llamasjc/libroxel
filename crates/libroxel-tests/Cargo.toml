@@ -1,0 +1,20 @@
+[package]
+name = "libroxel-tests"
+description = "Libroxel's regression checks: a corpus of games that must keep playing, soak runs and speed benchmarks."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+libroxel-engine.workspace = true
+libroxel-instance.workspace = true
+libroxel-script.workspace = true
+libroxel-rbx.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

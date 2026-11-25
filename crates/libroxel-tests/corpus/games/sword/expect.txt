@@ -1,0 +1,5 @@
+# seconds: 2
+sword: given to
+backpack has 1
+sword: hit Dummy, health 75
+sword: debounce kept health at 75

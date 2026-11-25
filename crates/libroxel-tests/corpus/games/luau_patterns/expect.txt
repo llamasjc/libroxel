@@ -1,0 +1,17 @@
+# seconds: 1
+luau: locked Loot (3): Crown,Gem,Coin
+luau: command give Player1 Sword x3
+luau: split into 4
+luau: HELLO WORLD
+luau: 003.1|ab  |ff|"hi"
+luau: utf8 5 6
+luau: find 2, clone 3
+luau: packed n=3
+luau: sum 55
+luau: error table code 42
+luau: xpcall caught true true
+luau: order spawn,main,defer,delay
+luau: bits 48 16
+luau: clamp 10 round 3 sign -1
+luau: buffer 123456
+luau: date 1970 number

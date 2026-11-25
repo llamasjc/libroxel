@@ -1,0 +1,20 @@
+# seconds: 1
+cframe: lookAt forward z -1.00
+cframe: rotated point -5.00 5.00 0.00
+cframe: round trip true
+cframe: inverse true
+cframe: lerp 2.50
+cframe: euler 0.10 0.20 0.30
+cframe: components 12
+vector: magnitude 5 unit 0.60
+vector: dot 3 cross z 1
+vector: lerp 0.5, 0.5, 0.5
+vector: min 1, 4, 0
+vector: fuzzy true
+vector: dynamic key 3
+vector2: 10 3, 4
+udim2: 0.5 15 -15
+color: hsv 0.08 1.00 1.00 hex ff8000
+color: lerp 0.50
+raycast: hit true at z -29.50
+raycast: excluded true

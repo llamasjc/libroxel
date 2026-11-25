@@ -13,7 +13,8 @@ android {
         versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
         versionName = System.getenv("VERSION") ?: "dev"
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            // ANDROID_ABIS: only for test builds (the nightly emulator run adds x86_64).
+            abiFilters += System.getenv("ANDROID_ABIS")?.split(",") ?: listOf("arm64-v8a", "armeabi-v7a")
             debugSymbolLevel = "SYMBOL_TABLE"
         }
     }

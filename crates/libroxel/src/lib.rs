@@ -42,6 +42,7 @@ mod report;
 mod rich_text;
 mod safe_area;
 mod server;
+mod smoke;
 mod social;
 mod starter_games;
 mod stats;
@@ -357,12 +358,17 @@ pub fn run() {
     if server::dispatch(&args) {
         return;
     }
-    if !MOBILE {
+    // A launch check from CI leaves updates, usage pings and the
+    // computer's settings alone (see `smoke`).
+    let smoke = smoke::seconds().is_some();
+    if !MOBILE && !smoke {
         update::on_start(&args);
     }
-    update::start();
+    if !smoke {
+        update::start();
+    }
     hub_assets::start(&libroxel_hub::hub_address());
-    if !MOBILE {
+    if !MOBILE && !smoke {
         // Play buttons on the website open this copy of the app.
         url_handler::register();
         // Typing `libroxel` in a terminal opens this copy too.
@@ -376,7 +382,9 @@ pub fn run() {
         ..Editor::default()
     };
     editor.touch.seen = MOBILE;
-    stats::start(editor.crash.as_deref());
+    if !smoke {
+        stats::start(editor.crash.as_deref());
+    }
     let mut notes = Vec::new();
     let tree = match args.first().cloned() {
         Some(link) if url_handler::is_link(&link) => {
@@ -496,6 +504,7 @@ pub fn run() {
                 .after(bevy_egui::EguiPreUpdateSet::ProcessInput)
                 .before(bevy_egui::EguiPreUpdateSet::BeginPass),
         );
+    smoke::add(&mut app);
     report::run(&mut app);
 }
 

@@ -5461,6 +5461,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "libroxel-tests"
+version = "0.1.5"
+dependencies = [
+ "libroxel-engine",
+ "libroxel-instance",
+ "libroxel-rbx",
+ "libroxel-script",
+ "serde_json",
+]
+
+[[package]]
 name = "libsqlite3-sys"
 version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

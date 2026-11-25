@@ -136,6 +136,20 @@ pub fn catch_panics() {
 
 pub fn run(app: &mut bevy::app::App) {
     let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.run()));
+    if crate::smoke::seconds().is_some() {
+        // A launch check: no restart or message box, just the result.
+        match ran {
+            Ok(exit) if exit.is_success() => return,
+            Ok(_) => std::process::exit(1),
+            Err(_) => {
+                eprintln!(
+                    "smoke: the app crashed\n{}",
+                    std::fs::read_to_string(crash_path()).unwrap_or_default()
+                );
+                std::process::exit(101);
+            }
+        }
+    }
     if ran.is_ok() {
         let _ = std::fs::remove_file(crash_path());
         return;

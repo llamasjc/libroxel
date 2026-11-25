@@ -1,0 +1,8 @@
+# seconds: 9
+# known-broken: coroutine.yield() in a script thread is resumed by the scheduler on the next frame instead of waiting for task.spawn(thread, ...), which breaks Signal:Wait() modules like GoodSignal
+rounds: config frozen true
+rounds: Intermission 1
+rounds: playing on Desert
+rounds: Desert ended, Red team wins (round 1)
+rounds: playing on Forest
+rounds: done after 2

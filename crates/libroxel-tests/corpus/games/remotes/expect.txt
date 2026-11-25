@@ -1,0 +1,11 @@
+# seconds: 3
+shop: server ready
+client: bought sword true 50
+client: bought shield true 20
+client: third purchase false too poor
+client: bad request refused true
+shop: click from
+at 7
+client: You bought Sword
+client: clicked
+saw 3 notes

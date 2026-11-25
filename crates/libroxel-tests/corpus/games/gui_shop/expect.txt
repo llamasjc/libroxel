@@ -1,0 +1,6 @@
+# seconds: 2
+shop gui: 6 children, title Coins: 150
+shop gui: bought Speed Coil, left 75
+shop gui: bought Boombox, left 35
+shop gui: can't afford Gravity Coil
+shop gui: final Coins: 35

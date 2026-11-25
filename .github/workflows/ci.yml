@@ -11,21 +11,35 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Launch checks must not update the app, ping the Hub or set up the
+  # `libroxel` command on the runner.
+  LIBROXEL_NO_UPDATE: "1"
+  LIBROXEL_NO_COMMAND: "1"
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libwayland-dev libxkbcommon-dev libudev-dev libasound2-dev
+        # xvfb and Mesa's software Vulkan let the launch check open a window.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libwayland-dev libxkbcommon-dev libudev-dev libasound2-dev \
+            xvfb xauth mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0 libxcursor1 libxi6 libxrandr2
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Includes the golden corpus (crates/libroxel-tests) and a short soak.
       - run: cargo test --workspace
+      - name: Build the app
+        run: cargo build --locked -p libroxel
+      - name: Launch check
+        run: packaging/ci/smoke.sh target/debug/libroxel window
 
   check-other-platforms:
     name: check (${{ matrix.os }})
@@ -34,6 +48,7 @@ jobs:
       matrix:
         os: [windows-latest, macos-15]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -41,3 +56,74 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --locked -p libroxel --all-targets -- -D warnings
+      # Scripts run through a JIT that differs per platform, so the corpus
+      # runs everywhere.
+      - run: cargo test --locked -p libroxel-tests --test corpus
+      - name: Build the app
+        run: cargo build --locked -p libroxel
+      - name: Launch check
+        shell: bash
+        run: packaging/ci/smoke.sh target/debug/libroxel${{ runner.os == 'Windows' && '.exe' || '' }} server
+
+  android:
+    # Both Android libraries build and would load on Android 8 (API 26):
+    # right machine, 16 KB pages, the entry points GameActivity calls, and
+    # only system libraries that exist there. The release build adds fat
+    # LTO on top; the nightly workflow checks that one fits in memory.
+    name: android (${{ matrix.abi }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            target: aarch64-linux-android
+            clang: aarch64-linux-android
+            machine: AArch64
+            class: ELF64
+          - abi: armeabi-v7a
+            target: armv7-linux-androideabi
+            clang: armv7a-linux-androideabi
+            machine: ARM
+            class: ELF32
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-android-${{ matrix.abi }}
+      - name: Build
+        shell: bash
+        run: |
+          ndk="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          env="${{ matrix.target }}"; env="${env//-/_}"
+          export "CC_$env=$ndk/bin/${{ matrix.clang }}26-clang" "CXX_$env=$ndk/bin/${{ matrix.clang }}26-clang++" "AR_$env=$ndk/bin/llvm-ar"
+          export "CARGO_TARGET_${env^^}_LINKER=$ndk/bin/${{ matrix.clang }}26-clang"
+          cargo rustc --locked --profile ci -p libroxel --lib --crate-type cdylib --target ${{ matrix.target }} \
+            -- -C link-arg=-Wl,-z,max-page-size=16384
+      - name: Check the library
+        run: |
+          packaging/ci/check-android-lib.sh target/${{ matrix.target }}/ci/liblibroxel.so \
+            ${{ matrix.machine }} ${{ matrix.class }} ${{ matrix.target }}
+
+  bench:
+    # Times the engine's hot paths on this commit and the one before it, on
+    # the same runner, and fails when something got much slower.
+    if: github.event_name == 'pull_request' || github.event.before != '0000000000000000000000000000000000000000'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libwayland-dev libxkbcommon-dev libudev-dev libasound2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bench
+      - name: Benchmark
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: packaging/ci/bench-compare.sh "$BASE"

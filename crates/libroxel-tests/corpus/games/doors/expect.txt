@@ -1,0 +1,5 @@
+# seconds: 3
+# known-broken: IntValue/NumberValue .Changed passes the property name ("Value") instead of the new value
+doors: open at x=6.0
+doors: closed at x=0.0
+doors: light tween Enum.PlaybackState.Completed brightness 2

@@ -136,9 +136,9 @@ pub(crate) fn play_on_remove(lua: &Lua, id: InstanceId) {
         let _ = tree.set_extra(copy, sound::PLAY_ON_REMOVE, None);
         let _ = tree.set_extra(copy, sound::PLAYED_ON_REMOVE, Some(set(true)));
         let _ = tree.set(copy, Property::Playing, set(true));
-        let holder = match at
-            .and_then(|at| tree.create(ClassKind::Part, sound::PLAY_ON_REMOVE).ok().map(|h| (h, at)))
-        {
+        // The holder part is only made when the sound has a place to play from.
+        let made = at.and_then(|_| tree.create(ClassKind::Part, sound::PLAY_ON_REMOVE).ok());
+        let holder = match made.zip(at) {
             Some((holder, at)) => {
                 let _ = tree.set(holder, Property::Position, PropertyValue::Vec3(at));
                 let _ = tree.set(

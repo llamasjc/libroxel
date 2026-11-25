@@ -1,0 +1,7 @@
+# seconds: 4
+physics: crate fell true
+physics: cart moved true
+physics: wheel kept up true
+physics: explosion hit crate true
+physics: cart box
+physics: crate gone true

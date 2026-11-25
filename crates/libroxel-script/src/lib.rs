@@ -734,6 +734,12 @@ impl ScriptRuntime {
         bindings::host(&self.lua).memory_limit.get()
     }
 
+    /// How much memory the game's scripts use together right now, in bytes
+    /// (for soak tests that check a game doesn't leak).
+    pub fn used_memory(&self) -> usize {
+        self.lua.used_memory()
+    }
+
     /// Runs every waiting thread each step, however long it takes, so a
     /// game plays out the same on a slow computer (for tests).
     pub fn set_steady(&self, on: bool) {

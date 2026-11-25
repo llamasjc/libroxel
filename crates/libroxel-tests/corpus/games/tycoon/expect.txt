@@ -1,0 +1,5 @@
+# seconds: 8
+tycoon: earned
+tycoon: bought dropper 2
+tycoon: ore tagged true
+tycoon: 1.5K 2.5M 999

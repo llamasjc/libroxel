@@ -1,0 +1,4 @@
+# seconds: 4
+obby: 5 checkpoints ready
+obby: spawned at stage 1
+obby: spinner turned once

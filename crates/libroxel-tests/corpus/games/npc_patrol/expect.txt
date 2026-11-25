@@ -1,0 +1,7 @@
+# seconds: 6
+npc: spawned Guard with health 100
+npc: path computed true true
+npc: has waypoints true
+npc: reached 2 points, within 2 studs true
+npc: health after hit 70
+npc: guard died

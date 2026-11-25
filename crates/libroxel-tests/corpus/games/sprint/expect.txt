@@ -1,0 +1,5 @@
+# seconds: 4
+sprint: ready on
+speed 16
+sprint: running at 28
+sprint: out of stamina, speed 16

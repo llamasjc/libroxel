@@ -65,6 +65,16 @@ lto = false
 codegen-units = 1
 strip = true
 
+# CI's Android build check (`cargo rustc --profile ci`): optimised like the
+# release so it builds the same code, but without link-time optimization and
+# in many pieces, so it is quick and small enough for any runner. The
+# nightly workflow builds the real release settings.
+[profile.ci]
+inherits = "release"
+lto = false
+codegen-units = 16
+debug = false
+
 # mlua with a cheap interrupt check (see vendor/mlua/Cargo.toml).
 [patch.crates-io]
 mlua = { path = "vendor/mlua" }
