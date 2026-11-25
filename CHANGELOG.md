@@ -3,8 +3,10 @@
 What changed in each release. The full list of commits for each one is on
 its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
 
-## Unreleased
+## 0.1.16 (2026-11-24)
 
+- **Android:** the app opens again on 64-bit phones. It quit on launch
+  with "cannot locate symbol `__clear_cache`".
 - **Steadier multiplayer:**
   - Both sides of a game say something at least once a second, so a
     connection that goes quiet without hanging up (Wi-Fi that drops, a

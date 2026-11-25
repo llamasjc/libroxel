@@ -6,7 +6,7 @@ exclude = ["vendor"]
 default-members = ["crates/libroxel"]
 
 [workspace.package]
-version = "0.1.5"
+version = "0.1.16"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT OR Apache-2.0"
@@ -16,13 +16,13 @@ authors = ["Libroxel contributors"]
 [workspace.dependencies]
 # A fast hash for maps looked up thousands of times a frame.
 foldhash = "0.2"
-libroxel-instance = { path = "crates/libroxel-instance", version = "0.1.5" }
-libroxel-script = { path = "crates/libroxel-script", version = "0.1.5" }
-libroxel-engine = { path = "crates/libroxel-engine", version = "0.1.5" }
-libroxel-net = { path = "crates/libroxel-net", version = "0.1.5" }
-libroxel-rbx = { path = "crates/libroxel-rbx", version = "0.1.5" }
-libroxel-avatar = { path = "crates/libroxel-avatar", version = "0.1.5" }
-libroxel-hub = { path = "crates/libroxel-hub", version = "0.1.5" }
+libroxel-instance = { path = "crates/libroxel-instance", version = "0.1.16" }
+libroxel-script = { path = "crates/libroxel-script", version = "0.1.16" }
+libroxel-engine = { path = "crates/libroxel-engine", version = "0.1.16" }
+libroxel-net = { path = "crates/libroxel-net", version = "0.1.16" }
+libroxel-rbx = { path = "crates/libroxel-rbx", version = "0.1.16" }
+libroxel-avatar = { path = "crates/libroxel-avatar", version = "0.1.16" }
+libroxel-hub = { path = "crates/libroxel-hub", version = "0.1.16" }
 rbx_mesh = { version = "0.8.2", default-features = false, features = ["mesh", "mesh-v1", "union-graphics", "csgphs-v8-ruzstd"] }
 thiserror = "2"
 serde_json = "1"

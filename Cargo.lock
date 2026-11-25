@@ -5325,7 +5325,7 @@ dependencies = [
 
 [[package]]
 name = "libroxel"
-version = "0.1.5"
+version = "0.1.16"
 dependencies = [
  "bevy",
  "bevy_egui",
@@ -5353,7 +5353,7 @@ dependencies = [
 
 [[package]]
 name = "libroxel-avatar"
-version = "0.1.5"
+version = "0.1.16"
 dependencies = [
  "flate2",
  "libroxel-instance",
@@ -5361,7 +5361,7 @@ dependencies = [
 
 [[package]]
 name = "libroxel-engine"
-version = "0.1.5"
+version = "0.1.16"
 dependencies = [
  "bevy",
  "data-encoding",
@@ -5377,7 +5377,7 @@ dependencies = [
 
 [[package]]
 name = "libroxel-hub"
-version = "0.1.5"
+version = "0.1.16"
 dependencies = [
  "argon2",
  "axum",
@@ -5402,7 +5402,7 @@ dependencies = [
 
 [[package]]
 name = "libroxel-instance"
-version = "0.1.5"
+version = "0.1.16"
 dependencies = [
  "foldhash 0.2.0",
  "serde_json",
@@ -5411,7 +5411,7 @@ dependencies = [
 
 [[package]]
 name = "libroxel-net"
-version = "0.1.5"
+version = "0.1.16"
 dependencies = [
  "data-encoding",
  "iroh",
@@ -5423,7 +5423,7 @@ dependencies = [
 
 [[package]]
 name = "libroxel-proto"
-version = "0.1.5"
+version = "0.1.16"
 dependencies = [
  "bevy",
  "libroxel-engine",
@@ -5432,7 +5432,7 @@ dependencies = [
 
 [[package]]
 name = "libroxel-rbx"
-version = "0.1.5"
+version = "0.1.16"
 dependencies = [
  "foldhash 0.2.0",
  "libroxel-engine",
@@ -5448,7 +5448,7 @@ dependencies = [
 
 [[package]]
 name = "libroxel-script"
-version = "0.1.5"
+version = "0.1.16"
 dependencies = [
  "getrandom 0.3.4",
  "libroxel-instance",
@@ -5462,7 +5462,7 @@ dependencies = [
 
 [[package]]
 name = "libroxel-tests"
-version = "0.1.5"
+version = "0.1.16"
 dependencies = [
  "libroxel-engine",
  "libroxel-instance",
