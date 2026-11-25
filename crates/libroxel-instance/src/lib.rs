@@ -52,7 +52,7 @@ fn names_default_group() -> String {
 pub use math::{CFrame, Color3, Rotation, UDim, UDim2, Vec2, Vec3};
 pub use property::{Property, PropertyValue};
 pub use serde_json;
-pub use tree::{Change, InstanceId, InstanceTree, TreeError};
+pub use tree::{Change, InstanceId, InstanceTree, MOST_INSTANCES, TreeError};
 
 /// Every kind of instance the engine knows about.
 ///

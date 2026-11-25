@@ -54,6 +54,21 @@ const NEAR_MOVERS_MIN: usize = 2000;
 const MOVER_MARGIN: f32 = 8.0;
 /// Boxes covering more cells than this are compared with everything.
 const MAX_CELLS: i64 = 64;
+
+/// The biggest a part is along any side for the physics engine; bigger
+/// (a script can ask for 1e30) breaks its shape tests. Games stay far below.
+const MOST_PHYSICS_SIZE: f32 = 1.0e5;
+
+/// How far from the middle of the world a part may be and still take part
+/// in physics.
+const MOST_PHYSICS_REACH: f32 = 1.0e7;
+
+/// How many grid cells the box of cells from `a` to `b` covers, without
+/// overflowing for an endless box (a NaN or infinite size makes one).
+fn cells_between(a: (i32, i32, i32), b: (i32, i32, i32)) -> i64 {
+    let side = |lo: i32, hi: i32| (i64::from(hi) - i64::from(lo) + 1).max(0);
+    side(a.0, b.0).saturating_mul(side(a.1, b.1)).saturating_mul(side(a.2, b.2))
+}
 /// The size of the broadphase's coarse cells (for big boxes), in studs.
 const COARSE_CELL: f32 = 64.0;
 /// Moving boxes climb onto anything whose top is at most this far above their bottom.
@@ -874,9 +889,16 @@ impl Physics {
             };
             type Sleeper = (InstanceId, Vec3, Vec3);
             let mut sleeping: HashMap<(i32, i32, i32), Vec<Sleeper>> = HashMap::new();
+            // Ones too big for cells (a script can make a part endlessly
+            // big), looked at by every moved part instead.
+            let mut huge: Vec<Sleeper> = Vec::new();
             for (id, _) in self.rest.iter().filter(|(_, r)| r.still >= SLEEP_STEPS) {
                 let Some((lo, hi)) = bounds(*id, 0.0) else { continue };
                 let (a, b) = (cell(lo), cell(hi));
+                if cells_between(a, b) > 512 {
+                    huge.push((*id, lo, hi));
+                    continue;
+                }
                 for x in a.0..=b.0 {
                     for y in a.1..=b.1 {
                         for z in a.2..=b.2 {
@@ -906,7 +928,8 @@ impl Physics {
                         && slo.z <= hi.z
                         && lo.z <= shi.z
                 };
-                if (b.0 - a.0 + 1) * (b.1 - a.1 + 1) * (b.2 - a.2 + 1) > 512 {
+                near.extend(huge.iter().filter(|(_, slo, shi)| meets(slo, shi)).map(|(s, ..)| *s));
+                if cells_between(a, b) > 512 {
                     // Something huge moved or went: each sleeping part is looked at.
                     for list in sleeping.values() {
                         near.extend(list.iter().filter(|(_, slo, shi)| meets(slo, shi)).map(|(s, ..)| *s));
@@ -1210,13 +1233,26 @@ impl Physics {
             } else {
                 size
             };
+            let pos = match body.collider {
+                Collider::Convex { centre, .. } => l(centre),
+                _ => body.pos,
+            };
+            // A part a script sent off to NaN or forever (or sized so) is left
+            // out of the physics engine, whose shape tests break on such
+            // numbers; one too big is held to a size they still handle.
+            let finite = |v: Vec3| v.x.is_finite() && v.y.is_finite() && v.z.is_finite();
+            if !finite(pos) || !finite(size) || pos.length() > MOST_PHYSICS_REACH {
+                continue;
+            }
+            let size = Vec3::new(
+                size.x.clamp(0.0, MOST_PHYSICS_SIZE),
+                size.y.clamp(0.0, MOST_PHYSICS_SIZE),
+                size.z.clamp(0.0, MOST_PHYSICS_SIZE),
+            );
             specs.push(rigid::Spec {
                 id,
                 role,
-                pos: match body.collider {
-                    Collider::Convex { centre, .. } => l(centre),
-                    _ => body.pos,
-                },
+                pos,
                 rot,
                 orientation,
                 size,
@@ -1425,8 +1461,7 @@ impl Physics {
         let coarse_of = |v: f32| (v / COARSE_CELL).floor() as i32;
         let span = |lo: Vec3, hi: Vec3, of: &dyn Fn(f32) -> i32| {
             let (a, b) = ((of(lo.x), of(lo.y), of(lo.z)), (of(hi.x), of(hi.y), of(hi.z)));
-            let cells = (b.0 - a.0 + 1) as i64 * (b.1 - a.1 + 1) as i64 * (b.2 - a.2 + 1) as i64;
-            (a, b, cells)
+            (a, b, cells_between(a, b))
         };
         // (A fast hash: these maps are rebuilt twice a frame.)
         let mut fine: FastMap<(i32, i32, i32), Vec<usize>> = FastMap::default();

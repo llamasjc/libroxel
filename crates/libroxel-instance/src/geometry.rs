@@ -114,9 +114,11 @@ impl Region {
                 // The nearest point of the box to the ball's middle.
                 let local = rot.transpose().apply(c - center);
                 let nearest = Vec3::new(
-                    local.x.clamp(-half.x, half.x),
-                    local.y.clamp(-half.y, half.y),
-                    local.z.clamp(-half.z, half.z),
+                    // (`abs`: a script can give a box a negative size, and
+                    // `clamp` panics on bounds the wrong way round.)
+                    local.x.max(-half.x.abs()).min(half.x.abs()),
+                    local.y.max(-half.y.abs()).min(half.y.abs()),
+                    local.z.max(-half.z.abs()).min(half.z.abs()),
                 );
                 (local - nearest).length() <= radius
             }

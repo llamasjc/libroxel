@@ -474,6 +474,9 @@ fn describe_tree_error(err: TreeError) -> String {
             names::class_name(class)
         ),
         TreeError::BadAttribute(kind) => format!("attributes can't hold a {}", names::value_kind_name(kind)),
+        TreeError::TooMany => {
+            format!("the game already has {} instances, the most there can be", libroxel_instance::MOST_INSTANCES)
+        }
         TreeError::WrongType { property, expected, got } => format!(
             "{} expects a {}, got a {}",
             names::property_name(property),
@@ -1272,7 +1275,13 @@ impl UserData for LuaInstance {
             host(lua).tree.borrow_mut().destroy(this.0).map_err(tree_err)
         });
         methods.add_method(CLONE, |lua, this, ()| {
-            let copy = host(lua).tree.borrow_mut().clone_subtree(this.0).map_err(tree_err)?;
+            let host = host(lua);
+            let mut tree = host.tree.borrow_mut();
+            if tree.held() >= libroxel_instance::MOST_INSTANCES {
+                return Err(tree_err(TreeError::TooMany));
+            }
+            let copy = tree.clone_subtree(this.0).map_err(tree_err)?;
+            drop(tree);
             push_instance(lua, copy)
         });
         methods.add_method(GET_SERVICE, |lua, this, name: String| {
@@ -2500,6 +2509,9 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
                 } else {
                     names::class_name(class)
                 };
+                if tree.held() >= libroxel_instance::MOST_INSTANCES {
+                    return Err(tree_err(TreeError::TooMany));
+                }
                 let id = tree.create(class, name).map_err(tree_err)?;
                 if other {
                     let _ = tree.set(id, Property::OtherClass, PropertyValue::String(api_name.clone()));

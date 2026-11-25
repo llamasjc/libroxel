@@ -308,7 +308,19 @@ pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicB
     let mut hub_said = None;
     let mut empty_since = Instant::now();
     while !stop.load(Ordering::Relaxed) {
-        session.step(frame.as_secs_f32(), CharacterInput::default());
+        // A crash inside one step ends this server tidily (its listing is
+        // taken down and the reason said), not with a bare panic.
+        let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            session.step(frame.as_secs_f32(), CharacterInput::default())
+        }));
+        if let Err(why) = stepped {
+            let why = why
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| why.downcast_ref::<String>().cloned())
+                .unwrap_or_default();
+            return Err(format!("the game stopped after an error: {why}"));
+        }
         if session.joined_count() > 0 {
             empty_since = Instant::now();
         } else if let Some(wait) = stop_when_empty

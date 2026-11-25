@@ -1683,6 +1683,9 @@ impl Joined {
                     continue;
                 };
                 let name = op.get("n").and_then(Json::as_str).unwrap_or("Instance");
+                if tree.held() >= libroxel_instance::MOST_INSTANCES {
+                    continue;
+                }
                 let Ok(id) = tree.create(class, name) else { continue };
                 self.ids.insert(host_id, id);
                 self.back.insert(id, host_id);
@@ -3615,5 +3618,271 @@ mod tests {
         let (next, _) = focus.wanted(&tree, &replicator.sent);
         assert_eq!((next[&near], next[&mid], next[&far]), (1, 3, 8));
         assert!(!next.contains_key(&gone));
+    }
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// A small, repeatable random source for the hostile peer tests.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+
+        fn pick<'a, T>(&mut self, items: &'a [T]) -> &'a T {
+            &items[self.below(items.len())]
+        }
+
+        /// An id: one that was sent, a small one, or nonsense.
+        fn id(&mut self, known: &[u64]) -> Json {
+            match self.below(4) {
+                0 | 1 if !known.is_empty() => json!(*self.pick(known)),
+                2 => json!(self.below(64)),
+                _ => self.value(0),
+            }
+        }
+
+        /// Any JSON value, odd ones often.
+        fn value(&mut self, depth: usize) -> Json {
+            match self.below(if depth > 2 { 9 } else { 12 }) {
+                0 => Json::Null,
+                1 => json!(self.below(2) == 0),
+                2 => json!(*self.pick(&[0u64, 1, 7, u64::MAX, u32::MAX as u64 + 1])),
+                3 => json!(*self.pick(&[-1i64, i64::MIN, -0x7fff_ffff])),
+                4 => json!(*self.pick(&[1e300f64, -1e300, 1e-300, 0.5, -0.0, 3.4e38, 1e39])),
+                5 => json!(*self.pick(&["", "x", "part", "Position", "terrain", "z", "\u{0}", "🙂"])),
+                6 => json!("w".repeat(self.below(5000))),
+                7 => json!([self.value(depth + 1), self.value(depth + 1), self.value(depth + 1)]),
+                8 => json!([1e39, -1e39, 1e300]),
+                9 => Json::Array((0..self.below(6)).map(|_| self.value(depth + 1)).collect()),
+                10 => json!({ "$i": self.value(depth + 1) }),
+                _ => {
+                    let mut map = Map::new();
+                    for _ in 0..self.below(5) {
+                        let key = self.property_key();
+                        map.insert(key, self.value(depth + 1));
+                    }
+                    Json::Object(map)
+                }
+            }
+        }
+
+        fn property_key(&mut self) -> String {
+            let all = Property::ALL;
+            match self.below(4) {
+                0 => "nonsense".into(),
+                _ => all[self.below(all.len())].file_name().to_owned(),
+            }
+        }
+
+        /// Properties as they're sent: real names, any values.
+        fn properties(&mut self) -> Json {
+            let mut map = Map::new();
+            for _ in 0..self.below(8) {
+                let key = self.property_key();
+                map.insert(key, self.value(1));
+            }
+            Json::Object(map)
+        }
+
+        fn class(&mut self) -> Json {
+            let all = ClassKind::ALL;
+            if self.below(8) == 0 { self.value(1) } else { json!(all[self.below(all.len())].file_name()) }
+        }
+
+        /// Terrain text, well formed or not.
+        fn cells(&mut self) -> Json {
+            let n = self.pick(&["1", "4096", "18446744073709551615", "-1", "x", ""]).to_string();
+            let at = self.pick(&["0,0,0", "1,2", "2147483647,-2147483648,0", "a,b,c"]).to_string();
+            json!(format!("{at}:{}*{n},{}*{n};{at}:3", self.below(30), self.below(300)))
+        }
+    }
+
+    /// Everything a joined computer may send, filled in at random.
+    fn guest_message(rng: &mut Rng, known: &[u64]) -> Json {
+        let kind = *rng.pick(&[
+            "input", "look", "move", "fire", "invoke", "click", "prompt", "tool", "reset", "voice", "activate",
+            "hello", "nonsense",
+        ]);
+        let mut map = Map::new();
+        map.insert("t".into(), json!(kind));
+        for key in ["r", "p", "a", "call", "pos", "vel", "yaw", "look", "d", "seq", "name", "dir", "jump", "slot"] {
+            if rng.below(2) == 0 {
+                let value = if matches!(key, "r" | "p") { rng.id(known) } else { rng.value(0) };
+                map.insert(key.into(), value);
+            }
+        }
+        if kind == "voice" && rng.below(2) == 0 {
+            map.insert("d".into(), json!(data_encoding::BASE64.encode(&vec![0xFF; rng.below(20000)])));
+        }
+        Json::Object(map)
+    }
+
+    /// Everything a host may send, filled in at random.
+    fn host_message(rng: &mut Rng, made: &mut Vec<u64>) -> Json {
+        match rng.below(10) {
+            0..=4 => {
+                let mut ops = Vec::new();
+                for _ in 0..rng.below(40) {
+                    let mut op = Map::new();
+                    match rng.below(4) {
+                        0 => {
+                            let id = rng.next() % 4000;
+                            made.push(id);
+                            op.insert("c".into(), json!(id));
+                            op.insert("k".into(), rng.class());
+                        }
+                        1 | 2 => {
+                            op.insert("u".into(), rng.id(made));
+                        }
+                        _ => {
+                            op.insert("d".into(), rng.id(made));
+                        }
+                    }
+                    if rng.below(2) == 0 {
+                        op.insert("p".into(), rng.id(made));
+                    }
+                    if rng.below(3) == 0 {
+                        op.insert("n".into(), rng.value(1));
+                    }
+                    op.insert("v".into(), rng.properties());
+                    for key in ["a", "e", "g"] {
+                        if rng.below(4) == 0 {
+                            op.insert(key.into(), rng.value(0));
+                        }
+                    }
+                    if rng.below(6) == 0 {
+                        let key = if rng.below(2) == 0 { "x" } else { "xs" };
+                        op.insert(key.into(), rng.cells());
+                    }
+                    ops.push(Json::Object(op));
+                }
+                json!({ "t": "rep", "ops": ops })
+            }
+            5 => json!({ "t": "welcome", "total": rng.value(0), "services": rng.value(0) }),
+            6 => json!({ "t": "you", "player": rng.id(made) }),
+            7 => json!({ "t": "teleport", "seq": rng.value(0), "pos": rng.value(0), "yaw": rng.value(0) }),
+            8 => json!({ "t": *rng.pick(&["event", "result", "voice", "kicked", "refused", "z"]),
+                         "r": rng.id(made), "a": rng.value(0), "call": rng.value(0), "ok": rng.value(0),
+                         "p": rng.id(made), "d": rng.value(0), "why": rng.value(0) }),
+            _ => rng.value(0),
+        }
+    }
+
+    fn quietly<T>(run: impl FnOnce() -> T) -> std::thread::Result<T> {
+        let quiet = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
+        std::panic::set_hook(quiet);
+        ran
+    }
+
+    fn panic_text(why: Box<dyn std::any::Any + Send>) -> String {
+        why.downcast_ref::<String>().cloned().or_else(|| why.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default()
+    }
+
+    /// A joined computer that sends nonsense can't crash the host or keep it busy.
+    #[test]
+    fn a_hostile_guest_cannot_crash_the_host() {
+        let rounds: usize = std::env::var("FUZZ_ROUNDS").ok().and_then(|n| n.parse().ok()).unwrap_or(4);
+        let ran = quietly(|| {
+            let mut tree = InstanceTree::new();
+            let ws = tree.workspace();
+            for i in 0..20 {
+                let part = tree.create(ClassKind::Part, format!("P{i}")).unwrap();
+                tree.set_parent(part, Some(ws)).unwrap();
+            }
+            let remote = tree.create(ClassKind::RemoteEvent, "Remote").unwrap();
+            tree.set_parent(remote, Some(tree.service(ClassKind::ReplicatedStorage).unwrap())).unwrap();
+            let script = tree.create(ClassKind::Script, "Listen").unwrap();
+            tree.set_parent(script, Some(ws)).unwrap();
+            tree.set(script, Property::Source, PropertyValue::String(
+                "game.ReplicatedStorage.Remote.OnServerEvent:Connect(function(p, ...) local t = {...} for _, v in t do tostring(v) end end)".into(),
+            )).unwrap();
+            let known: Vec<u64> = tree.descendants(tree.root()).unwrap().iter().map(|i| i.to_bits()).collect();
+            let mut host = PlaySession::host(Rc::new(RefCell::new(tree)), 0, None, false).unwrap();
+            let port = host.host_address().unwrap().port();
+            let mut rng = Rng(0x5eed_0000_1111_2222);
+            let mut slowest = Duration::ZERO;
+            for _ in 0..rounds {
+                let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+                let mut guest = Conn::new(stream, Side::Joining).unwrap();
+                guest.send(&json!({ "t": "hello", "name": rng.value(0), "version": PROTOCOL }));
+                guest.send(&json!({ "t": "hello", "name": "Fuzz", "version": PROTOCOL }));
+                for frame in 0..120 {
+                    for _ in 0..rng.below(30) {
+                        guest.send(&guest_message(&mut rng, &known));
+                    }
+                    if frame % 40 == 39 {
+                        // Garbage straight onto the wire, past the encryption.
+                        guest.send_raw(&[0xFF, 0xFF, 1, 2, 3]);
+                    }
+                    guest.flush();
+                    let _ = guest.receive();
+                    let began = Instant::now();
+                    host.step(1.0 / 60.0, CharacterInput::default());
+                    slowest = slowest.max(began.elapsed());
+                }
+            }
+            slowest
+        });
+        match ran {
+            Ok(slowest) => assert!(slowest < Duration::from_secs(2), "a host step took {slowest:?}"),
+            Err(why) => panic!("the host crashed: {}", panic_text(why)),
+        }
+    }
+
+    /// A host that sends nonsense can't crash a computer that joins it.
+    #[test]
+    fn a_hostile_host_cannot_crash_a_joined_computer() {
+        let rounds: usize = std::env::var("FUZZ_ROUNDS").ok().and_then(|n| n.parse().ok()).unwrap_or(4);
+        let mut rng = Rng(0x5eed_3333_4444_5555);
+        for round in 0..rounds {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap().to_string();
+            let tree: SharedTree = Rc::new(RefCell::new(InstanceTree::new()));
+            let ran = quietly(|| {
+                let mut joined = PlaySession::join(tree.clone(), &address, "Fuzz").unwrap();
+                let (stream, _) = listener.accept().unwrap();
+                let mut host = Conn::new(stream, Side::Hosting).unwrap();
+                let mut made = Vec::new();
+                let mut slowest = Duration::ZERO;
+                for frame in 0..150 {
+                    let _ = host.receive();
+                    if host.ready() {
+                        if frame < 3 {
+                            let services: Map<String, Json> = [ClassKind::Workspace, ClassKind::Players, ClassKind::ReplicatedStorage]
+                                .iter()
+                                .map(|c| (c.file_name().to_owned(), json!(c.file_name().len())))
+                                .collect();
+                            made.extend(services.values().filter_map(Json::as_u64));
+                            host.send(&json!({ "t": "welcome", "total": 10, "services": services }));
+                        }
+                        for _ in 0..rng.below(6) {
+                            host.send(&host_message(&mut rng, &mut made));
+                        }
+                    }
+                    host.flush();
+                    let began = Instant::now();
+                    joined.step(1.0 / 60.0, CharacterInput { move_dir: Vec3::new(1.0, 0.0, 0.0), ..Default::default() });
+                    slowest = slowest.max(began.elapsed());
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                slowest
+            });
+            match ran {
+                Ok(slowest) => assert!(slowest < Duration::from_secs(2), "round {round}: a step took {slowest:?}"),
+                Err(why) => panic!("round {round}: the joined computer crashed: {}", panic_text(why)),
+            }
+        }
     }
 }

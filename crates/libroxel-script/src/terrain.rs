@@ -43,7 +43,7 @@ const MOST_CELLS: i32 = 512;
 
 fn cell_range(lo: f32, hi: f32) -> std::ops::Range<i32> {
     let lo = lo.round() as i32;
-    lo..(hi.round() as i32).min(lo + MOST_CELLS)
+    lo..(hi.round() as i32).min(lo.saturating_add(MOST_CELLS))
 }
 
 fn material_value(lua: &mlua::Lua, material: Option<Material>) -> mlua::Result<Value> {
@@ -63,6 +63,30 @@ fn grid(lua: &mlua::Lua, size: [usize; 3]) -> mlua::Result<mlua::Table> {
     Ok(t)
 }
 
+/// Turns down a box too big (or endless) for one fill, rather than keep
+/// the game busy for minutes.
+fn check_size(size: libroxel_instance::Vec3, method: &str) -> mlua::Result<()> {
+    let cells = f64::from(size.x.abs()) * f64::from(size.y.abs()) * f64::from(size.z.abs());
+    if cells.is_finite() && cells <= libroxel_instance::voxels::MOST_EDIT_CELLS as f64 {
+        Ok(())
+    } else {
+        Err(err(format!(
+            "{method}: the region is too big (at most {} cells at once)",
+            libroxel_instance::voxels::MOST_EDIT_CELLS
+        )))
+    }
+}
+
+/// The most blocks one `ReadVoxels` or `WriteVoxels` call covers: at a
+/// resolution of 4, 64 million cells.
+const MOST_BLOCKS: usize = 1 << 20;
+
+/// Only a resolution of 4 is used by real games; anything else is read as 4 at
+/// most, so a huge one can't make a call loop for ever.
+fn voxel_resolution(value: &Value) -> i32 {
+    as_number(value).filter(|r| r.is_finite()).unwrap_or(4.0).clamp(1.0, 4.0).round() as i32
+}
+
 fn edit(
     lua: &mlua::Lua,
     terrain: libroxel_instance::InstanceId,
@@ -80,6 +104,7 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
         let cf = as_cframe(&cframe).ok_or_else(|| err("FillBlock expects a CFrame first"))?;
         let size = as_vector3(&size).ok_or_else(|| err("FillBlock expects a Vector3 size"))?;
         let material = fill_material(&material, terrain::FILL_BLOCK)?;
+        check_size(size, terrain::FILL_BLOCK)?;
         let axes = [cf.rot.x, cf.rot.y, cf.rot.z];
         edit(lua, this.0, |v| v.fill_block(cf.pos, axes, size, material))
     });
@@ -108,6 +133,7 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
         require_class(lua, this.0, ClassKind::Terrain, "FillRegion")?;
         let (lo, hi) = region(&r, "FillRegion")?;
         let material = fill_material(&material, "FillRegion")?;
+        check_size(hi - lo, "FillRegion")?;
         let v = libroxel_instance::Vec3::new;
         let axes = [v(1.0, 0.0, 0.0), v(0.0, 1.0, 0.0), v(0.0, 0.0, 1.0)];
         edit(lua, this.0, |v| v.fill_block((lo + hi) / 2.0, axes, hi - lo, material))
@@ -117,6 +143,7 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
         let cf = as_cframe(&cframe).ok_or_else(|| err("FillWedge expects a CFrame first"))?;
         let size = as_vector3(&size).ok_or_else(|| err("FillWedge expects a Vector3 size"))?;
         let material = fill_material(&material, "FillWedge")?;
+        check_size(size, "FillWedge")?;
         let axes = [cf.rot.x, cf.rot.y, cf.rot.z];
         edit(lua, this.0, |v| v.fill_wedge(cf.pos, axes, size, material))
     });
@@ -136,9 +163,12 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
     m.add_method("ReadVoxels", |lua, this, (r, resolution): (Value, Value)| {
         require_class(lua, this.0, ClassKind::Terrain, "ReadVoxels")?;
         let (lo, hi) = region(&r, "ReadVoxels")?;
-        let res = as_number(&resolution).unwrap_or(4.0).max(1.0).round() as i32;
+        let res = voxel_resolution(&resolution);
         let count = |a: f32, b: f32| (((b - a) / res as f32).round().max(0.0) as usize).min(256);
         let size = [count(lo.x, hi.x), count(lo.y, hi.y), count(lo.z, hi.z)];
+        if size[0] * size[1] * size[2] > MOST_BLOCKS {
+            return Err(err(format!("ReadVoxels: the region is too big (at most {MOST_BLOCKS} blocks)")));
+        }
         let materials = grid(lua, size)?;
         let occupancy = grid(lua, size)?;
         let host = host(lua);
@@ -188,12 +218,19 @@ pub(crate) fn add_instance_methods<M: UserDataMethods<LuaInstance>>(m: &mut M) {
          (r, resolution, materials, occupancy): (Value, Value, mlua::Table, Option<mlua::Table>)| {
             require_class(lua, this.0, ClassKind::Terrain, "WriteVoxels")?;
             let (lo, _) = region(&r, "WriteVoxels")?;
-            let res = as_number(&resolution).unwrap_or(4.0).max(1.0).round() as i32;
+            let res = voxel_resolution(&resolution);
             let start = [lo.x.round() as i32, lo.y.round() as i32, lo.z.round() as i32];
             let mut cells = Vec::new();
+            let mut blocks = 0;
             for (i, plane) in materials.sequence_values::<mlua::Table>().enumerate().take(256) {
                 for (j, row) in plane?.sequence_values::<mlua::Table>().enumerate().take(256) {
                     for (k, m) in row?.sequence_values::<Value>().enumerate().take(256) {
+                        blocks += 1;
+                        if blocks > MOST_BLOCKS {
+                            return Err(err(format!(
+                                "WriteVoxels: too many blocks (at most {MOST_BLOCKS} at once)"
+                            )));
+                        }
                         let material = fill_material(&m?, "WriteVoxels")?;
                         let full = match &occupancy {
                             Some(o) => o

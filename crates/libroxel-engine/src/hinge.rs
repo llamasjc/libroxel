@@ -173,11 +173,11 @@ impl Hinges {
                     let mut target = number(tree, hinge, Property::TargetAngle).to_radians();
                     // A servo can't turn past the hinge's limits.
                     if let Some((lo, hi)) = limits {
-                        target = target.clamp(lo, hi);
+                        target = crate::clamp_lenient(target, lo, hi);
                     }
                     let fastest = number(tree, hinge, Property::AngularSpeed).abs();
                     // Head for the target, arriving this step if it is close.
-                    let wanted = (wrap(target - angle) / dt.max(1e-4)).clamp(-fastest, fastest);
+                    let wanted = crate::clamp_lenient(wrap(target - angle) / dt.max(1e-4), -fastest, fastest);
                     Some((wanted, number(tree, hinge, Property::ServoMaxTorque)))
                 }
                 _ => None,

@@ -480,6 +480,7 @@ pub fn run() {
     .insert_non_send(editor)
     .add_plugins((EnginePlugin, RenderPlugin))
     .insert_resource(load_graphics())
+    .insert_resource(graphics::error_handler())
     .add_systems(Startup, setup_ui_camera)
     .init_resource::<render_scale::RenderScale>()
     .add_systems(PostUpdate, render_scale::apply)

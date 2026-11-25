@@ -262,7 +262,16 @@ fn collider_for(spec: &Spec, offset: Pose) -> Collider {
 struct Filter<'a> {
     ignored: &'a HashSet<(InstanceId, InstanceId)>,
     groups: &'a crate::physics::Groups,
+    /// Touching pairs let through so far this step.
+    pairs: std::sync::atomic::AtomicUsize,
 }
+
+/// The most touching pairs solved in one step. A pile of thousands of loose
+/// parts made in one spot (a script can make one in a line) touches every
+/// part with every other, millions of pairs, which would take gigabytes and
+/// minutes to solve; past this, the rest pass through each other until the
+/// pile spreads out.
+const MOST_CONTACT_PAIRS: usize = 100_000;
 
 impl PhysicsHooks for Filter<'_> {
     fn filter_contact_pair(&self, context: &PairFilterContext) -> Option<SolverFlags> {
@@ -279,6 +288,9 @@ impl PhysicsHooks for Filter<'_> {
             }
         }
         if self.groups.apart(a, b) {
+            return None;
+        }
+        if self.pairs.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= MOST_CONTACT_PAIRS {
             return None;
         }
         Some(SolverFlags::COMPUTE_RIGID_IMPULSES)
@@ -571,8 +583,9 @@ impl Rigid {
         self.world.gravity = RVec::new(0.0, -gravity, 0.0);
         let slices = ((dt * 45.0).ceil() as usize).clamp(1, 4);
         self.world.integration_parameters.dt = dt / slices as f32;
-        let filter = Filter { ignored, groups };
+        let filter = Filter { ignored, groups, pairs: Default::default() };
         for k in 1..=slices {
+            filter.pairs.store(0, std::sync::atomic::Ordering::Relaxed);
             let t = k as f32 / slices as f32;
             for (handle, from, to) in &kinematic {
                 let at = from.lerp(to, t);
@@ -789,7 +802,7 @@ impl Rigid {
             if inertia <= 0.0 {
                 continue;
             }
-            let torque = (inertia * (speed - spin) / dt - sag).clamp(-most, most);
+            let torque = crate::clamp_lenient(inertia * (speed - spin) / dt - sag, -most, most);
             // Share the torque out by how much each takes to turn. A part
             // held out from the hinge has its middle pushed round (as
             // gravity does): twisting it there instead, the solver turns

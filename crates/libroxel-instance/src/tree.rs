@@ -82,7 +82,17 @@ pub enum TreeError {
     WrongType { property: Property, expected: &'static str, got: &'static str },
     #[error("attributes can't hold a {0}")]
     BadAttribute(&'static str),
+    #[error("the game already has {MOST_INSTANCES} instances, the most there can be")]
+    TooMany,
 }
+
+/// The most instances scripts and other computers may fill a tree with.
+/// Real games have up to about a million; past this a script making parts
+/// in a loop (or a host saying there are billions) would take all the
+/// computer's memory, so making more fails instead, as an error a script
+/// can catch. The engine's own instances (players, characters) don't count
+/// against it, so a full game still lets people join.
+pub const MOST_INSTANCES: usize = if cfg!(any(target_os = "android", target_os = "ios")) { 2_000_000 } else { 6_000_000 };
 
 pub type Result<T> = std::result::Result<T, TreeError>;
 
@@ -362,6 +372,11 @@ impl InstanceTree {
 
     pub fn workspace(&self) -> InstanceId {
         self.workspace
+    }
+
+    /// How many instances the tree holds, counting destroyed ones not yet purged.
+    pub fn held(&self) -> usize {
+        self.slots.len() - self.free.len()
     }
 
     fn alloc(&mut self, data: InstanceData) -> InstanceId {

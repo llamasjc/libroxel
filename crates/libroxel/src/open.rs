@@ -27,8 +27,22 @@ pub fn is_model_file(path: &Path) -> bool {
         .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "rbxm" | "rbxmx"))
 }
 
+/// Runs `read` on a file's contents, turning a crash inside the readers
+/// (a damaged or deliberately broken file can trip them) into an error, so
+/// a bad download can't close the app.
+fn guarded<T>(path: &Path, read: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).unwrap_or_else(|_| {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        Err(format!("{name} is damaged and couldn't be read"))
+    })
+}
+
 /// Opens a place (or a model, set in an empty world).
 pub fn open(path: &Path) -> Result<Opened, String> {
+    guarded(path, || open_unguarded(path))
+}
+
+fn open_unguarded(path: &Path) -> Result<Opened, String> {
     if libroxel_rbx::is_place_file(path) {
         let (tree, report) = libroxel_rbx::open(path).map_err(|e| e.to_string())?;
         let mut notes = report.summary();
@@ -47,8 +61,10 @@ pub fn insert_model(
     parent: InstanceId,
 ) -> Result<(Vec<InstanceId>, Vec<String>), String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let dom = libroxel_rbx::read_dom(&bytes).map_err(|e| e.to_string())?;
-    let (made, report) = libroxel_rbx::import_model(tree, &dom, parent);
+    let (made, report) = guarded(path, || {
+        let dom = libroxel_rbx::read_dom(&bytes).map_err(|e| e.to_string())?;
+        Ok(libroxel_rbx::import_model(tree, &dom, parent))
+    })?;
     let mut notes = report.summary();
     notes.extend(save_made_files(&report));
     Ok((made, notes))

@@ -1,0 +1,67 @@
+# Libroxel's copy of rbx_binary 3.0.1 (MIT, from rbx-dom), changed so a
+# damaged or deliberately broken file can't close the app: sizes and counts
+# read from a file no longer set aside memory before the bytes behind them
+# arrive (src/core.rs, src/chunk.rs, src/deserializer/state.rs), and a
+# chunk's sizes are checked instead of asserted. Comments name the engine
+# generically. Tests and benches are left out. Everything else is as published.
+
+[package]
+edition = "2018"
+name = "rbx_binary"
+version = "3.0.1"
+authors = [
+    "Lucien Greathouse <me@lpghatguy.com>",
+    "Micah Reid <git@dekkonot.com>",
+    "Ken Loeffler <kenloef@gmail.com>",
+]
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "Binary model and place file reader and writer (rbxm, rbxl)."
+homepage = "https://github.com/rojo-rbx/rbx-dom"
+documentation = "https://docs.rs/rbx_binary"
+license = "MIT"
+repository = "https://github.com/rojo-rbx/rbx-dom.git"
+resolver = "2"
+
+[features]
+unstable_text_format = ["serde"]
+
+[lib]
+name = "rbx_binary"
+path = "src/lib.rs"
+
+[dependencies.ahash]
+version = "0.8.11"
+
+[dependencies.log]
+version = "0.4.17"
+
+[dependencies.lz4_flex]
+version = "0.13.1"
+
+[dependencies.profiling]
+version = "1.0.6"
+
+[dependencies.rbx_dom_weak]
+version = "4.2.0"
+
+[dependencies.rbx_reflection]
+version = "7.0.0"
+
+[dependencies.rbx_reflection_database]
+version = "3.0.1"
+
+[dependencies.serde]
+version = "1.0.137"
+features = ["derive"]
+optional = true
+
+[dependencies.thiserror]
+version = "1.0.31"
+
+[dependencies.zstd]
+version = "0.13.2"

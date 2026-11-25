@@ -83,6 +83,23 @@ fn index(x: usize, y: usize, z: usize) -> usize {
     (y * CHUNK as usize + z) * CHUNK as usize + x
 }
 
+/// The most cells one fill or replace looks at: a flat 4096 by 4096 stud
+/// map 16 studs deep. Bigger (or endless, from a NaN or infinite size)
+/// would keep the game busy for minutes and take gigabytes.
+pub const MOST_EDIT_CELLS: u64 = 1 << 28;
+
+/// Whether the cells from `min` to `max` (inclusive) are few enough for one edit.
+pub fn fits_one_edit(min: (i32, i32, i32), max: (i32, i32, i32)) -> bool {
+    let span = |lo: i32, hi: i32| (i64::from(hi) - i64::from(lo) + 1).max(0) as u64;
+    span(min.0, max.0)
+        .checked_mul(span(min.1, max.1))
+        .and_then(|n| n.checked_mul(span(min.2, max.2)))
+        .is_some_and(|n| n <= MOST_EDIT_CELLS)
+}
+
+/// The furthest a ray walks through terrain, as for parts.
+const MOST_RAY_REACH: f32 = 1.0e6;
+
 /// The cell a point is in.
 pub fn cell_at(p: Vec3) -> (i32, i32, i32) {
     (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32)
@@ -206,6 +223,9 @@ impl Voxels {
         fill_empty: bool,
         change: impl Fn((i32, i32, i32), u8) -> Option<u8>,
     ) -> usize {
+        if !fits_one_edit(min, max) {
+            return 0;
+        }
         let mut changed = 0;
         let mut touched = Vec::new();
         // A chunk at a time, straight into its cells.
@@ -344,6 +364,9 @@ impl Voxels {
     pub fn paint_ball(&mut self, centre: Vec3, radius: f32, material: Material) -> usize {
         let r = Vec3::new(radius, radius, radius);
         let (min, max) = (cell_at(centre - r), cell_at(centre + r));
+        if !fits_one_edit(min, max) {
+            return 0;
+        }
         let code = code_of(material);
         let mut changed = Vec::new();
         for y in min.1..=max.1 {
@@ -439,9 +462,19 @@ impl Voxels {
     /// meets within `reach` studs: the distance, the face's outward normal and
     /// the cell. A ray starting inside a filled cell doesn't hit it.
     pub fn raycast(&self, origin: Vec3, dir: Vec3, reach: f32) -> Option<(f32, Vec3, (i32, i32, i32))> {
-        if self.chunks.is_empty() {
+        if self.chunks.is_empty() || ![origin.x, origin.y, origin.z].iter().all(|v| v.is_finite()) {
             return None;
         }
+        let reach = reach.min(MOST_RAY_REACH);
+        // Past the last chunk on the way out there is nothing to hit.
+        let (lo, hi) = self.chunks.keys().fold(((i32::MAX, i32::MAX, i32::MAX), (i32::MIN, i32::MIN, i32::MIN)), |(lo, hi), c| {
+            ((lo.0.min(c.0), lo.1.min(c.1), lo.2.min(c.2)), (hi.0.max(c.0), hi.1.max(c.1), hi.2.max(c.2)))
+        });
+        let (lo, hi) = (
+            (lo.0 * CHUNK, lo.1 * CHUNK, lo.2 * CHUNK),
+            (hi.0 * CHUNK + CHUNK - 1, hi.1 * CHUNK + CHUNK - 1, hi.2 * CHUNK + CHUNK - 1),
+        );
+        let leaving = |c: i32, s: i32, lo: i32, hi: i32| (s > 0 && c > hi) || (s < 0 && c < lo);
         let mut cell = cell_at(origin);
         let step = |d: f32| {
             if d > 0.0 {
@@ -480,7 +513,12 @@ impl Voxels {
                 t_max.z += t_delta.z;
                 (t, Vec3::new(0.0, 0.0, -sz as f32))
             };
-            if t > reach || !t.is_finite() {
+            if t > reach
+                || !t.is_finite()
+                || leaving(cell.0, sx, lo.0, hi.0)
+                || leaving(cell.1, sy, lo.1, hi.1)
+                || leaving(cell.2, sz, lo.2, hi.2)
+            {
                 return None;
             }
             if self.is_solid(cell.0, cell.1, cell.2) {
@@ -561,7 +599,7 @@ impl Voxels {
             let at: Vec<i32> = at.split(',').filter_map(|v| v.trim().parse().ok()).collect();
             let [cx, cy, cz] = at[..] else { continue };
             let mut cells = Box::new([0u8; CHUNK_CELLS]);
-            let mut i = 0;
+            let mut i: usize = 0;
             for run in runs.split(',') {
                 let (code, n) = match run.split_once('*') {
                     Some((c, n)) => (c.trim().parse::<u8>().ok(), n.trim().parse::<usize>().ok()),
@@ -569,7 +607,7 @@ impl Voxels {
                 };
                 let (Some(code), Some(n)) = (code, n) else { break };
                 let code = if material_of(code).is_some() { code } else { 0 };
-                let end = (i + n).min(CHUNK_CELLS);
+                let end = i.saturating_add(n).min(CHUNK_CELLS);
                 cells[i..end].fill(code);
                 i = end;
             }
@@ -649,6 +687,44 @@ mod tests {
         let side = Vec3::new(-1.0, -1.0, 0.0).normalize_or_zero();
         let (_, normal, _) = v.raycast(Vec3::new(10.0, 4.0, 0.5), side, 100.0).unwrap();
         assert_eq!(normal, Vec3::new(1.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn damaged_text_never_panics() {
+        // A run long enough to wrap around once added up.
+        let text = format!("0,0,0:1*5,2*{}", usize::MAX);
+        let v = Voxels::decode(&text);
+        assert_eq!(v.get(0, 0, 0), Some(material_of(1).unwrap()));
+        let mut v = Voxels::new();
+        v.patch(&text);
+        assert!(Voxels::decode("1,2,3:;;:;,,,:*").is_empty());
+    }
+
+    #[test]
+    fn endless_fills_are_turned_down() {
+        let mut v = Voxels::new();
+        for size in [Vec3::new(f32::INFINITY, 1.0, 1.0), Vec3::new(1e9, 1e9, 1e9), Vec3::new(f32::NAN, 4.0, 4.0)] {
+            let began = std::time::Instant::now();
+            v.fill_block(Vec3::new(0.0, 0.0, 0.0), AXES, size, Some(Material::Grass));
+            v.fill_wedge(Vec3::new(0.0, 0.0, 0.0), AXES, size, Some(Material::Grass));
+            assert!(began.elapsed().as_secs() < 2, "{size:?}");
+        }
+        assert_eq!(v.paint_ball(Vec3::new(0.0, 0.0, 0.0), f32::INFINITY, Material::Rock), 0);
+        assert_eq!(v.fill_ball(Vec3::new(0.0, 0.0, 0.0), 1e9, None), 0);
+        assert!(fits_one_edit((0, 0, 0), (4095, 15, 4095)));
+        assert!(!fits_one_edit((i32::MIN, 0, 0), (i32::MAX, 0, 0)));
+    }
+
+    #[test]
+    fn a_ray_past_the_terrain_stops_at_once() {
+        let mut v = Voxels::new();
+        v.set(0, 0, 0, Some(Material::Grass));
+        let began = std::time::Instant::now();
+        assert!(v.raycast(Vec3::new(0.5, 5.0, 0.5), Vec3::new(1.0, 0.0, 0.0), f32::INFINITY).is_none());
+        assert!(v.raycast(Vec3::new(0.5, 5.0, 0.5), Vec3::new(0.0, 1.0, 0.0), 1e30).is_none());
+        assert!(v.raycast(Vec3::new(f32::NAN, 5.0, 0.5), Vec3::new(0.0, -1.0, 0.0), 10.0).is_none());
+        assert!(began.elapsed().as_millis() < 500);
+        assert!(v.raycast(Vec3::new(0.5, 5.0, 0.5), Vec3::new(0.0, -1.0, 0.0), f32::INFINITY).is_some());
     }
 
     #[test]

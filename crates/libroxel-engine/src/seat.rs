@@ -226,7 +226,7 @@ pub fn drive_vehicles(tree: &mut InstanceTree, physics: &mut Physics, dt: f32) {
             let brake = step * 3.0;
             if along.abs() <= brake { 0.0 } else { along - along.signum() * brake }
         } else {
-            along + (target - along).clamp(-step, step)
+            along + crate::clamp_lenient(target - along, -step, step)
         };
         let grip = (1.0 - 14.0 * dt).max(0.0);
         let new_v = f * along + side * grip + Vec3::new(0.0, v.y, 0.0);

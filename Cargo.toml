@@ -78,3 +78,5 @@ debug = false
 # mlua with a cheap interrupt check (see vendor/mlua/Cargo.toml).
 [patch.crates-io]
 mlua = { path = "vendor/mlua" }
+rbx_binary = { path = "vendor/rbx_binary" }
+rbx_types = { path = "vendor/rbx_types" }

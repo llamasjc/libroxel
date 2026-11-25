@@ -11,17 +11,71 @@
 //! is there even without a Vulkan driver, and a Vulkan surface takes the
 //! window for itself, so OpenGL ES could no longer draw to it.
 
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+use bevy::prelude::World;
 use bevy::render::RenderPlugin;
+use bevy::render::error_handler::{ErrorType, RenderError, RenderErrorHandler, RenderErrorPolicy};
 use bevy::render::settings::{Backends, RenderCreation, WgpuLimits, WgpuSettings};
 
 /// Bevy's renderer, set up for this device.
 pub fn render_plugin() -> RenderPlugin {
-    RenderPlugin {
-        render_creation: RenderCreation::Automatic(Box::new(settings(
-            cfg!(target_os = "android") && !has_vulkan(),
-        ))),
-        ..Default::default()
+    RenderPlugin { render_creation: creation(), ..Default::default() }
+}
+
+fn creation() -> RenderCreation {
+    RenderCreation::Automatic(Box::new(settings(cfg!(target_os = "android") && !has_vulkan())))
+}
+
+/// What to do when the graphics card stops answering or runs out of
+/// memory. Bevy on its own closes the app at once. A graphics driver that
+/// restarts (an update, a laptop switching cards, a phone taking the card
+/// back while the app is in the background) takes the device with it, so
+/// the renderer is made again instead, and the game carries on.
+pub fn error_handler() -> RenderErrorHandler {
+    RenderErrorHandler(on_render_error)
+}
+
+/// How many times in a row the renderer may be made again before giving
+/// up, and how long it must then run without trouble for the count to start over.
+const MOST_RECOVERIES: u32 = 3;
+const CALM_SECS: u64 = 60;
+
+static RECOVERIES: AtomicU32 = AtomicU32::new(0);
+static LAST_RECOVERY: AtomicU64 = AtomicU64::new(0);
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// Whether the renderer should be made again after `kind` of error, given
+/// how many times it already was (`tries`) and how long ago (`since`).
+fn should_recover(kind: &ErrorType, tries: u32, since: u64) -> bool {
+    let tries = if since > CALM_SECS { 0 } else { tries };
+    // A validation error is a mistake in how the card is used; making the
+    // renderer again would only meet it again.
+    !matches!(kind, ErrorType::Validation) && tries < MOST_RECOVERIES
+}
+
+fn on_render_error(error: &RenderError, main_world: &mut World, _: &mut World) -> RenderErrorPolicy {
+    let now = now_secs();
+    let since = now.saturating_sub(LAST_RECOVERY.load(Ordering::Relaxed));
+    let tries = if since > CALM_SECS { 0 } else { RECOVERIES.load(Ordering::Relaxed) };
+    if should_recover(&error.ty, tries, since) {
+        RECOVERIES.store(tries + 1, Ordering::Relaxed);
+        LAST_RECOVERY.store(now, Ordering::Relaxed);
+        bevy::log::warn!("The graphics card stopped ({:?}); starting the renderer again", error.ty);
+        return RenderErrorPolicy::Recover(creation());
     }
+    // Say why on the next start, rather than vanishing.
+    crate::report::save_crash(&format!(
+        "The graphics card stopped working ({:?}) and couldn't be started again. {}\n\n\
+         Updating the graphics driver often fixes this.",
+        error.ty,
+        error.description.trim()
+    ));
+    main_world.write_message(bevy::app::AppExit::error());
+    RenderErrorPolicy::StopRendering
 }
 
 /// The renderer's settings. `gles_only` draws with OpenGL ES alone and
@@ -76,6 +130,16 @@ mod tests {
 
     /// Without Vulkan, Bevy draws with OpenGL ES alone and sees no storage
     /// buffers, and nothing else about the device changes.
+    #[test]
+    fn a_lost_card_is_started_again_a_few_times() {
+        assert!(should_recover(&ErrorType::DeviceLost, 0, 0));
+        assert!(should_recover(&ErrorType::OutOfMemory, 2, 5));
+        assert!(!should_recover(&ErrorType::DeviceLost, MOST_RECOVERIES, 5));
+        // After a calm minute the count starts over.
+        assert!(should_recover(&ErrorType::DeviceLost, MOST_RECOVERIES, CALM_SECS + 1));
+        assert!(!should_recover(&ErrorType::Validation, 0, 0));
+    }
+
     #[test]
     fn only_storage_buffers_are_held_back() {
         let device = WgpuLimits::downlevel_defaults();

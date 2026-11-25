@@ -31,3 +31,19 @@ pub mod weld;
 
 pub use character::{Character, CharacterInput};
 pub use session::{Blast, FrameTimes, LogEntry, LogLevel, PlaySession};
+
+/// `x` held between `lo` and `hi`, never panicking as `clamp` does: limits
+/// come from games (a NaN, or a lower limit above the upper one), and a game
+/// mustn't stop over them. A NaN limit holds nothing back on that side, and
+/// limits the wrong way round are swapped.
+pub(crate) fn clamp_lenient<T: num_like::Float>(x: T, lo: T, hi: T) -> T {
+    let (lo, hi) = if lo > hi { (hi, lo) } else { (lo, hi) };
+    let x = if lo == lo && x < lo { lo } else { x };
+    if hi == hi && x > hi { hi } else { x }
+}
+
+mod num_like {
+    pub trait Float: Copy + PartialOrd {}
+    impl Float for f32 {}
+    impl Float for f64 {}
+}

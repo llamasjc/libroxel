@@ -111,6 +111,12 @@ fn crash_path() -> PathBuf {
     crate::server::data_dir().join("crash.txt")
 }
 
+/// Keeps `text` to show on the crash screen next time Libroxel starts.
+pub fn save_crash(text: &str) {
+    let _ = std::fs::create_dir_all(crate::server::data_dir());
+    let _ = std::fs::write(crash_path(), text);
+}
+
 pub fn catch_panics() {
     let before = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -128,8 +134,7 @@ pub fn catch_panics() {
             text.push_str("\n\n");
             text.push_str(&frames.join("\n"));
         }
-        let _ = std::fs::create_dir_all(crate::server::data_dir());
-        let _ = std::fs::write(crash_path(), text);
+        save_crash(&text);
         before(info);
     }));
 }
@@ -150,7 +155,10 @@ pub fn run(app: &mut bevy::app::App) {
             }
         }
     }
-    if ran.is_ok() {
+    // Quitting with an error that left a reason (the graphics card gave
+    // out) is a crash too: start over and show why.
+    let failed = ran.as_ref().is_ok_and(|exit| exit.is_error()) && crash_path().exists();
+    if ran.is_ok() && !failed {
         let _ = std::fs::remove_file(crash_path());
         return;
     }

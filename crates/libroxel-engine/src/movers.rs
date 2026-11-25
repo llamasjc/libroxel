@@ -143,8 +143,11 @@ fn clamp_length(v: Vec3, max: f32) -> Vec3 {
 }
 
 fn clamp_axes(v: Vec3, max: Vec3) -> Vec3 {
-    let m = Vec3::new(max.x.abs(), max.y.abs(), max.z.abs());
-    Vec3::new(v.x.clamp(-m.x, m.x), v.y.clamp(-m.y, m.y), v.z.clamp(-m.z, m.z))
+    // A NaN limit (a script can set one) holds nothing back, rather than
+    // stopping the game: `clamp` panics on NaN bounds.
+    let m = |a: f32| if a.is_nan() { 0.0 } else { a.abs() };
+    let c = |x: f32, a: f32| if x.is_nan() { 0.0 } else { x.clamp(-m(a), m(a)) };
+    Vec3::new(c(v.x, max.x), c(v.y, max.y), c(v.z, max.z))
 }
 
 /// The velocity change (this step) of a mass on an implicit spring-damper

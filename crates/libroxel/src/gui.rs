@@ -351,7 +351,8 @@ fn constrained(tree: &InstanceTree, id: InstanceId, size: Vec2, k: f32) -> Vec2 
         let lo = vec2(tree, limits, Property::MinSize);
         let hi = vec2(tree, limits, Property::MaxSize);
         let (lo, hi) = (Vec2::new(lo.x * k, lo.y * k), Vec2::new(hi.x * k, hi.y * k));
-        size = Vec2::new(size.x.clamp(lo.x, hi.x.max(lo.x)), size.y.clamp(lo.y, hi.y.max(lo.y)));
+        // `max` then `min`, not `clamp`: a script can make a limit NaN.
+        size = Vec2::new(size.x.max(lo.x).min(hi.x.max(lo.x)), size.y.max(lo.y).min(hi.y.max(lo.y)));
     }
     let own = own_scale(tree, id);
     size = Vec2::new(size.x * own, size.y * own);
@@ -682,7 +683,7 @@ fn draw_text(
         }
         lay(lo)
     } else {
-        lay(size.clamp(least, most))
+        lay(size.max(least).min(most.max(least)))
     };
     let bounds = galley.rect;
     let left = match x {

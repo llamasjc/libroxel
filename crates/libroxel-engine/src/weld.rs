@@ -84,7 +84,7 @@ pub fn pose_joints(tree: &mut InstanceTree, dt: f32) {
         let now = tree.get_number(motor, Property::CurrentAngle).unwrap_or(0.0);
         let want = tree.get_number(motor, Property::DesiredAngle).unwrap_or(0.0);
         let step = tree.get_number(motor, Property::MaxVelocity).unwrap_or(0.0).abs() * f64::from(dt) * 60.0;
-        let next = now + (want - now).clamp(-step, step);
+        let next = now + crate::clamp_lenient(want - now, -step, step);
         if next != now {
             let _ = tree.set(motor, Property::CurrentAngle, PropertyValue::Number(next));
         }

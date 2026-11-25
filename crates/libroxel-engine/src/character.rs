@@ -836,7 +836,8 @@ fn climb(
         physics.set_climbing(root, false);
         return false;
     };
-    let nearest = Vec3::new(pos.x.clamp(lo.x, hi.x), pos.y, pos.z.clamp(lo.z, hi.z));
+    let nearest =
+        Vec3::new(crate::clamp_lenient(pos.x, lo.x, hi.x), pos.y, crate::clamp_lenient(pos.z, lo.z, hi.z));
     let toward = Vec3::new(nearest.x - pos.x, 0.0, nearest.z - pos.z).normalize_or_zero();
     let pressing = dir.length() > 0.1 && (toward == Vec3::ZERO || dir.normalize_or_zero().dot(toward) > 0.3);
     let holding = physics.is_climbing(root);

@@ -34,6 +34,8 @@ pub enum ImportError {
     NotAPlaceFile,
     Binary(String),
     Xml(String),
+    /// Instances inside one another deeper than [`MAX_DEPTH`].
+    TooDeep,
 }
 
 impl std::fmt::Display for ImportError {
@@ -43,6 +45,9 @@ impl std::fmt::Display for ImportError {
             ImportError::NotAPlaceFile => write!(f, "this isn't a .rbxl, .rbxlx, .rbxm or .rbxmx file"),
             ImportError::Binary(e) => write!(f, "could not read the binary file: {e}"),
             ImportError::Xml(e) => write!(f, "could not read the XML file: {e}"),
+            ImportError::TooDeep => {
+                write!(f, "its instances are nested more than {MAX_DEPTH} deep, more than any game uses")
+            }
         }
     }
 }
@@ -134,13 +139,60 @@ pub fn read_dom_noting(bytes: &[u8], notes: &mut Vec<String>) -> Result<WeakDom,
     let start = bytes.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(0);
     let body = &bytes[start..];
     let body = body.strip_prefix(b"\xEF\xBB\xBF".as_slice()).unwrap_or(body);
-    if body.starts_with(b"<roblox!") {
-        read_binary(body, notes)
+    let dom = if body.starts_with(b"<roblox!") {
+        read_binary(body, notes)?
     } else if body.starts_with(b"<roblox") || body.starts_with(b"<?xml") {
-        rbx_xml::from_reader_default(body).map_err(|e| ImportError::Xml(e.to_string()))
+        // The XML reader calls itself for each level, so a file nested
+        // deeper than any game would use up the stack and close the app.
+        if xml_depth(body) > MAX_DEPTH {
+            return Err(ImportError::TooDeep);
+        }
+        rbx_xml::from_reader_default(body).map_err(|e| ImportError::Xml(e.to_string()))?
     } else {
-        Err(ImportError::NotAPlaceFile)
+        return Err(ImportError::NotAPlaceFile);
+    };
+    // Bringing instances across goes a level deeper for each level too.
+    if dom_depth(&dom) > MAX_DEPTH {
+        return Err(ImportError::TooDeep);
     }
+    Ok(dom)
+}
+
+/// How deep instances may be inside one another in a file. Real games stay
+/// within a few dozen levels.
+pub const MAX_DEPTH: usize = 1000;
+
+/// How deeply `<Item>` elements nest in an XML file, read without parsing it.
+fn xml_depth(xml: &[u8]) -> usize {
+    let (mut depth, mut deepest) = (0usize, 0usize);
+    let mut at = 0;
+    while let Some(offset) = xml[at..].iter().position(|b| *b == b'<') {
+        at += offset + 1;
+        let rest = &xml[at..];
+        if rest.starts_with(b"Item") && rest.get(4).is_some_and(|b| b.is_ascii_whitespace() || *b == b'>') {
+            depth += 1;
+            deepest = deepest.max(depth);
+        } else if rest.starts_with(b"/Item>") || rest.starts_with(b"/Item ") {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    deepest
+}
+
+/// How deeply instances nest in `dom`, walked without calling itself.
+fn dom_depth(dom: &WeakDom) -> usize {
+    let mut deepest = 0;
+    let mut stack = vec![(dom.root_ref(), 0usize)];
+    while let Some((at, depth)) = stack.pop() {
+        deepest = deepest.max(depth);
+        if deepest > MAX_DEPTH {
+            break;
+        }
+        if let Some(inst) = dom.get_by_ref(at) {
+            stack.extend(inst.children().iter().map(|c| (*c, depth + 1)));
+        }
+    }
+    deepest
 }
 
 /// Reads a binary file. A newer Studio sometimes saves a property in a

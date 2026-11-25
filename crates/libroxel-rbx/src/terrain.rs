@@ -24,6 +24,10 @@ const CHUNK_VOXELS: i32 = CHUNK * CHUNK * CHUNK;
 /// Past this many filled one-stud cells, the rest of the terrain is left out.
 pub const MAX_CELLS: usize = 48_000_000;
 
+/// The most voxels read from one terrain blob: well past what fills
+/// [`MAX_CELLS`], and few enough (a few hundred MB) to hold.
+const MAX_VOXELS: usize = 12_000_000;
+
 /// The file's terrain materials, by their number in a voxel.
 pub const MATERIALS: &[&str] = &[
     "Air",
@@ -154,7 +158,7 @@ pub fn decode(bytes: &[u8]) -> Result<HashMap<(i32, i32, i32), Voxel>, GridError
         for (c, b) in chunk.iter_mut().zip(raw) {
             *c = c.wrapping_add(i32::from_be_bytes(b));
         }
-        let base = (chunk[0] * CHUNK, chunk[1] * CHUNK, chunk[2] * CHUNK);
+        let base = (chunk[0].wrapping_mul(CHUNK), chunk[1].wrapping_mul(CHUNK), chunk[2].wrapping_mul(CHUNK));
         let mut index = 0;
         while index < CHUNK_VOXELS {
             let flag = r.byte()?;
@@ -178,7 +182,13 @@ pub fn decode(bytes: &[u8]) -> Result<HashMap<(i32, i32, i32), Voxel>, GridError
                 if id != 0 || water > 0.0 {
                     let (x, y, z) = (index % CHUNK, index / (CHUNK * CHUNK), (index / CHUNK) % CHUNK);
                     let solid = if id == 0 { 0.0 } else { solid };
-                    voxels.insert((base.0 + x, base.1 + y, base.2 + z), Voxel { material: id, solid, water });
+                    if voxels.len() >= MAX_VOXELS {
+                        // More than any world turns into cells (see
+                        // [`MAX_CELLS`]); a file saying so is padded or broken.
+                        return Ok(voxels);
+                    }
+                    let at = (base.0.wrapping_add(x), base.1.wrapping_add(y), base.2.wrapping_add(z));
+                    voxels.insert(at, Voxel { material: id, solid, water });
                 }
                 index += 1;
             }
