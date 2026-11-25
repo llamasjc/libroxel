@@ -538,6 +538,8 @@ pub mod game_info {
 pub mod debris {
     /// Destroys an instance after some seconds (10 by default).
     pub const ADD_ITEM: &str = "AddItem";
+    /// The older spelling.
+    pub const OLD_ADD_ITEM: &str = "addItem";
 }
 
 /// Members of raycast parameters and results.
@@ -1033,6 +1035,11 @@ pub mod signal {
     pub const ONCE: &str = "Once";
     /// Yields until the signal fires, then returns what it fired with.
     pub const WAIT: &str = "Wait";
+    /// The older lower-case spellings, still common in scripts written long ago.
+    pub const OLD_CONNECT: &str = "connect";
+    pub const OLD_WAIT: &str = "wait";
+    pub const OLD_DISCONNECT: &str = "disconnect";
+    pub const OLD_CONNECTED: &str = "connected";
 }
 
 /// What `typeof` reports for an instance.

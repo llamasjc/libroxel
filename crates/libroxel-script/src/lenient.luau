@@ -43,19 +43,23 @@ local function new_signal()
 end
 
 function Signal:Connect(fn)
-	local conn = { Connected = true }
+	-- (`connected` and `disconnect` are the older spellings.)
+	local conn = { Connected = true, connected = true }
 	local handler = { fn = fn, conn = conn }
 	table.insert(self.handlers, handler)
 	conn.Disconnect = function()
 		conn.Connected = false
+		conn.connected = false
 		local i = table.find(self.handlers, handler)
 		if i then
 			table.remove(self.handlers, i)
 		end
 	end
+	conn.disconnect = conn.Disconnect
 	return conn
 end
 Signal.ConnectParallel = Signal.Connect
+Signal.connect = Signal.Connect
 
 function Signal:Once(fn)
 	local conn
@@ -76,6 +80,7 @@ function Signal:Wait()
 	end
 	return table.unpack(result, 1, result.n)
 end
+Signal.wait = Signal.Wait
 
 function Signal:Fire(...)
 	for _, h in ipairs(table.clone(self.handlers)) do
@@ -3826,6 +3831,49 @@ SERVICE_EXTRAS.PhysicsService = {
 	},
 }
 
+-- Members' older spellings (mostly lower-case) that scripts written long
+-- ago still use, and the names they go by now. Only asked once nothing
+-- else answers, so a class's own member of that name always wins.
+local OLDER_NAMES = {
+	-- Every instance
+	children = "GetChildren",
+	getChildren = "GetChildren",
+	clone = "Clone",
+	destroy = "Destroy",
+	remove = "Remove",
+	findFirstChild = "FindFirstChild",
+	isA = "IsA",
+	isDescendantOf = "IsDescendantOf",
+	childAdded = "ChildAdded",
+	changed = "Changed",
+	-- The game and its services
+	service = "GetService",
+	getService = "GetService",
+	getPlayers = "GetPlayers",
+	players = "GetPlayers",
+	playerFromCharacter = "GetPlayerFromCharacter",
+	getMinutesAfterMidnight = "GetMinutesAfterMidnight",
+	setMinutesAfterMidnight = "SetMinutesAfterMidnight",
+	findPartOnRay = "FindPartOnRay",
+	findPartsInRegion3 = "FindPartsInRegion3",
+	-- Parts, models and characters
+	breakJoints = "BreakJoints",
+	makeJoints = "MakeJoints",
+	resize = "Resize",
+	getMass = "GetMass",
+	takeDamage = "TakeDamage",
+	loadAnimation = "LoadAnimation",
+	lastForce = "GetLastForce",
+	-- Sounds, tools and click detectors
+	play = "Play",
+	stop = "Stop",
+	pause = "Pause",
+	equipped = "Equipped",
+	unequipped = "Unequipped",
+	mouseClick = "MouseClick",
+	keyDown = "KeyDown",
+}
+
 -- (found, value) for member `key` of `obj`, whose groups are `groups`.
 function L.index(key_id, obj, key, groups)
 	local s = slot(key_id)
@@ -3876,6 +3924,16 @@ function L.index(key_id, obj, key, groups)
 				CURRENT = s
 				return m(self, ...)
 			end
+		end
+	end
+	-- An older spelling of a member: answer with today's.
+	local newer = OLDER_NAMES[key]
+	if newer then
+		local ok, v = pcall(function()
+			return obj[newer]
+		end)
+		if ok and v ~= nil then
+			return true, v
 		end
 	end
 	return false

@@ -2018,7 +2018,7 @@ pub(crate) struct Signal(pub(crate) SignalKind);
 
 impl UserData for Signal {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        for name in [names::signal::CONNECT, names::signal::CONNECT_PARALLEL] {
+        for name in [names::signal::CONNECT, names::signal::CONNECT_PARALLEL, names::signal::OLD_CONNECT] {
             methods.add_method(name, |lua, this, handler: Function| {
                 let handler = lua.create_registry_value(handler)?;
                 let host = host(lua);
@@ -2054,7 +2054,7 @@ impl UserData for Signal {
         });
         // `Wait` has to yield, so it is written in Luau (see the prelude).
         methods.add_meta_method(MetaMethod::Index, |lua, _, key: String| {
-            if key == names::signal::WAIT {
+            if key == names::signal::WAIT || key == names::signal::OLD_WAIT {
                 return lua.named_registry_value::<Value>(SIGNAL_WAIT_FN);
             }
             Err(mlua::Error::runtime(format!("{key} is not a valid member of a signal")))
@@ -2066,19 +2066,22 @@ struct ConnectionHandle(u64);
 
 impl UserData for ConnectionHandle {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
-        fields.add_field_method_get(names::signal::CONNECTED, |lua, this| {
-            Ok(host(lua).connections.borrow().contains(this.0))
-        });
+        for name in [names::signal::CONNECTED, names::signal::OLD_CONNECTED] {
+            fields
+                .add_field_method_get(name, |lua, this| Ok(host(lua).connections.borrow().contains(this.0)));
+        }
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method(names::signal::DISCONNECT, |lua, this, ()| {
-            let removed = host(lua).connections.borrow_mut().remove(this.0);
-            if let Some(conn) = removed {
-                lua.remove_registry_value(conn.handler)?;
-            }
-            Ok(())
-        });
+        for name in [names::signal::DISCONNECT, names::signal::OLD_DISCONNECT] {
+            methods.add_method(name, |lua, this, ()| {
+                let removed = host(lua).connections.borrow_mut().remove(this.0);
+                if let Some(conn) = removed {
+                    lua.remove_registry_value(conn.handler)?;
+                }
+                Ok(())
+            });
+        }
     }
 }
 

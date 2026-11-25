@@ -124,3 +124,59 @@ fn newer_constructor_spellings() {
     );
     assert_eq!(printed(&rt), ["0, 1, 0 1, 0, 0", "Part Source 0.5 0 1 true"]);
 }
+
+#[test]
+fn older_lower_case_member_names() {
+    let rt = runtime();
+    run(
+        &rt,
+        r##"
+        local part = Instance.new("Part")
+        part.Name = "Brick"
+        part.Parent = workspace
+        local fired = 0
+        local conn = part.Changed:connect(function() fired += 1 end)
+        part.Transparency = 0.5
+        print(conn.connected, typeof(fired))
+        conn:disconnect()
+        print(conn.connected, conn.Connected)
+        print(workspace:findFirstChild("Brick") == part, #workspace:getChildren() > 0, #workspace:children() > 0)
+        print(part:isA("BasePart"), part:isDescendantOf(game), part:clone().Name)
+        print(game:service("Players") == game:GetService("Players"), game:getService("Workspace") == workspace)
+        print(#game.Players:getPlayers(), game.Players:playerFromCharacter(part))
+        game:GetService("Debris"):addItem(Instance.new("Part"), 1)
+        local h = Instance.new("Humanoid")
+        h:takeDamage(10)
+        print(h.Health)
+        local s = Instance.new("Sound")
+        s:play()
+        print(s.Playing)
+        s:stop()
+        print(s.Playing)
+        game.Lighting:setMinutesAfterMidnight(9 * 60)
+        print(game.Lighting:getMinutesAfterMidnight())
+        local hit = workspace:findPartOnRay(Ray.new(Vector3.new(0, 50, 0), Vector3.new(0, -100, 0)))
+        print(hit == part)
+        local value = Instance.new("IntValue")
+        local seen
+        value.changed:connect(function(v) seen = v end)
+        value.Value = 5
+        Instance.new("Part"):remove()
+        print(pcall(function() return part.definitelyNotAMember end))
+    "##,
+    );
+    let _ = rt.step(0.1);
+    let out = printed(&rt);
+    assert_eq!(out[0], "true number");
+    assert_eq!(out[1], "false false");
+    assert_eq!(out[2], "true true true");
+    assert_eq!(out[3], "true true Brick");
+    assert_eq!(out[4], "true true");
+    assert_eq!(out[5], "0 nil");
+    assert_eq!(out[6], "90");
+    assert_eq!(out[7], "true");
+    assert_eq!(out[8], "false");
+    assert_eq!(out[9], "540");
+    assert_eq!(out[10], "true");
+    assert!(out[11].starts_with("false"), "{}", out[11]);
+}

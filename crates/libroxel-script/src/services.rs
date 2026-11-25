@@ -385,13 +385,15 @@ struct Debris;
 
 impl UserData for Debris {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method(debris::ADD_ITEM, |lua, _, (item, lifetime): (Value, Option<f64>)| {
-            let id = as_instance(&item).ok_or_else(|| runtime_err("AddItem expects an Instance"))?;
-            let host = host(lua);
-            let at = host.clock.get() + lifetime.unwrap_or(10.0).max(0.0);
-            host.debris.borrow_mut().push((id, at));
-            Ok(())
-        });
+        for name in [debris::ADD_ITEM, debris::OLD_ADD_ITEM] {
+            methods.add_method(name, |lua, _, (item, lifetime): (Value, Option<f64>)| {
+                let id = as_instance(&item).ok_or_else(|| runtime_err("AddItem expects an Instance"))?;
+                let host = host(lua);
+                let at = host.clock.get() + lifetime.unwrap_or(10.0).max(0.0);
+                host.debris.borrow_mut().push((id, at));
+                Ok(())
+            });
+        }
     }
 }
 
