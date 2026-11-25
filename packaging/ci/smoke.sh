@@ -18,6 +18,10 @@ export LIBROXEL_NO_UPDATE=1 LIBROXEL_NO_COMMAND=1 RUST_BACKTRACE=1
 
 fail() { echo "::error::$1"; exit 1; }
 
+if ! command -v timeout > /dev/null; then
+  timeout() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+fi
+
 echo "== libroxel help"
 "$app" help | tee help.txt
 grep -q "usage:" help.txt || fail "libroxel help printed no usage"
