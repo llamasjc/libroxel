@@ -632,7 +632,8 @@ impl PartIndex {
     /// part once, in id order. Boxes that overlap (a character's parts, a
     /// crowd) look each cell up only once.
     pub fn near_boxes(&self, boxes: &[(Vec3, Vec3)]) -> Vec<InstanceId> {
-        let mut cells = foldhash::HashSet::default();
+        let mut spans = Vec::with_capacity(boxes.len());
+        let (mut lo_all, mut hi_all) = ((i32::MAX, i32::MAX, i32::MAX), (i32::MIN, i32::MIN, i32::MIN));
         for (lo, hi) in boxes {
             let (a, b) = (index_cell(*lo), index_cell(*hi));
             let count = (i64::from(b.0) - i64::from(a.0) + 1)
@@ -645,10 +646,44 @@ impl PartIndex {
                 out.dedup();
                 return out;
             }
-            for x in a.0..=b.0 {
-                for y in a.1..=b.1 {
-                    for z in a.2..=b.2 {
-                        cells.insert((x, y, z));
+            lo_all = (lo_all.0.min(a.0), lo_all.1.min(a.1), lo_all.2.min(a.2));
+            hi_all = (hi_all.0.max(b.0), hi_all.1.max(b.1), hi_all.2.max(b.2));
+            spans.push((a, b));
+        }
+        // Each cell looked up once. The boxes usually sit in a small part of
+        // the world, so the cells they cover are marked in a grid over just
+        // that part (far cheaper than a set when thousands of loose parts
+        // move); boxes spread too far apart use a set.
+        let mut cells: Vec<(i32, i32, i32)> = Vec::new();
+        let size = |a: i32, b: i32| (i64::from(b) - i64::from(a) + 1).max(0);
+        let (sx, sy, sz) = (size(lo_all.0, hi_all.0), size(lo_all.1, hi_all.1), size(lo_all.2, hi_all.2));
+        if sx * sy * sz <= 1 << 22 {
+            let (sx, sy) = (sx as usize, sy as usize);
+            let mut marked = vec![false; sx * sy * sz as usize];
+            for (a, b) in &spans {
+                for x in a.0..=b.0 {
+                    for y in a.1..=b.1 {
+                        for z in a.2..=b.2 {
+                            let i = ((z - lo_all.2) as usize * sy + (y - lo_all.1) as usize) * sx
+                                + (x - lo_all.0) as usize;
+                            if !marked[i] {
+                                marked[i] = true;
+                                cells.push((x, y, z));
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            let mut seen = foldhash::HashSet::default();
+            for (a, b) in &spans {
+                for x in a.0..=b.0 {
+                    for y in a.1..=b.1 {
+                        for z in a.2..=b.2 {
+                            if seen.insert((x, y, z)) {
+                                cells.push((x, y, z));
+                            }
+                        }
                     }
                 }
             }

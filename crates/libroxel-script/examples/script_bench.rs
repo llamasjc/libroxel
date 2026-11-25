@@ -12,6 +12,7 @@ const CASES: &[(&str, &str, &str)] = &[
     ("part.Transparency = x", "", "part.Transparency = 0.5"),
     ("part.CFrame", "", "local _ = part.CFrame"),
     ("CFrame * CFrame", "local a, b = CFrame.new(1, 2, 3), CFrame.Angles(0, 1, 0)", "local _ = a * b"),
+    ("CFrame * Vector3", "local a, v = CFrame.new(1, 2, 3), Vector3.new(1, 0, 0)", "local _ = a * v"),
     ("Color3.new", "", "local _ = Color3.new(1, 0, 0)"),
     ("part:IsA", "", "local _ = part:IsA(\"BasePart\")"),
     ("folder.ChildName", "", "local _ = folder.Child150"),
@@ -61,6 +62,26 @@ fn main() {
         "start a script copy",
         t.elapsed().as_secs_f64() * 1e6 / f64::from(copies)
     );
+    // A frame's scheduling work with many threads asleep (NPCs, spinners,
+    // coins each in a `while task.wait(n)` loop).
+    if only.is_empty() || only == "sleepers" {
+        rt.run(
+            "sleepers",
+            "for i = 1, 10000 do task.spawn(function() while true do task.wait(5 + i % 7) end end) end",
+        )
+        .expect("sleepers start");
+        let _ = rt.step(1.0 / 60.0);
+        let frames = 600;
+        let t = std::time::Instant::now();
+        for _ in 0..frames {
+            let _ = rt.step(1.0 / 60.0);
+        }
+        println!(
+            "{:>24}: {:>8.1} us",
+            "frame, 10k asleep",
+            t.elapsed().as_secs_f64() * 1e6 / f64::from(frames)
+        );
+    }
     for (name, setup, body) in CASES.iter().filter(|c| c.0.contains(only.as_str())) {
         let src =
             format!("local part, folder = _G.part, _G.folder\n{setup}\nfor _ = 1, {reps} do\n{body}\nend");

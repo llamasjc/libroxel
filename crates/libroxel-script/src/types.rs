@@ -160,28 +160,54 @@ impl UserData for LuaCFrame {
             });
         }
 
-        methods.add_meta_function(MetaMethod::Mul, |lua, (a, b): (Value, Value)| {
-            let a = as_cframe(&a).ok_or_else(|| err("attempt to multiply a CFrame"))?;
-            if let Some(b) = as_cframe(&b) {
-                return Ok(Value::UserData(lua.create_userdata(LuaCFrame(a * b))?));
-            }
-            if let Some(v) = as_vector3(&b) {
-                return Ok(crate::bindings::vector_value(a.point_to_world(v)));
-            }
-            Err(err("a CFrame can only be multiplied by a CFrame or a Vector3"))
-        });
-        methods.add_meta_function(MetaMethod::Add, |_, (a, b): (Value, Value)| {
-            match (as_cframe(&a), as_vector3(&b)) {
+        // The CFrame is borrowed straight from the Luau stack: taking it as
+        // a plain value made a registry reference for it, a good part of
+        // what `a * b` cost. (`b` stays a value: a Vector3 needs no
+        // reference, and trying the CFrame first would cost a Vector3 an
+        // error built and thrown away.)
+        methods.add_meta_function(
+            MetaMethod::Mul,
+            |lua, (a, b): (mlua::Either<mlua::UserDataRef<LuaCFrame>, Value>, Value)| {
+                let a = match a {
+                    mlua::Either::Left(a) => a.0,
+                    mlua::Either::Right(other) => {
+                        as_cframe(&other).ok_or_else(|| err("attempt to multiply a CFrame"))?
+                    }
+                };
+                if let Some(v) = as_vector3(&b) {
+                    return Ok(crate::bindings::vector_value(a.point_to_world(v)));
+                }
+                if let Some(b) = as_cframe(&b) {
+                    return Ok(Value::UserData(lua.create_userdata(LuaCFrame(a * b))?));
+                }
+                Err(err("a CFrame can only be multiplied by a CFrame or a Vector3"))
+            },
+        );
+        // (The CFrame borrowed from the stack, as for `*`.)
+        let left = |a: mlua::Either<mlua::UserDataRef<LuaCFrame>, Value>| match a {
+            mlua::Either::Left(a) => Some(a.0),
+            mlua::Either::Right(other) => as_cframe(&other),
+        };
+        methods.add_meta_function(
+            MetaMethod::Add,
+            move |_, (a, b): (mlua::Either<mlua::UserDataRef<LuaCFrame>, Value>, Value)| match (
+                left(a),
+                as_vector3(&b),
+            ) {
                 (Some(cf), Some(v)) => Ok(LuaCFrame(CFrame::new(cf.pos + v, cf.rot))),
                 _ => Err(err("a CFrame can only have a Vector3 added to it")),
-            }
-        });
-        methods.add_meta_function(MetaMethod::Sub, |_, (a, b): (Value, Value)| {
-            match (as_cframe(&a), as_vector3(&b)) {
+            },
+        );
+        methods.add_meta_function(
+            MetaMethod::Sub,
+            move |_, (a, b): (mlua::Either<mlua::UserDataRef<LuaCFrame>, Value>, Value)| match (
+                left(a),
+                as_vector3(&b),
+            ) {
                 (Some(cf), Some(v)) => Ok(LuaCFrame(CFrame::new(cf.pos - v, cf.rot))),
                 _ => Err(err("a CFrame can only have a Vector3 subtracted from it")),
-            }
-        });
+            },
+        );
         methods.add_meta_function(MetaMethod::Eq, |_, (a, b): (Value, Value)| {
             Ok(matches!((as_cframe(&a), as_cframe(&b)), (Some(a), Some(b)) if a == b))
         });

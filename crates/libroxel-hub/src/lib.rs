@@ -662,10 +662,31 @@ struct Secret {
 
 type Db = Arc<Mutex<Connection>>;
 
+/// A list search: what was typed, and which game.
+type ListKey = (String, Option<String>);
+/// A list as last sent: database version, when, and the JSON.
+type KeptList = (u64, std::time::Instant, axum::body::Bytes);
+
+/// Server lists already answered, so a crowd of players looking at the
+/// list (each asking every few seconds) doesn't run the same search and
+/// build the same reply over and over. A list is kept for at most a second
+/// and only while nothing in the database changed (the database tells
+/// [`ServerLists::changed`] about every write, and `PRAGMA data_version`
+/// covers writes from other connections).
+#[derive(Default)]
+struct ServerLists {
+    changed: Arc<std::sync::atomic::AtomicU64>,
+    kept: Mutex<HashMap<ListKey, KeptList>>,
+}
+
+/// How long a server list is kept at most.
+const LIST_KEPT_FOR: Duration = Duration::from_secs(1);
+
 /// Everything the Hub's routes share.
 #[derive(Clone)]
 struct Hub {
     db: Db,
+    server_lists: Arc<ServerLists>,
     limits: Arc<Limits>,
     mail: Arc<Mail>,
     fleet: Option<Arc<fleet::Fleet>>,
@@ -687,6 +708,12 @@ impl FromRef<Hub> for Option<Arc<fleet::Fleet>> {
 impl FromRef<Hub> for Arc<Mail> {
     fn from_ref(hub: &Hub) -> Arc<Mail> {
         hub.mail.clone()
+    }
+}
+
+impl FromRef<Hub> for Arc<ServerLists> {
+    fn from_ref(hub: &Hub) -> Arc<ServerLists> {
+        hub.server_lists.clone()
     }
 }
 
@@ -850,8 +877,18 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         Arc::new(Limits { trust_proxy: options.behind_proxy, off: options.no_limits, ..Limits::default() });
     let fleet = options.fleet.map(|o| Arc::new(fleet::Fleet::new(o)));
     closed_games(&db, fleet.is_some()).expect("the database takes functions");
+    let mut db = db;
+    let server_lists = Arc::new(ServerLists::default());
+    let changed = server_lists.changed.clone();
+    // Any write may change what a list shows (bans, names, servers), so any
+    // write drops the kept lists. Reads between writes are served from memory.
+    db.update_hook(Some(move |_: rusqlite::hooks::Action, _: &str, _: &str, _: i64| {
+        changed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }))
+    .expect("the database takes hooks");
     let hub = Hub {
         db: Arc::new(Mutex::new(db)),
+        server_lists,
         limits,
         mail: Arc::new(options.mail),
         fleet,
@@ -1762,8 +1799,41 @@ fn server_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<ServerInfo> {
     })
 }
 
-async fn list_servers(State(db): State<Db>, Query(query): Query<ListQuery>) -> Json<Vec<ServerInfo>> {
+async fn list_servers(
+    State(db): State<Db>,
+    State(lists): State<Arc<ServerLists>>,
+    Query(query): Query<ListQuery>,
+) -> impl axum::response::IntoResponse {
+    let json = [(axum::http::header::CONTENT_TYPE, "application/json")];
+    let key = (query.q.clone().unwrap_or_default(), query.game_id.clone());
     let db = db.lock().unwrap();
+    // (Read while the database is held, so no write can slip in between.)
+    // The hook counts this connection's writes; data_version moves when
+    // another connection (an admin tool banning someone) commits.
+    let others: i64 = db
+        .prepare_cached("PRAGMA data_version")
+        .and_then(|mut s| s.query_row([], |r| r.get(0)))
+        .unwrap_or(-1);
+    let version = lists.changed.load(std::sync::atomic::Ordering::Relaxed) ^ (others as u64).rotate_left(32);
+    if let Some((v, at, body)) = lists.kept.lock().unwrap().get(&key)
+        && *v == version
+        && at.elapsed() < LIST_KEPT_FOR
+    {
+        return (json, body.clone());
+    }
+    let rows = server_list(&db, query);
+    drop(db);
+    let body = axum::body::Bytes::from(serde_json::to_vec(&rows).unwrap_or_default());
+    let mut kept = lists.kept.lock().unwrap();
+    if kept.len() >= 256 {
+        kept.clear();
+    }
+    kept.insert(key, (version, std::time::Instant::now(), body.clone()));
+    (json, body)
+}
+
+/// The listed servers a search finds, best first.
+fn server_list(db: &Connection, query: ListQuery) -> Vec<ServerInfo> {
     let now = now();
     let pattern = format!("%{}%", query.q.unwrap_or_default().trim().replace(['%', '_'], ""));
     let game_id = query.game_id.filter(|g| !g.trim().is_empty());
@@ -1774,11 +1844,10 @@ async fn list_servers(State(db): State<Db>, Query(query): Query<ListQuery>) -> J
              ORDER BY kind ASC, players DESC, first_seen ASC LIMIT 200"
         ))
         .expect("the list query is valid");
-    let rows = statement
+    statement
         .query_map(params![pattern, game_id, now - EXPIRES_AFTER_SECS], |r| server_row(r, now))
         .map(|rows| rows.filter_map(Result::ok).collect())
-        .unwrap_or_default();
-    Json(rows)
+        .unwrap_or_default()
 }
 
 async fn heartbeat(
