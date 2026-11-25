@@ -7,48 +7,32 @@
 use libroxel_instance::{ClassKind, InstanceId, Property, PropertyValue};
 use mlua::{Lua, MultiValue, Value};
 
-use crate::bindings::{
-    SignalKind, as_instance, fire, host, push_instance, require_class, take_errors, tree_err,
-};
+use crate::bindings::{SignalKind, as_instance, fire, host, require_class, take_errors, tree_err};
 use crate::names::sound;
 
 fn set_playing(lua: &Lua, id: InstanceId, playing: bool) -> mlua::Result<()> {
     host(lua).tree.borrow_mut().set(id, Property::Playing, PropertyValue::Bool(playing)).map_err(tree_err)
 }
 
-/// The registry names of the sound methods, by method name, with the
-/// event each fires.
-const METHODS: [(&str, &str, bool, bool, &str); 4] = [
-    (sound::PLAY, "libroxel.sound.play", true, true, "Played"),
-    (sound::STOP, "libroxel.sound.stop", false, true, "Stopped"),
-    (sound::PAUSE, "libroxel.sound.pause", false, false, "Paused"),
-    (sound::RESUME, "libroxel.sound.resume", true, false, "Resumed"),
+/// The registry names of the sound methods, by method name.
+const METHODS: [(&str, &str, bool, bool); 4] = [
+    (sound::PLAY, "libroxel.sound.play", true, true),
+    (sound::STOP, "libroxel.sound.stop", false, true),
+    (sound::PAUSE, "libroxel.sound.pause", false, false),
+    (sound::RESUME, "libroxel.sound.resume", true, false),
 ];
-
-fn is_playing(lua: &Lua, id: InstanceId) -> bool {
-    host(lua).tree.borrow().get_bool(id, Property::Playing) == Some(true)
-}
 
 /// Makes the sound methods. They're found through [`index`] rather than
 /// being methods of every instance, so a child called "Play" still works.
 pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
-    for (name, key, playing, restart, event) in METHODS {
+    for (name, key, playing, restart) in METHODS {
         let f = lua.create_function(move |lua, this: Value| {
             let id = as_instance(&this)
                 .ok_or_else(|| mlua::Error::runtime(format!("call it with a colon, like sound:{name}()")))?;
             require_class(lua, id, ClassKind::Sound, name)?;
-            let was = is_playing(lua, id);
             set_playing(lua, id, playing)?;
             if restart {
                 host(lua).world.borrow_mut().sound_restarts.push(id);
-                // Stop (and Play) go back to the start.
-                let _ = push_instance(lua, id).and_then(|s| mlua::ObjectLike::set(&s, "TimePosition", 0.0));
-            }
-            // Pausing a sound that isn't playing, or resuming one that is,
-            // changes nothing and fires nothing.
-            if restart || was != playing {
-                let args = MultiValue::from_iter([Value::String(lua.create_string(sound_id(lua, id))?)]);
-                crate::lenient::fire_event(lua, id, event, args)?;
             }
             Ok(())
         })?;

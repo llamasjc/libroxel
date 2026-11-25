@@ -1823,7 +1823,7 @@ add(props, "StarterGui", { ShowDevelopmentGui = true, ScreenOrientation = NIL, R
 add(props, "DataModel", {
 	PlaceVersion = 1,
 	CreatorId = 0,
-	CreatorType = "CreatorType.User",
+	CreatorType = NIL,
 	GameId = 0,
 	PrivateServerId = "",
 	PrivateServerOwnerId = 0,
@@ -1846,53 +1846,18 @@ plain_signals("DataModel", { "Loaded", "GraphicsQualityChangeRequest" })
 -- Services that are objects of their own rather than instances
 ------------------------------------------------------------------------------
 
--- Functions bound to the render step run each frame in priority order
--- (lowest first, then in the order they were bound), from one connection.
 local render_steps = {}
-local render_connection
-local render_order = 0
-local function run_render_steps(dt)
-	local list = {}
-	for _, step in pairs(render_steps) do
-		table.insert(list, step)
-	end
-	table.sort(list, function(a, b)
-		if a.priority == b.priority then
-			return a.order < b.order
-		end
-		return a.priority < b.priority
-	end)
-	for _, step in ipairs(list) do
-		if render_steps[step.name] == step then
-			local ok, err = pcall(step.fn, dt)
-			if not ok then
-				task.spawn(error, err, 0)
-			end
-		end
-	end
-end
 add(methods, "RunService", {
-	BindToRenderStep = function(self, name, priority, fn)
-		if type(name) ~= "string" then
-			error("BindToRenderStep expects a name", 2)
+	BindToRenderStep = function(self, name, _, fn)
+		if render_steps[name] then
+			render_steps[name]:Disconnect()
 		end
-		if type(fn) ~= "function" then
-			error("BindToRenderStep expects a function", 2)
-		end
-		if typeof(priority) == "EnumItem" then
-			priority = priority.Value
-		end
-		render_order += 1
-		render_steps[name] = { name = name, priority = tonumber(priority) or 0, order = render_order, fn = fn }
-		if not render_connection then
-			render_connection = self.RenderStepped:Connect(run_render_steps)
-		end
+		render_steps[name] = self.RenderStepped:Connect(fn)
 	end,
 	UnbindFromRenderStep = function(_, name)
-		render_steps[name] = nil
-		if next(render_steps) == nil and render_connection then
-			render_connection:Disconnect()
-			render_connection = nil
+		if render_steps[name] then
+			render_steps[name]:Disconnect()
+			render_steps[name] = nil
 		end
 	end,
 	IsRunMode = function()
@@ -2040,8 +2005,7 @@ add(signals, "UserInputService", {
 	DeviceRotationChanged = true,
 })
 
--- Ordered data stores, kept in one value of an ordinary data store. As on
--- Roblox they hold only whole numbers, and sort by value.
+-- Ordered data stores, kept in one value of an ordinary data store.
 local function ordered_store(name, scope)
 	local backing = service("DataStoreService"):GetDataStore(name .. " (ordered)", scope)
 	local KEY = "values"
@@ -2049,49 +2013,33 @@ local function ordered_store(name, scope)
 	local function all()
 		return backing:GetAsync(KEY) or {}
 	end
-	local function check_key(key)
-		if type(key) ~= "string" or #key == 0 or #key > 50 then
-			error("a key must be 1 to 50 characters", 3)
-		end
-	end
-	local function whole(value, what)
-		if type(value) ~= "number" or value ~= value or math.floor(value) ~= value then
-			error(what .. " must be a whole number in an ordered data store", 3)
-		end
-		return value
-	end
 	function store.GetAsync(_, key)
-		check_key(key)
 		return all()[key]
 	end
 	function store.SetAsync(_, key, value)
-		check_key(key)
+		if typeof(value) ~= "number" then
+			error("ordered data stores only hold whole numbers", 2)
+		end
 		local t = all()
-		t[key] = whole(value, "the value")
+		t[key] = math.floor(value)
 		backing:SetAsync(KEY, t)
 	end
 	function store.IncrementAsync(_, key, by)
-		check_key(key)
 		local t = all()
-		if t[key] ~= nil and type(t[key]) ~= "number" then
-			error(key .. " does not hold a number", 2)
-		end
-		t[key] = (t[key] or 0) + whole(by or 1, "the increment")
+		t[key] = (t[key] or 0) + math.floor(by or 1)
 		backing:SetAsync(KEY, t)
 		return t[key]
 	end
 	function store.UpdateAsync(_, key, fn)
-		check_key(key)
 		local t = all()
 		local new = fn(t[key])
 		if new ~= nil then
-			t[key] = whole(new, "the value")
+			t[key] = new
 			backing:SetAsync(KEY, t)
 		end
 		return t[key]
 	end
 	function store.RemoveAsync(_, key)
-		check_key(key)
 		local t = all()
 		local old = t[key]
 		t[key] = nil
@@ -2099,13 +2047,6 @@ local function ordered_store(name, scope)
 		return old
 	end
 	function store.GetSortedAsync(_, ascending, size, min, max)
-		if type(ascending) ~= "boolean" then
-			error("GetSortedAsync expects whether to sort ascending first", 2)
-		end
-		size = size or 50
-		if size < 1 or size > 100 then
-			error("a page holds 1 to 100 entries", 2)
-		end
 		local rows = {}
 		for key, value in pairs(all()) do
 			if (not min or value >= min) and (not max or value <= max) then
@@ -2121,16 +2062,23 @@ local function ordered_store(name, scope)
 			end
 			return a.value > b.value
 		end)
-		return L.list_pages(rows, size)
+		size = math.max(1, size or 50)
+		local page = 0
+		local pages = { IsFinished = false }
+		local function check()
+			pages.IsFinished = (page + 1) * size >= #rows
+		end
+		function pages.GetCurrentPage()
+			return table.move(rows, page * size + 1, math.min((page + 1) * size, #rows), 1, {})
+		end
+		function pages.AdvanceToNextPageAsync()
+			page += 1
+			check()
+		end
+		check()
+		return pages
 	end
-	return setmetatable(store, {
-		__index = function(_, k)
-			error(tostring(k) .. " is not a valid member of OrderedDataStore", 2)
-		end,
-		__tostring = function()
-			return name
-		end,
-	})
+	return store
 end
 add(methods, "DataStoreService", {
 	GetOrderedDataStore = function(_, name, scope)
@@ -2536,12 +2484,16 @@ local SERVICES = {
 			ChannelTabsConfiguration = function()
 				return L.chat_config("ChannelTabsConfiguration", { Enabled = false })
 			end,
-			-- The usual channels and commands (made further down).
+			-- The usual channels, so scripts can send to RBXGeneral.
 			TextChannels = function()
-				return L.chat_text_channels()
-			end,
-			TextChatCommands = function()
-				return L.chat_text_chat_commands()
+				local folder = Instance.new("Folder")
+				folder.Name = "TextChannels"
+				for _, n in ipairs({ "RBXGeneral", "RBXSystem" }) do
+					local c = Instance.new("TextChannel")
+					c.Name = n
+					c.Parent = folder
+				end
+				return folder
 			end,
 		},
 		methods = {
@@ -2555,15 +2507,6 @@ local SERVICES = {
 				return true
 			end,
 			DisplayBubble = function() end,
-			FindFirstChild = function(_, name)
-				return L.chat_child(name)
-			end,
-			WaitForChild = function(_, name)
-				return L.chat_child(name)
-			end,
-			GetChildren = function()
-				return L.chat_children()
-			end,
 		},
 	},
 	Chat = {
@@ -3263,24 +3206,6 @@ add(getters, "Mouse", {
 })
 plain_signals("Mouse", { "Button2Down", "Button2Up", "Move", "Idle", "WheelForward", "WheelBackward" })
 
--- Pages of `rows`, `size` to a page.
-function L.list_pages(rows, size)
-	size = math.max(1, size or 50)
-	local page = 0
-	local pages = { IsFinished = #rows <= size }
-	function pages.GetCurrentPage()
-		return table.move(rows, page * size + 1, math.min((page + 1) * size, #rows), 1, {})
-	end
-	function pages.AdvanceToNextPageAsync()
-		if pages.IsFinished then
-			return
-		end
-		page += 1
-		pages.IsFinished = (page + 1) * size >= #rows
-	end
-	return pages
-end
-
 function L.key_pages(keys)
 	local list = {}
 	for _, k in ipairs(keys) do
@@ -3391,216 +3316,16 @@ add(methods, "BasePart", {
 	end,
 })
 plain_signals("Team", { "PlayerAdded", "PlayerRemoved" })
--- TextChatService ------------------------------------------------------------
--- Libroxel has no chat window, but games still talk through their channels:
--- system messages, chat tags set in OnIncomingMessage and slash commands.
--- Messages go round this computer the way Roblox delivers them, and system
--- messages are also printed to the output.
-
-plain_signals("TextChannel", { "MessageReceived" })
-add(props, "TextChannel", { OnIncomingMessage = NIL, ShouldDeliverCallback = NIL })
-plain_signals("TextChatCommand", { "Triggered" })
-add(props, "TextChatCommand", { Enabled = true })
-
-local chat = { folders = {}, sources = {}, next_id = 0 }
-
-local function chat_service()
-	return service("TextChatService")
-end
-
--- The folders TextChatService keeps its channels and commands in. Made
--- once, so what a script connects to is what messages arrive on.
-local function chat_folder(name, fill)
-	local folder = chat.folders[name]
-	if not folder then
-		folder = Instance.new("Folder")
-		folder.Name = name
-		fill(folder)
-		chat.folders[name] = folder
-	end
-	return folder
-end
-
-local DEFAULT_COMMANDS = {
-	{ "RBXClearCommand", "/clear", "/cls" },
-	{ "RBXConsoleCommand", "/console", "" },
-	{ "RBXEmoteCommand", "/emote", "/e" },
-	{ "RBXHelpCommand", "/help", "/?" },
-	{ "RBXMuteCommand", "/mute", "/m" },
-	{ "RBXTeamCommand", "/team", "/t" },
-	{ "RBXUnmuteCommand", "/unmute", "/um" },
-	{ "RBXVersionCommand", "/version", "/v" },
-	{ "RBXWhisperCommand", "/whisper", "/w" },
-}
-
-local function text_channels()
-	return chat_folder("TextChannels", function(folder)
-		if chat_service().CreateDefaultTextChannels == false then
-			return
-		end
-		for _, n in ipairs({ "RBXGeneral", "RBXSystem" }) do
-			local c = Instance.new("TextChannel")
-			c.Name = n
-			c.Parent = folder
-		end
-	end)
-end
-
-local function text_chat_commands()
-	return chat_folder("TextChatCommands", function(folder)
-		if chat_service().CreateDefaultCommands == false then
-			return
-		end
-		for _, d in ipairs(DEFAULT_COMMANDS) do
-			local c = Instance.new("TextChatCommand")
-			c.Name = d[1]
-			c.PrimaryAlias = d[2]
-			c.SecondaryAlias = d[3]
-			c.Parent = folder
-		end
-	end)
-end
-
-local function chat_children()
-	return { text_channels(), text_chat_commands() }
-end
-
--- Who can speak in a channel (Roblox makes these itself; scripts can't).
-local function new_text_source(name, user_id)
-	chat.next_id += 1
-	return stand_in("TextSource", {
-		props = { Name = name, UserId = user_id or 0, CanSend = true },
-	}, "textsource:" .. chat.next_id)
-end
-
--- The local player's TextSource in `channel`: who sent a message.
-local function text_source(channel)
-	local player = game:GetService("Players").LocalPlayer
-	if not player then
-		return nil
-	end
-	local source = chat.sources[channel]
-	if not source then
-		source = new_text_source(player.Name, player.UserId)
-		chat.sources[channel] = source
-	end
-	return source
-end
-
-local function new_message(channel, text, source, metadata)
-	chat.next_id += 1
-	local id = service("HttpService"):GenerateGUID(false)
-	return stand_in("TextChatMessage", {
-		props = {
-			Text = text,
-			PrefixText = "",
-			MessageId = id,
-			Metadata = metadata or "",
-			Status = Enum.TextChatMessageStatus.Success,
-			TextChannel = channel,
-			TextSource = source or NIL,
-			Timestamp = DateTime.now(),
-			Translation = "",
-			BubbleChatMessageProperties = NIL,
-		},
-	}, "chatmsg:" .. id)
-end
-
--- Runs an OnIncomingMessage callback and applies what it hands back.
-local function incoming(callback, message)
-	if type(callback) ~= "function" then
-		return
-	end
-	local ok, props = pcall(callback, message)
-	if not ok then
-		task.spawn(error, props, 0)
-		return
-	end
-	if props == nil then
-		return
-	end
-	local function take(key)
-		local ok2, v = pcall(function()
-			return props[key]
-		end)
-		if ok2 and v ~= nil and v ~= "" then
-			message[key] = v
-		end
-	end
-	take("PrefixText")
-	take("Text")
-	take("Translation")
-end
-
-local function deliver(channel, message)
-	incoming(channel.OnIncomingMessage, message)
-	incoming(chat_service().OnIncomingMessage, message)
-	channel.MessageReceived:Fire(message)
-	chat_service().MessageReceived:Fire(message)
-end
-
--- A slash command `text` names, if it is one.
-local function find_command(text)
-	local word = string.lower(string.match(text, "^(%S+)") or "")
-	if string.sub(word, 1, 1) ~= "/" then
-		return nil
-	end
-	for _, c in ipairs(text_chat_commands():GetDescendants()) do
-		if c:IsA("TextChatCommand") and c.Enabled ~= false then
-			local primary, secondary = string.lower(c.PrimaryAlias or ""), string.lower(c.SecondaryAlias or "")
-			if (primary ~= "" and word == primary) or (secondary ~= "" and word == secondary) then
-				return c
-			end
-		end
-	end
-	return nil
-end
-
-L.chat_text_channels = text_channels
-L.chat_text_chat_commands = text_chat_commands
-L.chat_children = chat_children
-function L.chat_child(name)
-	for _, c in ipairs(chat_children()) do
-		if c.Name == name then
-			return c
-		end
-	end
-	return nil
-end
-
+plain_signals("TextChannel", { "MessageReceived", "ShouldDeliverCallback" })
 add(methods, "TextChannel", {
-	DisplaySystemMessage = function(self, text, metadata)
-		text = tostring(text)
+	DisplaySystemMessage = function(_, text)
 		print(text)
-		local message = new_message(self, text, nil, metadata)
-		deliver(self, message)
-		return message
 	end,
-	SendAsync = function(self, text, metadata)
-		text = tostring(text)
-		local source = text_source(self)
-		local message = new_message(self, text, source, metadata)
-		message.Status = Enum.TextChatMessageStatus.Sending
-		chat_service().SendingMessage:Fire(message)
-		local command = find_command(text)
-		if command then
-			command.Triggered:Fire(source, text)
-			message.Status = Enum.TextChatMessageStatus.Success
-			return message
-		end
-		message.Status = Enum.TextChatMessageStatus.Success
-		local player = game:GetService("Players").LocalPlayer
-		if player then
-			pcall(function()
-				player.Chatted:Fire(text)
-			end)
-		end
-		deliver(self, message)
-		return message
+	SendAsync = function(_, text)
+		print(text)
 	end,
-	AddUserAsync = function(_, user_id)
-		local player = game:GetService("Players"):GetPlayerByUserId(user_id)
-		return new_text_source(player and player.Name or tostring(user_id), user_id), true
+	AddUserAsync = function()
+		return nil, true
 	end,
 	SetDirectChatRequester = function() end,
 })

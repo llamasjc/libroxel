@@ -486,17 +486,6 @@ pub mod data_store {
     pub const TYPE_NAME: &str = "DataStore";
     /// Keys and store names may be at most this long.
     pub const MAX_NAME_LEN: usize = 50;
-    /// The most a value may take once encoded, as on Roblox (4 MiB).
-    pub const MAX_VALUE_LEN: usize = 4 * 1024 * 1024;
-    /// How many versions of each key are kept for `GetVersionAsync`.
-    pub const KEPT_VERSIONS: usize = 32;
-    /// The scope a store has when none is given.
-    pub const GLOBAL_SCOPE: &str = "global";
-    pub const KEY_INFO: &str = "DataStoreKeyInfo";
-    pub const LIST_KEYS_ASYNC: &str = "ListKeysAsync";
-    pub const LIST_VERSIONS_ASYNC: &str = "ListVersionsAsync";
-    pub const GET_VERSION_ASYNC: &str = "GetVersionAsync";
-    pub const GET_VERSION_AT_TIME_ASYNC: &str = "GetVersionAtTimeAsync";
 }
 
 /// Members of the clean-up service.
@@ -1784,8 +1773,6 @@ pub mod compat {
     pub const DISCONNECT: &str = "Disconnect";
     pub const BIND_ACTION: &str = "BindAction";
     pub const BIND_ACTION_AT_PRIORITY: &str = "BindActionAtPriority";
-    pub const GET_BOUND_ACTION_INFO: &str = "GetBoundActionInfo";
-    pub const GET_ALL_BOUND_ACTION_INFO: &str = "GetAllBoundActionInfo";
     pub const UNBIND_ACTION: &str = "UnbindAction";
     pub const UNBIND_ALL_ACTIONS: &str = "UnbindAllActions";
     pub const SET_TITLE: &str = "SetTitle";

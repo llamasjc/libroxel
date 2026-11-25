@@ -724,9 +724,8 @@ fn data_stores_save_and_load() {
     "#,
     );
     let out = printed(&rt);
-    // GetAsync, UpdateAsync and RemoveAsync also give the key's info.
-    assert_eq!(&out[..4], ["nil nil", "15 1", "30 DataStoreKeyInfo", "30 DataStoreKeyInfo"]);
-    assert_eq!(out[4], "1 nil nil");
+    assert_eq!(&out[..4], ["nil", "15 1", "30", "30"]);
+    assert_eq!(out[4], "1 nil");
     assert!(out[5].starts_with("false") && out[5].contains("can't be saved"), "{out:?}");
 
     // A new runtime sees what the first one saved.

@@ -494,7 +494,6 @@ pub fn draw(
     screens.sort_by(|a, b| order(*a).total_cmp(&order(*b)));
     boxes.rects.clear();
     TEXT_CONTEXT.with_borrow_mut(|c| *c = Some(ui.ctx().clone()));
-    libroxel_script::set_text_measure(|text, size, width| measure_text(text, size, width, None));
     COVER.set((area, false));
     for screen in screens {
         let k = own_scale(tree, screen);
