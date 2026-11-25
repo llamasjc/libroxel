@@ -109,7 +109,7 @@ fn passes_sell_and_earnings_show_up() {
     let (maker_id, time) = (player_id_of(&maker), ms());
     let mut ask = CashOut {
         player_id: maker_id,
-        sparks: 10,
+        credits: 10,
         details: "me@example.com".into(),
         time,
         signature: String::new(),

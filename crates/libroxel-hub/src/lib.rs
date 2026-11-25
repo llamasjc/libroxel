@@ -59,7 +59,7 @@ pub use charts::{Chart, ChartStats, Charts, ForYou, Played, for_you_message, gue
 mod badges;
 mod cli;
 pub use badges::{
-    Awarded, BADGE_COLORS, BADGE_ICONS, BADGE_SPARKS, Badge, BadgeAction, BadgeAward, BadgeChange,
+    Awarded, BADGE_COLORS, BADGE_CREDITS, BADGE_ICONS, Badge, BadgeAction, BadgeAward, BadgeChange,
     MAX_BADGE_ABOUT, MAX_BADGE_NAME, MAX_BADGES, PLATFORM_BADGES, PlatformBadge, award_message,
     badge_message, platform_badge,
 };

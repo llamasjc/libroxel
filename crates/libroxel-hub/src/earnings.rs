@@ -20,6 +20,7 @@ const DAY: i64 = 86_400;
 const CLOCK_SLACK_MS: i64 = 10 * 60 * 1000;
 
 pub(crate) fn create_tables(db: &Connection) -> Result<(), String> {
+    let _ = db.execute("ALTER TABLE payouts RENAME COLUMN sparks TO credits", []);
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS passes (
             pass_id     INTEGER PRIMARY KEY,
@@ -58,7 +59,7 @@ pub(crate) fn create_tables(db: &Connection) -> Result<(), String> {
         CREATE TABLE IF NOT EXISTS payouts (
             payout_id   INTEGER PRIMARY KEY,
             player_id   TEXT NOT NULL,
-            sparks      INTEGER NOT NULL,
+            credits     INTEGER NOT NULL,
             cents       INTEGER NOT NULL,
             details     TEXT NOT NULL,
             state       TEXT NOT NULL,
@@ -227,7 +228,8 @@ pub fn payable(db: &Connection, player_id: &str) -> i64 {
     let sum = |sql: &str| db.query_row(sql, params![player_id], |r| r.get::<_, i64>(0)).unwrap_or(0);
     let earned = sum("SELECT COALESCE(SUM(cashable), 0) FROM settled WHERE seller_id = ?1")
         + sum("SELECT COALESCE(SUM(earned), 0) FROM engagement WHERE creator_id = ?1");
-    let out = sum("SELECT COALESCE(SUM(sparks), 0) FROM payouts WHERE player_id = ?1 AND state <> 'refused'");
+    let out =
+        sum("SELECT COALESCE(SUM(credits), 0) FROM payouts WHERE player_id = ?1 AND state <> 'refused'");
     (earned - out).clamp(0, wallet::balance(db, player_id).max(0))
 }
 
@@ -376,14 +378,14 @@ pub fn earnings_message(player_id: &str, time: i64) -> Vec<u8> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CashOut {
     pub player_id: String,
-    pub sparks: u32,
+    pub credits: u32,
     pub details: String,
     pub time: i64,
     pub signature: String,
 }
 
 pub fn cash_out_message(c: &CashOut) -> Vec<u8> {
-    format!("libroxel cash out\n{}\n{}\n{}\n{}", c.player_id, c.sparks, c.details, c.time).into_bytes()
+    format!("libroxel cash out\n{}\n{}\n{}\n{}", c.player_id, c.credits, c.details, c.time).into_bytes()
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -416,7 +418,7 @@ pub struct SaleLine {
 pub struct Payout {
     pub payout_id: i64,
     pub player_id: String,
-    pub sparks: i64,
+    pub credits: i64,
     pub cents: i64,
     pub details: String,
     pub state: String,
@@ -450,7 +452,7 @@ fn payout_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<Payout> {
     Ok(Payout {
         payout_id: r.get(0)?,
         player_id: r.get(1)?,
-        sparks: r.get(2)?,
+        credits: r.get(2)?,
         cents: r.get(3)?,
         details: r.get(4)?,
         state: r.get(5)?,
@@ -459,7 +461,7 @@ fn payout_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<Payout> {
     })
 }
 
-const PAYOUT_COLUMNS: &str = "payout_id, player_id, sparks, cents, details, state, note, asked";
+const PAYOUT_COLUMNS: &str = "payout_id, player_id, credits, cents, details, state, note, asked";
 
 pub fn earnings(db: &Connection, player_id: &str, now: i64) -> rusqlite::Result<Earnings> {
     let one = |sql: &str, p: &[&dyn rusqlite::ToSql]| db.query_row(sql, p, |r| r.get::<_, i64>(0));
@@ -582,7 +584,7 @@ pub fn earnings(db: &Connection, player_id: &str, now: i64) -> rusqlite::Result<
     })
 }
 
-pub fn ask_payout(db: &Connection, player_id: &str, sparks: u32, details: &str) -> Result<i64, Failed> {
+pub fn ask_payout(db: &Connection, player_id: &str, credits: u32, details: &str) -> Result<i64, Failed> {
     let set = settings(db);
     let refuse = |code: StatusCode, why: String| Err((code, why));
     if !set.payouts_on() {
@@ -596,7 +598,7 @@ pub fn ask_payout(db: &Connection, player_id: &str, sparks: u32, details: &str) 
     if details.is_empty() || details.chars().count() > MAX_DETAILS {
         return refuse(StatusCode::BAD_REQUEST, format!("say where {} should pay you", set.provider));
     }
-    if sparks < set.minimum.max(1) {
+    if credits < set.minimum.max(1) {
         return refuse(
             StatusCode::BAD_REQUEST,
             format!("the least you can cash out is {} {CURRENCY}", set.minimum),
@@ -613,20 +615,20 @@ pub fn ask_payout(db: &Connection, player_id: &str, sparks: u32, details: &str) 
     if waiting.is_some() {
         return refuse(StatusCode::CONFLICT, "you already have a cash out waiting".into());
     }
-    if i64::from(sparks) > payable(db, player_id) {
+    if i64::from(credits) > payable(db, player_id) {
         return refuse(
             StatusCode::PAYMENT_REQUIRED,
             format!("you can cash out up to {} {CURRENCY}", payable(db, player_id)),
         );
     }
-    let cents = i64::from(sparks) * i64::from(set.cents_per_thousand) / 1000;
+    let cents = i64::from(credits) * i64::from(set.cents_per_thousand) / 1000;
     db.execute(
-        "INSERT INTO payouts (player_id, sparks, cents, details, state, asked) VALUES (?1, ?2, ?3, ?4, 'waiting', ?5)",
-        params![player_id, sparks, cents, details, now()],
+        "INSERT INTO payouts (player_id, credits, cents, details, state, asked) VALUES (?1, ?2, ?3, ?4, 'waiting', ?5)",
+        params![player_id, credits, cents, details, now()],
     )
     .map_err(internal)?;
     let id = db.last_insert_rowid();
-    if let Err(e) = wallet::debit(db, player_id, sparks, "cash-out", &id.to_string()) {
+    if let Err(e) = wallet::debit(db, player_id, credits, "cash-out", &id.to_string()) {
         let _ = db.execute("DELETE FROM payouts WHERE payout_id = ?1", params![id]);
         return Err(e.into());
     }
@@ -648,13 +650,13 @@ pub fn payouts(db: &Connection, state: &str) -> Vec<Payout> {
 pub fn finish_payout(db: &Connection, payout_id: i64, paid: bool, note: &str) -> Result<(), String> {
     let row: Option<(String, u32)> = db
         .query_row(
-            "SELECT player_id, sparks FROM payouts WHERE payout_id = ?1 AND state = 'waiting'",
+            "SELECT player_id, credits FROM payouts WHERE payout_id = ?1 AND state = 'waiting'",
             params![payout_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let Some((player_id, sparks)) = row else {
+    let Some((player_id, credits)) = row else {
         return Err(format!("no cash out {payout_id} is waiting"));
     };
     db.execute(
@@ -663,7 +665,7 @@ pub fn finish_payout(db: &Connection, payout_id: i64, paid: bool, note: &str) ->
     )
     .map_err(|e| e.to_string())?;
     if !paid {
-        wallet::credit(db, &player_id, sparks, "cash-out-back", &payout_id.to_string())
+        wallet::credit(db, &player_id, credits, "cash-out-back", &payout_id.to_string())
             .map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -708,7 +710,7 @@ pub(crate) async fn cash_out(State(db): State<Db>, Json(c): Json<CashOut>) -> Re
     let db = db.lock().unwrap();
     wallet::check(&db, &c.player_id, &cash_out_message(&c), &c.signature, c.time)?;
     settle(&db, now()).map_err(internal)?;
-    ask_payout(&db, &c.player_id, c.sparks, &c.details)?;
+    ask_payout(&db, &c.player_id, c.credits, &c.details)?;
     earnings(&db, &c.player_id, now()).map(Json).map_err(internal)
 }
 

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::{Db, now, verify};
 use crate::social::now_ms;
 
-pub const CURRENCY: &str = "Sparks";
+pub const CURRENCY: &str = "Credits";
 pub const DAILY: i64 = 25;
 pub const MAX_PRICE: u32 = 100_000;
 const MONTH_SECS: i64 = 30 * 24 * 60 * 60;
@@ -545,7 +545,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn credits_count_once_and_debits_need_the_sparks() {
+    fn credits_count_once_and_debits_need_the_credits() {
         let db = crate::open_db(None).unwrap();
         assert!(credit(&db, "a", 100, "badge", "first-win").unwrap());
         assert!(!credit(&db, "a", 100, "badge", "first-win").unwrap());

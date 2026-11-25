@@ -40,13 +40,13 @@ pub const HUB_HELP: &str = "\
                                supporter)
   rename <name> <new name>     rename an account
   earnings                     show the engagement pool and cash out settings
-  earnings pool <sparks>       Sparks shared each day between creators by
+  earnings pool <credits>       Credits shared each day between creators by
                                playtime (0: off)
   payouts [all]                list cash outs waiting to be paid
-  payouts on <provider> <cents per 1000 Sparks> <minimum Sparks>
+  payouts on <provider> <cents per 1000 Credits> <minimum Credits>
   payouts off
   payouts paid <id> [reference]
-  payouts refuse <id> <reason> gives the Sparks back
+  payouts refuse <id> <reason> gives the Credits back
 ";
 
 struct Flags {
@@ -228,19 +228,19 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
         }
         ["earnings"] => {
             let s = crate::earnings_settings(&crate::open_db(Some(&data))?);
-            println!("Engagement pool: {} Sparks a day", s.pool);
+            println!("Engagement pool: {} Credits a day", s.pool);
             if s.payouts_on() {
-                println!("Cash out: on, through {}, {} cents per 1000 Sparks, at least {} Sparks", s.provider, s.cents_per_thousand, s.minimum);
+                println!("Cash out: on, through {}, {} cents per 1000 Credits, at least {} Credits", s.provider, s.cents_per_thousand, s.minimum);
             } else {
                 println!("Cash out: off");
             }
             Ok(())
         }
-        ["earnings", "pool", sparks] => {
+        ["earnings", "pool", credits] => {
             let db = crate::open_db(Some(&data))?;
-            let pool = sparks.parse().map_err(|_| format!("{sparks} is not a number"))?;
+            let pool = credits.parse().map_err(|_| format!("{credits} is not a number"))?;
             crate::set_earnings_settings(&db, &crate::EarningsSettings { pool, ..crate::earnings_settings(&db) })?;
-            println!("Creators share {pool} Sparks a day.");
+            println!("Creators share {pool} Credits a day.");
             Ok(())
         }
         ["payouts", "on", provider, cents, minimum] => {
@@ -253,7 +253,7 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
                 ..crate::earnings_settings(&db)
             };
             if !s.payouts_on() {
-                return Err("cents per 1000 Sparks must be more than 0".into());
+                return Err("cents per 1000 Credits must be more than 0".into());
             }
             crate::set_earnings_settings(&db, &s)?;
             println!("Cash out is on.");
@@ -275,7 +275,7 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
         ["payouts", "refuse", id, reason @ ..] if !reason.is_empty() => {
             let id = id.parse().map_err(|_| format!("{id} is not a cash out"))?;
             crate::finish_payout(&crate::open_db(Some(&data))?, id, false, &reason.join(" "))?;
-            println!("Cash out {id} is refused and its Sparks are back.");
+            println!("Cash out {id} is refused and its Credits are back.");
             Ok(())
         }
         ["payouts", which @ ..] if which.is_empty() || which == ["all"] => {
@@ -289,8 +289,8 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
                     .query_row("SELECT name FROM accounts WHERE player_id = ?1", [&p.player_id], |r| r.get(0))
                     .unwrap_or_else(|_| p.player_id.clone());
                 println!(
-                    "{:<5} {:<20} {} Sparks  ${}.{:02}  {}  {}  {} days ago  {}",
-                    p.payout_id, name, p.sparks, p.cents / 100, p.cents % 100, p.details, p.state, p.asked_secs_ago / 86_400, p.note
+                    "{:<5} {:<20} {} Credits  ${}.{:02}  {}  {}  {} days ago  {}",
+                    p.payout_id, name, p.credits, p.cents / 100, p.cents % 100, p.details, p.state, p.asked_secs_ago / 86_400, p.note
                 );
             }
             Ok(())

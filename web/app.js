@@ -2879,7 +2879,7 @@ function chart(points, { bars = false, label }) {
 
 let walletSigned = 0;
 const walletTime = () => (walletSigned = Math.max(Date.now(), walletSigned + 1));
-const sparks = (n) => `${count(n)} Sparks`;
+const credits = (n) => `${count(n)} Credits`;
 const money = (cents) => `$${(cents / 100).toFixed(2)}`;
 
 const passList = { key: null, who: null, list: null, busy: false };
@@ -2923,8 +2923,8 @@ function passesPanel(entry) {
         : el('button', { class: 'chip', disabled: !session || passList.busy, title: session ? undefined : 'Sign in to buy passes', onclick: (e) => {
           const b = e.currentTarget;
           if (b.dataset.sure) buyPass(p);
-          else { b.dataset.sure = '1'; b.replaceChildren(`Buy for ${sparks(p.price)}?`); }
-        } }, sparks(p.price)))))));
+          else { b.dataset.sure = '1'; b.replaceChildren(`Buy for ${credits(p.price)}?`); }
+        } }, credits(p.price)))))));
 }
 
 async function changePass(gameId, c, said) {
@@ -2954,7 +2954,7 @@ function passForm(gameId, p) {
   return el('div', { class: 'form manage' },
     el('label', { class: 'field' }, el('span', {}, 'Name'), name),
     el('label', { class: 'field' }, el('span', {}, 'Description'), about),
-    el('label', { class: 'field' }, el('span', {}, 'Price in Sparks'), price),
+    el('label', { class: 'field' }, el('span', {}, 'Price in Credits'), price),
     el('div', { class: 'form-actions' },
       el('button', { class: 'btn go small', disabled: mine.busy, onclick: () => changePass(gameId, { action: p ? 'edit' : 'add', ...read() }, p ? 'Saved.' : `Added ${name.value.trim()}.`) }, icon(ICON.check), p ? 'Save' : 'Add pass'),
       p && el('button', { class: 'chip', disabled: mine.busy, onclick: () => changePass(gameId, { action: 'remove', pass_id: p.pass_id }, `Removed ${p.name}.`) }, icon(ICON.trash), 'Remove')));
@@ -2965,7 +2965,7 @@ function passesTab(g) {
   const list = passList.key === g.game_id ? passList.list : null;
   if (!list) return el('p', { class: 'soft' }, 'Loading…');
   return el('div', {},
-    list.map((p) => el('div', {}, el('h2', { class: 'section' }, `${p.name} · ${sparks(p.price)} · ${count(p.sold)} sold`), passForm(g.game_id, p))),
+    list.map((p) => el('div', {}, el('h2', { class: 'section' }, `${p.name} · ${credits(p.price)} · ${count(p.sold)} sold`), passForm(g.game_id, p))),
     el('h2', { class: 'section' }, 'New pass'), passForm(g.game_id, null));
 }
 
@@ -2986,8 +2986,8 @@ function loadEarnings(again) {
 async function cashOut(amount, details) {
   earned.busy = true;
   render();
-  const body = { player_id: session.playerId, sparks: amount, details, time: walletTime() };
-  body.signature = signText(secretKey(), `libroxel cash out\n${body.player_id}\n${body.sparks}\n${body.details}\n${body.time}`);
+  const body = { player_id: session.playerId, credits: amount, details, time: walletTime() };
+  body.signature = signText(secretKey(), `libroxel cash out\n${body.player_id}\n${body.credits}\n${body.details}\n${body.time}`);
   try {
     earned.result = await api('/earnings/cash-out', { method: 'POST', body });
     flash = { text: 'Cash out asked for.' };
@@ -3001,20 +3001,20 @@ async function cashOut(amount, details) {
 function cashOutPanel(e) {
   const out = [el('h2', { class: 'section' }, 'Cash out')];
   if (!e.payouts_on) return [...out, el('p', { class: 'soft' }, 'Not available yet.')];
-  out.push(el('p', { class: 'soft' }, `${money(e.cents_per_thousand)} per 1,000 Sparks through ${e.provider}. At least ${sparks(e.minimum)}. You can cash out ${sparks(e.payable)}.`));
+  out.push(el('p', { class: 'soft' }, `${money(e.cents_per_thousand)} per 1,000 Credits through ${e.provider}. At least ${credits(e.minimum)}. You can cash out ${credits(e.payable)}.`));
   if (e.needs.length) out.push(status(`First ${e.needs.join(', ')}.`));
   else if (!e.payouts.some((p) => p.state === 'waiting')) {
     const amount = el('input', { type: 'number', min: e.minimum, max: e.payable, value: e.payable });
     const details = el('input', { type: 'text', maxlength: 200, placeholder: `Your ${e.provider} email or account` });
     out.push(el('div', { class: 'form manage' },
-      el('label', { class: 'field' }, el('span', {}, 'Sparks'), amount),
+      el('label', { class: 'field' }, el('span', {}, 'Credits'), amount),
       el('label', { class: 'field' }, el('span', {}, 'Pay to'), details),
       el('div', { class: 'form-actions' },
         el('button', { class: 'btn go small', disabled: earned.busy || e.payable < e.minimum, onclick: () => cashOut(Math.floor(Number(amount.value) || 0), details.value.trim()) }, icon(ICON.check), 'Cash out'))));
   }
   if (e.payouts.length) {
     out.push(el('div', { class: 'versions' }, e.payouts.map((p) => el('div', { class: 'person' },
-      el('div', { class: 'what' }, el('b', {}, `${sparks(p.sparks)} · ${money(p.cents)}`), el('small', { class: 'soft' }, [ago(p.asked_secs_ago), p.note].filter(Boolean).join(' · '))),
+      el('div', { class: 'what' }, el('b', {}, `${credits(p.credits)} · ${money(p.cents)}`), el('small', { class: 'soft' }, [ago(p.asked_secs_ago), p.note].filter(Boolean).join(' · '))),
       el('div', { class: 'buttons' }, el('span', { class: 'soft' }, { waiting: 'Waiting', paid: 'Paid', refused: 'Refused' }[p.state] || p.state))))));
   }
   return out;
@@ -3026,10 +3026,10 @@ function earningsPage() {
   const e = earned.result;
   if (earned.error) out.push(status(earned.error, 'error'));
   if (!e) return [...out, el('p', { class: 'soft' }, 'Loading…')];
-  const tiles = [[sparks(e.balance), 'Balance'], [sparks(e.pending), 'On hold'], [sparks(e.last_30), 'Last 30 days'], [sparks(e.total), 'All time']];
+  const tiles = [[credits(e.balance), 'Balance'], [credits(e.pending), 'On hold'], [credits(e.last_30), 'Last 30 days'], [credits(e.total), 'All time']];
   out.push(el('div', { class: 'tiles' }, tiles.map(([v, l]) => el('div', {}, el('b', {}, v), el('span', { class: 'caps' }, l)))));
   out.push(el('h2', { class: 'section' }, 'Each day'),
-    chart(e.days.map((d) => ({ v: d.sales + d.engagement, short: dayName(d.day), long: `${dayName(d.day)}: ${sparks(d.sales)} sales, ${sparks(d.engagement)} playtime` })), { bars: true, label: 'Sparks earned each day' }));
+    chart(e.days.map((d) => ({ v: d.sales + d.engagement, short: dayName(d.day), long: `${dayName(d.day)}: ${credits(d.sales)} sales, ${credits(d.engagement)} playtime` })), { bars: true, label: 'Credits earned each day' }));
   if (e.games.length) {
     out.push(el('h2', { class: 'section' }, 'Games'), el('div', { class: 'table-wrap' }, el('table', { class: 'numbers' },
       el('thead', {}, el('tr', {}, ['Game', 'Passes', 'Playtime', 'Total'].map((h) => el('th', {}, h)))),
@@ -3041,8 +3041,8 @@ function earningsPage() {
   }
   if (e.sales.length) {
     out.push(el('h2', { class: 'section' }, 'Sales'), el('div', { class: 'versions' }, e.sales.map((s) => el('div', { class: 'person' },
-      el('div', { class: 'what' }, el('b', {}, s.name), el('small', { class: 'soft' }, `${sparks(s.price)} · ${ago(s.secs_ago)}`)),
-      el('div', { class: 'buttons' }, el('span', { class: 'soft' }, `${s.settled ? '+' : 'On hold: '}${sparks(s.earned)}`))))));
+      el('div', { class: 'what' }, el('b', {}, s.name), el('small', { class: 'soft' }, `${credits(s.price)} · ${ago(s.secs_ago)}`)),
+      el('div', { class: 'buttons' }, el('span', { class: 'soft' }, `${s.settled ? '+' : 'On hold: '}${credits(s.earned)}`))))));
   }
   out.push(...cashOutPanel(e));
   return out;

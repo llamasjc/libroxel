@@ -61,7 +61,7 @@ fn share_hat(hub: &HubClient, key: &[u8; 32]) -> libroxel_hub::Item {
 }
 
 #[test]
-fn daily_sparks_buy_a_hat_once() {
+fn daily_credits_buy_a_hat_once() {
     let running = libroxel_hub::start("127.0.0.1:0".parse().unwrap(), None).unwrap();
     let hub = HubClient::new(&running.url());
     let (maker, me) = ([90u8; 32], [91u8; 32]);

@@ -8,7 +8,7 @@ use super::{Db, now, verify};
 use crate::social::{Failure, fresh, internal};
 
 pub const MAX_BADGES: i64 = 30;
-pub const BADGE_SPARKS: u32 = 100;
+pub const BADGE_CREDITS: u32 = 100;
 pub const MAX_BADGE_NAME: usize = 40;
 pub const MAX_BADGE_ABOUT: usize = 200;
 const PLAYING_SLACK_SECS: i64 = 120;
@@ -276,7 +276,7 @@ pub(crate) fn give(db: &Connection, player_id: &str, badge_id: &str) -> bool {
         )
         .is_ok_and(|n| n > 0);
     if platform_badge(badge_id).is_some() {
-        let _ = crate::wallet::credit(db, player_id, BADGE_SPARKS, "badge", badge_id);
+        let _ = crate::wallet::credit(db, player_id, BADGE_CREDITS, "badge", badge_id);
     }
     new
 }
