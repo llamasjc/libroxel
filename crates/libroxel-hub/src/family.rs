@@ -493,10 +493,10 @@ type Letter = (String, String, String);
 
 async fn post(mail: Arc<Mail>, letter: Option<Letter>) -> Result<(), Failure> {
     let Some((to, code, name)) = letter else { return Ok(()) };
-    let subject = format!("{code} is the code to approve {name} on Libroxel");
+    let subject = format!("{code} is the code to approve {name} on PlayLibre");
     let body = format!(
-        "Hello!\n\n{name} made a Libroxel account and is under 13. They can chat with a strict filter, but friend requests stay off until a parent approves.\n\n\
-         To approve, open Libroxel on their device, go to Avatar > Parent settings, and type this code with a \
+        "Hello!\n\n{name} made a PlayLibre account and is under 13. They can chat with a strict filter, but friend requests stay off until a parent approves.\n\n\
+         To approve, open PlayLibre on their device, go to Avatar > Parent settings, and type this code with a \
          4-digit PIN of your own:\n\n{code}\n\nThe PIN lets you change chat, messages, friend requests, spending \
          and playtime later. The code works for 7 days.\n\nIf you don't approve, do nothing.\n"
     );

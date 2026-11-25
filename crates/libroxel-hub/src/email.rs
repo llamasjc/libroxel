@@ -85,9 +85,9 @@ impl Mail {
 
     /// Sends `code` to `to`. Blocks, so call it off the async threads.
     fn send(&self, to: &str, code: &str) -> Result<(), String> {
-        let subject = format!("{code} is your Libroxel code");
+        let subject = format!("{code} is your PlayLibre code");
         let body = format!(
-            "Hello!\n\nYour Libroxel code is {code}\n\nType it into Libroxel to prove this email is yours. \
+            "Hello!\n\nYour PlayLibre code is {code}\n\nType it into PlayLibre to prove this email is yours. \
              It works for 30 minutes.\n\nIf you didn't ask for it, someone typed your email by mistake: \
              you can ignore this mail.\n"
         );

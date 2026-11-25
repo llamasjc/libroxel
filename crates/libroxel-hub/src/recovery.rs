@@ -497,9 +497,9 @@ pub(crate) async fn ask_reset(
         .map_err(internal)?;
         (email, code)
     };
-    let subject = format!("{code} is your Libroxel reset code");
+    let subject = format!("{code} is your PlayLibre reset code");
     let body = format!(
-        "Hello!\n\nYour code to reset your Libroxel password is {code}\n\nIt works for 30 minutes. \
+        "Hello!\n\nYour code to reset your PlayLibre password is {code}\n\nIt works for 30 minutes. \
          Resetting signs you out everywhere.\n\nIf you didn't ask for it, ignore this mail: your \
          password stays the same.\n"
     );
