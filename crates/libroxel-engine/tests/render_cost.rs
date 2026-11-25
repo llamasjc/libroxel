@@ -8,7 +8,8 @@
 //! `cargo test --release -p libroxel-engine --test render_cost -- --ignored --nocapture`
 //!
 //! `RC_SHOT=view.png` also saves what the view drew, `RC_FRAMES=240` draws
-//! fewer frames, and `RC_NO_DECALS=1` or `RC_NO_MODELS=1` leaves those out.
+//! fewer frames, and `RC_NO_DECALS=1` or `RC_NO_MODELS=1` leaves those out, and `RC_PHONE=1` draws
+//! as a phone or tablet at level 5 does.
 
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -194,7 +195,11 @@ fn a_decorated_map_draws_cheaply() {
     .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(DT as f64)))
     .insert_non_send(EngineState::new(tree))
     // A fixed level, so slow frames here don't turn things off part way.
-    .insert_resource(libroxel_engine::view::GraphicsQuality::new(false, 6))
+    .insert_resource(if std::env::var_os("RC_PHONE").is_some() {
+        libroxel_engine::view::GraphicsQuality::new(false, 5).phone()
+    } else {
+        libroxel_engine::view::GraphicsQuality::new(false, 6)
+    })
     .add_plugins((EnginePlugin, RenderPlugin))
     .add_systems(Update, aim_off_screen);
     app.finish();

@@ -325,6 +325,7 @@ fn sync_parts(
         f32::INFINITY
     };
     let limited = detail || radius.is_finite();
+    let small = quality.as_ref().map_or(1.0, |q| q.small_part_reach());
     let tree_ptr = std::rc::Rc::as_ptr(&engine.tree) as usize;
     let (epoch, _) = tree.touched_since(0);
     sync.frames += 1;
@@ -380,7 +381,7 @@ fn sync_parts(
         };
         let d = (Vec3::new(pos.x, pos.y, pos.z).distance(eye) - size.length() * 0.5).max(0.0);
         let limit = if detail {
-            radius.min((size.x.max(size.y).max(size.z) * DETAIL_PER_STUD).max(DETAIL_MIN))
+            radius.min((size.x.max(size.y).max(size.z) * DETAIL_PER_STUD * small).max(DETAIL_MIN * small))
         } else {
             radius
         };
@@ -1166,6 +1167,48 @@ impl GraphicsQuality {
         }
     }
 
+    /// Whether this is a phone or tablet (see [`GraphicsQuality::phone`]).
+    pub fn is_phone(&self) -> bool {
+        self.phone
+    }
+
+    /// How shadow edges are softened. A phone or tablet takes one blended
+    /// look at the shadow map for each pixel instead of nine below level
+    /// 8: shadow edges are a little harder, and the 3D view much cheaper.
+    pub fn shadow_filter(&self) -> bevy::light::ShadowFilteringMethod {
+        if self.phone && self.level < 8 {
+            bevy::light::ShadowFilteringMethod::Hardware2x2
+        } else {
+            bevy::light::ShadowFilteringMethod::Gaussian
+        }
+    }
+
+    /// How far the sun's shadows reach, in studs. A phone or tablet draws
+    /// every part again into its one shadow map, so it keeps that to the
+    /// parts near the player, where shadows show most.
+    pub fn shadow_distance(&self) -> f32 {
+        let far = self.view_distance().min(800.0);
+        if self.phone && self.level < 8 { far.min(250.0) } else { far }
+    }
+
+    /// How soon small parts stop being drawn while playing, as a share of
+    /// the usual distance: a phone or tablet at the lower levels leaves
+    /// them out sooner, where they are only a few pixels anyway.
+    pub fn small_part_reach(&self) -> f32 {
+        match (self.phone, self.level) {
+            (true, 0..=3) => 0.5,
+            (true, 4..=6) => 0.7,
+            _ => 1.0,
+        }
+    }
+
+    /// How many times its size away a detailed model is drawn with its
+    /// rough copy (see [`crate::mesh_files::Model::simplified`]); sooner on
+    /// a phone or tablet below level 8.
+    pub fn far_model(&self) -> f32 {
+        if self.phone && self.level < 8 { FAR_MODEL * 0.6 } else { FAR_MODEL }
+    }
+
     /// Whether edges are smoothed (MSAA).
     pub fn smoothing(&self) -> bool {
         self.level >= if self.phone { 8 } else { 4 } && !self.smoothing_dropped
@@ -1206,15 +1249,16 @@ impl GraphicsQuality {
     }
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn auto_quality(
     time: Res<Time>,
     step: Res<StepTime>,
     monitors: Query<&bevy::window::Monitor, With<bevy::window::PrimaryMonitor>>,
     mut quality: ResMut<GraphicsQuality>,
     mut shadow_map: ResMut<bevy::light::DirectionalLightShadowMap>,
-    mut cameras: Query<(&mut Projection, &mut Msaa), With<CameraRig>>,
+    mut cameras: Query<(Entity, &mut Projection, &mut Msaa), With<CameraRig>>,
     mut sun: Query<(&mut DirectionalLight, &mut bevy::light::CascadeShadowConfig), With<Sun>>,
+    mut commands: Commands,
 ) {
     if let Some(hz) = monitors.iter().next().and_then(|m| m.refresh_rate_millihertz) {
         quality.set_target(hz as f32 / 1000.0);
@@ -1228,11 +1272,12 @@ fn auto_quality(
     }
     quality.applied = Some(quality.level);
     let msaa = if quality.smoothing() { Msaa::Sample4 } else { Msaa::Off };
-    for (mut projection, mut samples) in &mut cameras {
+    for (entity, mut projection, mut samples) in &mut cameras {
         if let Projection::Perspective(p) = &mut *projection {
             p.far = quality.view_distance();
         }
         samples.set_if_neq(msaa);
+        commands.entity(entity).insert(quality.shadow_filter());
     }
     let (cascades, size) = quality.shadow_detail();
     if shadow_map.size != size {
@@ -1243,7 +1288,7 @@ fn auto_quality(
         *config = bevy::light::CascadeShadowConfigBuilder {
             num_cascades: cascades,
             first_cascade_far_bound: 50.0,
-            maximum_distance: quality.view_distance().min(800.0),
+            maximum_distance: quality.shadow_distance(),
             ..default()
         }
         .build();
@@ -1657,6 +1702,7 @@ const FAR_MODEL: f32 = 40.0;
 /// [`crate::mesh_files::Model::simplified`]), a few times a second.
 fn model_detail(
     files: Res<crate::mesh_files::MeshFiles>,
+    quality: Option<Res<GraphicsQuality>>,
     cameras: Query<&GlobalTransform, (With<Camera3d>, Without<PartLink>)>,
     mut parts: Query<(&PartMeshFile, &Transform, &mut Mesh3d), With<PartLink>>,
     mut frame: Local<u32>,
@@ -1668,6 +1714,7 @@ fn model_detail(
     let Some(eye) = cameras.iter().next().map(GlobalTransform::translation) else {
         return;
     };
+    let switch = quality.as_ref().map_or(FAR_MODEL, |q| q.far_model());
     for (file, transform, mut mesh) in &mut parts {
         if file.0.is_empty() {
             continue;
@@ -1678,7 +1725,7 @@ fn model_detail(
         let size = transform.scale.max_element().max(0.01);
         let away = transform.translation.distance(eye) / size;
         let showing_far = mesh.0 == far;
-        let wanted = if away > FAR_MODEL || (showing_far && away > FAR_MODEL * 0.9) { far } else { near };
+        let wanted = if away > switch || (showing_far && away > switch * 0.9) { far } else { near };
         if mesh.0 != wanted {
             mesh.0 = wanted;
         }
@@ -3040,6 +3087,26 @@ mod tests {
         assert_eq!(q.level, 6);
         assert_eq!(q.render_density(), Some(1.5));
         assert_eq!(GraphicsQuality::default().render_density(), None, "computers draw every pixel");
+    }
+
+    #[test]
+    fn phones_spend_less_on_shadows_small_parts_and_far_models() {
+        use bevy::light::ShadowFilteringMethod as Filter;
+        let computer = GraphicsQuality::new(false, 5);
+        let phone = GraphicsQuality::new(false, 5).phone();
+        assert!(phone.is_phone() && !computer.is_phone());
+        assert_eq!(
+            (computer.shadow_filter(), phone.shadow_filter()),
+            (Filter::Gaussian, Filter::Hardware2x2)
+        );
+        assert!(phone.shadow_distance() < computer.shadow_distance());
+        assert!(phone.small_part_reach() < 1.0 && computer.small_part_reach() == 1.0);
+        assert!(phone.far_model() < computer.far_model());
+        // A phone set to the top draws as a computer does.
+        let top = GraphicsQuality::new(false, 10).phone();
+        assert_eq!(top.shadow_filter(), Filter::Gaussian);
+        assert_eq!(top.shadow_distance(), GraphicsQuality::new(false, 10).shadow_distance());
+        assert_eq!((top.small_part_reach(), top.far_model()), (1.0, FAR_MODEL));
     }
 
     fn close(a: Vec3, b: Vec3) -> bool {

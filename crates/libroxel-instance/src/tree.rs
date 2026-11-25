@@ -94,8 +94,18 @@ struct InstanceData {
     children: Vec<InstanceId>,
     parent_locked: bool,
     destroyed: bool,
-    /// Every property except `Name`, in [`ClassKind::properties`] order.
-    props: Vec<(Property, PropertyValue)>,
+    /// Every property except `Name`, in [`ClassKind::properties`] order
+    /// (which property each is comes from the class, see [`prop_slot`]).
+    props: Box<[PropertyValue]>,
+    /// What most instances have none of, kept apart so they don't each
+    /// carry room for it (a big map has tens of thousands of parts).
+    rare: Option<Box<Rare>>,
+    /// Changes whenever a property does (see [`InstanceTree::revision`]).
+    revision: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct Rare {
     /// Values scripts and the editor attach by name.
     attributes: std::collections::BTreeMap<String, PropertyValue>,
     /// Properties of the API-style class that libroxel has no setting
@@ -105,9 +115,10 @@ struct InstanceData {
     tags: Vec<String>,
     /// A terrain's cells (empty for everything else).
     voxels: crate::voxels::Voxels,
-    /// Changes whenever a property does (see [`InstanceTree::revision`]).
-    revision: u64,
 }
+
+/// What an instance without any of [`Rare`] reads.
+static NONE_RARE: std::sync::LazyLock<Rare> = std::sync::LazyLock::new(Rare::default);
 
 /// Revisions come from one counter for every tree, so a revision number
 /// always means the same property values, even across undo snapshots.
@@ -123,7 +134,7 @@ impl InstanceData {
             .properties()
             .iter()
             .filter(|p| **p != Property::Name)
-            .filter_map(|p| Some((*p, class.default_value(*p)?)))
+            .filter_map(|p| class.default_value(*p))
             .collect();
         Self {
             class,
@@ -133,33 +144,25 @@ impl InstanceData {
             parent_locked: false,
             destroyed: false,
             props,
-            attributes: Default::default(),
-            extras: Default::default(),
-            tags: Vec::new(),
-            voxels: Default::default(),
+            rare: None,
             revision: next_revision(),
         }
     }
 
     fn prop_mut(&mut self, property: Property) -> Option<&mut PropertyValue> {
-        let at = self.slot_of(property)?;
-        self.props.get_mut(at).map(|(_, v)| v)
+        self.props.get_mut(prop_slot(self.class, property)?)
     }
 
     fn prop(&self, property: Property) -> Option<&PropertyValue> {
-        let at = self.slot_of(property)?;
-        self.props.get(at).map(|(_, v)| v)
+        self.props.get(prop_slot(self.class, property)?)
     }
 
-    /// Where `property` is in `props`: worked out once per class (the list
-    /// is always built in the same order), checked, else looked for.
-    fn slot_of(&self, property: Property) -> Option<usize> {
-        if let Some(at) = prop_slot(self.class, property)
-            && self.props.get(at).is_some_and(|(p, _)| *p == property)
-        {
-            return Some(at);
-        }
-        self.props.iter().position(|(p, _)| *p == property)
+    fn rare(&self) -> &Rare {
+        self.rare.as_deref().unwrap_or(&NONE_RARE)
+    }
+
+    fn rare_mut(&mut self) -> &mut Rare {
+        self.rare.get_or_insert_default()
     }
 }
 
@@ -367,7 +370,7 @@ impl InstanceTree {
             self.kind_counts.resize(number + 1, 0);
         }
         self.kind_counts[number] += 1;
-        let tags = (!data.tags.is_empty()).then(|| data.tags.clone());
+        let tags = (!data.rare().tags.is_empty()).then(|| data.rare().tags.clone());
         let id = if let Some(index) = self.free.pop() {
             let slot = &mut self.slots[index as usize];
             slot.data = Some(data);
@@ -626,7 +629,7 @@ impl InstanceTree {
             if slot.generation != id.generation || !slot.data.as_ref().is_some_and(|d| d.destroyed) {
                 continue;
             }
-            for tag in slot.data.as_ref().map(|d| d.tags.as_slice()).unwrap_or_default() {
+            for tag in slot.data.as_ref().map(|d| d.rare().tags.as_slice()).unwrap_or_default() {
                 if let Some(set) = self.tag_index.get_mut(tag) {
                     set.remove(id);
                 }
@@ -780,11 +783,11 @@ impl InstanceTree {
 
     /// Every attribute on `id`, sorted by name.
     pub fn attributes(&self, id: InstanceId) -> Result<&std::collections::BTreeMap<String, PropertyValue>> {
-        Ok(&self.data(id)?.attributes)
+        Ok(&self.data(id)?.rare().attributes)
     }
 
     pub fn get_attribute(&self, id: InstanceId, name: &str) -> Result<Option<PropertyValue>> {
-        Ok(self.data(id)?.attributes.get(name).cloned())
+        Ok(self.data(id)?.rare().attributes.get(name).cloned())
     }
 
     /// Sets an attribute, or removes it with `None`. Links and enum values
@@ -793,10 +796,10 @@ impl InstanceTree {
         if let Some(v @ (PropertyValue::Ref(_) | PropertyValue::Enum(_))) = &value {
             return Err(TreeError::BadAttribute(v.kind_name()));
         }
-        let attributes = &mut self.data_mut(id)?.attributes;
+        let data = self.data_mut(id)?;
         let changed = match value {
-            Some(v) => attributes.insert(name.to_owned(), v.clone()).as_ref() != Some(&v),
-            None => attributes.remove(name).is_some(),
+            Some(v) => data.rare_mut().attributes.insert(name.to_owned(), v.clone()).as_ref() != Some(&v),
+            None => data.rare.as_mut().is_some_and(|r| r.attributes.remove(name).is_some()),
         };
         if changed {
             self.data_mut(id)?.revision = next_revision();
@@ -809,11 +812,11 @@ impl InstanceTree {
     /// Every kept property libroxel has no setting for (see
     /// [`set_extra`](Self::set_extra)), sorted by name.
     pub fn extras(&self, id: InstanceId) -> Result<&std::collections::BTreeMap<String, PropertyValue>> {
-        Ok(&self.data(id)?.extras)
+        Ok(&self.data(id)?.rare().extras)
     }
 
     pub fn get_extra(&self, id: InstanceId, name: &str) -> Result<Option<PropertyValue>> {
-        Ok(self.data(id)?.extras.get(name).cloned())
+        Ok(self.data(id)?.rare().extras.get(name).cloned())
     }
 
     /// Keeps a property libroxel has no setting for, such as a dialog's
@@ -822,8 +825,8 @@ impl InstanceTree {
     pub fn set_extra(&mut self, id: InstanceId, name: &str, value: Option<PropertyValue>) -> Result<()> {
         let data = self.data_mut(id)?;
         let changed = match value {
-            Some(v) => data.extras.insert(name.to_owned(), v.clone()).as_ref() != Some(&v),
-            None => data.extras.remove(name).is_some(),
+            Some(v) => data.rare_mut().extras.insert(name.to_owned(), v.clone()).as_ref() != Some(&v),
+            None => data.rare.as_mut().is_some_and(|r| r.extras.remove(name).is_some()),
         };
         if changed {
             data.revision = next_revision();
@@ -834,7 +837,7 @@ impl InstanceTree {
 
     /// A terrain's cells.
     pub fn voxels(&self, id: InstanceId) -> Result<&crate::voxels::Voxels> {
-        Ok(&self.data(id)?.voxels)
+        Ok(&self.data(id)?.rare().voxels)
     }
 
     /// Changes a terrain's cells. Anything but a terrain is left alone.
@@ -847,9 +850,10 @@ impl InstanceTree {
         if data.class != ClassKind::Terrain {
             return Ok(None);
         }
-        let before = data.voxels.version();
-        let out = edit(&mut data.voxels);
-        if data.voxels.version() != before {
+        let voxels = &mut data.rare_mut().voxels;
+        let before = voxels.version();
+        let out = edit(voxels);
+        if voxels.version() != before {
             data.revision = next_revision();
             self.changes.push(Change::VoxelsChanged(id));
             self.note_touched(id);
@@ -879,15 +883,15 @@ impl InstanceTree {
 
     /// The tags on `id`, sorted.
     pub fn tags(&self, id: InstanceId) -> Result<&[String]> {
-        Ok(&self.data(id)?.tags)
+        Ok(&self.data(id)?.rare().tags)
     }
 
     pub fn has_tag(&self, id: InstanceId, tag: &str) -> Result<bool> {
-        Ok(self.data(id)?.tags.binary_search_by(|t| t.as_str().cmp(tag)).is_ok())
+        Ok(self.data(id)?.rare().tags.binary_search_by(|t| t.as_str().cmp(tag)).is_ok())
     }
 
     pub fn add_tag(&mut self, id: InstanceId, tag: &str) -> Result<()> {
-        let tags = &mut self.data_mut(id)?.tags;
+        let tags = &mut self.data_mut(id)?.rare_mut().tags;
         if let Err(at) = tags.binary_search_by(|t| t.as_str().cmp(tag)) {
             tags.insert(at, tag.to_owned());
             self.tag_index.entry(tag.to_owned()).or_default().insert(id);
@@ -899,7 +903,8 @@ impl InstanceTree {
     }
 
     pub fn remove_tag(&mut self, id: InstanceId, tag: &str) -> Result<()> {
-        let tags = &mut self.data_mut(id)?.tags;
+        let Some(rare) = self.data_mut(id)?.rare.as_mut() else { return Ok(()) };
+        let tags = &mut rare.tags;
         if let Ok(at) = tags.binary_search_by(|t| t.as_str().cmp(tag)) {
             tags.remove(at);
             if let Some(set) = self.tag_index.get_mut(tag) {
@@ -1037,7 +1042,7 @@ impl InstanceTree {
         let new_id = self.clone_inner(id, &mut copies)?;
         for &copy in copies.values() {
             let data = self.data_mut(copy)?;
-            for (_, value) in data.props.iter_mut() {
+            for value in data.props.iter_mut() {
                 if let PropertyValue::Ref(Some(target)) = value
                     && let Some(mapped) = copies.get(target)
                 {
