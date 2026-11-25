@@ -23,14 +23,19 @@ fn check_attribute_name(name: &str) -> mlua::Result<()> {
     let ok = !name.is_empty()
         && name.len() <= names::attributes::MAX_NAME_LEN
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    if ok {
-        Ok(())
-    } else {
-        Err(runtime_err(format!(
+    if !ok {
+        return Err(runtime_err(format!(
             "attribute names must be 1 to {} letters, digits or underscores",
             names::attributes::MAX_NAME_LEN
-        )))
+        )));
     }
+    // Names starting with RBX are reserved.
+    if name.starts_with("RBX") {
+        return Err(runtime_err(format!(
+            "{name} is a reserved attribute name (names starting with RBX are)"
+        )));
+    }
+    Ok(())
 }
 
 /// The attribute value for a script value; nil means "remove".
@@ -196,6 +201,15 @@ fn get_tags(lua: &Lua, id: InstanceId) -> mlua::Result<Vec<String>> {
 }
 
 impl UserData for CollectionService {
+    fn add_fields<F: mlua::UserDataFields<Self>>(fields: &mut F) {
+        for event in ["TagAdded", "TagRemoved"] {
+            fields.add_field_function_get(event, move |lua, obj: mlua::AnyUserData| {
+                host(lua).tag_sets_heard.set(true);
+                crate::lenient::service_index(lua, "CollectionService", obj, event)
+            });
+        }
+    }
+
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
         crate::lenient::add_service_members(m, "CollectionService");
         m.add_method(methods::ADD_TAG, |lua, _, (inst, tag): (Value, String)| {

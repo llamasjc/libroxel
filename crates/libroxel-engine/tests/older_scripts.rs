@@ -149,7 +149,8 @@ fn services_without_much_behind_them_answer_harmlessly() {
         printed,
         [
             "true",
-            "false false",
+            // Awarding a badge works (it's kept with the game's saved data).
+            "false true",
             "25",
             "false true",
             "hi",

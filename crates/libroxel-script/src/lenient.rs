@@ -502,7 +502,7 @@ pub(crate) fn new_signal(lua: &Lua) -> mlua::Result<Value> {
     layer(lua)?.get::<Function>("signal")?.call(())
 }
 
-/// Pages of data store keys (each a table with a `KeyName`), all on one page.
-pub(crate) fn pages(lua: &Lua, keys: Vec<String>) -> mlua::Result<Value> {
-    layer(lua)?.get::<Function>("key_pages")?.call(keys)
+/// Pages of `rows` (a list), `size` to a page, like the documented `Pages` objects.
+pub(crate) fn list_pages(lua: &Lua, rows: Table, size: usize) -> mlua::Result<Value> {
+    layer(lua)?.get::<Function>("list_pages")?.call((rows, size.max(1)))
 }

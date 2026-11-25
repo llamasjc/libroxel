@@ -182,12 +182,23 @@ struct DataStoreService;
 
 impl UserData for DataStoreService {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method(data_store::GET_DATA_STORE, |_, _, name: String| {
-            check_name("data store name", &name)?;
-            Ok(DataStore(name))
-        });
+        methods.add_method(
+            data_store::GET_DATA_STORE,
+            |_, _, (name, scope, _options): (String, Option<String>, Value)| {
+                check_name("data store name", &name)?;
+                let scope = scope.unwrap_or_else(|| data_store::GLOBAL_SCOPE.to_owned());
+                check_name("scope", &scope)?;
+                Ok(DataStore(store_key(&name, &scope)))
+            },
+        );
         crate::lenient::add_service_members(methods, services::DATA_STORE_SERVICE);
     }
+}
+
+/// Where a store's keys are saved. The global scope keeps the plain name, so
+/// data saved before scopes were told apart still loads.
+pub(crate) fn store_key(name: &str, scope: &str) -> String {
+    if scope == data_store::GLOBAL_SCOPE { name.to_owned() } else { format!("{name}\u{1f}{scope}") }
 }
 
 struct DataStore(String);
@@ -199,24 +210,227 @@ fn check_name(what: &str, name: &str) -> mlua::Result<()> {
     Ok(())
 }
 
+/// One saved version of a key.
+#[derive(Debug, Clone)]
+pub(crate) struct KeyVersion {
+    id: String,
+    /// When it was written, in milliseconds since 1970.
+    time: f64,
+    /// `None` for the version that removed the key.
+    value: Option<serde_json::Value>,
+}
+
+/// What is kept about a key besides its value.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct KeyInfo {
+    created: f64,
+    user_ids: Vec<f64>,
+    metadata: serde_json::Map<String, serde_json::Value>,
+    /// Oldest first, at most [`data_store::KEPT_VERSIONS`].
+    versions: Vec<KeyVersion>,
+}
+
+/// Key information by store and key. It lasts for the session: values are
+/// saved, but their history isn't.
+pub(crate) type KeyInfos = std::collections::HashMap<(String, String), KeyInfo>;
+
+fn now_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as f64)
+        .unwrap_or(0.0)
+}
+
+/// A new version name, always later than the last one handed out.
+fn next_version() -> String {
+    thread_local! {
+        static LAST: std::cell::Cell<u128> = const { std::cell::Cell::new(0) };
+    }
+    let micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros())
+        .unwrap_or(0);
+    let n = LAST.with(|last| {
+        let n = micros.max(last.get() + 1);
+        last.set(n);
+        n
+    });
+    format!("{n:016X}.0000000001.0001")
+}
+
+/// `DataStoreKeyInfo`: a key's version, times, user ids and metadata.
+#[derive(Clone)]
+struct LuaKeyInfo {
+    version: String,
+    created: f64,
+    updated: f64,
+    user_ids: Vec<f64>,
+    metadata: serde_json::Map<String, serde_json::Value>,
+}
+
+impl LuaKeyInfo {
+    fn of(info: &KeyInfo, version: &KeyVersion) -> LuaKeyInfo {
+        LuaKeyInfo {
+            version: version.id.clone(),
+            created: info.created,
+            updated: version.time,
+            user_ids: info.user_ids.clone(),
+            metadata: info.metadata.clone(),
+        }
+    }
+}
+
+impl UserData for LuaKeyInfo {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        fields.add_field_method_get("Version", |_, this| Ok(this.version.clone()));
+        fields.add_field_method_get("CreatedTime", |_, this| Ok(this.created));
+        fields.add_field_method_get("UpdatedTime", |_, this| Ok(this.updated));
+        fields.add_field_method_get("ClassName", |_, _| Ok(data_store::KEY_INFO));
+        fields.add_meta_field(MetaMethod::Type, "Instance");
+    }
+
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("GetUserIds", |_, this, ()| Ok(this.user_ids.clone()));
+        methods.add_method("GetMetadata", |lua, this, ()| {
+            from_json(lua, &serde_json::Value::Object(this.metadata.clone()))
+        });
+        methods.add_method("IsA", |_, _, class: String| {
+            Ok(class == data_store::KEY_INFO || class == "Instance")
+        });
+        methods.add_meta_method(MetaMethod::ToString, |_, _, ()| Ok(data_store::KEY_INFO));
+    }
+}
+
+/// The user ids a script passed: a list of numbers, or nothing.
+fn user_ids(value: &Value) -> mlua::Result<Option<Vec<f64>>> {
+    match value {
+        Value::Nil => Ok(None),
+        Value::Table(t) => t
+            .sequence_values::<f64>()
+            .collect::<mlua::Result<Vec<_>>>()
+            .map(Some)
+            .map_err(|_| runtime_err("user ids must be a list of numbers")),
+        _ => Err(runtime_err("user ids must be a list of numbers")),
+    }
+}
+
+/// The metadata a `DataStoreSetOptions` (or a plain table) carries.
+fn metadata(value: &Value) -> mlua::Result<Option<serde_json::Map<String, serde_json::Value>>> {
+    let table = match value {
+        Value::Nil => return Ok(None),
+        Value::Table(t) => Value::Table(t.clone()),
+        Value::UserData(ud) => mlua::ObjectLike::call_method::<Value>(ud, "GetMetadata", ())?,
+        _ => return Ok(None),
+    };
+    match to_json(&table, 0)? {
+        serde_json::Value::Object(map) => Ok(Some(map)),
+        // An empty table looks like an empty list.
+        serde_json::Value::Array(a) if a.is_empty() => Ok(Some(Default::default())),
+        serde_json::Value::Null => Ok(None),
+        _ => Err(runtime_err("metadata must be a table with string keys")),
+    }
+}
+
 impl DataStore {
     fn get(&self, lua: &Lua, key: &str) -> Option<serde_json::Value> {
         host(lua).data.borrow().get(&self.0).and_then(|s| s.get(key)).cloned()
     }
 
-    fn set(&self, lua: &Lua, key: &str, value: Option<serde_json::Value>) -> Option<serde_json::Value> {
+    /// The key information for `key`'s current value, if it has one.
+    fn info(&self, lua: &Lua, key: &str) -> Option<LuaKeyInfo> {
+        self.get(lua, key)?;
+        let host = host(lua);
+        let mut infos = host.data_info.borrow_mut();
+        let info = infos.entry((self.0.clone(), key.to_owned())).or_default();
+        if info.versions.is_empty() {
+            // Loaded from an earlier session, so its history is unknown.
+            let time = now_ms();
+            info.created = time;
+            info.versions.push(KeyVersion { id: next_version(), time, value: self.get(lua, key) });
+        }
+        info.versions.last().map(|v| LuaKeyInfo::of(info, v))
+    }
+
+    /// Writes (or with `None`, removes) a key, keeping its history. Gives the
+    /// old value and the new version's key information.
+    fn set(
+        &self,
+        lua: &Lua,
+        key: &str,
+        value: Option<serde_json::Value>,
+        ids: Option<Vec<f64>>,
+        meta: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> mlua::Result<(Option<serde_json::Value>, LuaKeyInfo)> {
+        if let Some(v) = &value {
+            let size = serde_json::to_string(v).map(|s| s.len()).unwrap_or(0);
+            if size > data_store::MAX_VALUE_LEN {
+                return Err(runtime_err(format!(
+                    "a saved value can be at most {} bytes once encoded (this is {size})",
+                    data_store::MAX_VALUE_LEN
+                )));
+            }
+        }
         let host = host(lua);
         host.data_changed.set(true);
-        let mut data = host.data.borrow_mut();
-        let store = data.entry(self.0.clone()).or_default();
-        let old = match value {
-            Some(v) => store.insert(key.to_owned(), v),
-            None => store.remove(key),
+        let old = {
+            let mut data = host.data.borrow_mut();
+            let store = data.entry(self.0.clone()).or_default();
+            let old = match value.clone() {
+                Some(v) => store.insert(key.to_owned(), v),
+                None => store.remove(key),
+            };
+            if store.is_empty() {
+                data.remove(&self.0);
+            }
+            old
         };
-        if store.is_empty() {
-            data.remove(&self.0);
+        let mut infos = host.data_info.borrow_mut();
+        let info = infos.entry((self.0.clone(), key.to_owned())).or_default();
+        let time = now_ms();
+        if old.is_none() || info.versions.is_empty() {
+            info.created = time;
         }
-        old
+        if let Some(ids) = ids {
+            info.user_ids = ids;
+        }
+        if let Some(meta) = meta {
+            info.metadata = meta;
+        }
+        info.versions.push(KeyVersion { id: next_version(), time, value });
+        if info.versions.len() > data_store::KEPT_VERSIONS {
+            info.versions.remove(0);
+        }
+        let shown = LuaKeyInfo::of(info, info.versions.last().expect("just pushed"));
+        Ok((old, shown))
+    }
+
+    fn value_and_info(&self, lua: &Lua, key: &str) -> mlua::Result<(Value, Option<LuaKeyInfo>)> {
+        match self.get(lua, key) {
+            Some(v) => Ok((from_json(lua, &v)?, self.info(lua, key))),
+            None => Ok((Value::Nil, None)),
+        }
+    }
+
+    /// A saved version, picked from the key's history.
+    fn version(
+        &self,
+        lua: &Lua,
+        key: &str,
+        pick: impl Fn(&[KeyVersion]) -> Option<usize>,
+    ) -> mlua::Result<(Value, Option<LuaKeyInfo>)> {
+        self.info(lua, key);
+        let host = host(lua);
+        let infos = host.data_info.borrow();
+        let Some(info) = infos.get(&(self.0.clone(), key.to_owned())) else {
+            return Ok((Value::Nil, None));
+        };
+        let Some(v) = pick(&info.versions).map(|i| &info.versions[i]) else {
+            return Ok((Value::Nil, None));
+        };
+        match &v.value {
+            Some(value) => Ok((from_json(lua, value)?, Some(LuaKeyInfo::of(info, v)))),
+            None => Ok((Value::Nil, None)),
+        }
     }
 }
 
@@ -226,70 +440,127 @@ impl UserData for DataStore {
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method(data_store::GET_ASYNC, |lua, this, key: String| {
+        methods.add_method(data_store::GET_ASYNC, |lua, this, (key, _options): (String, Value)| {
             check_name("key", &key)?;
-            this.get(lua, &key).map(|v| from_json(lua, &v)).transpose().map(|v| v.unwrap_or(Value::Nil))
+            this.value_and_info(lua, &key)
         });
-        methods.add_method(data_store::SET_ASYNC, |lua, this, (key, value): (String, Value)| {
-            check_name("key", &key)?;
-            let json = to_json(&value, 0)?;
-            this.set(lua, &key, (!json.is_null()).then_some(json));
-            Ok(())
-        });
+        methods.add_method(
+            data_store::SET_ASYNC,
+            |lua, this, (key, value, ids, options): (String, Value, Value, Value)| {
+                check_name("key", &key)?;
+                let json = to_json(&value, 0)?;
+                let (_, info) = this.set(
+                    lua,
+                    &key,
+                    (!json.is_null()).then_some(json),
+                    user_ids(&ids)?,
+                    metadata(&options)?,
+                )?;
+                Ok(info.version)
+            },
+        );
         methods.add_method(
             data_store::UPDATE_ASYNC,
             |lua, this, (key, transform): (String, mlua::Function)| {
                 check_name("key", &key)?;
-                let old = match this.get(lua, &key) {
-                    Some(v) => from_json(lua, &v)?,
-                    None => Value::Nil,
-                };
-                let new: Value = transform.call(old)?;
+                let (old, info) = this.value_and_info(lua, &key)?;
+                let (new, ids, meta): (Value, Value, Value) = transform.call((old, info))?;
                 // Returning nil leaves the value as it was.
                 if new.is_nil() {
-                    return this
-                        .get(lua, &key)
-                        .map(|v| from_json(lua, &v))
-                        .transpose()
-                        .map(|v| v.unwrap_or(Value::Nil));
+                    return this.value_and_info(lua, &key);
                 }
                 let json = to_json(&new, 0)?;
-                this.set(lua, &key, Some(json));
+                let (_, info) = this.set(lua, &key, Some(json.clone()), user_ids(&ids)?, metadata(&meta)?)?;
+                Ok((from_json(lua, &json)?, Some(info)))
+            },
+        );
+        methods.add_method(
+            data_store::INCREMENT_ASYNC,
+            |lua, this, (key, delta, ids, _options): (String, Option<f64>, Value, Value)| {
+                check_name("key", &key)?;
+                let current = match this.get(lua, &key) {
+                    None => 0.0,
+                    Some(serde_json::Value::Number(n)) => n.as_f64().unwrap_or(0.0),
+                    Some(_) => return Err(runtime_err(format!("{key} does not hold a number"))),
+                };
+                let new = (current + delta.unwrap_or(1.0)).round();
+                this.set(lua, &key, Some(json_number(new)?), user_ids(&ids)?, None)?;
                 Ok(new)
             },
         );
-        methods.add_method(data_store::INCREMENT_ASYNC, |lua, this, (key, delta): (String, Option<f64>)| {
-            check_name("key", &key)?;
-            let current = match this.get(lua, &key) {
-                None => 0.0,
-                Some(serde_json::Value::Number(n)) => n.as_f64().unwrap_or(0.0),
-                Some(_) => return Err(runtime_err(format!("{key} does not hold a number"))),
-            };
-            let new = (current + delta.unwrap_or(1.0)).round();
-            this.set(lua, &key, Some(json_number(new)?));
-            Ok(new)
-        });
-        methods.add_method("ListKeysAsync", |lua, this, (prefix, _page): (Option<String>, Option<f64>)| {
-            let prefix = prefix.unwrap_or_default();
-            let keys: Vec<String> = host(lua)
-                .data
-                .borrow()
-                .get(&this.0)
-                .map(|s| s.keys().filter(|k| k.starts_with(&prefix)).cloned().collect())
-                .unwrap_or_default();
-            crate::lenient::pages(lua, keys)
-        });
-        methods
-            .add_method("ListVersionsAsync", |lua, _, _: MultiValue| crate::lenient::pages(lua, Vec::new()));
-        methods.add_method("GetVersionAsync", |lua, this, key: String| {
-            this.get(lua, &key).map(|v| from_json(lua, &v)).transpose().map(|v| v.unwrap_or(Value::Nil))
-        });
         methods.add_method(data_store::REMOVE_ASYNC, |lua, this, key: String| {
             check_name("key", &key)?;
-            match this.set(lua, &key, None) {
-                Some(old) => from_json(lua, &old),
-                None => Ok(Value::Nil),
+            if this.get(lua, &key).is_none() {
+                return Ok((Value::Nil, None));
             }
+            this.info(lua, &key);
+            let (old, info) = this.set(lua, &key, None, None, None)?;
+            Ok((old.map(|v| from_json(lua, &v)).transpose()?.unwrap_or(Value::Nil), Some(info)))
+        });
+        methods.add_method(
+            data_store::LIST_KEYS_ASYNC,
+            |lua, this, (prefix, page_size): (Option<String>, Option<usize>)| {
+                let prefix = prefix.unwrap_or_default();
+                let keys: Vec<String> = host(lua)
+                    .data
+                    .borrow()
+                    .get(&this.0)
+                    .map(|s| s.keys().filter(|k| k.starts_with(&prefix)).cloned().collect())
+                    .unwrap_or_default();
+                let rows = lua.create_table()?;
+                for key in keys {
+                    let row = lua.create_table()?;
+                    row.set("KeyName", key)?;
+                    rows.push(row)?;
+                }
+                crate::lenient::list_pages(lua, rows, page_size.unwrap_or(50))
+            },
+        );
+        methods.add_method(
+            data_store::LIST_VERSIONS_ASYNC,
+            |lua,
+             this,
+             (key, direction, min, max, page_size): (
+                String,
+                Value,
+                Option<f64>,
+                Option<f64>,
+                Option<usize>,
+            )| {
+                check_name("key", &key)?;
+                this.info(lua, &key);
+                let descending =
+                    !direction.is_nil() && direction.to_string().is_ok_and(|s| s.contains("Descending"));
+                let rows = lua.create_table()?;
+                let mut versions = host(lua)
+                    .data_info
+                    .borrow()
+                    .get(&(this.0.clone(), key))
+                    .map(|i| i.versions.clone())
+                    .unwrap_or_default();
+                if descending {
+                    versions.reverse();
+                }
+                for v in versions {
+                    if min.is_some_and(|m| v.time < m) || max.is_some_and(|m| m > 0.0 && v.time > m) {
+                        continue;
+                    }
+                    let row = lua.create_table()?;
+                    row.set("Version", v.id)?;
+                    row.set("CreatedTime", v.time)?;
+                    row.set("IsDeleted", v.value.is_none())?;
+                    rows.push(row)?;
+                }
+                crate::lenient::list_pages(lua, rows, page_size.unwrap_or(50))
+            },
+        );
+        methods.add_method(data_store::GET_VERSION_ASYNC, |lua, this, (key, version): (String, String)| {
+            check_name("key", &key)?;
+            this.version(lua, &key, |list| list.iter().position(|v| v.id == version))
+        });
+        methods.add_method(data_store::GET_VERSION_AT_TIME_ASYNC, |lua, this, (key, time): (String, f64)| {
+            check_name("key", &key)?;
+            this.version(lua, &key, |list| list.iter().rposition(|v| v.time <= time))
         });
     }
 }

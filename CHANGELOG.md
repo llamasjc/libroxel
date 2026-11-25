@@ -36,6 +36,19 @@ its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
   material, so they draw together; and their pictures load in the
   background, without stalling the frame. The Hub's database uses WAL.
 
+- **Game services act as documented:** data stores hand back each key's
+  `DataStoreKeyInfo` (version, times, user ids, metadata), keep scopes
+  apart, keep older versions for `GetVersionAsync` and
+  `ListVersionsAsync`, and ordered stores take only whole numbers.
+  Bound actions run highest priority first and stop at the first one that
+  doesn't pass, and unbinding a held key cancels it. Render steps run in
+  priority order. `CollectionService.TagAdded` and `TagRemoved` fire.
+  Sounds fire `Played`, `Paused`, `Resumed` and `Stopped`. A newer tween
+  cancels an older one moving the same thing, and booleans can be
+  tweened. Text chat channels deliver messages (with `OnIncomingMessage`
+  tags) and run slash commands. `GetTextSize` wraps at the frame width.
+  Purchase prompts close as not bought instead of never answering, and
+  badges awarded in a game stay awarded.
 - **Avatar pictures:** profile pictures in the app and on the website
   are now 3D renders of your character, head and full body, redrawn
   when your look changes.
