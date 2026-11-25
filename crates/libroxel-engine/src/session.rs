@@ -297,6 +297,7 @@ pub struct PlaySession {
     /// The next `UserId` to give a player who joins.
     pub(crate) next_user_id: u32,
     pub(crate) voice: crate::voice::Voice,
+    pub(crate) earned_badges: Vec<String>,
 }
 
 impl PlaySession {
@@ -343,6 +344,7 @@ impl PlaySession {
             link: Default::default(),
             next_user_id: 1,
             voice: Default::default(),
+            earned_badges: Vec::new(),
         };
         // Scripts find the camera through the workspace, so it exists from the start.
         session.camera = {
@@ -1229,6 +1231,22 @@ impl PlaySession {
         self.collect(errors);
     }
 
+    /// Badges a game gave the player on this computer.
+    pub fn take_earned_badges(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.earned_badges)
+    }
+
+    /// The game's badges, and which of them the player on this computer has.
+    pub fn set_badges(&mut self, info: Vec<libroxel_script::BadgeInfo>, owned: Vec<String>) {
+        self.runtime.set_badge_info(info);
+        let user = self
+            .local()
+            .and_then(|i| self.runtime.tree().borrow().get_number(self.avatars[i].player, Property::UserId));
+        if let Some(user) = user {
+            self.runtime.add_owned_badges(user as i64, owned);
+        }
+    }
+
     /// A new strength (0 to 1) for the phone's vibration motor, if a script set one.
     pub fn take_vibration(&self) -> Option<f32> {
         self.runtime.take_vibration()
@@ -1436,6 +1454,9 @@ impl PlaySession {
         });
         for (player, why) in self.runtime.take_kicks() {
             self.kick(player, &why);
+        }
+        for (user, badge) in self.runtime.take_badge_awards() {
+            self.give_badge(user, badge);
         }
         for player in self.runtime.take_load_requests() {
             if let Some(index) = self.avatar_of(player) {

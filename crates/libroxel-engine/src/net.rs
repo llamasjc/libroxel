@@ -2197,6 +2197,22 @@ impl PlaySession {
         }
     }
 
+    pub(crate) fn give_badge(&mut self, user: i64, badge: String) {
+        let player = self.avatars.iter().map(|a| a.player).find(|p| {
+            self.runtime.tree().borrow().get_number(*p, Property::UserId).map(|n| n as i64) == Some(user)
+        });
+        let Some(player) = player else { return };
+        if let Link::Host(host) = &mut self.link
+            && let Some(peer) = host.peers.iter_mut().find(|p| p.player == Some(player))
+        {
+            peer.conn.send(&json!({ "t": "badge", "id": badge }));
+            return;
+        }
+        if self.avatar_of(player).is_some_and(|i| !self.avatars[i].remote) {
+            self.earned_badges.push(badge);
+        }
+    }
+
     /// The players who joined from other computers, for the host to see.
     pub fn joined_players(&self) -> Vec<(InstanceId, String)> {
         let Link::Host(host) = &self.link else { return Vec::new() };
@@ -2881,6 +2897,11 @@ impl PlaySession {
                             (c.bytes + bytes_in) as f64 / 1_000_000.0,
                             c.slowest.max(slowest_apply) * 1000.0,
                         ));
+                    }
+                }
+                "badge" => {
+                    if let Some(id) = message.get("id").and_then(Json::as_str) {
+                        self.earned_badges.push(id.chars().take(64).collect());
                     }
                 }
                 "kicked" => {

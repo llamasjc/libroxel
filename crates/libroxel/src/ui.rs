@@ -305,6 +305,10 @@ pub fn editor_ui(
         }
     }
     editor.platform.social_tick(engine.session.is_some());
+    editor.platform.awards_tick(engine.session.as_mut());
+    for name in std::mem::take(&mut editor.platform.awards.earned) {
+        log(engine, LogLevel::Info, format!("Badge earned: {name}"));
+    }
     editor.platform.chats_tick(editor.menu.open && editor.menu.tab == crate::menu::Tab::Messages);
     let hub = editor.platform.client();
     editor.voice.tick(engine.session.as_mut(), || hub);

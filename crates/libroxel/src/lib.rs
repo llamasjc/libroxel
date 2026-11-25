@@ -17,6 +17,7 @@
 mod accounts;
 mod android_input;
 mod autosave;
+mod awards;
 mod browse;
 mod command;
 mod debugging;

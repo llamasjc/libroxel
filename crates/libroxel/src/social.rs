@@ -325,6 +325,16 @@ impl Platform {
         Some(server.code.clone())
     }
 
+    pub fn playing_game_id(&self, playing: bool) -> Option<String> {
+        if !playing {
+            return None;
+        }
+        match &self.social.joined {
+            Some(server) => server.game_id.clone(),
+            None => self.social.next_game.as_ref().and_then(|g| g.game_id.clone()),
+        }
+    }
+
     /// Tells the Hub this player is online and where, when that changes
     /// and every little while.
     fn send_presence(&mut self, playing: bool) {

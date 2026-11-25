@@ -9,6 +9,7 @@
 local Players = game:GetService("Players")
 local storage = game:GetService("ReplicatedStorage")
 local DataStoreService = game:GetService("DataStoreService")
+local BadgeService = game:GetService("BadgeService")
 
 local folder = storage:WaitForChild("Chess")
 local Rules = require(folder:WaitForChild("Rules"))
@@ -244,6 +245,12 @@ end
 
 local playBot -- defined below
 
+local function won(person)
+	if person.wins + person.botWins >= 10 then
+		pcall(BadgeService.AwardBadge, BadgeService, person.player.UserId, "chess-master")
+	end
+end
+
 local function finish(g, result, reason)
 	if g.status ~= "playing" then
 		return
@@ -265,9 +272,11 @@ local function finish(g, result, reason)
 		if score == 1 then
 			w.wins += 1
 			b.losses += 1
+			won(w)
 		elseif score == 0 then
 			b.wins += 1
 			w.losses += 1
+			won(b)
 		else
 			w.draws += 1
 			b.draws += 1
@@ -291,6 +300,7 @@ local function finish(g, result, reason)
 			local mine = if w then 1 else 0
 			if (mine == 1 and score == 1) or (mine == 0 and score == 0) then
 				person.botWins += 1
+				won(person)
 				save(person)
 				updateStats(person)
 			end

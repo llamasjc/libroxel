@@ -1793,6 +1793,8 @@ pub mod compat {
     pub const GET_PRODUCT_INFO: &str = "GetProductInfo";
     pub const AWARD_BADGE: &str = "AwardBadge";
     pub const USER_HAS_BADGE_ASYNC: &str = "UserHasBadgeAsync";
+    pub const GET_BADGE_INFO_ASYNC: &str = "GetBadgeInfoAsync";
+    pub const CHECK_USER_BADGES_ASYNC: &str = "CheckUserBadgesAsync";
     pub const TELEPORT: &str = "Teleport";
     pub const TELEPORT_ASYNC: &str = "TeleportAsync";
     pub const TELEPORT_TO_PLACE_INSTANCE: &str = "TeleportToPlaceInstance";

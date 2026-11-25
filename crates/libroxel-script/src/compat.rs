@@ -2,7 +2,7 @@
 //! for other engines run: named brick colours, rays and the older ray
 //! searches, dates, model helpers, enumeration lists, key bindings through
 //! the action service, and services with little or nothing behind them yet
-//! (purchases, badges, teleports) that answer harmlessly instead of failing.
+//! (purchases, teleports) that answer harmlessly instead of failing.
 
 use libroxel_instance::{
     CFrame, ClassKind, Color3, EnumKind, EnumValue, InstanceId, Property, PropertyValue, Rotation,
@@ -985,6 +985,71 @@ fn warn(lua: &Lua, text: String) {
     host(lua).output.borrow_mut().push(crate::OutputLine { level: crate::OutputLevel::Warn, text });
 }
 
+fn badge_id(value: &Value) -> Option<String> {
+    match value {
+        Value::Integer(n) => Some(n.to_string()),
+        Value::Number(n) if n.fract() == 0.0 => Some((*n as i64).to_string()),
+        Value::String(s) => s.to_str().ok().map(|s| s.to_owned()).filter(|s| !s.is_empty() && s.len() <= 64),
+        _ => None,
+    }
+}
+
+fn user_id(value: &Value) -> Option<i64> {
+    match value {
+        Value::Integer(n) => Some(*n),
+        Value::Number(n) if n.fract() == 0.0 => Some(*n as i64),
+        _ => None,
+    }
+    .filter(|n| *n > 0)
+}
+
+fn badge_service(lua: &Lua, t: &Table) -> mlua::Result<()> {
+    for award in [AWARD_BADGE, "AwardBadgeAsync"] {
+        method(lua, t, award, |lua, (user, badge): (Value, Value)| {
+            let (Some(user), Some(badge)) = (user_id(&user), badge_id(&badge)) else { return Ok(false) };
+            Ok(award_badge(lua, user, &badge))
+        })?;
+    }
+    for has in [USER_HAS_BADGE_ASYNC, "UserHasBadge"] {
+        method(lua, t, has, |lua, (user, badge): (Value, Value)| {
+            let (Some(user), Some(badge)) = (user_id(&user), badge_id(&badge)) else { return Ok(false) };
+            Ok(has_badge(lua, user, &badge))
+        })?;
+    }
+    method(lua, t, CHECK_USER_BADGES_ASYNC, |lua, (user, badges): (Value, Option<Table>)| {
+        let out = lua.create_table()?;
+        let (Some(user), Some(badges)) = (user_id(&user), badges) else { return Ok(out) };
+        for badge in badges.sequence_values::<Value>() {
+            let badge = badge?;
+            if badge_id(&badge).is_some_and(|id| has_badge(lua, user, &id)) {
+                out.raw_push(badge)?;
+            }
+        }
+        Ok(out)
+    })?;
+    method(lua, t, GET_BADGE_INFO_ASYNC, |lua, badge: Value| {
+        let id = badge_id(&badge).unwrap_or_default();
+        let host = host(lua);
+        let world = host.world.borrow();
+        let found = world.badges.info.iter().find(|b| b.id == id);
+        let info = lua.create_table()?;
+        match found {
+            Some(b) => {
+                info.set(NAME, b.name.as_str())?;
+                info.set("Description", b.description.as_str())?;
+            }
+            None => {
+                info.set(NAME, format!("Badge {id}"))?;
+                info.set("Description", "")?;
+            }
+        }
+        info.set("IconImageId", 0)?;
+        info.set("IsEnabled", true)?;
+        info.set("Id", badge)?;
+        Ok(info)
+    })
+}
+
 fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
     let t = lua.create_table()?;
     t.set(NAME, name)?;
@@ -1045,29 +1110,7 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
                 })?;
             }
         }
-        BADGE_SERVICE => {
-            for award in [AWARD_BADGE, "AwardBadgeAsync"] {
-                method(lua, &t, award, |lua, (user, badge): (f64, f64)| Ok(award_badge(lua, user, badge)))?;
-            }
-            method(lua, &t, USER_HAS_BADGE_ASYNC, |lua, (user, badge): (f64, f64)| {
-                Ok(has_badge(lua, user, badge))
-            })?;
-            method(lua, &t, "UserHasBadge", |lua, (user, badge): (f64, f64)| {
-                Ok(has_badge(lua, user, badge))
-            })?;
-            method(lua, &t, "CheckUserBadgesAsync", |lua, (user, badges): (f64, Vec<f64>)| {
-                Ok(badges.into_iter().filter(|b| has_badge(lua, user, *b)).collect::<Vec<_>>())
-            })?;
-            method(lua, &t, "GetBadgeInfoAsync", |lua, id: f64| {
-                let info = lua.create_table()?;
-                info.set("Name", format!("Badge {id}"))?;
-                info.set("Description", "")?;
-                info.set("IconImageId", 0)?;
-                // Enabled, so the usual "if info.IsEnabled then award" works.
-                info.set("IsEnabled", true)?;
-                Ok(info)
-            })?;
-        }
+        BADGE_SERVICE => badge_service(lua, &t)?,
         TELEPORT_SERVICE => {
             for go in [TELEPORT, TELEPORT_ASYNC, TELEPORT_TO_PLACE_INSTANCE] {
                 method(lua, &t, go, move |lua, _: MultiValue| {
@@ -1375,30 +1418,40 @@ fn product_info(lua: &Lua, id: f64, kind: &Value) -> mlua::Result<Table> {
 /// character), user id to the badges they have.
 const BADGE_STORE: &str = "libroxel\u{1f}badges";
 
-fn has_badge(lua: &Lua, user: f64, badge: f64) -> bool {
+fn has_badge(lua: &Lua, user: i64, badge: &str) -> bool {
     let host = host(lua);
+    if host.world.borrow().badges.owned.contains(&(user, badge.to_owned())) {
+        return true;
+    }
     let data = host.data.borrow();
-    let Some(list) = data.get(BADGE_STORE).and_then(|s| s.get(&(user as i64).to_string())) else {
-        return false;
-    };
-    list.as_array().is_some_and(|l| l.iter().any(|b| b.as_f64() == Some(badge)))
+    let Some(list) = data.get(BADGE_STORE).and_then(|s| s.get(&user.to_string())) else { return false };
+    list.as_array().is_some_and(|l| {
+        l.iter().any(|b| match b {
+            serde_json::Value::String(s) => s == badge,
+            other => other.as_i64().is_some_and(|n| n.to_string() == badge),
+        })
+    })
 }
 
-/// Gives `user` the badge; true if they didn't have it yet.
-fn award_badge(lua: &Lua, user: f64, badge: f64) -> bool {
-    if has_badge(lua, user, badge) || user <= 0.0 {
+fn award_badge(lua: &Lua, user: i64, badge: &str) -> bool {
+    if has_badge(lua, user, badge) {
         return false;
     }
     let host = host(lua);
+    {
+        let mut world = host.world.borrow_mut();
+        world.badges.owned.insert((user, badge.to_owned()));
+        world.badges.awards.push((user, badge.to_owned()));
+    }
     host.data_changed.set(true);
     let mut data = host.data.borrow_mut();
     let list = data
         .entry(BADGE_STORE.to_owned())
         .or_default()
-        .entry((user as i64).to_string())
+        .entry(user.to_string())
         .or_insert_with(|| serde_json::Value::Array(Vec::new()));
     if let serde_json::Value::Array(l) = list {
-        l.push(serde_json::Value::from(badge as i64));
+        l.push(serde_json::Value::from(badge));
     }
     true
 }

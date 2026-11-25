@@ -1588,3 +1588,31 @@ fn a_bare_yield_waits_until_the_thread_is_resumed() {
     rt.step(0.4);
     assert_eq!(printed(&rt), vec!["spawning", "resumed with hello"]);
 }
+
+#[test]
+fn games_award_badges() {
+    let rt = runtime();
+    rt.set_badge_info(vec![libroxel_script::BadgeInfo {
+        id: "top".into(),
+        name: "Top".into(),
+        description: "Got to the top".into(),
+    }]);
+    rt.add_owned_badges(2, ["top".to_owned()]);
+    run(
+        &rt,
+        r#"
+        local badges = game:GetService("BadgeService")
+        print(badges:UserHasBadgeAsync(1, "top"), badges:UserHasBadgeAsync(2, "top"))
+        print(badges:AwardBadge(1, "top"), badges:AwardBadge(1, "top"), badges:AwardBadge(2, "top"))
+        print(badges:UserHasBadgeAsync(1, "top"), #badges:CheckUserBadgesAsync(1, { "top", "other" }))
+        local info = badges:GetBadgeInfoAsync("top")
+        print(info.Name, info.Description, info.IsEnabled, badges:GetBadgeInfoAsync("other").IsEnabled)
+        "#,
+    );
+    assert_eq!(
+        printed(&rt),
+        vec!["false true", "true false false", "true 1", "Top Got to the top true true"]
+    );
+    assert_eq!(rt.take_badge_awards(), vec![(1, "top".to_owned())]);
+    assert!(rt.take_badge_awards().is_empty());
+}

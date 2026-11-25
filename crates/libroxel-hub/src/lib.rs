@@ -56,7 +56,13 @@ pub use assets::{
     valid_hash,
 };
 pub use charts::{Chart, ChartStats, Charts, ForYou, Played, for_you_message, guess_genre, wilson};
+mod badges;
 mod cli;
+pub use badges::{
+    Awarded, BADGE_COLORS, BADGE_ICONS, BADGE_SPARKS, Badge, BadgeAction, BadgeAward, BadgeChange,
+    MAX_BADGE_ABOUT, MAX_BADGE_NAME, MAX_BADGES, PLATFORM_BADGES, PlatformBadge, award_message,
+    badge_message, platform_badge,
+};
 mod copies;
 mod earnings;
 pub use earnings::{
@@ -847,6 +853,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     number_accounts(&db).map_err(|e| format!("could not number the Hub's accounts: {e}"))?;
     social::create_tables(&db)?;
     parties::create_tables(&db)?;
+    badges::create_tables(&db)?;
     messages::create_tables(&db)?;
     groups::create_tables(&db)?;
     password::create_tables(&db)?;
@@ -960,6 +967,9 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/games/{id}/comments", get(ratings::list_comments).post(ratings::add_comment))
         .route("/comments/{id}", delete(ratings::remove_comment))
         .route("/accounts/{id}/favorites", get(ratings::favorites))
+        .route("/accounts/{id}/badges", get(badges::player_badges))
+        .route("/games/{id}/badges", get(badges::game_badges).post(badges::change_badge))
+        .route("/badges/award", post(badges::award))
         .route("/games/{id}/place", get(download).layer(tower_http::compression::CompressionLayer::new()))
         .route("/assets/missing", post(assets::missing_assets))
         .route(
@@ -3024,6 +3034,56 @@ impl HubClient {
             .call()
             .and_then(|mut r| r.body_mut().read_json())
             .map_err(|e| format!("could not get your party from the Hub: {e}"))
+    }
+
+    pub fn badges(&self, who: &str) -> Result<Vec<Badge>, String> {
+        self.agent
+            .get(format!("{}/accounts/{who}/badges", self.base))
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not get badges from the Hub: {e}"))
+    }
+
+    pub fn game_badges(&self, game_id: &str) -> Result<Vec<Badge>, String> {
+        self.agent
+            .get(format!("{}/games/{}/badges", self.base, assets::encode(game_id)))
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not get badges from the Hub: {e}"))
+    }
+
+    pub fn change_badge(&self, game_id: &str, change: &BadgeChange) -> Result<Vec<Badge>, String> {
+        self.agent
+            .post(format!("{}/games/{}/badges", self.base, assets::encode(game_id)))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(change)
+            .map_err(|e| format!("could not reach the Hub: {e}"))
+            .and_then(|mut r| {
+                if r.status().is_success() {
+                    r.body_mut().read_json().map_err(|e| e.to_string())
+                } else {
+                    Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+                }
+            })
+    }
+
+    pub fn award_badge(&self, award: &BadgeAward) -> Result<Awarded, String> {
+        self.agent
+            .post(format!("{}/badges/award", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(award)
+            .map_err(|e| format!("could not reach the Hub: {e}"))
+            .and_then(|mut r| {
+                if r.status().is_success() {
+                    r.body_mut().read_json().map_err(|e| e.to_string())
+                } else {
+                    Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+                }
+            })
     }
 
     pub fn charts(&self) -> Result<Charts, String> {

@@ -51,7 +51,7 @@ pub use mlua;
 /// (`RunService:Set3dRenderingEnabled(false)`, as loading screens do).
 pub static RENDERING_3D: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 pub use net::{NetMessage, NetRole, decode as decode_net_value, encode as encode_net_value, map_instances};
-pub use world::VelocityRequest;
+pub use world::{BadgeInfo, VelocityRequest};
 
 /// Measures GUI text: the text, its size in points and the width it wraps
 /// at, giving how wide and tall it is. The app hands in the one its GUI
@@ -401,6 +401,21 @@ impl ScriptRuntime {
     /// players: player, where, and for how many seconds.
     pub fn take_stream_requests(&self) -> Vec<(InstanceId, Vec3, f32)> {
         world::take_stream_requests(&self.lua)
+    }
+
+    /// Takes the badges `AwardBadge` gave: user id, badge id.
+    pub fn take_badge_awards(&self) -> Vec<(i64, String)> {
+        std::mem::take(&mut bindings::host(&self.lua).world.borrow_mut().badges.awards)
+    }
+
+    pub fn set_badge_info(&self, info: Vec<BadgeInfo>) {
+        bindings::host(&self.lua).world.borrow_mut().badges.info = info;
+    }
+
+    pub fn add_owned_badges(&self, user_id: i64, ids: impl IntoIterator<Item = String>) {
+        let host = bindings::host(&self.lua);
+        let mut world = host.world.borrow_mut();
+        world.badges.owned.extend(ids.into_iter().map(|id| (user_id, id)));
     }
 
     /// Takes the players `Kick` removed, with why.

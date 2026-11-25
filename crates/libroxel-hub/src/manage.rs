@@ -122,7 +122,7 @@ fn fresh(time: i64) -> Result<(), Failed> {
     Ok(())
 }
 
-fn owned(db: &Connection, game_id: &str, player_id: &str) -> Result<(), Failed> {
+pub(crate) fn owned(db: &Connection, game_id: &str, player_id: &str) -> Result<(), Failed> {
     let author: Option<Option<String>> = db
         .query_row("SELECT author_id FROM games WHERE game_id = ?1", params![game_id], |r| r.get(0))
         .optional()

@@ -2984,16 +2984,6 @@ local SERVICE_EXTRAS = {
 			CanViewBrandProjectAsync = returns(false),
 		},
 	},
-	BadgeService = {
-		methods = {
-			GetBadgeInfoAsync = function(_, id)
-				return { Name = "", Description = "", IconImageId = 0, IsEnabled = false, Id = id }
-			end,
-			CheckUserBadgesAsync = function()
-				return {}
-			end,
-		},
-	},
 }
 
 -- (found, value) for member `key` of a compat.rs service called `name`.

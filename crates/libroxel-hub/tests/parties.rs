@@ -102,8 +102,10 @@ fn friends_party_up_and_follow_the_leader() {
     assert_eq!(invites[0].from.name, "Alice");
     assert!(bo.party(&hub, PartyAction::Accept, &party.party_id).is_err());
 
+    assert!(!hub.badges(&alice.id).unwrap().iter().any(|b| b.badge_id == "party-starter"));
     let joined = ana.party(&hub, PartyAction::Accept, &party.party_id).unwrap();
     assert!(joined.invites.is_empty());
+    assert!(hub.badges(&alice.id).unwrap().iter().any(|b| b.badge_id == "party-starter"));
     let members = joined.party.unwrap().members;
     assert_eq!(
         members.iter().map(|m| (m.name.as_str(), m.leader)).collect::<Vec<_>>(),

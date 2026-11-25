@@ -35,6 +35,9 @@ pub const HUB_HELP: &str = "\
                                Official servers
   ban <name> [reason]          ban an account; unban <name> lets it back
   verify|unverify <name>       give or take away a verified badge
+  badge give|take <name> <badge>
+                               give or take away a Libroxel badge (such as
+                               supporter)
   rename <name> <new name>     rename an account
   earnings                     show the engagement pool and cash out settings
   earnings pool <sparks>       Sparks shared each day between creators by
@@ -305,6 +308,22 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
         ["unverify", who] => {
             crate::set_verified(&crate::open_db(Some(&data))?, who, false)?;
             println!("{who} is no longer verified.");
+            Ok(())
+        }
+        ["badge", how @ ("give" | "take"), who, id] => {
+            let badge = crate::platform_badge(id).ok_or_else(|| {
+                let ids: Vec<&str> = crate::PLATFORM_BADGES.iter().map(|b| b.id).collect();
+                format!("there is no badge {id} (there are {})", ids.join(", "))
+            })?;
+            let db = crate::open_db(Some(&data))?;
+            let player = crate::owner::resolve(&db, who)?;
+            if *how == "give" {
+                crate::badges::give(&db, &player, id);
+                println!("{who} has the {} badge.", badge.name);
+            } else {
+                crate::badges::take(&db, &player, id);
+                println!("{who} no longer has the {} badge.", badge.name);
+            }
             Ok(())
         }
         ["unban", who] => {

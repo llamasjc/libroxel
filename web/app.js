@@ -37,6 +37,13 @@ const ICON = {
   chart: '', profile: '', heart: '',
 };
 
+const BADGE_GLYPHS = {
+  star: '', trophy: '', medal: '', crown: '', lightning: '', fire: '', sword: '',
+  shield: '', diamond: '', flag: '', target: '', skull: '', ghost: '', rocket: '',
+  heart: '', key: '', clock: '', smiley: '', flower: '', planet: '', coin: '',
+  footprints: '', hammer: '', butterfly: '', confetti: '', compass: '', horse: '',
+};
+
 const PAYPAL = 'https://paypal.me/llamasjc';
 const SPONSORS = 'https://github.com/sponsors/llamasjc';
 
@@ -197,7 +204,7 @@ async function api(path, { method = 'GET', body, query } = {}) {
 
 const SESSION_KEY = 'libroxel.session';
 let session = loadSession();
-let lastSigned = { friends: 0, party: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0, wallet: 0 };
+let lastSigned = { friends: 0, party: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0, wallet: 0, badge: 0 };
 
 function loadSession() {
   for (const store of [sessionStorage, localStorage]) {
@@ -1112,7 +1119,7 @@ function game() {
     if (withFriends.length) out.push(el('div', { class: 'caps group' }, 'Other servers'));
     out.push(others.map((s) => serverRow(s, entry)));
   }
-  if (hostable) out.push(commentsPanel(entry));
+  if (hostable) out.push(gameBadges(entry.key), commentsPanel(entry));
   return out;
 }
 
@@ -1672,10 +1679,58 @@ function user() {
         key: g.game_id, title: g.title, by: g.author, servers: [], playing: 0, symbol: ICON.globe,
       })))
       : el('p', { class: 'soft' }, isMe ? 'Games you publish from the app show up here.' : 'No published games yet.'),
+    badgesOf(p),
     favoritesOf(p),
     (p.groups || []).length > 0 && el('h2', { class: 'section' }, `Groups (${p.groups.length})`),
     (p.groups || []).length > 0 && el('div', { class: 'group-list' }, p.groups.map((g) => el('a', { class: 'chip', href: `/group/${g.group_id}` }, badge(g), ' ', g.name))),
   ];
+}
+
+const badgeLists = new Map();
+
+function loadBadges(path) {
+  if (!badgeLists.has(path)) {
+    badgeLists.set(path, null);
+    api(path)
+      .then((list) => badgeLists.set(path, list))
+      .catch(() => badgeLists.set(path, []))
+      .finally(() => render());
+  }
+  return badgeLists.get(path);
+}
+
+function emblem(b, size = 56) {
+  const base = GROUP_COLORS[b.color] || GROUP_COLORS.purple;
+  const mix = (by) => rgb(base.map((v) => Math.round(by >= 0 ? v + (255 - v) * by : v * (1 + by))));
+  const hex = (r) => Array.from({ length: 6 }, (_, i) => {
+    const a = (Math.PI / 3) * i - Math.PI / 2;
+    return `${(50 + r * Math.cos(a)).toFixed(2)},${(50 + r * Math.sin(a)).toFixed(2)}`;
+  }).join(' ');
+  const id = `b${fnv(`${b.badge_id}${size}`)}`;
+  return svg('svg', { viewBox: '0 0 100 100', width: size, height: size, class: 'emblem', 'aria-hidden': 'true' },
+    svg('defs', {}, svg('linearGradient', { id, x1: 0, y1: 0, x2: 0, y2: 1 },
+      svg('stop', { offset: '0', 'stop-color': mix(0.22) }), svg('stop', { offset: '1', 'stop-color': mix(-0.1) }))),
+    svg('polygon', { points: hex(48), fill: mix(-0.35) }),
+    svg('polygon', { points: hex(41), fill: `url(#${id})` }),
+    svg('polygon', { points: hex(35), fill: 'none', stroke: mix(0.45), 'stroke-width': 3 }),
+    svg('text', { x: 50, y: 51, 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-family': 'Phosphor', 'font-size': 40, fill: '#fff' }, BADGE_GLYPHS[b.icon] || BADGE_GLYPHS.medal));
+}
+
+function badgeShelf(list, about) {
+  return el('div', { class: 'badge-shelf' }, list.map((b) => el('div', { class: 'badge-card', title: `${b.name}\n${about(b)}` },
+    emblem(b), el('b', {}, b.name), el('small', { class: 'soft' }, about(b)))));
+}
+
+function badgesOf(p) {
+  const list = loadBadges(`/accounts/${p.player_id}/badges`);
+  if (!list?.length) return null;
+  return [el('h2', { class: 'section' }, `Badges (${list.length})`), badgeShelf(list, (b) => b.game_title || b.description)];
+}
+
+function gameBadges(key) {
+  const list = loadBadges(`/games/${encodeURIComponent(key)}/badges`);
+  if (!list?.length) return null;
+  return [el('h2', { class: 'section' }, 'Badges'), badgeShelf(list, (b) => `${b.description}${b.description ? ' · ' : ''}${count(b.earned_by)} ${b.earned_by === 1 ? 'player has' : 'players have'} it`)];
 }
 
 const favorites = new Map();
@@ -2692,6 +2747,68 @@ function versionsTab(g) {
       : el('button', { class: 'chip', disabled: mine.busy, onclick: () => manageGame(g.game_id, { do: 'restore', version: x.version }, `Version ${x.version} is live again.`) }, icon(ICON.refresh), 'Restore')))));
 }
 
+const badgeForm = { name: '', description: '', icon: 'star', color: 'yellow', editing: null };
+
+async function changeBadge(gameId, action, b, said) {
+  if (mine.busy) return;
+  mine.busy = true;
+  render();
+  const time = Math.max(Date.now(), lastSigned.badge + 1);
+  lastSigned.badge = time;
+  const c = { player_id: session.playerId, action, badge_id: b.badge_id || '', name: b.name || '', description: b.description || '', icon: b.icon || '', color: b.color || '', time };
+  c.signature = signText(secretKey(), `libroxel badge\n${c.player_id}\n${gameId}\n${c.action}\n${c.badge_id}\n${c.name}\n${c.description}\n${c.icon}\n${c.color}\n${c.time}`);
+  try {
+    const list = await api(`/games/${encodeURIComponent(gameId)}/badges`, { method: 'POST', body: c });
+    badgeLists.set(`/games/${encodeURIComponent(gameId)}/badges`, list);
+    badgeLists.delete(`/accounts/${session.playerId}/badges`);
+    Object.assign(badgeForm, { name: '', description: '', editing: null });
+    flash = { text: said };
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  } finally {
+    mine.busy = false;
+    render();
+  }
+}
+
+function badgesTab(g) {
+  const list = loadBadges(`/games/${encodeURIComponent(g.game_id)}/badges`);
+  if (!list) return el('p', { class: 'soft' }, 'Loading…');
+  const f = badgeForm;
+  const name = el('input', { type: 'text', value: f.name, maxlength: 40, oninput: (e) => { f.name = e.target.value; } });
+  const about = el('input', { type: 'text', value: f.description, maxlength: 200, oninput: (e) => { f.description = e.target.value; } });
+  const color = colorPick(f.color);
+  color.addEventListener('change', () => { f.color = color.value; render(); });
+  const icons = el('div', { class: 'badge-icons' }, Object.keys(BADGE_GLYPHS).map((i) =>
+    el('button', { class: `chip${f.icon === i ? ' on' : ''}`, title: i, onclick: () => { f.icon = i; render(); } }, icon(BADGE_GLYPHS[i]))));
+  const save = () => {
+    const b = { badge_id: f.editing || '', name: name.value.trim(), description: about.value.trim(), icon: f.icon, color: f.color };
+    changeBadge(g.game_id, f.editing ? 'update' : 'create', b, f.editing ? 'Saved.' : `Made ${b.name}.`);
+  };
+  const rows = list.filter((b) => b.game_id === g.game_id).map((b) => el('div', { class: 'person' },
+    emblem(b, 44),
+    el('div', { class: 'what' }, el('b', {}, b.name), el('small', { class: 'soft' }, `${b.description ? `${b.description} · ` : ''}${count(b.earned_by)} earned`), el('code', {}, b.badge_id)),
+    el('div', { class: 'buttons' },
+      el('button', { class: 'chip', disabled: mine.busy, onclick: () => { Object.assign(f, { name: b.name, description: b.description, icon: b.icon, color: b.color, editing: b.badge_id }); render(); } }, 'Edit'),
+      el('button', { class: 'chip', disabled: mine.busy, onclick: (e) => {
+        const btn = e.currentTarget;
+        if (btn.dataset.sure) changeBadge(g.game_id, 'remove', b, `Removed ${b.name}.`);
+        else { btn.dataset.sure = '1'; btn.replaceChildren(icon(ICON.trash), ' Remove?'); }
+      } }, icon(ICON.trash), 'Remove'))));
+  return [
+    rows.length ? el('div', { class: 'versions' }, rows) : el('p', { class: 'soft' }, 'No badges yet.'),
+    el('div', { class: 'form manage' },
+      el('div', { class: 'badge-preview' }, emblem({ badge_id: 'new', icon: f.icon, color: f.color }, 64)),
+      el('label', { class: 'field' }, el('span', {}, 'Name'), name),
+      el('label', { class: 'field' }, el('span', {}, 'Description'), about),
+      el('label', { class: 'field' }, el('span', {}, 'Color'), color),
+      el('div', { class: 'field' }, el('span', {}, 'Icon'), icons),
+      el('div', { class: 'form-actions' },
+        el('button', { class: 'btn go small', disabled: mine.busy, onclick: save }, icon(ICON.check), f.editing ? 'Save' : 'Make badge'),
+        f.editing && el('button', { class: 'chip', onclick: () => { Object.assign(f, { name: '', description: '', editing: null }); render(); } }, 'Cancel'))),
+  ];
+}
+
 const size = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 
 function myGameCard(g) {
@@ -2947,17 +3064,18 @@ function creatorPage() {
       return out;
     }
     const base = `/creator/${encodeURIComponent(info.game_id)}`;
-    const tab = ['settings', 'passes', 'versions'].includes(route.tab) ? route.tab : '';
+    const tab = ['settings', 'passes', 'versions', 'badges'].includes(route.tab) ? route.tab : '';
     out.push(el('div', { class: 'manage-head' },
       el('div', { class: 'mini' }, gamePicture(64, 64, info.game_id)),
       el('div', {}, el('h1', { class: 'title' }, info.title),
         el('div', { class: 'soft' }, `${info.private ? 'Private' : 'Public'} · version ${info.version} · ${ago(info.updated_secs_ago)}`)),
       !info.private && el('a', { class: 'chip', href: `/game/${encodeURIComponent(info.game_id)}` }, icon(ICON.play), 'View')));
-    out.push(el('div', { class: 'hats' }, [['', 'Numbers'], ['settings', 'Settings'], ['passes', 'Passes'], ['versions', 'Versions']].map(([t, label]) =>
+    out.push(el('div', { class: 'hats' }, [['', 'Numbers'], ['settings', 'Settings'], ['passes', 'Passes'], ['versions', 'Versions'], ['badges', 'Badges']].map(([t, label]) =>
       el('a', { class: `chip${tab === t ? ' on' : ''}`, href: t ? `${base}/${t}` : base }, label))));
     if (tab === 'settings') { out.push(settingsTab(info)); return out; }
     if (tab === 'passes') { out.push(passesTab(info)); return out; }
     if (tab === 'versions') { out.push(versionsTab(info)); return out; }
+    if (tab === 'badges') { out.push(badgesTab(info)); return out; }
     out.push(range);
     if (!g) {
       out.push(creator.error ? status(creator.error, 'error') : el('p', { class: 'soft' }, 'Loading…'));

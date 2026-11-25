@@ -250,6 +250,13 @@ label.field span { display: block; margin-bottom: 4px; }
 .tag.verified { background-color: var(--accent); }
 .tag.group { background-color: rgb(120, 80, 200); text-transform: none; }
 .group-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.badge-shelf { display: flex; flex-wrap: wrap; gap: 14px; }
+.badge-card { display: flex; flex-direction: column; align-items: center; width: 96px; text-align: center; gap: 2px; }
+.badge-card b { font-size: 13px; line-height: 1.2; }
+.badge-card small { font-size: 11px; line-height: 1.2; overflow-wrap: anywhere; }
+.badge-icons { display: flex; flex-wrap: wrap; gap: 6px; }
+.badge-icons .chip .icon { font-size: 18px; }
+.emblem { flex: none; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.25)); }
 .post { padding: 8px 0; border-bottom: 1px solid var(--line); }
 .post .link { float: right; }
 .report-card { display: grid; gap: 6px; padding: 10px 12px; margin-bottom: 8px; background: #fff; border: 1px solid var(--line); border-radius: 8px; }

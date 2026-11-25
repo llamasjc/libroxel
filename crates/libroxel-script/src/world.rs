@@ -64,6 +64,21 @@ pub(crate) struct WorldState {
     pub(crate) sound_restarts: Vec<InstanceId>,
     /// Tools that were just used (their `Activated` fired).
     pub(crate) swings: Vec<InstanceId>,
+    pub(crate) badges: Badges,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BadgeInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct Badges {
+    pub(crate) info: Vec<BadgeInfo>,
+    pub(crate) owned: std::collections::HashSet<(i64, String)>,
+    pub(crate) awards: Vec<(i64, String)>,
 }
 
 fn runtime_err(message: impl Into<String>) -> mlua::Error {

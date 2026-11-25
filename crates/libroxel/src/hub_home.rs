@@ -1180,6 +1180,7 @@ fn game_page(
         ui.add_space(6.0);
     }
     if entry.hostable() {
+        platform.game_badges_ui(ui, &entry.key);
         ui.add_space(22.0);
         let author_id = match &entry.source {
             Source::Published(game) => game.author_id.clone(),

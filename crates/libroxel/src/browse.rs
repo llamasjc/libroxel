@@ -34,6 +34,7 @@ pub struct Downloaded {
 /// Everything about the Hub the editor keeps between frames.
 pub struct Platform {
     pub badges: crate::groups::Badges,
+    pub awards: crate::awards::Awards,
     /// The Hub's address ([`libroxel_hub::hub_address`]). It isn't
     /// something to change in the app: there is one Hub.
     pub hub_address: String,
@@ -253,6 +254,7 @@ impl Default for Platform {
             social: crate::social::Social::default(),
             family: family::FamilyUi::default(),
             chats: crate::messages::Chats::default(),
+            awards: Default::default(),
         }
     }
 }
@@ -1890,6 +1892,7 @@ impl Platform {
             }
         }
         if self.account.is_some() {
+            self.my_badges_ui(ui);
             let client = self.client();
             self.family.parent_ui(ui, client);
         }

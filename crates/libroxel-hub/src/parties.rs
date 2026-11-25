@@ -255,6 +255,9 @@ pub(crate) async fn change_party(
                 .map_err(internal)?;
             }
             db.execute("DELETE FROM party_invites WHERE player_id = ?1", params![me]).map_err(internal)?;
+            if let Some(leader) = leader_of(&db, target)? {
+                crate::badges::give(&db, &leader, "party-starter");
+            }
         }
         PartyAction::Decline => {
             fresh(&db, me, "party", change.time)?;
