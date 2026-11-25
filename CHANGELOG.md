@@ -5,6 +5,10 @@ its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 
 ## Unreleased
 
+- **Website:** avatar pictures (heads on profiles and friends, whole bodies
+  on profiles and the Avatar page) now show. The site's security rules
+  only allowed pictures from the site itself, so the browser blocked the
+  ones the Hub draws.
 - **Android:** menus stay clear of the notch again in release builds.
 - **Moving from Libroxel to PlayLibre without losing anyone:**
   - Macs on a Libroxel version update to PlayLibre by themselves (the update

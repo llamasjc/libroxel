@@ -164,7 +164,8 @@ $DOMAIN {
     root * /var/www/playlibre
     header {
         # Only this site's own files run, and they only talk to the Hub (and GitHub, for downloads).
-        Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' $HUB$github; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
+        # Avatar pictures are drawn by the Hub, so pictures may come from it too.
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: $HUB; font-src 'self'; connect-src 'self' $HUB$github; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
         X-Content-Type-Options nosniff
         Referrer-Policy strict-origin-when-cross-origin
         Strict-Transport-Security "max-age=31536000"

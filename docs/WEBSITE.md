@@ -41,7 +41,8 @@ npx esbuild web/vendor/crypto-source.js --bundle --format=esm --minify --legal-c
 ```
 
 The server sends a Content-Security-Policy that lets only the site's own
-scripts run and only lets them talk to the Hub.
+scripts run and only lets them talk to the Hub. Pictures may come from the
+site itself or the Hub, which draws avatar pictures.
 
 ## Play opens the app
 
