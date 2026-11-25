@@ -76,6 +76,100 @@ fn extra_enum(tree: &InstanceTree, id: InstanceId, name: &str) -> Option<i64> {
     }
 }
 
+fn extra_bool(tree: &InstanceTree, id: InstanceId, name: &str, default: bool) -> bool {
+    match tree.get_extra(id, name) {
+        Ok(Some(PropertyValue::Bool(b))) => b,
+        _ => default,
+    }
+}
+
+fn extra_vec2(tree: &InstanceTree, id: InstanceId, name: &str) -> Option<Vec2> {
+    match tree.get_extra(id, name) {
+        Ok(Some(PropertyValue::Vec2(v))) => Some(v),
+        _ => None,
+    }
+}
+
+fn extra_color(tree: &InstanceTree, id: InstanceId, name: &str) -> Option<Color3> {
+    match tree.get_extra(id, name) {
+        Ok(Some(PropertyValue::Color3(c))) => Some(c),
+        _ => None,
+    }
+}
+
+fn extra_number(tree: &InstanceTree, id: InstanceId, name: &str) -> Option<f32> {
+    match tree.get_extra(id, name) {
+        Ok(Some(PropertyValue::Number(n))) => Some(n as f32),
+        _ => None,
+    }
+}
+
+/// The part of a picture an image object shows, in the picture's own 0..1
+/// terms: the rectangle ImageRectOffset and ImageRectSize pick out (pixels
+/// of a sprite sheet), or all of it when ImageRectSize is zero. Also the
+/// size in pixels of what's shown.
+pub fn image_rect(tree: &InstanceTree, id: InstanceId, picture: egui::Vec2) -> (Rect, egui::Vec2) {
+    let full = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+    let size = extra_vec2(tree, id, "ImageRectSize").unwrap_or(Vec2::ZERO);
+    if size.x <= 0.0 || size.y <= 0.0 || picture.x <= 0.0 || picture.y <= 0.0 {
+        return (full, picture);
+    }
+    let offset = extra_vec2(tree, id, "ImageRectOffset").unwrap_or(Vec2::ZERO);
+    let min = Pos2::new(offset.x / picture.x, offset.y / picture.y);
+    let max = Pos2::new((offset.x + size.x) / picture.x, (offset.y + size.y) / picture.y);
+    (Rect::from_min_max(min, max), egui::vec2(size.x, size.y))
+}
+
+/// The outline text objects draw round their letters with
+/// TextStrokeTransparency below 1 (a UI stroke inside them wins).
+fn text_stroke(tree: &InstanceTree, id: InstanceId, text_alpha: f32) -> Option<(Color32, f32)> {
+    let transparency = extra_number(tree, id, "TextStrokeTransparency").unwrap_or(1.0);
+    if transparency >= 1.0 {
+        return None;
+    }
+    let c = extra_color(tree, id, "TextStrokeColor3").unwrap_or(Color3::new(0.0, 0.0, 0.0));
+    Some((color(c, (1.0 - transparency) * text_alpha), 1.0))
+}
+
+/// Which ways a scrolling frame scrolls (ScrollingDirection: X is 1, Y 2
+/// and XY, the default, 4), and not at all when ScrollingEnabled is off.
+pub fn scroll_axes(tree: &InstanceTree, id: InstanceId) -> (bool, bool) {
+    if !extra_bool(tree, id, "ScrollingEnabled", true) {
+        return (false, false);
+    }
+    match extra_enum(tree, id, "ScrollingDirection") {
+        Some(1) => (true, false),
+        Some(2) => (false, true),
+        _ => (true, true),
+    }
+}
+
+/// A scrolling frame's canvas (pixels): its CanvasSize, grown to hold its
+/// children along the axes AutomaticCanvasSize names (X 1, Y 2, XY 3), and
+/// never smaller than the frame.
+pub fn canvas_size(tree: &InstanceTree, id: InstanceId, frame: Rect, k: f32) -> egui::Vec2 {
+    let canvas = res2(udim2(tree, id, Property::CanvasSize), Vec2::new(frame.width(), frame.height()), k);
+    let mut canvas = egui::vec2(canvas.x, canvas.y);
+    let axes = extra_enum(tree, id, "AutomaticCanvasSize").unwrap_or(0);
+    if axes != 0 {
+        let origin = Rect::from_min_size(Pos2::ZERO, frame.size());
+        let inner = padded(tree, id, origin, k);
+        let pad = origin.max - inner.max;
+        let mut extent = egui::vec2(0.0, 0.0);
+        for (_, _, r) in arrange_unsorted(tree, id, origin, k) {
+            extent.x = extent.x.max(r.max.x + pad.x);
+            extent.y = extent.y.max(r.max.y + pad.y);
+        }
+        if axes & 1 != 0 {
+            canvas.x = canvas.x.max(extent.x);
+        }
+        if axes & 2 != 0 {
+            canvas.y = canvas.y.max(extent.y);
+        }
+    }
+    egui::vec2(canvas.x.max(frame.width()), canvas.y.max(frame.height()))
+}
+
 /// The space Roblox's top bar takes at the top of the screen, in pixels.
 /// Screen GUIs start below it unless they ignore the inset.
 pub const GUI_INSET: f32 = libroxel_script::GUI_INSET;
@@ -538,14 +632,27 @@ fn draw_image(
     rect: Rect,
     round: f32,
     darker: bool,
+    hovered: bool,
 ) {
-    let name = tree.get_string(id, Property::Image).unwrap_or_default();
-    let Some((texture, size)) = crate::images::texture(painter.ctx(), &name) else { return };
+    let mut name = tree.get_string(id, Property::Image).unwrap_or_default().to_owned();
+    // A button shows its HoverImage, when it has one, while pointed at.
+    if hovered
+        && let Ok(Some(PropertyValue::String(hover))) = tree.get_extra(id, "HoverImage")
+        && !hover.is_empty()
+    {
+        name = hover;
+    }
+    let Some((texture, picture)) = crate::images::texture(painter.ctx(), &name) else { return };
     let scale = match tree.get_enum(id, Property::ScaleType) {
         Some(libroxel_instance::EnumValue::ScaleType(s)) => s,
         _ => libroxel_instance::ScaleType::Stretch,
     };
+    let (shown, size) = image_rect(tree, id, picture);
     let (at, uv) = crate::images::placement(rect, size, scale);
+    let uv = Rect::from_min_max(
+        shown.min + uv.min.to_vec2() * shown.size(),
+        shown.min + uv.max.to_vec2() * shown.size(),
+    );
     let mut tint = tree.get_color(id, Property::ImageColor).unwrap_or(Color3::WHITE);
     if darker {
         tint = tint.lerp(Color3::new(0.0, 0.0, 0.0), 0.15);
@@ -685,6 +792,7 @@ fn draw_children(
                 padded(tree, child, r, k),
                 round,
                 class == ClassKind::ImageButton && hovered,
+                class == ClassKind::ImageButton && hovered,
             );
         }
         let size = tree.get_number(child, Property::TextSize).unwrap_or(14.0).max(1.0) as f32 * k;
@@ -703,7 +811,9 @@ fn draw_children(
         let inner = padded(tree, child, r, k);
         if !text.is_empty() && text_alpha > 0.0 {
             let clipped = painter.with_clip_rect(r.intersect(painter.clip_rect()));
-            let outline = stroke.filter(|_| is_text(class));
+            let outline = stroke.filter(|_| is_text(class)).or_else(|| {
+                text_stroke(tree, child, text_alpha).filter(|_| is_text(class)).map(|(c, w)| (c, w * k))
+            });
             draw_text(&clipped, tree, child, inner, text, size, color(text_color, text_alpha), outline, k);
         }
         if selected == Some(child) {
@@ -716,24 +826,38 @@ fn draw_children(
         }
         if class == ClassKind::ScrollingFrame {
             // The children sit on a canvas that can be bigger than the frame, moved by scrolling.
-            let canvas = res2(udim2(tree, child, Property::CanvasSize), Vec2::new(r.width(), r.height()), k);
-            let canvas = egui::vec2(canvas.x.max(r.width()), canvas.y.max(r.height()));
+            let canvas = canvas_size(tree, child, r, k);
             let max = canvas - r.size();
             let at = vec2(tree, child, Property::CanvasPosition);
             let at = egui::vec2(at.x.clamp(0.0, max.x), at.y.clamp(0.0, max.y));
-            if hovered {
+            let (sideways, upright) = scroll_axes(tree, child);
+            if hovered && (sideways || upright) {
                 boxes.scroll = Some((child, max));
             }
             let clip = painter.with_clip_rect(r.intersect(painter.clip_rect()));
             let area = Rect::from_min_size(r.min - at, canvas);
             draw_children(&clip, tree, child, area, k, pointer, selected, hit, boxes);
             let bar = tree.get_number(child, Property::ScrollBarThickness).unwrap_or(12.0) as f32 * k;
-            if max.y > 0.5 && bar > 0.0 {
+            // The thumbs take ScrollBarImageColor3 and its transparency.
+            let thumb_colour = {
+                let c =
+                    extra_color(tree, child, "ScrollBarImageColor3").unwrap_or(Color3::new(0.0, 0.0, 0.0));
+                let t = extra_number(tree, child, "ScrollBarImageTransparency").unwrap_or(0.53);
+                color(c, 1.0 - t)
+            };
+            if max.y > 0.5 && bar > 0.0 && upright {
                 let track = Rect::from_min_max(Pos2::new(r.max.x - bar, r.min.y), r.max);
                 let thumb_h = (r.height() * r.height() / canvas.y).max(bar);
                 let thumb_y = track.min.y + (track.height() - thumb_h) * (at.y / max.y);
                 let thumb = Rect::from_min_size(Pos2::new(track.min.x, thumb_y), egui::vec2(bar, thumb_h));
-                painter.rect_filled(thumb.shrink(2.0), bar / 2.0, Color32::from_black_alpha(120));
+                painter.rect_filled(thumb.shrink(2.0), bar / 2.0, thumb_colour);
+            }
+            if max.x > 0.5 && bar > 0.0 && sideways {
+                let track = Rect::from_min_max(Pos2::new(r.min.x, r.max.y - bar), r.max);
+                let thumb_w = (r.width() * r.width() / canvas.x).max(bar);
+                let thumb_x = track.min.x + (track.width() - thumb_w) * (at.x / max.x);
+                let thumb = Rect::from_min_size(Pos2::new(thumb_x, track.min.y), egui::vec2(thumb_w, bar));
+                painter.rect_filled(thumb.shrink(2.0), bar / 2.0, thumb_colour);
             }
             continue;
         }
@@ -1235,6 +1359,39 @@ mod tests {
         let a = tree.find_first_child(model, "A").unwrap().unwrap();
         set(&mut tree, model, Property::PrimaryPart, PropertyValue::Ref(Some(a)));
         assert_eq!(anchor_position(&tree, model).unwrap().x, 0.0);
+    }
+
+    #[test]
+    fn sprite_sheets_scrolling_directions_and_growing_canvases() {
+        let mut tree = InstanceTree::new();
+        let root = tree.root();
+        let screen = gui(&mut tree, ClassKind::ScreenGui, root, "Screen");
+        let icon = gui(&mut tree, ClassKind::ImageLabel, screen, "Icon");
+        let picture = egui::vec2(256.0, 128.0);
+        assert_eq!(image_rect(&tree, icon, picture).1, picture, "no rect: the whole picture");
+        tree.set_extra(icon, "ImageRectOffset", Some(PropertyValue::Vec2(Vec2::new(64.0, 32.0)))).unwrap();
+        tree.set_extra(icon, "ImageRectSize", Some(PropertyValue::Vec2(Vec2::new(64.0, 64.0)))).unwrap();
+        let (shown, size) = image_rect(&tree, icon, picture);
+        assert_eq!(size, egui::vec2(64.0, 64.0));
+        assert_eq!(shown, Rect::from_min_max(Pos2::new(0.25, 0.25), Pos2::new(0.5, 0.75)));
+
+        let list = gui(&mut tree, ClassKind::ScrollingFrame, screen, "List");
+        assert_eq!(scroll_axes(&tree, list), (true, true));
+        tree.set_extra(list, "ScrollingDirection", Some(PropertyValue::Number(2.0))).unwrap();
+        assert_eq!(scroll_axes(&tree, list), (false, true));
+        tree.set_extra(list, "ScrollingEnabled", Some(PropertyValue::Bool(false))).unwrap();
+        assert_eq!(scroll_axes(&tree, list), (false, false));
+
+        set(&mut tree, list, Property::CanvasSize, PropertyValue::UDim2(UDim2::new(0.0, 0.0, 0.0, 0.0)));
+        gui(&mut tree, ClassKind::UIListLayout, list, "Layout");
+        for i in 0..10 {
+            let row = gui(&mut tree, ClassKind::Frame, list, &format!("Row{i}"));
+            set(&mut tree, row, Property::GuiSize, PropertyValue::UDim2(UDim2::new(1.0, 0.0, 0.0, 50.0)));
+        }
+        let frame = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0));
+        assert_eq!(canvas_size(&tree, list, frame, 1.0), egui::vec2(200.0, 100.0), "fixed: the frame's size");
+        tree.set_extra(list, "AutomaticCanvasSize", Some(PropertyValue::Number(2.0))).unwrap();
+        assert_eq!(canvas_size(&tree, list, frame, 1.0), egui::vec2(200.0, 500.0), "grows to hold ten rows");
     }
 
     #[test]

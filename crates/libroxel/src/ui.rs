@@ -4001,6 +4001,13 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
         }
         Action::Scroll(frame, delta, max) => {
             let mut tree = engine.tree.borrow_mut();
+            // Only the ways the frame scrolls (its ScrollingDirection) move;
+            // the wheel moves a frame that only scrolls sideways sideways.
+            let (sideways, upright) = crate::gui::scroll_axes(&tree, frame);
+            let delta = match (sideways, upright) {
+                (true, false) => egui::vec2(delta.x + delta.y, 0.0),
+                _ => egui::vec2(if sideways { delta.x } else { 0.0 }, if upright { delta.y } else { 0.0 }),
+            };
             if let Ok(PropertyValue::Vec2(at)) = tree.get(frame, Property::CanvasPosition) {
                 // Wheel down (a negative delta) moves further down the canvas.
                 let next = libroxel_instance::Vec2::new(

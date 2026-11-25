@@ -180,3 +180,28 @@ fn older_lower_case_member_names() {
     assert_eq!(out[10], "true");
     assert!(out[11].starts_with("false"), "{}", out[11]);
 }
+
+#[test]
+fn a_scrolling_frames_canvas_grows_with_what_is_in_it() {
+    let rt = ScriptRuntime::new_with_tree(Default::default()).unwrap();
+    run(
+        &rt,
+        r##"
+        local gui = Instance.new("ScreenGui")
+        local list = Instance.new("ScrollingFrame")
+        list.Size = UDim2.fromOffset(200, 100)
+        list.CanvasSize = UDim2.new()
+        list.Parent = gui
+        Instance.new("UIListLayout").Parent = list
+        for i = 1, 6 do
+            local row = Instance.new("Frame")
+            row.Size = UDim2.new(1, 0, 0, 40)
+            row.Parent = list
+        end
+        print(list.AbsoluteCanvasSize)
+        list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        print(list.AbsoluteCanvasSize)
+    "##,
+    );
+    assert_eq!(printed(&rt), ["200, 100", "200, 240"]);
+}

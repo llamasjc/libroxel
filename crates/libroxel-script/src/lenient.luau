@@ -1289,6 +1289,41 @@ add(getters, "UIGridLayout", {
 		return Vector2.new(1, #self.Parent:GetChildren())
 	end,
 })
+-- A scrolling frame's canvas in pixels: its CanvasSize, grown to hold what's
+-- in it along the axes AutomaticCanvasSize names, and never smaller than
+-- the frame (as the renderer draws it).
+add(getters, "ScrollingFrame", {
+	AbsoluteCanvasSize = function(self)
+		local frame = abs_size(self)
+		local canvas = self.CanvasSize
+		local w = canvas.X.Scale * frame.X + canvas.X.Offset
+		local h = canvas.Y.Scale * frame.Y + canvas.Y.Offset
+		local auto = tostring(self.AutomaticCanvasSize)
+		if auto ~= "Enum.AutomaticSize.None" then
+			local layout = self:FindFirstChildOfClass("UIListLayout") or self:FindFirstChildOfClass("UIGridLayout")
+			local extent = layout and layout.AbsoluteContentSize or Vector2.zero
+			if not layout then
+				for _, child in ipairs(self:GetChildren()) do
+					if child:IsA("GuiObject") and child.Visible then
+						local size = abs_size(child)
+						local at = child.Position
+						extent = Vector2.new(
+							math.max(extent.X, at.X.Scale * frame.X + at.X.Offset + size.X),
+							math.max(extent.Y, at.Y.Scale * frame.Y + at.Y.Offset + size.Y)
+						)
+					end
+				end
+			end
+			if auto == "Enum.AutomaticSize.X" or auto == "Enum.AutomaticSize.XY" then
+				w = math.max(w, extent.X)
+			end
+			if auto == "Enum.AutomaticSize.Y" or auto == "Enum.AutomaticSize.XY" then
+				h = math.max(h, extent.Y)
+			end
+		end
+		return Vector2.new(math.max(w, frame.X), math.max(h, frame.Y))
+	end,
+})
 add(methods, "UIListLayout", { ApplyLayout = function() end })
 add(methods, "UIGridLayout", { ApplyLayout = function() end })
 
