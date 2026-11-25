@@ -98,20 +98,30 @@ pub(crate) fn copied_from(
     owner: &str,
     prints: &HashSet<String>,
 ) -> Option<String> {
-    if prints.len() < ENOUGH {
+    let plugin = !prints.is_empty() && prints.iter().all(|p| p.starts_with('p'));
+    let enough = if plugin { 1 } else { ENOUGH };
+    let market = game_id.starts_with("market:");
+    if prints.len() < enough {
         return None;
     }
     let mut find = db.prepare("SELECT game_id, owner FROM prints WHERE print = ?1").ok()?;
     let mut shared: HashMap<String, usize> = HashMap::new();
     for print in prints {
-        let rows: Vec<(String, String)> = find
+        let all: Vec<(String, String)> = find
             .query_map(params![print], |r| Ok((r.get(0)?, r.get(1)?)))
             .ok()?
             .filter_map(Result::ok)
-            .filter(|(game, other)| game != game_id && other != owner)
             .collect();
+        if all
+            .iter()
+            .any(|(game, _)| game.starts_with("starter:") || (!market && game.starts_with("market:")))
+        {
+            continue;
+        }
+        let rows: Vec<(String, String)> =
+            all.into_iter().filter(|(game, other)| game != game_id && other != owner).collect();
         let owners: HashSet<&str> = rows.iter().map(|(_, other)| other.as_str()).collect();
-        if owners.len() >= COMMON || rows.iter().any(|(game, _)| game.starts_with("starter:")) {
+        if owners.len() >= COMMON {
             continue;
         }
         for (game, _) in rows {
@@ -119,10 +129,15 @@ pub(crate) fn copied_from(
         }
     }
     let (game, count) = shared.into_iter().max_by_key(|(_, count)| *count)?;
-    if count < ENOUGH || count * 2 < prints.len() {
+    if count < enough || count * 2 < prints.len() {
         return None;
     }
-    db.query_row("SELECT title FROM games WHERE game_id = ?1", params![game], |r| r.get(0)).optional().ok()?
+    match game.strip_prefix("market:") {
+        Some(id) => db.query_row("SELECT name FROM market WHERE asset_id = ?1", params![id], |r| r.get(0)),
+        None => db.query_row("SELECT title FROM games WHERE game_id = ?1", params![game], |r| r.get(0)),
+    }
+    .optional()
+    .ok()?
 }
 
 #[cfg(test)]

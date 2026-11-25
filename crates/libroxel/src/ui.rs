@@ -104,6 +104,10 @@ enum Action {
     Kick(InstanceId),
     /// Share a model (or part) as a hat in the catalog.
     ShareHat(InstanceId),
+    OpenMarket,
+    InsertMarketModel(String, String),
+    RunPlugin(crate::plugins::Plugin),
+    PublishAsset(crate::market::PublishForm),
     /// Put the open game on the Hub for anyone to play.
     Publish {
         title: String,
@@ -630,6 +634,15 @@ pub fn editor_ui(
 
     script_editor(&ctx, editor, &mut tree_rc.borrow_mut(), now, playing);
     dialogs(&ctx, editor, &mut actions);
+    if editor.market.active()
+        && let Some(todo) = editor.market.window(&ctx, editor.platform.client(), editor.selection)
+    {
+        actions.push(match todo {
+            crate::market::Do::Insert(name, text) => Action::InsertMarketModel(name, text),
+            crate::market::Do::Run(plugin) => Action::RunPlugin(plugin),
+            crate::market::Do::Publish(form) => Action::PublishAsset(form),
+        });
+    }
     if let Some((address, name)) = editor.platform.window(&ctx) {
         actions.push(Action::Join { address, name });
     }
@@ -3952,6 +3965,77 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                 Err(e) => log(engine, LogLevel::Error, e),
             }
         }
+        Action::OpenMarket => editor.market.open = !editor.market.open,
+        Action::InsertMarketModel(name, text) => {
+            if playing {
+                log(engine, LogLevel::Warn, "Stop the game to add a model".to_string());
+                return;
+            }
+            let tree_rc = engine.tree.clone();
+            let mut tree = tree_rc.borrow_mut();
+            editor.history.begin_edit(&tree, now);
+            let ws = tree.workspace();
+            let done = place::insert_model(&mut tree, &text, ws);
+            drop(tree);
+            match done {
+                Ok((made, _)) => {
+                    editor.dirty = true;
+                    editor.selection = made.first().copied();
+                    editor.focus_selection = !made.is_empty();
+                    log(engine, LogLevel::Info, format!("Added {name}"));
+                }
+                Err(e) => log(engine, LogLevel::Error, format!("Could not add {name}: {e}")),
+            }
+        }
+        Action::RunPlugin(plugin) => {
+            if playing {
+                log(engine, LogLevel::Warn, "Stop the game to run a plugin".to_string());
+                return;
+            }
+            let tree_rc = engine.tree.clone();
+            let ran = crate::plugins::run(&tree_rc.borrow(), editor.selection.as_slice(), &plugin);
+            match ran {
+                Ok((after, picked, printed)) => {
+                    let mut tree = tree_rc.borrow_mut();
+                    editor.history.begin_edit(&tree, now);
+                    *tree = after;
+                    drop(tree);
+                    editor.dirty = true;
+                    editor.selection = picked.first().copied();
+                    for line in printed {
+                        log(engine, LogLevel::Info, line);
+                    }
+                    log(engine, LogLevel::Info, format!("Ran {}", plugin.name));
+                }
+                Err(e) => log(engine, LogLevel::Error, e),
+            }
+        }
+        Action::PublishAsset(form) => {
+            if playing {
+                return;
+            }
+            let tree = engine.tree.borrow();
+            let data = match form.kind {
+                libroxel_hub::AssetKind::Model => {
+                    if tree.class(form.target).is_ok_and(|c| c.is_service()) {
+                        Err("Pick a model or part, not a service".to_owned())
+                    } else {
+                        place::save_model(&tree, form.target).map_err(|e| e.to_string())
+                    }
+                }
+                libroxel_hub::AssetKind::Plugin => match tree.class(form.target) {
+                    Ok(ClassKind::Script | ClassKind::LocalScript | ClassKind::ModuleScript) => {
+                        Ok(tree.get_string(form.target, Property::Source).unwrap_or_default())
+                    }
+                    _ => Err("Pick the script with the plugin's code".to_owned()),
+                },
+            };
+            drop(tree);
+            match data {
+                Ok(data) => editor.market.publish(editor.platform.client(), &form, data),
+                Err(e) => editor.market.fail(e),
+            }
+        }
         Action::InsertModelFile(path) => {
             if playing {
                 log(engine, LogLevel::Warn, "Stop the game to add a model".to_string());
@@ -4535,6 +4619,14 @@ fn model_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mu
                 }
             }
         });
+        theme::ribbon_group(ui, "Marketplace", |ui| {
+            if theme::ribbon_button(ui, icon::STOREFRONT, "Marketplace", editor.market.open)
+                .on_hover_text("Models and plugins people share")
+                .clicked()
+            {
+                actions.push(Action::OpenMarket);
+            }
+        });
         theme::ribbon_group(ui, "Avatar", |ui| {
             let selected = editor.selection;
             ui.add_enabled_ui(selected.is_some(), |ui| {
@@ -4735,6 +4827,7 @@ fn toolbox(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mut 
                             Action::Insert(ClassKind::SpawnLocation),
                         ),
                         (icon(ClassKind::Tool), theme::MUTED, "Tool", Action::Insert(ClassKind::Tool)),
+                        (icon::STOREFRONT, theme::LINK, "Marketplace", Action::OpenMarket),
                     ],
                 ),
                 (

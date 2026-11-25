@@ -126,7 +126,14 @@ pub fn attribute_from_json(value: &Value) -> Option<PropertyValue> {
 type RefIds = foldhash::HashMap<InstanceId, u64>;
 
 fn ref_targets(tree: &InstanceTree) -> RefIds {
-    let all = tree.descendants(tree.root()).unwrap_or_default();
+    ref_targets_under(tree, tree.root())
+}
+
+fn ref_targets_under(tree: &InstanceTree, top: InstanceId) -> RefIds {
+    let mut all = tree.descendants(top).unwrap_or_default();
+    if top != tree.root() {
+        all.push(top);
+    }
     let saved: foldhash::HashSet<InstanceId> = all.iter().copied().collect();
     let mut wanted = foldhash::HashSet::default();
     for &id in &all {
@@ -146,7 +153,10 @@ fn ref_targets(tree: &InstanceTree) -> RefIds {
             walk(tree, child, out);
         }
     }
-    walk(tree, tree.root(), &mut order);
+    if top != tree.root() {
+        order.push(top);
+    }
+    walk(tree, top, &mut order);
     for id in order.into_iter().filter(|id| wanted.contains(id)) {
         let n = ids.len() as u64 + 1;
         ids.insert(id, n);
@@ -222,6 +232,41 @@ pub fn save(tree: &InstanceTree) -> Result<String, TreeError> {
         .collect::<Result<Vec<_>, _>>()?;
     let doc = json!({ "format": FORMAT, "version": VERSION, "children": children });
     Ok(serde_json::to_string_pretty(&doc).expect("JSON values always serialise"))
+}
+
+pub fn save_model(tree: &InstanceTree, id: InstanceId) -> Result<String, TreeError> {
+    let refs = ref_targets_under(tree, id);
+    let doc = json!({ "format": FORMAT, "version": VERSION, "children": [node_to_json(tree, id, &refs)?] });
+    Ok(serde_json::to_string(&doc).expect("JSON values always serialise"))
+}
+
+pub fn insert_model(
+    tree: &mut InstanceTree,
+    text: &str,
+    parent: InstanceId,
+) -> Result<(Vec<InstanceId>, LoadReport), PlaceError> {
+    let doc: Value = serde_json::from_str(text)?;
+    if doc.get("format").and_then(Value::as_str) != Some(FORMAT) {
+        return Err(PlaceError::WrongFormat);
+    }
+    let version = doc.get("version").and_then(Value::as_u64).unwrap_or(0);
+    if version > VERSION {
+        return Err(PlaceError::TooNew(version));
+    }
+    let before: std::collections::HashSet<InstanceId> = tree.children(parent)?.iter().copied().collect();
+    let mut report = LoadReport::default();
+    let mut refs = LoadRefs::default();
+    for child in doc.get("children").and_then(Value::as_array).into_iter().flatten() {
+        load_node(tree, child, parent, &mut report, &mut refs)?;
+    }
+    for (id, property, n) in refs.pending {
+        match refs.ids.get(&n) {
+            Some(&target) => tree.set(id, property, PropertyValue::Ref(Some(target)))?,
+            None => report.warnings.push(format!("a link points at something that isn't in the model ({n})")),
+        }
+    }
+    let made = tree.children(parent)?.iter().copied().filter(|c| !before.contains(c)).collect();
+    Ok((made, report))
 }
 
 /// Things in a file that were skipped rather than failing the load.
@@ -377,6 +422,26 @@ mod tests {
         let t = back.terrain().unwrap();
         assert_eq!(back.voxels(t).unwrap().get(-20, -4, 19), Some(crate::Material::Grass));
         assert_eq!(back.voxels(t).unwrap().encode(), tree.voxels(terrain).unwrap().encode());
+    }
+
+    #[test]
+    fn models_round_trip() {
+        let mut tree = InstanceTree::new();
+        let ws = tree.workspace();
+        let model = tree.create(ClassKind::Model, "Tower").unwrap();
+        tree.set_parent(model, Some(ws)).unwrap();
+        let base = tree.create(ClassKind::Part, "Base").unwrap();
+        tree.set_parent(base, Some(model)).unwrap();
+        tree.set(model, Property::PrimaryPart, PropertyValue::Ref(Some(base))).unwrap();
+        let text = save_model(&tree, model).unwrap();
+        let mut other = InstanceTree::new();
+        let ws = other.workspace();
+        let (made, report) = insert_model(&mut other, &text, ws).unwrap();
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        assert_eq!(made.len(), 1);
+        let base = other.find_first_child(made[0], "Base").unwrap().unwrap();
+        assert_eq!(other.get_ref(made[0], Property::PrimaryPart), Some(base));
+        assert_eq!(save_model(&other, made[0]).unwrap(), text);
     }
 
     #[test]

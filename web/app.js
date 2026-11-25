@@ -782,6 +782,7 @@ function tabs() {
     tab('groups', ICON.shield),
     tab('avatar', ICON.shirt),
     tab('creator', ICON.hammer),
+    tab('market', ICON.games),
     tab('profile', ICON.profile),
     tab('download', ICON.download),
   );
@@ -893,7 +894,7 @@ window.addEventListener('unhandledrejection', (e) => crashed(e.reason));
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, charts: chartsPage, profile, creator: creatorPage, search: searchPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, stats: statsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy, donate: donatePage };
+  const views = { home, game, charts: chartsPage, profile, creator: creatorPage, market: marketPage, search: searchPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, stats: statsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy, donate: donatePage };
   // An account that signed in with an easy password sees nothing else until it sets a new one.
   loadFamily();
   const needsBirthday = session && familyInfo && !familyInfo.loading && !familyInfo.error && !familyInfo.has_birthday;
@@ -923,6 +924,7 @@ const DESCRIPTIONS = {
   privacy: 'What Libroxel keeps about you, why, and how to have it removed.',
   donate: 'Libroxel is free and open source. Donations are highly appreciated.',
   charts: 'The games people play most on Libroxel, trending, top rated and new.',
+  market: 'Models and plugins creators share for the Libroxel editor.',
   search: 'Find players and games on Libroxel.',
   'sign-in': 'Sign in to Libroxel.',
   create: 'Make a Libroxel account.',
@@ -2063,7 +2065,7 @@ function statsPage() {
 
 const mod = { board: null, error: null, busy: false, for: null, at: 0 };
 const HOURS = [[1, '1 hour'], [24, '1 day'], [168, '7 days'], [720, '30 days']];
-const KINDS = { player: 'Player', game: 'Game', item: 'Item', comment: 'Comment', message: 'Message', group: 'Group', post: 'Post', appeal: 'Appeal' };
+const KINDS = { player: 'Player', game: 'Game', item: 'Item', market: 'Marketplace', comment: 'Comment', message: 'Message', group: 'Group', post: 'Post', appeal: 'Appeal' };
 const PENALTIES = { ban: 'Ban', mute: 'Mute', warning: 'Warning' };
 
 function loadModeration() {
@@ -3043,6 +3045,91 @@ function earningsPage() {
       el('div', { class: 'buttons' }, el('span', { class: 'soft' }, `${s.settled ? '+' : 'On hold: '}${sparks(s.earned)}`))))));
   }
   out.push(...cashOutPanel(e));
+  return out;
+}
+
+const PERMISSION_WORDS = { add: 'Add new things', change: "Change, move or delete what's there", scripts: 'Write or change scripts' };
+const market = { key: null, list: null, error: null, kind: '', sort: '', q: '', item: null };
+
+function loadMarket() {
+  const key = `${market.kind}|${market.sort}|${market.q}`;
+  if (market.key === key) return;
+  market.key = key;
+  const query = { q: market.q };
+  if (market.kind) query.kind = market.kind;
+  if (market.sort) query.sort = market.sort;
+  api('/market', { query })
+    .then((list) => { market.list = list; market.error = null; })
+    .catch((e) => { market.error = e.message; })
+    .finally(() => route.name === 'market' && render());
+}
+
+function loadMarketItem(id) {
+  if (market.item?.asset_id === id || market.item?.loading === id) return;
+  market.item = { loading: id };
+  api(`/market/${encodeURIComponent(id)}`)
+    .then((item) => { market.item = item; })
+    .catch((e) => { market.item = { asset_id: id, error: e.message }; })
+    .finally(() => route.name === 'market' && render());
+}
+
+function permissionsLine(item) {
+  if (item.kind !== 'plugin') return null;
+  return el('div', { class: 'soft' }, item.permissions.length ? item.permissions.map((p) => PERMISSION_WORDS[p] || p).join(', ') : 'Can only look');
+}
+
+async function takeDown(item) {
+  const time = nowSecs();
+  const signature = signText(secretKey(), `libroxel unmarket\n${item.asset_id}\n${time}`);
+  try {
+    await api(`/market/${encodeURIComponent(item.asset_id)}`, { method: 'DELETE', body: { time, signature } });
+    flash = { text: 'Taken down.' };
+    market.key = null;
+    market.item = null;
+    history.pushState(null, '', '/market');
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  render();
+}
+
+function marketItemPage(id) {
+  loadMarketItem(id);
+  const item = market.item;
+  const out = [el('a', { class: 'back', href: '/market' }, icon(ICON.left), 'Marketplace')];
+  if (!item || item.loading) return [...out, el('p', { class: 'soft' }, 'Loading…')];
+  if (item.error) return [...out, el('div', { class: 'empty' }, item.error)];
+  const mine = session && session.playerId === item.creator_id;
+  out.push(el('h1', { class: 'title' }, item.name),
+    el('div', { class: 'soft' }, item.kind === 'plugin' ? 'Plugin' : 'Model', ' by ', el('a', { href: `/user/${item.creator_id}` }, item.creator),
+      ` · version ${item.version} · ${count(item.installs)} uses · ${ago(item.updated_secs_ago)}`),
+    item.about && el('p', {}, item.about),
+    permissionsLine(item),
+    el('p', { class: 'soft' }, item.price ? 'Paid' : 'Free', ' · Open Libroxel, then Model › Marketplace in the editor to use it.'),
+    el('div', { class: 'buttons' },
+      session && !mine && el('button', { class: 'chip', onclick: () => startReport('market', item.asset_id, item.name) }, icon(ICON.flag), 'Report'),
+      mine && el('button', { class: 'chip', onclick: () => takeDown(item) }, icon(ICON.trash), 'Take down')),
+    reportPanel('market', item.asset_id));
+  return out;
+}
+
+function marketPage() {
+  if (route.id) return marketItemPage(route.id);
+  loadMarket();
+  const box = el('input', { type: 'search', placeholder: 'Search models and plugins', value: market.q });
+  box.addEventListener('change', () => { market.q = box.value.trim(); render(); });
+  const chips = (list, key) => el('div', { class: 'hats' }, list.map(([value, label]) =>
+    el('button', { class: `chip${market[key] === value ? ' on' : ''}`, onclick: () => { market[key] = value; render(); } }, label)));
+  const out = [el('h1', { class: 'title' }, 'Marketplace'), box,
+    chips([['', 'All'], ['model', 'Models'], ['plugin', 'Plugins']], 'kind'),
+    chips([['', 'Most used'], ['new', 'New'], ['updated', 'Updated']], 'sort')];
+  if (market.error) return [...out, status(market.error, 'error')];
+  if (!market.list) return [...out, el('p', { class: 'soft' }, 'Loading…')];
+  if (!market.list.length) return [...out, el('div', { class: 'empty' }, 'Nothing here yet.')];
+  out.push(el('div', { class: 'market' }, market.list.map((item) => el('a', { class: 'market-row', href: `/market/${encodeURIComponent(item.asset_id)}` },
+    el('b', {}, item.name),
+    el('div', { class: 'soft' }, `${item.kind === 'plugin' ? 'Plugin' : 'Model'} by ${item.creator} · ${count(item.installs)} uses`),
+    permissionsLine(item)))));
   return out;
 }
 

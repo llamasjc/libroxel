@@ -439,3 +439,7 @@ footer a { color: var(--heading); text-decoration: underline; }
 .manage { max-width: 560px; }
 .manage input[type=number] { width: 120px; padding: 7px 9px; background: #fff; border: 1px solid rgb(171, 173, 179); border-radius: 3px; }
 .versions { max-width: 560px; display: flex; flex-direction: column; gap: 8px; }
+
+.market { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.market-row { display: block; padding: 12px 14px; background: #fff; border: 1px solid var(--line); border-radius: 8px; color: inherit; text-decoration: none; }
+.market-row:hover { border-color: var(--link); }

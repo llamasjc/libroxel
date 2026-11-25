@@ -89,7 +89,12 @@ pub use groups::{
 };
 mod limits;
 mod manage;
+mod market;
 pub use manage::{Change, KEEP_VERSIONS, MOST_PLAYERS, ManageGame, Version, manage_message};
+pub use market::{
+    Asset, AssetData, AssetKind, MAX_MODEL, MAX_PLUGIN, NewAsset, PERMISSIONS, Unmarket, asset_message,
+    unmarket_message,
+};
 mod messages;
 mod moderate;
 pub use cli::{HUB_HELP, cli};
@@ -870,6 +875,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     moderate::create_tables(&db)?;
     recovery::create_tables(&db)?;
     manage::create_tables(&db)?;
+    market::create_tables(&db)?;
     copies::create_tables(&db)?;
     pictures::create_tables(&db)?;
     wallet::create_tables(&db)?;
@@ -955,6 +961,7 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         tower_http::decompression::RequestDecompressionLayer::new(),
         axum::extract::DefaultBodyLimit::max(MAX_PLACE * 2 + 64 * 1024),
     );
+    let shared = axum::extract::DefaultBodyLimit::max(MAX_MODEL * 3);
     Router::new()
         .route("/", get(status))
         .route("/servers", get(list_servers))
@@ -1002,6 +1009,9 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/accounts/family/consent", post(family::consent))
         .route("/accounts/{id}/family", get(family::family))
         .route("/accounts/{id}/chat", get(family::chat_rule))
+        .route("/market", get(market::list).post(market::publish).layer(shared))
+        .route("/market/{id}", get(market::info).delete(market::remove))
+        .route("/market/{id}/data", get(market::data))
         .route("/catalog", get(list_items).post(share_item))
         .route("/catalog/{id}", delete(unlist_item))
         .route("/catalog/{id}/wear", post(wear_item))
@@ -1604,8 +1614,12 @@ async fn report(
         return Err(too_many("reports"));
     }
     let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
-    if !["game", "item", "comment", "message", "group", "post", "player"].contains(&report.kind.as_str()) {
-        return bad("only players, games, items, comments, messages, groups and posts can be reported");
+    if !["game", "item", "market", "comment", "message", "group", "post", "player"]
+        .contains(&report.kind.as_str())
+    {
+        return bad(
+            "only players, games, items, marketplace items, comments, messages, groups and posts can be reported",
+        );
     }
     if report.reason.trim().is_empty() || report.reason.chars().count() > 300 {
         return bad("a report needs a short reason");
@@ -1638,6 +1652,7 @@ async fn report(
     let table = match report.kind.as_str() {
         "game" => "games WHERE game_id = ?1",
         "item" => "items WHERE item_id = ?1",
+        "market" => "market WHERE asset_id = ?1",
         "comment" => "game_comments WHERE comment_id = ?1",
         "group" => "groups WHERE group_id = ?1",
         "post" => "group_posts WHERE post_id = ?1",
@@ -1674,6 +1689,7 @@ pub fn reports(db: &Connection) -> Vec<Reported> {
                  EXISTS (SELECT 1 FROM cleared c WHERE c.kind = r.kind AND c.target = r.target),
                  CASE r.kind WHEN 'game' THEN (SELECT title FROM games WHERE game_id = r.target)
                              WHEN 'item' THEN (SELECT name FROM items WHERE item_id = r.target)
+                             WHEN 'market' THEN (SELECT name FROM market WHERE asset_id = r.target)
                              WHEN 'comment' THEN (SELECT text FROM game_comments WHERE comment_id = r.target)
                              WHEN 'group' THEN (SELECT name FROM groups WHERE group_id = r.target)
                              WHEN 'post' THEN (SELECT text FROM group_posts WHERE post_id = r.target)
@@ -1716,12 +1732,15 @@ pub fn take_down(db: &Connection, kind: &str, target: &str) -> Result<(), String
         "comment" => "DELETE FROM game_comments WHERE comment_id = ?1",
         "message" => "DELETE FROM messages WHERE message_id = ?1",
         "post" => "DELETE FROM group_posts WHERE post_id = ?1",
-        "group" => "",
+        "group" | "market" => "",
         _ => return Err(format!("there are no {kind}s on a Hub")),
     };
-    let gone =
-        if sql.is_empty() { groups::delete_group(db, target) } else { db.execute(sql, params![target]) }
-            .map_err(|e| e.to_string())?;
+    let gone = match kind {
+        "group" => groups::delete_group(db, target),
+        "market" => market::take_down(db, target),
+        _ => db.execute(sql, params![target]),
+    }
+    .map_err(|e| e.to_string())?;
     if gone == 0 {
         return Err(format!("there is no {kind} {target}"));
     }
@@ -2747,6 +2766,75 @@ impl HubClient {
             .build()
             .call();
         self.answer(request)
+    }
+
+    pub fn market(
+        &self,
+        search: &str,
+        kind: Option<AssetKind>,
+        creator: Option<&str>,
+    ) -> Result<Vec<Asset>, String> {
+        let mut request = self.agent.get(format!("{}/market", self.base)).query("q", search);
+        if let Some(kind) = kind {
+            request = request.query("kind", kind.word());
+        }
+        if let Some(creator) = creator {
+            request = request.query("creator", creator);
+        }
+        request
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not reach the Hub: {e}"))
+    }
+
+    pub fn market_asset(&self, asset_id: &str) -> Result<Asset, String> {
+        let request = self
+            .agent
+            .get(format!("{}/market/{}", self.base, assets::encode(asset_id)))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call();
+        self.answer(request)
+    }
+
+    pub fn market_data(&self, asset_id: &str) -> Result<AssetData, String> {
+        let request = self
+            .slow
+            .get(format!("{}/market/{}/data", self.base, assets::encode(asset_id)))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call();
+        self.answer(request)
+    }
+
+    pub fn publish_asset(&self, asset: &NewAsset) -> Result<Asset, String> {
+        let request = self
+            .slow
+            .post(format!("{}/market", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(asset);
+        self.answer(request)
+    }
+
+    pub fn unmarket(&self, asset_id: &str, signed: &Unmarket) -> Result<(), String> {
+        let mut r = self
+            .agent
+            .delete(format!("{}/market/{}", self.base, assets::encode(asset_id)))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .force_send_body()
+            .send_json(signed)
+            .map_err(|e| format!("could not reach the Hub: {e}"))?;
+        if r.status().is_success() {
+            Ok(())
+        } else {
+            Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+        }
     }
 
     /// Counts someone putting an item on.

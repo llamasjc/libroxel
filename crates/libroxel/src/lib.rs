@@ -32,12 +32,14 @@ mod hub_home;
 mod i18n;
 mod images;
 mod loading;
+mod market;
 mod menu;
 mod mesh_import;
 mod messages;
 mod my_games;
 mod open;
 mod party_games;
+mod plugins;
 mod render_scale;
 mod report;
 mod rich_text;
@@ -172,6 +174,7 @@ pub struct Editor {
     pub edit_tunnel: Option<Tunnel>,
     /// The Hub: Browse, the built-in Hub, and listing a hosted game.
     pub platform: browse::Platform,
+    pub market: market::Market,
     /// The main menu, shown when the app starts.
     pub menu: menu::Menu,
     /// Playing a game started from the main menu: only the game shows, and
@@ -266,6 +269,7 @@ impl Default for Editor {
             coedit: None,
             edit_tunnel: None,
             platform: browse::Platform::default(),
+            market: market::Market::default(),
             menu: menu::Menu::default(),
             player_mode: false,
             loading: Default::default(),

@@ -407,6 +407,8 @@ fn content(db: &Connection, kind: &str, target: &str) -> Option<(String, Option<
         "game" => "SELECT title || CASE WHEN description = '' THEN '' ELSE ': ' || description END, author_id, game_id
                    FROM games WHERE game_id = ?1",
         "item" => "SELECT name, creator_id, NULL FROM items WHERE item_id = ?1",
+        "market" => "SELECT name || CASE WHEN about = '' THEN '' ELSE ': ' || about END, creator_id, NULL
+                     FROM market WHERE asset_id = ?1",
         "comment" => "SELECT text, player_id, game_id FROM game_comments WHERE comment_id = ?1",
         "message" => "SELECT unseal(text), from_id, NULL FROM messages WHERE message_id = ?1",
         "group" => "SELECT name || CASE WHEN about = '' THEN '' ELSE ': ' || about END,

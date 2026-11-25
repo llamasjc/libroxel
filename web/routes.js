@@ -3,6 +3,7 @@ export const ROUTES = {
   game: { title: 'Game', params: ['key'], rest: true },
   user: { title: 'Player', params: ['id'] },
   creator: { title: 'Create', params: ['id', 'tab'] },
+  market: { title: 'Marketplace', params: ['id'] },
   messages: { title: 'Messages', params: ['id'] },
   group: { title: 'Group', params: ['id'] },
   charts: { title: 'Charts', params: [] },

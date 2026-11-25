@@ -216,6 +216,7 @@ pub const GUI_INSET: f32 = 58.0;
 /// script that tries to use more gets a "not enough memory" error instead
 /// of taking the whole computer (or server) down with it.
 pub const MEMORY_LIMIT: usize = 2048 * 1024 * 1024;
+pub const PLUGIN_MEMORY_LIMIT: usize = 256 * 1024 * 1024;
 
 /// The same on a phone or tablet, which has far less to spare.
 pub const MOBILE_MEMORY_LIMIT: usize = 768 * 1024 * 1024;
@@ -302,6 +303,18 @@ impl ScriptRuntime {
     /// come back from [`step`](Self::step).
     pub fn run(&self, script_name: &str, source: &str) -> Result<(), ScriptError> {
         bindings::run_chunk(&self.lua, script_name, source, None)
+    }
+
+    pub fn run_plugin(
+        &self,
+        name: &str,
+        source: &str,
+        selection: &[InstanceId],
+    ) -> Result<Vec<InstanceId>, ScriptError> {
+        let _ = self.lua.set_memory_limit(PLUGIN_MEMORY_LIMIT);
+        let picked = Rc::new(RefCell::new(selection.to_vec()));
+        bindings::run_plugin(&self.lua, name, source, picked.clone())?;
+        Ok(picked.take())
     }
 
     /// Starts every enabled `Script` instance in the tree, in tree order,

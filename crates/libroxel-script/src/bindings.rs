@@ -2790,6 +2790,48 @@ pub(crate) fn run_chunk(
     }
 }
 
+pub(crate) fn run_plugin(
+    lua: &Lua,
+    name: &str,
+    source: &str,
+    selection: Rc<RefCell<Vec<InstanceId>>>,
+) -> Result<(), ScriptError> {
+    let fail = |err: mlua::Error| ScriptError { script: name.to_owned(), message: err.to_string() };
+    let env = script_env(lua, None).map_err(fail)?;
+    let plugin = lua.create_table().map_err(fail)?;
+    let get = selection.clone();
+    let get_selection = lua
+        .create_function(move |lua, _: Value| {
+            let list = lua.create_table()?;
+            for (i, id) in get.borrow().iter().enumerate() {
+                list.raw_set(i + 1, push_instance(lua, *id)?)?;
+            }
+            Ok(list)
+        })
+        .map_err(fail)?;
+    let set_selection = lua
+        .create_function(move |_, (_, list): (Value, Table)| {
+            *selection.borrow_mut() = list
+                .sequence_values::<Value>()
+                .filter_map(Result::ok)
+                .filter_map(|v| as_instance(&v))
+                .collect();
+            Ok(())
+        })
+        .map_err(fail)?;
+    plugin.raw_set("GetSelection", get_selection).map_err(fail)?;
+    plugin.raw_set("SetSelection", set_selection).map_err(fail)?;
+    plugin.set_readonly(true);
+    env.raw_set("plugin", plugin).map_err(fail)?;
+    let func =
+        lua.load(source).set_name(format!("={name}")).set_environment(env).into_function().map_err(fail)?;
+    let thread = lua.create_thread(func).map_err(fail)?;
+    match resume(lua, thread, MultiValue::new(), name, None) {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}
+
 /// Runs every enabled `Script` in the workspace and the server script
 /// service, in tree order. Scripts elsewhere (in storage, or in GUIs
 /// waiting to be copied to players) don't run.
