@@ -1053,6 +1053,7 @@ impl ClassKind {
             Property::Orientation,
             Property::FieldOfView,
             Property::CameraType,
+            Property::CameraSubject,
         ];
         const POINT_LIGHT: &[Property] =
             &[Property::Name, Property::Enabled, Property::Brightness, Property::Color, Property::Range];
@@ -1451,7 +1452,7 @@ impl ClassKind {
             Property::Opacity => PropertyValue::Number(0.5),
             Property::RiseVelocity => PropertyValue::Number(1.0),
             Property::SparkleColor => PropertyValue::Color3(Color3::from_rgb8(144, 25, 255)),
-            Property::Adornee => PropertyValue::Ref(None),
+            Property::Adornee | Property::CameraSubject => PropertyValue::Ref(None),
             Property::FillColor => PropertyValue::Color3(Color3::from_rgb8(255, 0, 0)),
             Property::FillTransparency => PropertyValue::Number(0.5),
             Property::OutlineColor => PropertyValue::Color3(Color3::WHITE),

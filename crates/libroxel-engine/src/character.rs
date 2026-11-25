@@ -742,6 +742,98 @@ pub fn yaw_of(dir: Vec3) -> f32 {
     (-dir.x).atan2(-dir.z).to_degrees()
 }
 
+/// A humanoid setting libroxel keeps by its script name (one scripts set,
+/// or one from a file), or `default` when it hasn't been set.
+fn kept_bool(tree: &InstanceTree, humanoid: InstanceId, name: &str, default: bool) -> bool {
+    match tree.get_extra(humanoid, name) {
+        Ok(Some(PropertyValue::Bool(b))) => b,
+        _ => default,
+    }
+}
+
+fn kept_number(tree: &InstanceTree, humanoid: InstanceId, name: &str) -> Option<f32> {
+    match tree.get_extra(humanoid, name) {
+        Ok(Some(PropertyValue::Number(n))) => Some(n as f32),
+        _ => None,
+    }
+}
+
+/// Whether a humanoid turns to face the way it walks (`AutoRotate`, on
+/// unless a script turns it off, as shift-lock and vehicle scripts do).
+pub fn auto_rotates(tree: &InstanceTree, humanoid: InstanceId) -> bool {
+    kept_bool(tree, humanoid, "AutoRotate", true)
+}
+
+/// Whether a humanoid stands on its platform (`PlatformStand`): it neither
+/// walks nor jumps by itself, so a vehicle or a ragdoll script moves it.
+pub fn platform_standing(tree: &InstanceTree, humanoid: InstanceId) -> bool {
+    kept_bool(tree, humanoid, "PlatformStand", false)
+}
+
+/// How fast a humanoid leaves the ground when it jumps: its JumpPower, or,
+/// once a script turns UseJumpPower off, fast enough to rise JumpHeight
+/// studs under the workspace's gravity.
+pub fn jump_speed(tree: &InstanceTree, humanoid: InstanceId) -> f32 {
+    let power = tree.get_number(humanoid, Property::JumpPower).unwrap_or(50.0) as f32;
+    if kept_bool(tree, humanoid, "UseJumpPower", true) {
+        return power;
+    }
+    let height = kept_number(tree, humanoid, "JumpHeight").unwrap_or(7.2).max(0.0);
+    let gravity = tree
+        .get_number(tree.workspace(), Property::Gravity)
+        .map_or(crate::physics::GRAVITY, |g| g as f32)
+        .max(0.0);
+    (2.0 * gravity * height).sqrt()
+}
+
+/// How fast characters climb, as a share of their walk speed.
+const CLIMB_SHARE: f32 = 0.7;
+
+/// Climbing a truss: a character walking into one goes up it, hangs on when
+/// the keys are let go, and leaps off backwards with Space. The top of the
+/// truss lets go once the feet are above it, and the walk carries the
+/// character on over the top. True while climbing (`v` is then its new
+/// velocity).
+fn climb(
+    tree: &InstanceTree,
+    physics: &mut Physics,
+    root: InstanceId,
+    dir: Vec3,
+    jump: bool,
+    walk: f32,
+    v: &mut Vec3,
+) -> bool {
+    let Some(pos) = tree.get_vec3(root, Property::Position) else { return false };
+    let reach = Vec3::new(1.5, 2.5, 1.5);
+    let truss = physics
+        .climbable_near(tree, pos - reach, pos + reach)
+        // Only while some of it is still above the feet.
+        .filter(|(_, hi)| hi.y > pos.y - 2.5);
+    let Some((lo, hi)) = truss else {
+        physics.set_climbing(root, false);
+        return false;
+    };
+    let nearest = Vec3::new(pos.x.clamp(lo.x, hi.x), pos.y, pos.z.clamp(lo.z, hi.z));
+    let toward = Vec3::new(nearest.x - pos.x, 0.0, nearest.z - pos.z).normalize_or_zero();
+    let pressing = dir.length() > 0.1 && (toward == Vec3::ZERO || dir.normalize_or_zero().dot(toward) > 0.3);
+    let holding = physics.is_climbing(root);
+    if jump && holding {
+        // Leap off, away from the truss.
+        *v = Vec3::new(-toward.x * walk, walk * 1.5, -toward.z * walk);
+        physics.set_climbing(root, false);
+        return true;
+    }
+    let away = dir.length() > 0.1 && dir.normalize_or_zero().dot(toward) < -0.3;
+    if !(pressing || holding && !away) {
+        physics.set_climbing(root, false);
+        return false;
+    }
+    physics.set_climbing(root, true);
+    let up = if pressing { walk * CLIMB_SHARE } else { 0.0 };
+    *v = Vec3::new(dir.x * walk * 0.5, up, dir.z * walk * 0.5);
+    true
+}
+
 /// Moves any humanoid's root part: walking at its walk speed in the input's
 /// direction, and jumping when on the ground.
 pub fn drive(
@@ -749,12 +841,16 @@ pub fn drive(
     physics: &mut Physics,
     root: InstanceId,
     humanoid: InstanceId,
-    input: CharacterInput,
+    mut input: CharacterInput,
     dt: f32,
 ) {
+    if platform_standing(tree, humanoid) {
+        input.move_dir = Vec3::ZERO;
+        input.jump = false;
+    }
     {
         let walk = tree.get_number(humanoid, Property::WalkSpeed).unwrap_or(16.0) as f32;
-        let jump = tree.get_number(humanoid, Property::JumpPower).unwrap_or(50.0) as f32;
+        let jump = jump_speed(tree, humanoid);
         let mut dir = Vec3::new(input.move_dir.x, 0.0, input.move_dir.z);
         if dir.length() > 1.0 {
             dir = dir.normalize_or_zero();
@@ -777,6 +873,10 @@ pub fn drive(
                 (false, true) => 0.0,
                 (false, false) => FLOAT_UP,
             };
+            physics.set_velocity(root, v);
+            return;
+        }
+        if climb(tree, physics, root, dir, input.jump, walk, &mut v) {
             physics.set_velocity(root, v);
             return;
         }

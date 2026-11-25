@@ -138,6 +138,9 @@ pub fn stand_in(name: &str) -> Option<(ClassKind, Option<PartShape>)> {
 /// a stand-in was made as, so scripts see that class.
 pub const STAND_IN: &str = "ClassName";
 
+/// The stand-in class characters climb.
+pub const TRUSS_PART: &str = "TrussPart";
+
 /// Services that are another service under a second name.
 pub fn service_alias(name: &str) -> &str {
     match name {
@@ -1340,6 +1343,7 @@ pub fn property_name(property: Property) -> &'static str {
         Property::RiseVelocity => "RiseVelocity",
         Property::SparkleColor => "SparkleColor",
         Property::Adornee => "Adornee",
+        Property::CameraSubject => "CameraSubject",
         Property::FillColor => "FillColor",
         Property::FillTransparency => "FillTransparency",
         Property::OutlineColor => "OutlineColor",

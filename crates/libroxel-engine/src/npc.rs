@@ -128,7 +128,9 @@ impl Npcs {
     ) -> (Vec<(InstanceId, bool)>, Vec<InstanceId>) {
         for pose in poses {
             let Some(new_pos) = tree.get_vec3(pose.root, Property::Position) else { continue };
-            let new_yaw = if pose.dir.x != 0.0 || pose.dir.z != 0.0 {
+            let new_yaw = if (pose.dir.x != 0.0 || pose.dir.z != 0.0)
+                && crate::character::auto_rotates(tree, pose.humanoid)
+            {
                 crate::character::turn_toward(pose.yaw, crate::character::yaw_of(pose.dir), dt)
             } else {
                 pose.yaw

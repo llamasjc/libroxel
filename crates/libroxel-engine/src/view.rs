@@ -2115,6 +2115,44 @@ fn place_follow(
     transform.translation = focus + back * rig.shown;
 }
 
+/// What the camera follows when its subject is `subject`: the root part of a
+/// humanoid's model, a part itself, or a model's primary (else first) part.
+/// `None` for the player's own humanoid, which is followed as usual, and for
+/// anything that isn't in the world.
+fn subject_followed(
+    tree: &InstanceTree,
+    subject: InstanceId,
+    own_humanoid: Option<InstanceId>,
+) -> Option<Followed> {
+    if Some(subject) == own_humanoid || tree.is_destroyed(subject).unwrap_or(true) {
+        return None;
+    }
+    let first_part = |model: InstanceId| {
+        tree.get_ref(model, Property::PrimaryPart)
+            .or_else(|| tree.find_first_child(model, "HumanoidRootPart").ok().flatten())
+            .or_else(|| tree.descendants_of_class(model, ClassKind::Part).into_iter().next())
+    };
+    let (root, model) = match tree.class(subject).ok()? {
+        ClassKind::Humanoid => {
+            let model = tree.parent(subject).ok().flatten()?;
+            (first_part(model)?, Some(model))
+        }
+        ClassKind::Model => (first_part(subject)?, Some(subject)),
+        class if class.is_physical() && class != ClassKind::Terrain => {
+            let model =
+                tree.parent(subject).ok().flatten().filter(|m| tree.class(*m) == Ok(ClassKind::Model));
+            (subject, model)
+        }
+        _ => return None,
+    };
+    if !tree.is_descendant_of(root, tree.workspace()).unwrap_or(false) {
+        return None;
+    }
+    let position = tree.get_vec3(root, Property::Position)?;
+    let yaw = tree.get_vec3(root, Property::Orientation).unwrap_or_default().y;
+    Some(Followed { root, model, position, yaw, driving: None })
+}
+
 /// Whether the follow camera is in the character's head.
 pub fn first_person(rig: &CameraRig) -> bool {
     rig.mode == CameraMode::Follow && rig.following.is_some() && rig.zoom <= crate::camera::FIRST_PERSON
@@ -2147,6 +2185,15 @@ fn follow_camera(
     });
     // The workspace camera: scripts can take it over, or read where it is.
     let camera = session.and_then(|s| s.camera());
+    // A script can point the camera at something else to follow.
+    let own_humanoid = session.and_then(|s| s.character()).map(|c| c.humanoid);
+    let followed = camera
+        .and_then(|cam| {
+            let tree = engine.tree.borrow();
+            let subject = tree.get_ref(cam, Property::CameraSubject)?;
+            subject_followed(&tree, subject, own_humanoid)
+        })
+        .or(followed);
     let (scripted, fov) = camera.map_or((false, 70.0), |cam| {
         let tree = engine.tree.borrow();
         let scripted = tree.get_enum(cam, Property::CameraType)
@@ -2738,6 +2785,36 @@ fn draw_blasts(
 mod tests {
     use super::*;
     use libroxel_instance::Vec3 as V;
+
+    #[test]
+    fn the_camera_follows_its_subject() {
+        let mut tree = InstanceTree::new();
+        let ws = tree.workspace();
+        let car = tree.create(ClassKind::Model, "Car").unwrap();
+        tree.set_parent(car, Some(ws)).unwrap();
+        let body = tree.create(ClassKind::Part, "Body").unwrap();
+        tree.set_parent(body, Some(car)).unwrap();
+        tree.set(body, Property::Position, libroxel_instance::PropertyValue::Vec3(V::new(5.0, 1.0, 2.0)))
+            .unwrap();
+        let npc = tree.create(ClassKind::Model, "Npc").unwrap();
+        tree.set_parent(npc, Some(ws)).unwrap();
+        let root = tree.create(ClassKind::Part, "HumanoidRootPart").unwrap();
+        tree.set_parent(root, Some(npc)).unwrap();
+        let humanoid = tree.create(ClassKind::Humanoid, "Humanoid").unwrap();
+        tree.set_parent(humanoid, Some(npc)).unwrap();
+        let stored = tree.create(ClassKind::Part, "Stored").unwrap();
+
+        let f = subject_followed(&tree, body, None).unwrap();
+        assert_eq!((f.root, f.model), (body, Some(car)));
+        assert_eq!(f.position, V::new(5.0, 1.0, 2.0));
+        assert_eq!(subject_followed(&tree, car, None).unwrap().root, body);
+        let f = subject_followed(&tree, humanoid, None).unwrap();
+        assert_eq!((f.root, f.model), (root, Some(npc)));
+        // The player's own humanoid is followed the usual way, and nothing
+        // outside the world is followed at all.
+        assert!(subject_followed(&tree, humanoid, Some(humanoid)).is_none());
+        assert!(subject_followed(&tree, stored, None).is_none());
+    }
 
     #[test]
     fn auto_quality_holds_sixty() {

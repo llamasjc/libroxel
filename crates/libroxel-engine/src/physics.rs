@@ -420,6 +420,8 @@ pub struct Physics {
     grounded: HashSet<InstanceId>,
     /// Moving parts that were in water last step.
     wet: HashSet<InstanceId>,
+    /// Characters holding on to something they climb: gravity leaves them be.
+    climbing: HashSet<InstanceId>,
     contacts: HashSet<(InstanceId, InstanceId)>,
     /// Parts moved by something else (a weld) that stand still in a step.
     carried: HashSet<InstanceId>,
@@ -698,6 +700,38 @@ impl Physics {
     pub fn hold(&mut self, id: InstanceId) {
         self.wake(id);
         self.held.insert(id);
+    }
+
+    /// Whether `id` is holding on to something it climbs.
+    pub fn is_climbing(&self, id: InstanceId) -> bool {
+        self.climbing.contains(&id)
+    }
+
+    /// Holds `id` on to (or lets it go of) something it climbs.
+    pub fn set_climbing(&mut self, id: InstanceId, climbing: bool) {
+        if climbing {
+            self.climbing.insert(id);
+        } else {
+            self.climbing.remove(&id);
+        }
+    }
+
+    /// The box (low and high corners) of a climbable part, a truss, that
+    /// overlaps the box from `lo` to `hi`, if there is one.
+    pub fn climbable_near(&self, tree: &InstanceTree, lo: Vec3, hi: Vec3) -> Option<(Vec3, Vec3)> {
+        let near = self.index.borrow().near_box(lo, hi);
+        near.into_iter()
+            .filter(|part| {
+                matches!(
+                    tree.get_extra(*part, names::STAND_IN),
+                    Ok(Some(PropertyValue::String(class))) if class == names::TRUSS_PART
+                )
+            })
+            .filter_map(|part| libroxel_instance::geometry::Region::of_part(tree, part))
+            .map(|region| region.bounds())
+            .find(|(a, b)| {
+                a.x <= hi.x && b.x >= lo.x && a.y <= hi.y && b.y >= lo.y && a.z <= hi.z && b.z >= lo.z
+            })
     }
 
     /// Whether `id` was in terrain water during the last step.
@@ -1220,6 +1254,7 @@ impl Physics {
         let live: HashSet<InstanceId> = bodies.iter().map(|b| b.id).collect();
         self.velocities.retain(|id, _| live.contains(id));
         self.spins.retain(|id, _| live.contains(id));
+        self.climbing.retain(|id| live.contains(id));
         self.hips.retain(|id, _| live.contains(id));
         for body in bodies.iter().filter(|b| b.hip > 0.0) {
             self.hips.entry(body.id).or_insert(body.hip);
@@ -1481,6 +1516,7 @@ impl Physics {
             let id = bodies[i].id;
             let mut v = self.velocity(id);
             match bodies[i].water {
+                None if self.climbing.contains(&id) => {}
                 None => v.y -= gravity * h,
                 Some(floats) => {
                     if floats {

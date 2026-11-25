@@ -825,7 +825,10 @@ impl PlaySession {
         if let Some(yaw) = input.face.filter(|_| !sitting) {
             let facing = PropertyValue::Vec3(Vec3::new(0.0, yaw, 0.0));
             let _ = tree.set(character.root, Property::Orientation, facing);
-        } else if !sitting && (dir.x != 0.0 || dir.z != 0.0) {
+        } else if !sitting
+            && (dir.x != 0.0 || dir.z != 0.0)
+            && crate::character::auto_rotates(&tree, character.humanoid)
+        {
             // Turn smoothly, the short way round, rather than snapping.
             let now = tree.get_vec3(character.root, Property::Orientation).unwrap_or_default().y;
             let yaw = crate::character::turn_toward(now, crate::character::yaw_of(dir), dt);

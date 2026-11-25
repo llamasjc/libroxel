@@ -290,6 +290,9 @@ pub enum Property {
     SparkleColor,
     /// On a highlight: what it highlights (its parent when empty).
     Adornee,
+    /// On a camera: what the follow camera follows (a humanoid, a part or
+    /// a model); the player's own character when empty.
+    CameraSubject,
     /// On a highlight: the tint over the inside.
     FillColor,
     /// On a highlight: how see-through the tint is.
@@ -491,7 +494,7 @@ impl Property {
             | Property::SparkleColor
             | Property::FillColor
             | Property::OutlineColor => "Color3",
-            Property::Adornee => "ref",
+            Property::Adornee | Property::CameraSubject => "ref",
             Property::BorderColor => "Color3",
             Property::ClipsDescendants | Property::TextWrapped | Property::TextScaled => "bool",
             Property::TextXAlignment => EnumKind::TextXAlignment.kind_name(),
@@ -845,6 +848,7 @@ impl Property {
         Property::RiseVelocity,
         Property::SparkleColor,
         Property::Adornee,
+        Property::CameraSubject,
         Property::FillColor,
         Property::FillTransparency,
         Property::OutlineColor,
@@ -1075,6 +1079,7 @@ impl Property {
             Property::RiseVelocity => "rise_velocity",
             Property::SparkleColor => "sparkle_color",
             Property::Adornee => "adornee",
+            Property::CameraSubject => "camera_subject",
             Property::FillColor => "fill_color",
             Property::FillTransparency => "fill_transparency",
             Property::OutlineColor => "outline_color",
