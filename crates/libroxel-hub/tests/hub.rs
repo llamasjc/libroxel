@@ -233,7 +233,7 @@ fn creators_share_hats_and_others_find_and_wear_them() {
     // Only the creator takes it out.
     assert!(client.unlist(&shared.item_id, &sign(&[4u8; 32], &unlist_message(&shared.item_id))).is_err());
     client.unlist(&shared.item_id, &sign(&key, &unlist_message(&shared.item_id))).unwrap();
-    assert!(client.catalog("").unwrap().is_empty());
+    assert!(client.catalog("").unwrap().iter().all(|i| i.item_id != shared.item_id));
 }
 
 #[test]

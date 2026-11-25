@@ -18,6 +18,12 @@ mod family;
 
 type Slot<T> = Arc<Mutex<Option<Result<T, String>>>>;
 
+enum WalletAction {
+    Read,
+    Daily,
+    Buy(String, u32),
+}
+
 /// A published game fetched to play: where it was saved, and whether to
 /// host it for friends.
 pub struct Downloaded {
@@ -126,6 +132,12 @@ pub struct Platform {
     pub items: Vec<Item>,
     fetched_items: Slot<Vec<Item>>,
     item_shared: Slot<String>,
+    wallet: Option<libroxel_hub::Wallet>,
+    wallet_found: Slot<libroxel_hub::Wallet>,
+    wallet_busy: bool,
+    wallet_error: Option<String>,
+    wallet_fetched: Option<Instant>,
+    wallet_time: i64,
     /// What the Hub said about the last report.
     reported: Slot<String>,
     pub report_status: Option<Result<String, String>>,
@@ -224,6 +236,12 @@ impl Default for Platform {
             items: Vec::new(),
             fetched_items: Arc::default(),
             item_shared: Arc::default(),
+            wallet: None,
+            wallet_found: Arc::default(),
+            wallet_busy: false,
+            wallet_error: None,
+            wallet_fetched: None,
+            wallet_time: 0,
             reported: Arc::default(),
             report_status: None,
             reporting: None,
@@ -308,6 +326,17 @@ impl Platform {
         }
         if let Some(Ok(items)) = self.fetched_items.lock().unwrap().take() {
             self.items = items;
+        }
+        let taken = self.wallet_found.lock().unwrap().take();
+        if let Some(result) = taken {
+            self.wallet_busy = false;
+            match result {
+                Ok(wallet) => {
+                    self.wallet = Some(wallet);
+                    self.wallet_error = None;
+                }
+                Err(e) => self.wallet_error = Some(e),
+            }
         }
         if let Some(result) = self.reported.lock().unwrap().take() {
             self.report_status = Some(result);
@@ -607,6 +636,84 @@ impl Platform {
         });
     }
 
+    fn wallet_send(&mut self, action: WalletAction) {
+        if self.wallet_busy {
+            return;
+        }
+        self.wallet_busy = true;
+        self.wallet_fetched = Some(Instant::now());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as i64);
+        self.wallet_time = now.max(self.wallet_time + 1);
+        let (time, client, out) = (self.wallet_time, self.client(), self.wallet_found.clone());
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| {
+                let player_id = me.player_id();
+                match action {
+                    WalletAction::Read => client.wallet(
+                        &player_id,
+                        time,
+                        &me.sign(&libroxel_hub::wallet_message(&player_id, time)),
+                    ),
+                    WalletAction::Daily => {
+                        let signature = me.sign(&libroxel_hub::daily_message(&player_id, time));
+                        client.claim_daily(&libroxel_hub::Daily { player_id, time, signature })
+                    }
+                    WalletAction::Buy(item_id, price) => {
+                        let signature =
+                            me.sign(&libroxel_hub::buy_message(&player_id, &item_id, price, time));
+                        client.buy_item(&libroxel_hub::Buy { player_id, item_id, price, time, signature })
+                    }
+                }
+            });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    fn wallet_row(&mut self, ui: &mut egui::Ui) {
+        if self.account.is_none() {
+            return;
+        }
+        if self.wallet_fetched.is_none_or(|t| t.elapsed() > Duration::from_secs(60)) {
+            self.wallet_send(WalletAction::Read);
+        }
+        let mut claim = false;
+        ui.horizontal(|ui| match &self.wallet {
+            Some(w) => {
+                ui.strong(format!("{} {}", w.balance, w.currency));
+                if w.daily_ready {
+                    claim = ui
+                        .add_enabled(!self.wallet_busy, egui::Button::new(format!("Get {} free", w.daily)))
+                        .clicked();
+                } else {
+                    ui.label(RichText::new("Back tomorrow for more").color(crate::theme::MUTED));
+                }
+                match w.may_spend {
+                    Some(0) => {
+                        ui.label(RichText::new("Spending is off").color(crate::theme::MUTED));
+                    }
+                    Some(left) => {
+                        ui.label(
+                            RichText::new(format!("{left} left to spend this month"))
+                                .color(crate::theme::MUTED),
+                        );
+                    }
+                    None => {}
+                }
+            }
+            None => {
+                ui.spinner();
+            }
+        });
+        if let Some(e) = &self.wallet_error {
+            ui.colored_label(egui::Color32::from_rgb(220, 90, 80), e);
+        }
+        if claim {
+            self.wallet_send(WalletAction::Daily);
+        }
+    }
+
     /// The catalog part of the Avatar tab: hats to put on. Returns the one
     /// picked, or `Some(None)` to take a catalog hat off.
     #[allow(clippy::option_option)]
@@ -635,13 +742,20 @@ impl Platform {
                 }
             });
         }
+        self.wallet_row(ui);
         if self.items.is_empty() {
             ui.label("Nothing in the catalog yet.");
         }
         let mut worn = None;
         let mut reporting = None;
+        let mut buying = None;
+        let me = self.account.as_ref().map(|a| a.player_id.clone());
+        let owned: Vec<String> = self.wallet.as_ref().map(|w| w.owned.clone()).unwrap_or_default();
         ui.horizontal_wrapped(|ui| {
             for item in &self.items {
+                let has = item.price == 0
+                    || me.as_deref() == Some(item.creator_id.as_str())
+                    || owned.contains(&item.item_id);
                 let Some(hat) = libroxel_engine::character::CustomHat::from_json(&item.data) else {
                     continue;
                 };
@@ -651,7 +765,17 @@ impl Platform {
                         ui.label(RichText::new(format!("by {} · worn {}", item.creator, item.wears)).small());
                         let on = wearing.is_some_and(|w| *w == hat);
                         ui.horizontal(|ui| {
-                            if ui
+                            if !has {
+                                if ui
+                                    .add_enabled(
+                                        !self.wallet_busy,
+                                        egui::Button::new(format!("Buy for {}", item.price)),
+                                    )
+                                    .clicked()
+                                {
+                                    buying = Some((item.item_id.clone(), item.price));
+                                }
+                            } else if ui
                                 .add_enabled(!on, egui::Button::new(if on { "Wearing" } else { "Wear" }))
                                 .clicked()
                             {
@@ -672,6 +796,9 @@ impl Platform {
             self.report_status = None;
         }
         self.report_row(ui);
+        if let Some((id, price)) = buying {
+            self.wallet_send(WalletAction::Buy(id, price));
+        }
         if let Some(id) = worn {
             let client = self.client();
             std::thread::spawn(move || {

@@ -197,7 +197,7 @@ async function api(path, { method = 'GET', body, query } = {}) {
 
 const SESSION_KEY = 'libroxel.session';
 let session = loadSession();
-let lastSigned = { friends: 0, party: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0 };
+let lastSigned = { friends: 0, party: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0, wallet: 0 };
 
 function loadSession() {
   for (const store of [sessionStorage, localStorage]) {
@@ -2217,6 +2217,63 @@ function loadCatalog() {
   api('/catalog').then((items) => { catalog.items = items; render(); }).catch(() => {});
 }
 
+let walletInfo = null;
+
+function walletTime() {
+  const time = Math.max(Date.now(), lastSigned.wallet + 1);
+  lastSigned.wallet = time;
+  return time;
+}
+
+function loadWallet() {
+  if (!session || (walletInfo && walletInfo.for === session.playerId)) return;
+  walletInfo = { for: session.playerId, loading: true };
+  const time = Date.now();
+  const signature = signText(secretKey(), `libroxel wallet\n${session.playerId}\n${time}`);
+  api(`/wallet/${session.playerId}`, { query: { time, signature } })
+    .then((w) => { walletInfo = { for: session.playerId, ...w }; })
+    .catch((e) => { walletInfo = { for: session.playerId, error: e.message }; })
+    .finally(() => render());
+}
+
+async function walletPost(path, body, message) {
+  const time = walletTime();
+  const signature = signText(secretKey(), message(time));
+  try {
+    const w = await api(path, { method: 'POST', body: { player_id: session.playerId, ...body, time, signature } });
+    if (w) walletInfo = { for: session.playerId, ...w };
+    return true;
+  } catch (e) {
+    draft.message = { text: e.message, kind: 'error' };
+    return false;
+  } finally {
+    render();
+  }
+}
+
+const claimDaily = () => walletPost('/wallet/daily', {}, (t) => `libroxel daily\n${session.playerId}\n${t}`);
+
+const buyItem = (item) => walletPost('/shop/buy', { item_id: item.item_id, price: item.price },
+  (t) => `libroxel buy\n${session.playerId}\n${item.item_id}\n${item.price}\n${t}`);
+
+async function priceItem(item, price) {
+  const ok = await walletPost(`/catalog/${encodeURIComponent(item.item_id)}/price`, { price },
+    (t) => `libroxel price\n${session.playerId}\n${item.item_id}\n${price}\n${t}`);
+  if (ok) { catalog.at = 0; loadCatalog(); }
+}
+
+function walletBar() {
+  const w = walletInfo;
+  if (!w || w.loading) return null;
+  if (w.error) return status(w.error, 'error');
+  return el('div', { class: 'form-actions' },
+    el('b', {}, `${w.balance} ${w.currency}`),
+    w.daily_ready
+      ? el('button', { class: 'chip', onclick: claimDaily }, `Get ${w.daily} free`)
+      : el('span', { class: 'soft' }, 'Back tomorrow for more'),
+    w.may_spend != null && el('span', { class: 'soft' }, w.may_spend ? `${w.may_spend} left to spend this month` : 'Spending is off'));
+}
+
 function startDraft() {
   if (!draft || draft.for !== session.playerId) {
     draft = { for: session.playerId, look: readLook(data.me.look, data.me.name, lookFor(0n)), about: data.me.about || '', message: null };
@@ -2242,6 +2299,16 @@ function avatar() {
   const save = el('button', { class: 'btn go', onclick: () => saveAccount(save) }, icon(ICON.check), 'Save');
   const hats = catalog.items.map((item) => [item, readItem(item.data)]).filter(([, hat]) => hat);
   const same = (hat) => look.item && JSON.stringify(look.item.json) === JSON.stringify(hat.json);
+  const mine = (item) => item.creator_id === session.playerId;
+  const owned = (item) => !item.price || mine(item) || walletInfo?.owned?.includes(item.item_id);
+  const priceField = (item) => {
+    const hat = readItem(item.data);
+    const box = el('input', { type: 'number', min: 0, max: 100000, value: item.price || 0, style: 'width:80px' });
+    return el('span', { class: 'form-actions' },
+      el('button', { class: 'chip', disabled: same(hat), onclick: () => { look.item = hat; changed(); } }, same(hat) ? 'Wearing' : 'Wear'),
+      box, el('button', { class: 'chip', onclick: () => priceItem(item, Math.max(0, Math.min(100000, Math.floor(Number(box.value) || 0)))) }, 'Set price'));
+  };
+  loadWallet();
   return [
     el('h1', { class: 'title' }, 'Your avatar'),
     el('p', { class: 'note' }, 'How you look in every game you play or join. Other players see it too.'),
@@ -2258,12 +2325,14 @@ function avatar() {
           el('button', { class: 'chip', onclick: () => { draft.look = lookFor(0n); changed(); } }, 'Back to the usual look')))),
     el('h2', { class: 'section' }, 'Catalog'),
     el('p', { class: 'note' }, 'Hats people made and shared. To make one, build it from parts in the editor, select its model and use Model > Share as hat.'),
+    walletBar(),
     look.item && el('div', { class: 'form-actions' }, `Wearing ${look.item.name}`, el('button', { class: 'chip', onclick: () => { delete look.item; changed(); } }, 'Take it off')),
     hats.length
       ? el('div', { class: 'catalog' }, hats.map(([item, hat]) => el('div', { class: 'item' },
         el('b', {}, item.name),
         el('small', {}, `by ${item.creator} · worn ${item.wears}`),
-        el('button', { class: 'chip', disabled: same(hat), onclick: () => { look.item = hat; api(`/catalog/${encodeURIComponent(item.item_id)}/wear`, { method: 'POST' }).catch(() => {}); changed(); } }, same(hat) ? 'Wearing' : 'Wear'))))
+        mine(item) ? priceField(item) : !owned(item) ? el('button', { class: 'chip go', onclick: () => buyItem(item) }, `Buy for ${item.price}`)
+          : el('button', { class: 'chip', disabled: same(hat), onclick: () => { look.item = hat; api(`/catalog/${encodeURIComponent(item.item_id)}/wear`, { method: 'POST' }).catch(() => {}); changed(); } }, same(hat) ? 'Wearing' : 'Wear'))))
       : el('p', { class: 'soft' }, 'Nothing in the catalog yet.'),
     el('div', { class: 'form-actions' }, save),
     draft.message && status(draft.message.text, draft.message.kind),

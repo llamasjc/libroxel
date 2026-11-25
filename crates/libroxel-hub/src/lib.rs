@@ -1508,7 +1508,7 @@ async fn list_items(State(db): State<Db>, Query(query): Query<ListQuery>) -> Jso
                     i.creator_id, i.data, i.wears, i.price
              FROM items i LEFT JOIN accounts a ON a.player_id = i.creator_id
              WHERE (i.name LIKE ?1 OR COALESCE(a.name, '') LIKE ?1) AND NOT {} AND NOT {}
-             ORDER BY i.price > 0 DESC, i.wears DESC, i.created DESC LIMIT 200",
+             ORDER BY i.wears DESC, i.created DESC LIMIT 200",
             hidden_sql("item", "i.item_id"),
             owner::banned_sql("i.creator_id")
         ))

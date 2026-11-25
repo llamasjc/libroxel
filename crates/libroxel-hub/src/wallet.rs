@@ -407,13 +407,19 @@ pub struct SetPrice {
     pub signature: String,
 }
 
-type Failed = (StatusCode, String);
+pub(crate) type Failed = (StatusCode, String);
 
 fn internal(e: rusqlite::Error) -> Failed {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
-fn check(db: &Connection, player_id: &str, message: &[u8], signature: &str, time: i64) -> Result<(), Failed> {
+pub(crate) fn check(
+    db: &Connection,
+    player_id: &str,
+    message: &[u8],
+    signature: &str,
+    time: i64,
+) -> Result<(), Failed> {
     if !verify(player_id, message, signature) {
         return Err((StatusCode::FORBIDDEN, "the signature does not match that player".into()));
     }
