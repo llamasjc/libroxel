@@ -29,6 +29,11 @@ impl Loading {
         self.began.is_some()
     }
 
+    /// Whether the screen is up and solid (not fading away).
+    pub fn covering(&self) -> bool {
+        self.began.is_some() && self.done.is_none()
+    }
+
     /// Once, when the screen starts to go: how long it was up, and how
     /// much of that was waiting for the 3D view to fill after the world
     /// had arrived.

@@ -181,6 +181,9 @@ struct PartSync {
     eye: Option<Vec3>,
     /// Whether parts in range were left to spawn next frame.
     pending: bool,
+    /// Those parts, farthest first, so each frame takes the nearest off
+    /// the end without looking over the workspace again.
+    backlog: Vec<InstanceId>,
     /// Parts out of range when last measured.
     far: FastSet<InstanceId>,
     frames: u64,
@@ -339,12 +342,8 @@ fn sync_parts(
     // nearly every frame), just those are looked at, from the tree's log of
     // what moved, instead of every part in the workspace.
     let (moved_epoch, came_or_went) = tree.moved_since(sync.moved_read);
-    let incremental = scan
-        && !full
-        && !sync.pending
-        && !periodic
-        && moved_epoch == sync.moved_epoch
-        && came_or_went.len() < 20_000;
+    let incremental =
+        scan && !full && !periodic && moved_epoch == sync.moved_epoch && came_or_went.len() < 20_000;
 
     let mut work: Vec<InstanceId> = Vec::new();
     if full {
@@ -422,12 +421,26 @@ fn sync_parts(
                 }
             }
         }
-        sync.pending = fresh.len() > SPAWN_BUDGET;
-        if sync.pending {
-            fresh.select_nth_unstable_by(SPAWN_BUDGET, |a, b| a.0.total_cmp(&b.0));
-            fresh.truncate(SPAWN_BUDGET);
-        }
+        // Parts that just came in range all spawn, however many (the view
+        // keeps up with the world as it arrives); what's left of the budget
+        // goes to the nearest of the parts still waiting.
+        let room = SPAWN_BUDGET.saturating_sub(fresh.len());
+        let arrived: FastSet<InstanceId> = fresh.iter().map(|(_, id)| *id).collect();
         work.extend(fresh.into_iter().map(|(_, id)| id));
+        let mut taken = 0;
+        while taken < room
+            && let Some(id) = sync.backlog.pop()
+        {
+            let live = !spawned.contains_key(&id)
+                && !arrived.contains(&id)
+                && !tree.is_destroyed(id).unwrap_or(true)
+                && tree.is_descendant_of(id, tree.workspace()).unwrap_or(false);
+            if live {
+                work.push(id);
+                taken += 1;
+            }
+        }
+        sync.pending = !sync.backlog.is_empty();
     } else if scan {
         sync.structure = tree.workspace_structure();
         sync.eye = eye;
@@ -472,9 +485,13 @@ fn sync_parts(
             }
         }
         sync.pending = fresh.len() > SPAWN_BUDGET;
+        sync.backlog.clear();
         if sync.pending {
-            fresh.select_nth_unstable_by(SPAWN_BUDGET, |a, b| a.0.total_cmp(&b.0));
-            fresh.truncate(SPAWN_BUDGET);
+            // Farthest first: the nearest come off the end, a budget a frame.
+            fresh.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
+            let now = fresh.split_off(fresh.len() - SPAWN_BUDGET);
+            sync.backlog = fresh.into_iter().map(|(_, id)| id).collect();
+            fresh = now;
         }
         work.extend(fresh.into_iter().map(|(_, id)| id));
     } else if full {
@@ -626,6 +643,12 @@ pub static VIEW_COVERED: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 
 pub static VIEW_FILLING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Set by the app while its own loading screen covers the whole view: the
+/// world isn't drawn behind it (parts still come into the view, so it is
+/// ready when the screen goes), and a joined game takes in the host's world
+/// in bigger pieces a frame.
+pub static LOADING_SCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Whether the 3D view isn't being drawn: a loading screen covers it, or
 /// the game turned 3D rendering off.
 pub fn view_hidden() -> bool {
@@ -635,7 +658,8 @@ pub fn view_hidden() -> bool {
 
 fn cover_view(mut cameras: Query<&mut Camera, With<CameraRig>>) {
     let covered = VIEW_COVERED.load(std::sync::atomic::Ordering::Relaxed)
-        || !libroxel_script::RENDERING_3D.load(std::sync::atomic::Ordering::Relaxed);
+        || !libroxel_script::RENDERING_3D.load(std::sync::atomic::Ordering::Relaxed)
+        || LOADING_SCREEN.load(std::sync::atomic::Ordering::Relaxed);
     for mut camera in &mut cameras {
         if camera.is_active == covered {
             camera.is_active = !covered;

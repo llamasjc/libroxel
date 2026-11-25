@@ -1124,13 +1124,14 @@ impl Physics {
             bodies.iter().filter(|b| b.sim && !self.carried.contains(&b.id)).map(|b| b.id).collect();
         let mut specs = Vec::with_capacity(bodies.len());
         let mut seen = HashSet::new();
+        let terrain = tree.terrain();
         for body in bodies {
             let id = body.id;
             // A part with a model is several bodies here, but one part there.
             if !seen.insert(id) {
                 continue;
             }
-            if Some(id) == tree.terrain() {
+            if Some(id) == terrain {
                 continue;
             }
             let Some(size) = tree.get_vec3(id, Property::Size) else { continue };

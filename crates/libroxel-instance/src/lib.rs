@@ -1613,6 +1613,17 @@ impl ClassKind {
     }
 
     pub fn from_file_name(name: &str) -> Option<ClassKind> {
-        ClassKind::ALL.iter().copied().find(|c| c.file_name() == name)
+        static BY_NAME: std::sync::OnceLock<foldhash::HashMap<&'static str, ClassKind>> =
+            std::sync::OnceLock::new();
+        BY_NAME
+            .get_or_init(|| {
+                let mut map = foldhash::HashMap::default();
+                for c in ClassKind::ALL.iter().copied() {
+                    map.entry(c.file_name()).or_insert(c);
+                }
+                map
+            })
+            .get(name)
+            .copied()
     }
 }

@@ -794,6 +794,11 @@ impl InstanceTree {
 
     /// The workspace's terrain, if it has one.
     pub fn terrain(&self) -> Option<InstanceId> {
+        // Asked many times a step: a game without terrain (most of them)
+        // needn't look through every child of a big workspace to find none.
+        if self.kind_counts.get(ClassKind::Terrain as usize).is_none_or(|n| *n == 0) {
+            return None;
+        }
         self.find_first_child_of_class(self.workspace, ClassKind::Terrain).ok().flatten()
     }
 

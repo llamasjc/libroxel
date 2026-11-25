@@ -644,6 +644,8 @@ pub fn editor_ui(
         Some(_) => {}
         None => editor.loading.stop(),
     }
+    libroxel_engine::view::LOADING_SCREEN
+        .store(editor.loading.covering(), std::sync::atomic::Ordering::Relaxed);
     if engine.session.as_ref().is_some_and(PlaySession::wrong_version) {
         crate::update::now();
         if !editor.dirty

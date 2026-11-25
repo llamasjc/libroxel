@@ -1147,6 +1147,19 @@ impl Property {
     }
 
     pub fn from_file_name(name: &str) -> Option<Property> {
-        Property::ALL.iter().copied().find(|p| p.file_name() == name)
+        // Looked up for every property of every instance a joined computer
+        // is sent, and of every saved one opened: a table, not a search.
+        static BY_NAME: std::sync::OnceLock<foldhash::HashMap<&'static str, Property>> =
+            std::sync::OnceLock::new();
+        BY_NAME
+            .get_or_init(|| {
+                let mut map = foldhash::HashMap::default();
+                for p in Property::ALL.iter().copied() {
+                    map.entry(p.file_name()).or_insert(p);
+                }
+                map
+            })
+            .get(name)
+            .copied()
     }
 }

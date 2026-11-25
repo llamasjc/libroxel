@@ -20,7 +20,11 @@
 //! Characters move on the host, so a joined player sees their own
 //! character's moves once the host has made them.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
+
+// Fast-hashing maps: the host looks every instance up in these each step,
+// and a joined computer every instance it is sent.
+use bevy::platform::collections::{HashMap, HashSet};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
@@ -53,6 +57,10 @@ const SEND_AHEAD: usize = 2 * 1024 * 1024;
 const READ_BUDGET: usize = 1024 * 1024;
 const CHUNK: usize = 500;
 const APPLY_BUDGET: Duration = Duration::from_millis(8);
+/// The same while the app's loading screen is up: nothing to keep smooth
+/// but its animation, so fewer, fuller frames bring the world in sooner on
+/// a slow device (each frame has its own fixed cost).
+const LOADING_APPLY_BUDGET: Duration = Duration::from_millis(30);
 /// How many instances a streamed player gets when joining, and then each
 /// step at most, nearest first.
 const STREAM_FIRST: usize = 5_000;
@@ -153,6 +161,60 @@ pub(crate) struct Conn {
     max_message: usize,
     /// Bytes read off the wire so far, for the speed reports.
     pub(crate) bytes_read: u64,
+    /// A thread of its own for reading long messages (a newcomer's world),
+    /// started when the first arrives.
+    parser: Option<Parser>,
+}
+
+/// Messages longer than this are read on the [`Parser`]'s thread: reading
+/// them was most of a joining computer's frame.
+const PARSE_OFF_THREAD: usize = 16 * 1024;
+/// How many messages may wait there at once (the rest wait their turn).
+const PARSE_AHEAD: usize = 8;
+
+/// Turns long lines into messages on another thread, in the order they
+/// came, and lets go of messages already acted on there too (freeing a
+/// big world's worth of them takes a while as well).
+struct Parser {
+    jobs: Sender<Job>,
+    done: Receiver<Option<Unpacked>>,
+    /// Lines sent off whose messages haven't come back yet.
+    pending: usize,
+}
+
+enum Job {
+    Parse(Vec<u8>),
+    Drop(#[allow(dead_code)] Vec<Json>),
+}
+
+impl Parser {
+    fn start(limit: usize) -> Self {
+        let (jobs, inbox) = channel::<Job>();
+        let (outbox, done) = channel();
+        std::thread::spawn(move || {
+            for job in inbox {
+                let Job::Parse(line) = job else { continue };
+                if outbox.send(parse_line(&line, limit)).is_err() {
+                    break;
+                }
+            }
+        });
+        Self { jobs, done, pending: 0 }
+    }
+}
+
+/// One line as a message: `None` for one that isn't one.
+fn parse_line(line: &[u8], limit: usize) -> Option<Unpacked> {
+    let message = serde_json::from_slice::<Json>(line).ok()?;
+    if message.get("t").and_then(Json::as_str) != Some("z") {
+        return Some(Unpacked::Message(message, 0));
+    }
+    // A compressed message: it mustn't unpack to more than one message
+    // may be, so a small one can't fill this computer's memory.
+    match unpack(&message, limit) {
+        Unpacked::Broken => None,
+        other => Some(other),
+    }
 }
 
 impl Conn {
@@ -185,6 +247,7 @@ impl Conn {
             closed: false,
             max_message,
             bytes_read: 0,
+            parser: None,
         };
         if side == Side::Joining {
             conn.unsent.extend_from_slice(MAGIC);
@@ -227,6 +290,14 @@ impl Conn {
         }
         self.plain_out.push(b'\n');
         self.seal();
+    }
+
+    /// Lets go of messages already acted on, on the parser's thread if
+    /// there is one: freeing a world's worth takes a while.
+    pub(crate) fn discard(&self, messages: Vec<Json>) {
+        if let Some(parser) = &self.parser {
+            let _ = parser.jobs.send(Job::Drop(messages));
+        }
     }
 
     /// How much is waiting to go out, so a newcomer's world can be paced.
@@ -376,6 +447,37 @@ impl Conn {
         self.wire_in.drain(..start);
     }
 
+    /// Messages the parser's thread has finished, in order.
+    fn take_parsed(&mut self, messages: &mut Vec<Json>) {
+        let Some(parser) = &mut self.parser else { return };
+        // Once the other side has hung up, what it sent before still
+        // counts (a host's last words when it removes a player): wait for it.
+        let hung_up = self.closed;
+        while parser.pending > 0 {
+            let next = if hung_up {
+                parser.done.recv().map_err(|_| TryRecvError::Disconnected)
+            } else {
+                parser.done.try_recv()
+            };
+            match next {
+                Ok(Some(Unpacked::Message(message, _))) => {
+                    parser.pending -= 1;
+                    messages.push(message);
+                }
+                Ok(Some(Unpacked::TooBig)) => {
+                    parser.pending -= 1;
+                    self.closed = true;
+                }
+                Ok(_) => parser.pending -= 1,
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    parser.pending = 0;
+                    self.closed = true;
+                }
+            }
+        }
+    }
+
     /// Every whole message that has arrived.
     ///
     /// Takes in at most about one longest message's worth of bytes a call,
@@ -412,10 +514,13 @@ impl Conn {
         let mut messages = Vec::new();
         let mut start = 0;
         let limit = self.max_message;
+        // What the parser's thread has read, first: those lines came first.
+        self.take_parsed(&mut messages);
         // A step takes in about READ_BUDGET bytes of messages, counted
         // unpacked, so a compressed world can't make one step take long.
         let mut parsed = 0;
         while parsed < READ_BUDGET
+            && self.parser.as_ref().is_none_or(|p| p.pending < PARSE_AHEAD)
             && let Some(offset) = self.received[start..].iter().position(|b| *b == b'\n')
         {
             let line = &self.received[start..start + offset];
@@ -425,26 +530,33 @@ impl Conn {
                 self.closed = true;
                 break;
             }
-            let Ok(message) = serde_json::from_slice::<Json>(line) else { continue };
-            if message.get("t").and_then(Json::as_str) != Some("z") {
-                messages.push(message);
-                continue;
-            }
-            // A compressed message: it mustn't unpack to more than one
-            // message may be, so a small one can't fill this computer's memory.
-            match unpack(&message, limit) {
-                Unpacked::Message(inner, size) => {
-                    parsed += size;
-                    messages.push(inner);
+            // Long lines, and every line while some wait there (so they
+            // stay in order), go to the parser's thread.
+            if line.len() > PARSE_OFF_THREAD || self.parser.as_ref().is_some_and(|p| p.pending > 0) {
+                let parser = self.parser.get_or_insert_with(|| Parser::start(limit));
+                if parser.jobs.send(Job::Parse(line.to_vec())).is_ok() {
+                    parser.pending += 1;
+                    continue;
                 }
-                Unpacked::TooBig => {
+                // Its thread is gone: read it here.
+                self.parser = None;
+            }
+            match parse_line(line, limit) {
+                Some(Unpacked::Message(message, size)) => {
+                    parsed += size;
+                    messages.push(message);
+                }
+                Some(Unpacked::TooBig) => {
                     self.closed = true;
                     break;
                 }
-                Unpacked::Broken => {}
+                _ => {}
             }
         }
         self.received.drain(..start);
+        if self.closed {
+            self.take_parsed(&mut messages);
+        }
         if self.received.len() > self.max_message {
             self.closed = true;
         }
@@ -700,6 +812,54 @@ pub(crate) struct Joined {
     wrong_version: bool,
     /// How the join is going, for the Output.
     clock: JoinClock,
+    /// The workspace's loose parts, which our character's physics holds
+    /// where the host put them.
+    loose: LooseParts,
+}
+
+/// The unanchored parts in the workspace, kept up from the tree's log of
+/// what moved, came or went: looking for them among every part each frame
+/// cost a big map's joined computers a pass over all its parts a frame.
+#[derive(Default)]
+struct LooseParts {
+    ready: bool,
+    epoch: u64,
+    read: usize,
+    parts: std::collections::HashSet<InstanceId>,
+}
+
+impl LooseParts {
+    fn update(&mut self, t: &InstanceTree) -> &std::collections::HashSet<InstanceId> {
+        let ws = t.workspace();
+        let (epoch, entries) = t.moved_since(self.read);
+        if !self.ready || epoch != self.epoch {
+            self.parts = t
+                .descendants_of_class(ws, ClassKind::Part)
+                .into_iter()
+                .filter(|p| t.get_bool(*p, Property::Anchored) == Some(false))
+                .collect();
+        } else {
+            for id in entries {
+                let mut ids = t.descendants(*id).unwrap_or_default();
+                ids.push(*id);
+                for id in ids {
+                    let loose = t.class(id).is_ok_and(|c| c.is_a(ClassKind::Part))
+                        && !t.is_destroyed(id).unwrap_or(true)
+                        && t.get_bool(id, Property::Anchored) == Some(false)
+                        && t.is_descendant_of(id, ws).unwrap_or(false);
+                    if loose {
+                        self.parts.insert(id);
+                    } else {
+                        self.parts.remove(&id);
+                    }
+                }
+            }
+        }
+        self.ready = true;
+        self.epoch = t.moved_epoch();
+        self.read = t.moved_len();
+        &self.parts
+    }
 }
 
 /// When a join got where, and what took its time, put in the Output as
@@ -1670,6 +1830,7 @@ impl PlaySession {
             got: 0,
             wrong_version: false,
             clock: JoinClock::new(began),
+            loose: LooseParts::default(),
         }));
         session.info("🔗 Joining the game (its address stays hidden here)".to_owned());
         session.info(format!("⏱ Join: reached the host after {reached:.2} s"));
@@ -2214,8 +2375,13 @@ impl PlaySession {
             joined.clock.ready = true;
             marks.push(joined.clock.mark("keys agreed with the host"));
         }
+        let budget = if crate::view::LOADING_SCREEN.load(std::sync::atomic::Ordering::Relaxed) {
+            LOADING_APPLY_BUDGET
+        } else {
+            APPLY_BUDGET
+        };
         let began = std::time::Instant::now();
-        while began.elapsed() < APPLY_BUDGET
+        while began.elapsed() < budget
             && let Some(mut message) = joined.inbox.pop_front()
         {
             match message.get("t").and_then(Json::as_str).unwrap_or("") {
@@ -2255,9 +2421,11 @@ impl PlaySession {
                     let at = Instant::now();
                     joined.apply(&mut tree.borrow_mut(), &ops);
                     let took = at.elapsed().as_secs_f64();
+                    let count = ops.len() as u64;
+                    joined.conn.discard(ops);
                     applying += took;
                     slowest_apply = slowest_apply.max(took);
-                    ops_applied += ops.len() as u64;
+                    ops_applied += count;
                     if !joined.clock.first {
                         joined.clock.first = true;
                         marks.push(joined.clock.mark("the first instances arrived"));
@@ -2548,11 +2716,8 @@ impl PlaySession {
                     input.jump = true;
                     let _ = t.set(c.humanoid, Property::Jump, PropertyValue::Bool(false));
                 }
-                let others: HashSet<InstanceId> = t
-                    .descendants_of_class(t.workspace(), ClassKind::Part)
-                    .into_iter()
-                    .filter(|p| *p != c.root && t.get_bool(*p, Property::Anchored) == Some(false))
-                    .collect();
+                let mut others = joined.loose.update(&t).clone();
+                others.remove(&c.root);
                 // Other players' characters are where the host last put
                 // them. Bumping into them here as well as on the host made
                 // two players on one spot push each other up into the sky,
