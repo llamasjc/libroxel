@@ -19,6 +19,23 @@ its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
     where there is no `PLAYLIBRE_…` one, so email codes keep going out.
   - libroxel.com (and www.libroxel.com) sends every page on to the same
     page on playlibre.net.
+- **Games are much harder to steal:**
+  - A published game's place, with its server scripts and storage, now
+    goes only to its creator and the Hub's own servers, on every Hub.
+    Everyone else plays it by joining a server. (Before, on a Hub without
+    servers of its own, anyone could download the whole game.)
+  - Local scripts and the modules players' computers can see are sent with
+    no comments, no indentation and no local names. They run exactly the
+    same (checked against the original's bytecode before sending) and
+    errors still point at the right line.
+  - Game scripts can't read any script's `Source`, so a careless
+    RemoteFunction can't hand out the server's code, and a failed
+    `InvokeServer` no longer shows the player the server's stack trace.
+  - Pictures, meshes and sounds kept from the Hub are sealed on disk with
+    this computer's own key, and are checked against their hash when they
+    arrive.
+  - Joining someone else's game from the editor shows it the way players
+    see it: no Explorer, Properties or script editor over their game.
 
 ## 0.1.16 (2026-11-24)
 

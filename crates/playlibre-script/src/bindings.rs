@@ -1507,6 +1507,15 @@ impl UserData for LuaInstance {
                 return Ok(Value::UserData(lua.create_userdata(Signal(signal))?));
             }
             if let Some(property) = names::property_from_name(class, key) {
+                // A game's scripts can't read code, as on the reference
+                // platform: a careless RemoteFunction that hands back
+                // `thing.Source` would give any player the server's code.
+                if property == Property::Source {
+                    return Err(mlua::Error::runtime(format!(
+                        "{} can't be read by a game's scripts",
+                        names::property_name(property)
+                    )));
+                }
                 let value = host(lua).tree.borrow().get(id, property);
                 match value {
                     Ok(value) => {

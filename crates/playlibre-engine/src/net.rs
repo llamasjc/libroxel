@@ -1185,6 +1185,15 @@ fn wire_value(class: ClassKind, property: Property, value: &PropertyValue, edits
         PropertyValue::String(_) if class == ClassKind::Script && property == Property::Source && !edits => {
             json!("")
         }
+        // Code players' computers run goes with no comments, indentation or
+        // local names (see `playlibre_script::shield`).
+        PropertyValue::String(source)
+            if matches!(class, ClassKind::LocalScript | ClassKind::ModuleScript)
+                && property == Property::Source
+                && !edits =>
+        {
+            json!(&*playlibre_script::shield::shield(source).0)
+        }
         other => place::value_to_json(other),
     }
 }
@@ -3968,3 +3977,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "steal_tests.rs"]
+mod steal_tests;

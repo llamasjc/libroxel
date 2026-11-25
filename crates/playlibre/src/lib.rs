@@ -181,6 +181,10 @@ pub struct Editor {
     /// Playing a game started from the main menu: only the game shows, and
     /// leaving it goes back to the menu.
     pub player_mode: bool,
+    /// Someone else's game was joined from the editor: it shows the way
+    /// players see it (no explorer, properties or script editor over the
+    /// host's game), and leaving goes back to the editor, not the menu.
+    pub joined_from_editor: bool,
     pub loading: loading::Loading,
     /// Esc pressed while playing: the game menu is open.
     pub paused: bool,
@@ -274,6 +278,7 @@ impl Default for Editor {
             market: market::Market::default(),
             menu: menu::Menu::default(),
             player_mode: false,
+            joined_from_editor: false,
             loading: Default::default(),
             paused: false,
             touch: Default::default(),

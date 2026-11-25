@@ -342,6 +342,12 @@ pub fn editor_ui(
         *engine.tree.borrow_mut() = snapshot;
         editor.tunnel = None;
     }
+    // A game joined from the editor ended: back to the editor.
+    if editor.joined_from_editor && engine.session.is_none() {
+        editor.joined_from_editor = false;
+        editor.player_mode = false;
+        editor.paused = false;
+    }
     // A game played from the main menu ended: back to the menu.
     if editor.player_mode && engine.session.is_none() {
         editor.player_mode = false;
@@ -3614,6 +3620,14 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     }
                     if editor.player_mode || session.is_joined() {
                         editor.loading.start(now);
+                    }
+                    // Someone else's game is seen only the way players see
+                    // it: no explorer, properties or script editor over it.
+                    if session.is_joined() && !editor.player_mode {
+                        editor.player_mode = true;
+                        editor.joined_from_editor = true;
+                        editor.open_script = None;
+                        editor.selection = None;
                     }
                     engine.session = Some(session);
                     engine.log.extend(lines);

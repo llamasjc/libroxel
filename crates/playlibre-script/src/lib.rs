@@ -34,6 +34,7 @@ mod net;
 mod pathfinding;
 mod reflection;
 mod services;
+pub mod shield;
 mod sound;
 mod terrain;
 mod types;

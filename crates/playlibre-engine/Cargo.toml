@@ -22,6 +22,8 @@ data-encoding = "2"
 snow = "0.10"
 # Random edit passwords.
 getrandom = "0.3"
+# Seals the files kept from the Hub on disk.
+chacha20poly1305 = "0.10"
 
 [lints]
 workspace = true

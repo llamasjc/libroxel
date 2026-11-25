@@ -207,17 +207,82 @@ struct HubAssets {
     dir: PathBuf,
     fetch: fn(String),
     asked: std::collections::HashSet<String>,
+    /// Seals the files kept from the Hub (see [`keep_hub_asset`]).
+    key: Option<[u8; 32]>,
 }
 
 static HUB_ASSETS: Mutex<Option<HubAssets>> = Mutex::new(None);
 
 pub fn set_hub_assets(dir: PathBuf, fetch: fn(String)) {
+    let key = cache_key(&dir);
     *HUB_ASSETS.lock().unwrap_or_else(|e| e.into_inner()) =
-        Some(HubAssets { dir, fetch, asked: Default::default() });
+        Some(HubAssets { dir, fetch, asked: Default::default(), key });
 }
 
 pub fn hub_asset_arrived() {
     GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Where a kept Hub file is.
+const SEALED: &str = "sealed";
+
+/// This computer's own key for the files it keeps from the Hub, made the
+/// first time. The pictures, meshes and sounds games use are kept sealed
+/// with it (ChaCha20-Poly1305), so the folder holds no files anyone can
+/// open or copy into another game; only this app on this computer reads
+/// them back. (The app has to hold the key to draw them, so this stops
+/// copying by hand, not someone set on taking apart the app itself.)
+fn cache_key(dir: &Path) -> Option<[u8; 32]> {
+    let path = dir.join(".key");
+    if let Ok(bytes) = std::fs::read(&path)
+        && let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice())
+    {
+        return Some(key);
+    }
+    let mut key = [0u8; 32];
+    getrandom::fill(&mut key).ok()?;
+    std::fs::create_dir_all(dir).ok()?;
+    let part = dir.join(".key.part");
+    std::fs::write(&part, key).ok()?;
+    std::fs::rename(&part, &path).ok()?;
+    Some(key)
+}
+
+fn seal(key: &[u8; 32], hash: &str, bytes: &[u8]) -> Option<Vec<u8>> {
+    use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+    let mut nonce = [0u8; 12];
+    getrandom::fill(&mut nonce).ok()?;
+    let cipher = chacha20poly1305::ChaCha20Poly1305::new(key.into());
+    let sealed = cipher.encrypt((&nonce).into(), Payload { msg: bytes, aad: hash.as_bytes() }).ok()?;
+    Some([nonce.as_slice(), &sealed].concat())
+}
+
+fn open(key: &[u8; 32], hash: &str, sealed: &[u8]) -> Option<Vec<u8>> {
+    use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+    let (nonce, body) = sealed.split_at_checked(12)?;
+    let cipher = chacha20poly1305::ChaCha20Poly1305::new(key.into());
+    cipher.decrypt(nonce.into(), Payload { msg: body, aad: hash.as_bytes() }).ok()
+}
+
+/// Keeps a file that came from the Hub, sealed, in the folder
+/// [`set_hub_assets`] named. `hash` must already have been checked.
+pub fn keep_hub_asset(hash: &str, bytes: &[u8]) {
+    let (dir, key) = {
+        let assets = HUB_ASSETS.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(assets) = assets.as_ref() else { return };
+        (assets.dir.clone(), assets.key)
+    };
+    keep_sealed(&dir, key.as_ref(), hash, bytes);
+}
+
+fn keep_sealed(dir: &Path, key: Option<&[u8; 32]>, hash: &str, bytes: &[u8]) {
+    // Without a key (a read-only folder, say) nothing is kept: the file
+    // is fetched again next time rather than left open on the disk.
+    let Some(sealed) = key.and_then(|k| seal(k, hash, bytes)) else { return };
+    let part = dir.join(format!("{hash}.part"));
+    let _ = std::fs::create_dir_all(dir)
+        .and_then(|_| std::fs::write(&part, sealed))
+        .and_then(|_| std::fs::rename(&part, dir.join(format!("{hash}.{SEALED}"))));
 }
 
 fn hub_asset(rest: &str) -> Option<Vec<u8>> {
@@ -228,8 +293,19 @@ fn hub_asset(rest: &str) -> Option<Vec<u8>> {
     let hash = hash.to_ascii_lowercase();
     let mut assets = HUB_ASSETS.lock().unwrap_or_else(|e| e.into_inner());
     let assets = assets.as_mut()?;
-    if let Some(bytes) = read_file(&assets.dir.join(&hash)) {
-        return Some(bytes);
+    if let Some(key) = &assets.key {
+        if let Some(bytes) =
+            read_file(&assets.dir.join(format!("{hash}.{SEALED}"))).and_then(|s| open(key, &hash, &s))
+        {
+            return Some(bytes);
+        }
+        // Kept open by an older copy of the app: seal it now.
+        let old = assets.dir.join(&hash);
+        if let Some(bytes) = read_file(&old) {
+            keep_sealed(&assets.dir, Some(key), &hash, &bytes);
+            let _ = std::fs::remove_file(&old);
+            return Some(bytes);
+        }
     }
     if assets.asked.insert(hash.clone()) {
         (assets.fetch)(hash);

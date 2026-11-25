@@ -1228,7 +1228,6 @@ fn download_signer(headers: &HeaderMap, game_id: &str) -> Option<String> {
 async fn download(
     State(db): State<Db>,
     State(limits): State<Arc<Limits>>,
-    State(fleet): State<Option<Arc<fleet::Fleet>>>,
     Extension(caller): Extension<Caller>,
     UrlPath(id): UrlPath<String>,
     headers: HeaderMap,
@@ -1250,14 +1249,19 @@ async fn download(
     let trusted = download_signer(&headers, &id).is_some_and(|signer| {
         author_id.as_deref() == Some(signer.as_str()) || fleet::runs(&db, &signer, &id)
     });
+    // A place holds the game's server scripts and storage, which players'
+    // computers never get, so only its creator and the Hub's own servers
+    // may have it, whether or not this Hub runs servers. Everyone else
+    // plays it by joining a server.
     if !trusted {
         if !limits.take_logged(Limit::Download, &caller.0) {
             return Err(too_many("games downloaded"));
         }
-        if fleet.is_some() {
-            eprintln!("{} was refused the place of {id}", caller.0);
-            return Err((StatusCode::FORBIDDEN, "only its creator can download this game".into()));
-        }
+        eprintln!("{} was refused the place of {id}", caller.0);
+        return Err((
+            StatusCode::FORBIDDEN,
+            "only its creator can download or host this game; join one of its servers to play".into(),
+        ));
     }
     let _ = db.execute("UPDATE games SET plays = plays + 1 WHERE game_id = ?1", params![id]);
     Ok(place)

@@ -92,10 +92,11 @@ fn addresses_are_tidied() {
 
 #[test]
 fn games_are_published_found_downloaded_and_updated() {
-    use playlibre_hub::Publish;
+    use playlibre_hub::{DownloadProof, Publish, player_id_of, publish_message, sign};
     let hub = start("127.0.0.1:0".parse().unwrap(), None).unwrap();
     let client = HubClient::new(&hub.url());
     let secret = new_secret();
+    let alice = [3; 32];
     let game = |id: Option<String>, secret: &str, place: &str| Publish {
         game_id: id,
         secret: secret.into(),
@@ -103,9 +104,10 @@ fn games_are_published_found_downloaded_and_updated() {
         author: "Alice".into(),
         description: "Climb before the lava does".into(),
         place: place.into(),
-        author_id: None,
-        author_signature: None,
+        author_id: Some(player_id_of(&alice)),
+        author_signature: Some(sign(&alice, &publish_message(secret))),
     };
+    let proof = |id: &str, key: &[u8; 32]| DownloadProof::new(id, player_id_of(key), |m| sign(key, m));
     let first = client.publish(&game(None, &secret, r#"{"version":1,"root":{}}"#)).unwrap();
     assert_eq!(first.version, 1);
     assert_eq!(client.status().unwrap().games, 1);
@@ -116,7 +118,12 @@ fn games_are_published_found_downloaded_and_updated() {
     assert_eq!(list[0].author, "Alice");
     assert!(client.games("kart").unwrap().is_empty());
 
-    assert_eq!(client.download(&first.game_id, None).unwrap(), r#"{"version":1,"root":{}}"#);
+    // The place (server scripts and all) goes to its creator only: players
+    // join a server of it instead.
+    assert!(client.download(&first.game_id, None).unwrap_err().contains("only its creator"));
+    assert!(client.download(&first.game_id, Some(&proof(&first.game_id, &[4; 32]))).is_err());
+    let mine = proof(&first.game_id, &alice);
+    assert_eq!(client.download(&first.game_id, Some(&mine)).unwrap(), r#"{"version":1,"root":{}}"#);
     assert_eq!(client.games("").unwrap()[0].plays, 1);
 
     // A new version from whoever published it; no one else can replace it.
@@ -125,7 +132,7 @@ fn games_are_published_found_downloaded_and_updated() {
     assert_eq!(second.unwrap().version, 2);
     let stolen = client.publish(&game(Some(first.game_id.clone()), &new_secret(), "{}"));
     assert!(stolen.unwrap_err().contains("someone else"));
-    assert_eq!(client.download(&first.game_id, None).unwrap(), r#"{"version":1,"root":{"x":1}}"#);
+    assert_eq!(client.download(&first.game_id, Some(&mine)).unwrap(), r#"{"version":1,"root":{"x":1}}"#);
 
     // Only saved games are taken.
     assert!(client.publish(&game(None, &secret, "not a game")).is_err());
@@ -134,7 +141,7 @@ fn games_are_published_found_downloaded_and_updated() {
 
     client.unpublish(&first.game_id, &secret).unwrap();
     assert!(client.games("").unwrap().is_empty());
-    assert!(client.download(&first.game_id, None).is_err());
+    assert!(client.download(&first.game_id, Some(&mine)).is_err());
 }
 
 #[test]

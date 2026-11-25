@@ -1,6 +1,6 @@
 use playlibre_hub::{
-    Change, HubClient, KEEP_VERSIONS, ManageGame, Publish, creator_message, player_id_of, publish_message,
-    sign, start,
+    Change, DownloadProof, HubClient, KEEP_VERSIONS, ManageGame, Publish, creator_message, player_id_of,
+    publish_message, sign, start,
 };
 
 fn now_ms() -> i64 {
@@ -67,7 +67,8 @@ fn settings_versions_and_remove() {
         max_players: 0,
     };
     hub.manage(&id, &ask(&me, &id, open)).unwrap();
-    assert_eq!(hub.download(&id, None).unwrap(), r#"{"v":5}"#);
+    let proof = DownloadProof::new(&id, player_id_of(&me), |m| sign(&me, m));
+    assert_eq!(hub.download(&id, Some(&proof)).unwrap(), r#"{"v":5}"#);
     assert_eq!(hub.game(&id).unwrap().version, 13);
 
     hub.manage(&id, &ask(&me, &id, Change::Remove)).unwrap();

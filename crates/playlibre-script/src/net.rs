@@ -384,11 +384,17 @@ pub(crate) fn reply_fn(lua: &Lua) -> mlua::Result<Function> {
                 Err(err) => (false, Json::String(err.to_string())),
             }
         } else {
+            // Only what went wrong goes to the player: never the server's
+            // stack traceback (its scripts' names and lines).
             let message = match rest.front() {
                 Some(Value::String(s)) => s.to_str().map(|s| s.to_owned()).unwrap_or_default(),
-                Some(other) => format!("{other:?}"),
-                None => "OnServerInvoke failed".to_owned(),
+                Some(Value::Error(err)) => match err.as_ref() {
+                    mlua::Error::CallbackError { cause, .. } => cause.to_string(),
+                    other => other.to_string(),
+                },
+                _ => "OnServerInvoke failed".to_owned(),
             };
+            let message = message.split("\nstack traceback").next().unwrap_or_default().to_owned();
             (false, Json::String(message))
         };
         send(lua, NetMessage::InvokeResult { call, player, ok, values });

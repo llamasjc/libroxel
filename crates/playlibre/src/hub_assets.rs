@@ -10,13 +10,12 @@ use crate::server::data_dir;
 
 struct Queue {
     hub: String,
-    dir: PathBuf,
     waiting: VecDeque<String>,
     working: bool,
 }
 
 static QUEUE: Mutex<Queue> =
-    Mutex::new(Queue { hub: String::new(), dir: PathBuf::new(), waiting: VecDeque::new(), working: false });
+    Mutex::new(Queue { hub: String::new(), waiting: VecDeque::new(), working: false });
 
 pub fn dir() -> PathBuf {
     data_dir().join("assets")
@@ -29,7 +28,6 @@ pub fn start(hub: &str) {
 fn start_at(hub: &str, dir: PathBuf) {
     let mut queue = QUEUE.lock().unwrap();
     queue.hub = hub.to_owned();
-    queue.dir = dir.clone();
     pictures::set_hub_assets(dir, fetch);
 }
 
@@ -43,10 +41,7 @@ fn fetch(hash: String) {
 }
 
 fn work() {
-    let (client, dir) = {
-        let queue = QUEUE.lock().unwrap();
-        (HubClient::new(&queue.hub), queue.dir.clone())
-    };
+    let client = HubClient::new(&QUEUE.lock().unwrap().hub);
     loop {
         let Some(hash) = ({
             let mut queue = QUEUE.lock().unwrap();
@@ -56,20 +51,16 @@ fn work() {
         }) else {
             return;
         };
-        if let Ok(bytes) = client.asset(&hash) {
-            keep(&dir, &hash, &bytes);
+        // Only what the hash says: a Hub (or anyone on the way) can't swap in another file.
+        if let Ok(bytes) = client.asset(&hash)
+            && asset_hash(&bytes) == hash
+        {
+            pictures::keep_hub_asset(&hash, &bytes);
         }
         if QUEUE.lock().unwrap().waiting.is_empty() {
             pictures::hub_asset_arrived();
         }
     }
-}
-
-fn keep(dir: &Path, hash: &str, bytes: &[u8]) {
-    let part = dir.join(format!("{hash}.part"));
-    let _ = std::fs::create_dir_all(dir)
-        .and_then(|_| std::fs::write(&part, bytes))
-        .and_then(|_| std::fs::rename(&part, dir.join(hash)));
 }
 
 fn each_name(node: &mut Json, f: &mut dyn FnMut(&mut String)) {
@@ -184,7 +175,10 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert_eq!(pictures::bytes_for(&name).as_deref(), Some(picture));
-        assert!(cache.join(&hash).exists());
+        // Kept sealed: nothing in the folder is the picture itself.
+        let kept = std::fs::read(cache.join(format!("{hash}.sealed"))).unwrap();
+        assert!(!cache.join(&hash).exists());
+        assert!(!kept.windows(16).any(|w| picture.windows(16).next() == Some(w)));
         let _ = std::fs::remove_dir_all(root);
     }
 }

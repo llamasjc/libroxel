@@ -274,6 +274,30 @@
   in its tools as they arrive. Clicks on click detectors, prompts, hotbar
   keys and the mouse button over the world go to the host, which checks
   reach and fires the events there.
+- **What players' computers never get, and what they get scrambled.**
+  ServerScriptService, ServerStorage and StarterPlayer (with
+  StarterCharacterScripts) are never replicated, and a server `Script`'s
+  source is sent empty wherever it is, so a game's server side stays on
+  the host. Arguments a joined computer passes to `FireServer` or
+  `InvokeServer` can only name instances it was sent, game scripts can't
+  read any script's `Source`, and a failed `InvokeServer` tells the player
+  only the error, not the server's traceback. Code players' computers run
+  (`LocalScript`s, and `ModuleScript`s they can see) goes through
+  `playlibre_script::shield` first: comments and indentation go and every
+  local, parameter and local function gets a short meaningless name; it is
+  only sent when it compiles to the same bytecode as the original (without
+  debug information), and each result is cached. It is sent as code, not
+  bytecode, because Luau doesn't check the bytecode it loads, so a host
+  could take over players' computers with bad bytecode. On the Hub, a
+  game's place (its server scripts included) goes only to its creator and
+  the Hub's own servers; everyone else plays it by joining a server. Files
+  kept from the Hub on a player's computer are sealed with that computer's
+  own key. Editing together still shares everything, after the creator
+  lets each person in. `steal_tests.rs` (in the engine) is a cheat that
+  joins, keeps every message and asks the game about every instance on
+  the host. Code a player's computer runs can always be taken by someone
+  determined (it must be there to run); this makes it unreadable, and keeps
+  everything else off that computer.
 - **Who moves a joined player's character.** While it is alive and not
   sitting, the joined computer does, like everything on one computer: it
   runs physics for that one root part (every other loose part is held where
