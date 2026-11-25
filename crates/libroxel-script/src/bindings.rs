@@ -344,6 +344,9 @@ pub(crate) struct Host {
     /// A Luau function that turns a list of instance numbers into their
     /// objects in place (see [`instance_list`]).
     fill_instances: RefCell<Option<Function>>,
+    /// Value objects whose Changed already fired when the value was set,
+    /// with how many times: their next batch of changes skips that many.
+    values_heard: RefCell<std::collections::HashMap<InstanceId, u32>>,
     pub(crate) tree: SharedTree,
     connections: RefCell<Connections>,
     next_connection: Cell<u64>,
@@ -484,7 +487,20 @@ fn describe_tree_error(err: TreeError) -> String {
 // Scheduler
 // ---------------------------------------------------------------------------
 
-/// Resumes `thread`; if it yields, it is parked until the time it asked for.
+/// What the engine's own waits yield first, ahead of the seconds. A thread
+/// that yields anything else (a bare `coroutine.yield()`) is left alone
+/// until something resumes it, such as `task.spawn(thread)`.
+static WAIT_MARK: u8 = 0;
+
+pub(crate) fn wait_mark() -> Value {
+    Value::LightUserData(mlua::LightUserData(std::ptr::addr_of!(WAIT_MARK) as *mut std::ffi::c_void))
+}
+
+fn is_wait_mark(value: Option<&Value>) -> bool {
+    matches!(value, Some(Value::LightUserData(p)) if std::ptr::eq(p.0 as *const u8, std::ptr::addr_of!(WAIT_MARK)))
+}
+
+/// Resumes `thread`; if it waits, it is parked until the time it asked for.
 /// Errors are recorded against `script`. Returns the error, if any, so the
 /// first resume of a script can report it directly.
 fn resume(
@@ -541,7 +557,11 @@ fn resume_returning(
     match result {
         Ok(yielded) => {
             if thread.is_resumable() {
-                let seconds = yielded.front().and_then(|v| match v {
+                // Yielded by the script itself: whoever resumes it next decides.
+                if !is_wait_mark(yielded.front()) {
+                    return Ok(None);
+                }
+                let seconds = yielded.get(1).and_then(|v| match v {
                     Value::Number(n) => Some(*n),
                     Value::Integer(n) => Some(*n as f64),
                     _ => None,
@@ -1554,7 +1574,7 @@ impl UserData for LuaInstance {
                     value.type_name()
                 ))
             })?;
-            host(lua).tree.borrow_mut().set(id, property, value).map_err(tree_err)?;
+            set_heard_now(lua, id, class, property, value)?;
             if property == Property::Disabled && is_script_class(class) {
                 script_toggled(lua, id);
             }
@@ -1854,10 +1874,43 @@ fn write_tween_value(lua: &Lua, id: InstanceId, target: TweenTarget, value: Twee
                 TweenValue::Bool(b) => PropertyValue::Bool(b),
                 TweenValue::CFrame(_) => return,
             };
-            host(lua).tree.borrow_mut().set(id, p, value).map_err(tree_err)
+            match class_of(lua, id) {
+                Ok(class) => set_heard_now(lua, id, class, p, value),
+                Err(err) => Err(err),
+            }
         }
         _ => Ok(()),
     };
+}
+
+/// Whether `class` is a value object (IntValue, NumberValue and the rest).
+fn is_value_object(class: ClassKind) -> bool {
+    names::is_a_family(class, "ValueBase") == Some(true)
+}
+
+/// Sets `property` and, when it is a value object's Value and it changed,
+/// fires the object's Changed with the new value right away, as the
+/// reference platform does: the handlers have run before the setter's next
+/// line (or a tween's Completed).
+fn set_heard_now(
+    lua: &Lua,
+    id: InstanceId,
+    class: ClassKind,
+    property: Property,
+    value: PropertyValue,
+) -> mlua::Result<()> {
+    let heard_now = is_value_object(class) && names::property_name(property) == "Value";
+    let before = heard_now.then(|| host(lua).tree.borrow().get(id, property).ok()).flatten();
+    host(lua).tree.borrow_mut().set(id, property, value).map_err(tree_err)?;
+    if !heard_now || host(lua).tree.borrow().get(id, property).ok() == before {
+        return Ok(());
+    }
+    *host(lua).values_heard.borrow_mut().entry(id).or_default() += 1;
+    fire(lua, SignalKind::Changed(id), || {
+        let object = push_instance(lua, id)?;
+        Ok(std::iter::once(object.get::<Value>("Value")?).collect())
+    });
+    Ok(())
 }
 
 fn create_tween(lua: &Lua, target: Value, info: Value, goals: Table) -> mlua::Result<LuaTween> {
@@ -2256,8 +2309,8 @@ fn prelude() -> String {
     format!(
         r#"
         local yield = coroutine.yield
-        local lib, load_module, side = ...
-        lib["{wait}"] = function(seconds) return yield(seconds or 0) end
+        local lib, load_module, side, mark = ...
+        lib["{wait}"] = function(seconds) return yield(mark, seconds or 0) end
         local wait = lib["{wait}"]
         local wait_for_child = function(self, name, timeout)
             local waited = 0
@@ -2388,6 +2441,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         groups: RefCell::new(Default::default()),
         instance_cache: RefCell::new(None),
         fill_instances: RefCell::new(None),
+        values_heard: RefCell::new(Default::default()),
     });
 
     // Weak-valued cache so each instance has exactly one userdata.
@@ -2594,6 +2648,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
                     _ => "server",
                 })
             })?,
+            wait_mark(),
         ))?;
     lua.set_named_registry_value(SIGNAL_WAIT_FN, signal_wait)?;
     crate::types::install(lua)?;
@@ -3115,6 +3170,8 @@ fn forget_destroyed(lua: &Lua, changes: &[Change]) {
 }
 
 fn fire_heard_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
+    // What was set since the last batch is in this one.
+    let mut heard = std::mem::take(&mut *host(lua).values_heard.borrow_mut());
     let (any_watched, tags_heard, tools_heard) = {
         let host = host(lua);
         let conns = host.connections.borrow();
@@ -3166,9 +3223,23 @@ fn fire_heard_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
         match change {
             Change::PropertyChanged { id, property } if watched(id) => {
                 let name = names::property_name(*property);
-                fire(lua, SignalKind::Changed(*id), || {
-                    Ok(std::iter::once(Value::String(lua.create_string(name)?)).collect())
-                });
+                // A value object's Changed hears only its Value, and passes
+                // the new value; everything else passes the property's name.
+                let class = host(lua).tree.borrow().class(*id).ok();
+                if class.is_some_and(is_value_object) {
+                    let fired =
+                        name == "Value" && heard.get_mut(id).filter(|n| **n > 0).map(|n| *n -= 1).is_some();
+                    if name == "Value" && !fired {
+                        fire(lua, SignalKind::Changed(*id), || {
+                            let object = push_instance(lua, *id)?;
+                            Ok(std::iter::once(object.get::<Value>(name)?).collect())
+                        });
+                    }
+                } else {
+                    fire(lua, SignalKind::Changed(*id), || {
+                        Ok(std::iter::once(Value::String(lua.create_string(name)?)).collect())
+                    });
+                }
                 fire(lua, SignalKind::PropertyChanged(*id, *property), || Ok(MultiValue::new()));
                 if *property == Property::Health {
                     let health = host(lua).tree.borrow().get_number(*id, Property::Health);

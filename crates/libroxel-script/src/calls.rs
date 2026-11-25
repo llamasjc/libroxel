@@ -100,13 +100,13 @@ pub(crate) fn new_index(
 /// Luau halves of the invoke methods: the caller waits until a callback is
 /// set, then calls it in its own thread, so the callback may wait too.
 const INVOKE_PRELUDE: &str = r#"
-    local get, local_player, check_player, send, poll, reply = ...
+    local get, local_player, check_player, send, poll, reply, mark = ...
     local yield = coroutine.yield
     local function await(self, name)
         while true do
             local cb = get(self, name)
             if cb then return cb end
-            yield(0)
+            yield(mark, 0)
         end
     end
     local invoke_server = function(self, ...)
@@ -119,7 +119,7 @@ const INVOKE_PRELUDE: &str = r#"
                     if not ok then error(result, 2) end
                     return table.unpack(result, 1, result.n)
                 end
-                yield(0)
+                yield(mark, 0)
             end
         end
         local cb = await(self, "OnServerInvoke")
@@ -361,7 +361,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     let (server, client, bindable, serve): (Function, Function, Function, Function) = lua
         .load(INVOKE_PRELUDE)
         .set_name("=libroxel")
-        .call((get, local_player, check_player, send, poll, reply))?;
+        .call((get, local_player, check_player, send, poll, reply, crate::bindings::wait_mark()))?;
     lua.set_named_registry_value(INVOKE_SERVE_FN, serve)?;
     lua.set_named_registry_value(INVOKE_SERVER_FN, server)?;
     lua.set_named_registry_value(INVOKE_CLIENT_FN, client)?;

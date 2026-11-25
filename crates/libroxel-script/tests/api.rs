@@ -518,7 +518,9 @@ fn change_events_and_signal_helpers() {
     assert!(rt.fire_changes(&changes).is_empty());
     rt.step(0.1);
     let out = printed(&rt);
-    assert!(out.contains(&"changed Value 5".to_string()), "{out:?}");
+    // A value object's Changed passes the new value, and only for its Value.
+    assert!(out.contains(&"changed 5 5".to_string()), "{out:?}");
+    assert_eq!(out.iter().filter(|l| l.starts_with("changed")).count(), 1, "{out:?}");
     assert!(out.contains(&"renamed Points".to_string()), "{out:?}");
     assert!(out.contains(&"added Folder".to_string()) || out.contains(&"added First".to_string()), "{out:?}");
     assert!(out.iter().any(|l| l.starts_with("waited for")), "{out:?}");
@@ -1560,4 +1562,29 @@ fn parts_are_made_of_their_material_or_custom_physical_properties() {
             "nil"
         ]
     );
+}
+
+#[test]
+fn a_bare_yield_waits_until_the_thread_is_resumed() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local waiting
+        task.spawn(function()
+            waiting = coroutine.running()
+            local got = coroutine.yield()
+            print("resumed with", got)
+        end)
+        task.delay(0.5, function()
+            print("spawning")
+            task.spawn(waiting, "hello")
+        end)
+    "#,
+    );
+    rt.step(0.1);
+    rt.step(0.1);
+    assert!(printed(&rt).is_empty(), "a bare yield isn't resumed by the scheduler");
+    rt.step(0.4);
+    assert_eq!(printed(&rt), vec!["spawning", "resumed with hello"]);
 }
