@@ -3,6 +3,10 @@
 What changed in each release. The full list of commits for each one is on
 its [GitHub release](https://github.com/llamasjc/libroxel/releases) page.
 
+## Unreleased
+
+- **Android:** menus stay clear of the notch again in release builds.
+
 ## 0.1.16 (2026-11-24)
 
 - **Android:** the app opens again on 64-bit phones. It quit on launch

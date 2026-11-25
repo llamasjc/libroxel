@@ -2,5 +2,5 @@
 -repackageclasses
 -allowaccessmodification
 -keepclassmembers class com.libroxel.app.MainActivity {
-    public void setMotor(float);
+    public *;
 }
