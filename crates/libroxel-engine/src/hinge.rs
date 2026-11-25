@@ -104,6 +104,23 @@ fn number(tree: &InstanceTree, id: InstanceId, p: Property) -> f32 {
     tree.get_number(id, p).unwrap_or(0.0) as f32
 }
 
+/// With `LimitsEnabled`, how far a hinge can turn either way (radians):
+/// from `LowerAngle` to `UpperAngle` degrees, 45 either way unless set.
+fn hinge_limits(tree: &InstanceTree, hinge: InstanceId) -> Option<(f32, f32)> {
+    use names::constraint as names;
+    let enabled = matches!(tree.get_extra(hinge, names::LIMITS_ENABLED), Ok(Some(PropertyValue::Bool(true))));
+    if !enabled {
+        return None;
+    }
+    let degrees = |key: &str, default: f32| match tree.get_extra(hinge, key) {
+        Ok(Some(PropertyValue::Number(n))) => (n as f32).clamp(-180.0, 180.0),
+        _ => default,
+    };
+    let lo = degrees(names::LOWER_ANGLE, -45.0).to_radians();
+    let hi = degrees(names::UPPER_ANGLE, 45.0).to_radians();
+    Some((lo.min(hi), hi.max(lo)))
+}
+
 /// The hinge angle now, in radians.
 fn angle_of(tree: &InstanceTree, a0: InstanceId, a1: InstanceId) -> Option<f32> {
     let (f0, _) = attachment_frame(tree, a0)?;
@@ -144,6 +161,7 @@ impl Hinges {
                 continue;
             }
             let angle = angle_of(tree, a0, a1).unwrap_or(0.0);
+            let limits = hinge_limits(tree, hinge);
             let actuator = tree.get_enum(hinge, Property::ActuatorType);
             let servo = actuator == Some(EnumValue::ActuatorType(ActuatorType::Servo));
             let motor = match actuator {
@@ -152,7 +170,11 @@ impl Hinges {
                     number(tree, hinge, Property::MotorMaxTorque),
                 )),
                 Some(EnumValue::ActuatorType(ActuatorType::Servo)) => {
-                    let target = number(tree, hinge, Property::TargetAngle).to_radians();
+                    let mut target = number(tree, hinge, Property::TargetAngle).to_radians();
+                    // A servo can't turn past the hinge's limits.
+                    if let Some((lo, hi)) = limits {
+                        target = target.clamp(lo, hi);
+                    }
                     let fastest = number(tree, hinge, Property::AngularSpeed).abs();
                     // Head for the target, arriving this step if it is close.
                     let wanted = (wrap(target - angle) / dt.max(1e-4)).clamp(-fastest, fastest);
@@ -166,7 +188,7 @@ impl Hinges {
                 part1: p1,
                 frame0: frame(l0),
                 frame1: frame(l1),
-                kind: JointKind::Hinge { motor, servo },
+                kind: JointKind::Hinge { motor, servo, limits },
             });
             self.working.insert(hinge, (a0, a1));
         }

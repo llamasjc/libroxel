@@ -60,6 +60,9 @@ pub(crate) enum SignalKind {
     ToolDeactivated(InstanceId),
     MouseButton1Down,
     MouseButton1Up,
+    /// The mouse's older key events, with the key as a letter.
+    MouseKeyDown,
+    MouseKeyUp,
     TextBoxFocused(InstanceId),
     MoveToFinished(InstanceId),
     Stepped,
@@ -1215,6 +1218,7 @@ impl UserData for LuaInstance {
             Ok(parts.join("."))
         });
         methods.add_method(DESTROY, |lua, this, ()| {
+            crate::sound::play_on_remove(lua, this.0);
             host(lua).tree.borrow_mut().destroy(this.0).map_err(tree_err)
         });
         methods.add_method(CLONE, |lua, this, ()| {
@@ -1304,10 +1308,10 @@ impl UserData for LuaInstance {
         });
         methods.add_method(names::methods::CLEAR_ALL_CHILDREN, |lua, this, ()| {
             let host = host(lua);
-            let mut tree = host.tree.borrow_mut();
-            let children = tree.children(this.0).map_err(tree_err)?.to_vec();
+            let children = host.tree.borrow().children(this.0).map_err(tree_err)?.to_vec();
             for child in children {
-                let _ = tree.destroy(child);
+                crate::sound::play_on_remove(lua, child);
+                let _ = host.tree.borrow_mut().destroy(child);
             }
             Ok(())
         });

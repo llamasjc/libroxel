@@ -21,7 +21,7 @@ use bevy::audio::{
     AudioPlayer, AudioSink, AudioSinkPlayback, AudioSource, PlaybackMode, PlaybackSettings, Volume,
 };
 use bevy::prelude::*;
-use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property};
+use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property, PropertyValue};
 
 use crate::pictures::BUILT_IN;
 use crate::view::{EngineState, to_bevy};
@@ -134,6 +134,49 @@ pub fn falloff(distance: f32) -> f32 {
         let edge = 1.0 - (distance - NEAR) / (HEARING_DISTANCE - NEAR);
         (NEAR / distance) * edge.sqrt()
     }
+}
+
+/// How loud a sound is `distance` studs away when it says how it falls
+/// off: full within `near`, silent past `far`, and in between going down
+/// as one over the distance, in a straight line, as that line squared, or
+/// as one over the distance tapering to nothing at `far`.
+pub fn roll_off(distance: f32, near: f32, far: f32, mode: u32) -> f32 {
+    use libroxel_script::names::sound as names;
+    let near = near.max(0.01);
+    let far = far.max(near);
+    if distance <= near {
+        return 1.0;
+    }
+    if distance >= far {
+        return 0.0;
+    }
+    let inverse = near / distance;
+    let line = 1.0 - (distance - near) / (far - near);
+    match mode {
+        names::ROLL_OFF_LINEAR => line,
+        names::ROLL_OFF_LINEAR_SQUARE => line * line,
+        names::ROLL_OFF_INVERSE_TAPERED => inverse.min(line * line),
+        _ => inverse,
+    }
+}
+
+/// How loud the sound `id` (in a part) is `distance` studs away: as it
+/// says, if it says how it falls off, else libroxel's own falloff.
+fn sound_falloff(tree: &InstanceTree, id: InstanceId, distance: f32) -> f32 {
+    use libroxel_script::names::sound as names;
+    let number = |key: &str| match tree.get_extra(id, key) {
+        Ok(Some(PropertyValue::Number(n))) => Some(n as f32),
+        _ => None,
+    };
+    let (near, far, mode) = (
+        number(names::ROLL_OFF_MIN_DISTANCE),
+        number(names::ROLL_OFF_MAX_DISTANCE),
+        number(names::ROLL_OFF_MODE),
+    );
+    if near.is_none() && far.is_none() && mode.is_none() {
+        return falloff(distance);
+    }
+    roll_off(distance, near.unwrap_or(NEAR), far.unwrap_or(10_000.0), mode.map_or(0, |m| m as u32))
 }
 
 /// A small, repeatable noise source.
@@ -497,7 +540,7 @@ pub fn audible_sounds(tree: &InstanceTree, listener: Option<Vec3>) -> Vec<(Insta
                 .filter(|p| tree.class(*p).is_ok_and(|c| c.is_physical()))
                 .and_then(|p| tree.get_vec3(p, Property::Position));
             if let (Some(at), Some(listener)) = (at, listener) {
-                volume *= falloff(to_bevy(at).distance(listener));
+                volume *= sound_falloff(tree, id, to_bevy(at).distance(listener));
             }
             out.push((
                 id,
@@ -694,5 +737,12 @@ mod tests {
         assert!(falloff(40.0) < 0.3 && falloff(40.0) > 0.05);
         assert!(falloff(150.0) < falloff(40.0));
         assert_eq!(falloff(HEARING_DISTANCE), 0.0);
+        use libroxel_script::names::sound as names;
+        assert_eq!(roll_off(5.0, 10.0, 100.0, names::ROLL_OFF_INVERSE), 1.0);
+        assert!((roll_off(20.0, 10.0, 100.0, names::ROLL_OFF_INVERSE) - 0.5).abs() < 1e-6);
+        assert!((roll_off(55.0, 10.0, 100.0, names::ROLL_OFF_LINEAR) - 0.5).abs() < 1e-6);
+        assert!((roll_off(55.0, 10.0, 100.0, names::ROLL_OFF_LINEAR_SQUARE) - 0.25).abs() < 1e-6);
+        assert!(roll_off(95.0, 10.0, 100.0, names::ROLL_OFF_INVERSE_TAPERED) < 0.01);
+        assert_eq!(roll_off(100.0, 10.0, 100.0, names::ROLL_OFF_INVERSE), 0.0);
     }
 }

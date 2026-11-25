@@ -401,6 +401,21 @@ pub mod sound {
     pub const RESUME: &str = "Resume";
     /// Fires when it plays to its end (not when looped or stopped).
     pub const ENDED: &str = "Ended";
+    /// Set, it plays on as it's destroyed.
+    pub const PLAY_ON_REMOVE: &str = "PlayOnRemove";
+    /// Marks the copy (and the part holding it) that plays for a sound
+    /// that was destroyed, so it goes once it's done.
+    pub const PLAYED_ON_REMOVE: &str = "libroxel.playedOnRemove";
+    /// How loudness falls off with distance: within the near distance it's
+    /// full, past the far one silent, and in between as the mode says.
+    pub const ROLL_OFF_MIN_DISTANCE: &str = "RollOffMinDistance";
+    pub const ROLL_OFF_MAX_DISTANCE: &str = "RollOffMaxDistance";
+    pub const ROLL_OFF_MODE: &str = "RollOffMode";
+    /// The numbers of the roll-off modes.
+    pub const ROLL_OFF_INVERSE: u32 = 0;
+    pub const ROLL_OFF_LINEAR: u32 = 1;
+    pub const ROLL_OFF_LINEAR_SQUARE: u32 = 2;
+    pub const ROLL_OFF_INVERSE_TAPERED: u32 = 3;
 }
 
 /// Terrain methods.
@@ -443,6 +458,10 @@ pub mod mouse {
     pub const X: &str = "X";
     pub const Y: &str = "Y";
     pub const TYPE_NAME: &str = "Mouse";
+    /// The older key events: they pass the key as it types, in lower case.
+    pub const KEY_DOWN: &str = "KeyDown";
+    pub const KEY_UP: &str = "KeyUp";
+    pub const OLD_KEY_DOWN: &str = "keyDown";
     /// How far the mouse ray reaches, in studs.
     pub const REACH: f32 = 1000.0;
 }
@@ -647,6 +666,14 @@ pub mod animation {
         ("toolnone", "hold"),
         ("toolnoneanim", "hold"),
     ];
+}
+
+/// Constraint settings the engine reads from what scripts and places set.
+pub mod constraint {
+    /// Whether a hinge stops at its lower and upper angles (degrees).
+    pub const LIMITS_ENABLED: &str = "LimitsEnabled";
+    pub const LOWER_ANGLE: &str = "LowerAngle";
+    pub const UPPER_ANGLE: &str = "UpperAngle";
 }
 
 /// Keyframe sequences: an animation kept as instances, a `Keyframe` for

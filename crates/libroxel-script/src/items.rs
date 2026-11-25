@@ -283,6 +283,63 @@ fn held_tool(lua: &Lua) -> Option<InstanceId> {
 }
 
 /// The left mouse button went down or up (and no GUI used the click).
+/// What the mouse's older key events pass for `key`: the letter it types,
+/// in lower case (a space, a return, a tab, a backspace), if it types one.
+pub(crate) fn typed(key: libroxel_instance::KeyCode) -> Option<&'static str> {
+    use libroxel_instance::KeyCode as K;
+    Some(match key {
+        K::A => "a",
+        K::B => "b",
+        K::C => "c",
+        K::D => "d",
+        K::E => "e",
+        K::F => "f",
+        K::G => "g",
+        K::H => "h",
+        K::I => "i",
+        K::J => "j",
+        K::K => "k",
+        K::L => "l",
+        K::M => "m",
+        K::N => "n",
+        K::O => "o",
+        K::P => "p",
+        K::Q => "q",
+        K::R => "r",
+        K::S => "s",
+        K::T => "t",
+        K::U => "u",
+        K::V => "v",
+        K::W => "w",
+        K::X => "x",
+        K::Y => "y",
+        K::Z => "z",
+        K::Zero => "0",
+        K::One => "1",
+        K::Two => "2",
+        K::Three => "3",
+        K::Four => "4",
+        K::Five => "5",
+        K::Six => "6",
+        K::Seven => "7",
+        K::Eight => "8",
+        K::Nine => "9",
+        K::Space => " ",
+        K::Return => "\r",
+        K::Tab => "\t",
+        K::Backspace => "\u{8}",
+        K::Slash => "/",
+        _ => return None,
+    })
+}
+
+/// A key went down or up: the mouse's older key events fire with it.
+pub(crate) fn mouse_key(lua: &Lua, key: libroxel_instance::KeyCode, down: bool) {
+    let Some(letter) = typed(key) else { return };
+    let signal = if down { SignalKind::MouseKeyDown } else { SignalKind::MouseKeyUp };
+    fire(lua, signal, || Ok([Value::String(lua.create_string(letter)?)].into_iter().collect()));
+}
+
 pub(crate) fn mouse_button(lua: &Lua, down: bool) {
     let signal = if down { SignalKind::MouseButton1Down } else { SignalKind::MouseButton1Up };
     fire(lua, signal, || Ok(mlua::MultiValue::new()));
@@ -348,6 +405,10 @@ impl UserData for Mouse {
             Ok(Signal(SignalKind::MouseButton1Down))
         });
         fields.add_field_method_get(names::events::BUTTON1_UP, |_, _| Ok(Signal(SignalKind::MouseButton1Up)));
+        for name in [mouse::KEY_DOWN, mouse::OLD_KEY_DOWN] {
+            fields.add_field_method_get(name, |_, _| Ok(Signal(SignalKind::MouseKeyDown)));
+        }
+        fields.add_field_method_get(mouse::KEY_UP, |_, _| Ok(Signal(SignalKind::MouseKeyUp)));
         fields.add_meta_field(MetaMethod::Type, mouse::TYPE_NAME);
     }
 

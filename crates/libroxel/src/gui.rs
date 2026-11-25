@@ -513,6 +513,87 @@ pub fn draw(
     hit
 }
 
+/// The start of `text` with at most `most` letters showing (all of it when
+/// `most` is negative), for typewriter effects. In rich text the markup
+/// doesn't count, and is kept, and `&lt;` and the like count as one.
+pub fn visible_graphemes(text: &str, most: i64, rich: bool) -> String {
+    if most < 0 {
+        return text.to_owned();
+    }
+    let mut shown = 0;
+    let mut out = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if rich && c == '<' {
+            // Markup: kept whole, not counted.
+            out.push(c);
+            for c in chars.by_ref() {
+                out.push(c);
+                if c == '>' {
+                    break;
+                }
+            }
+            continue;
+        }
+        if shown >= most {
+            if rich {
+                continue;
+            }
+            break;
+        }
+        out.push(c);
+        if rich && c == '&' {
+            while let Some(&n) = chars.peek() {
+                chars.next();
+                out.push(n);
+                if n == ';' || !n.is_ascii_alphanumeric() && n != '#' {
+                    break;
+                }
+            }
+        }
+        shown += 1;
+    }
+    out
+}
+
+/// How text that doesn't fit is cut short (TextTruncate): not at all, at
+/// the last letter that fits, or at the last whole word that fits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Truncate {
+    No,
+    AtEnd,
+    SplitWord,
+}
+
+/// The longest start of `text` that, with "..." after it, `fits`; all of
+/// `text` when it fits as it is.
+pub fn truncated(text: &str, how: Truncate, fits: impl Fn(&str) -> bool) -> String {
+    if how == Truncate::No || fits(text) {
+        return text.to_owned();
+    }
+    let ends: Vec<usize> = match how {
+        Truncate::SplitWord => {
+            let mut ends: Vec<usize> =
+                text.char_indices().filter(|(_, c)| c.is_whitespace()).map(|(i, _)| i).collect();
+            ends.insert(0, 0);
+            ends
+        }
+        _ => text.char_indices().map(|(i, _)| i).collect(),
+    };
+    let cut = |end: usize| format!("{}...", text[..end].trim_end());
+    // The most that fits, found by halving the gap.
+    let (mut lo, mut hi) = (0usize, ends.len());
+    while hi - lo > 1 {
+        let mid = (lo + hi) / 2;
+        if fits(&cut(ends[mid])) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    cut(ends.get(lo).copied().unwrap_or(0))
+}
+
 /// Draws `text` inside `rect` as a text object's properties say: aligned,
 /// wrapped or scaled to fit, and outlined when `stroke` is given.
 #[allow(clippy::too_many_arguments)]
@@ -544,6 +625,31 @@ fn draw_text(
         TextXAlignment::Right => egui::Align::RIGHT,
     };
     let rich = is_rich(tree, id);
+    let text = match extra_number(tree, id, "MaxVisibleGraphemes") {
+        Some(most) => visible_graphemes(&text, most as i64, rich),
+        None => text,
+    };
+    let truncate = match extra_number(tree, id, "TextTruncate").map(|n| n as u32) {
+        Some(1) if !scaled && !rich => Truncate::AtEnd,
+        Some(2) if !scaled && !rich => Truncate::SplitWord,
+        _ => Truncate::No,
+    };
+    let lay_text = |text: &str, size: f32| {
+        let width = if wrapped { rect.width().max(1.0) } else { f32::INFINITY };
+        let mut job =
+            egui::text::LayoutJob::simple(text.to_owned(), crate::rich_text::font(size), colour, width);
+        job.halign = halign;
+        painter.layout_job(job)
+    };
+    let text = if truncate == Truncate::No {
+        text
+    } else {
+        let size = size.clamp(1.0, 100.0);
+        truncated(&text, truncate, |t| {
+            let g = lay_text(t, size);
+            g.size().x <= rect.width() + 0.5 && g.size().y <= rect.height().max(size) + 0.5
+        })
+    };
     let lay = |size: f32| {
         let width = if wrapped || scaled { rect.width().max(1.0) } else { f32::INFINITY };
         let mut job = if rich {
@@ -1334,6 +1440,22 @@ pub fn hotbar(ui: &egui::Ui, tree: &InstanceTree, tools: &[(InstanceId, bool)]) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typewriter_text_and_text_cut_short() {
+        assert_eq!(visible_graphemes("Hello", 3, false), "Hel");
+        assert_eq!(visible_graphemes("Hello", -1, false), "Hello");
+        assert_eq!(visible_graphemes("Hello", 0, false), "");
+        // Markup is kept and not counted; an entity is one letter.
+        assert_eq!(visible_graphemes("<b>Hi</b> &lt;3", 4, true), "<b>Hi</b> &lt;");
+        assert_eq!(visible_graphemes("<b>Hi</b> there", 1, true), "<b>H</b>");
+        let fits = |t: &str| t.chars().count() <= 10;
+        assert_eq!(truncated("short", Truncate::AtEnd, fits), "short");
+        assert_eq!(truncated("a long sentence here", Truncate::AtEnd, fits), "a long...");
+        assert_eq!(truncated("a longer sentence", Truncate::AtEnd, fits), "a longe...");
+        assert_eq!(truncated("a longer sentence", Truncate::SplitWord, fits), "a...");
+        assert_eq!(truncated("a longer sentence", Truncate::No, fits), "a longer sentence");
+    }
 
     fn gui(tree: &mut InstanceTree, class: ClassKind, parent: InstanceId, name: &str) -> InstanceId {
         let id = tree.create(class, name).unwrap();

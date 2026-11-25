@@ -479,3 +479,43 @@ fn a_ball_socket_swings_any_way_and_keeps_its_length() {
     assert!(widest > 0.5, "{widest}");
     assert!(lowest < 18.0, "{lowest}");
 }
+
+/// Turns on a hinge's limits, as a script or place sets them.
+fn limit(tree: &mut InstanceTree, hinge: InstanceId, lower: f64, upper: f64) {
+    tree.set_extra(hinge, "LimitsEnabled", Some(PropertyValue::Bool(true))).unwrap();
+    tree.set_extra(hinge, "LowerAngle", Some(PropertyValue::Number(lower))).unwrap();
+    tree.set_extra(hinge, "UpperAngle", Some(PropertyValue::Number(upper))).unwrap();
+}
+
+#[test]
+fn a_limited_hinge_stops_at_its_angles() {
+    let mut tree = world();
+    let (arm, a0, a1) = pendulum(&mut tree);
+    let h = hinge(&mut tree, a0, a1, &[]);
+    limit(&mut tree, h, -30.0, 60.0);
+    let t = run(tree, 1.5);
+    // It would hang straight down (-90); it stops at -30 instead.
+    assert!((angle(&t, h) + 30.0).abs() < 3.0, "{}", angle(&t, h));
+    let at = vec(&t, arm, Property::Position);
+    assert!(at.y > 8.0, "{at:?}");
+}
+
+#[test]
+fn a_servo_stops_at_the_hinges_limit() {
+    let mut tree = world();
+    let (_, a0, a1) = pendulum(&mut tree);
+    let h = hinge(
+        &mut tree,
+        a0,
+        a1,
+        &[
+            actuator(ActuatorType::Servo),
+            (Property::TargetAngle, PropertyValue::Number(90.0)),
+            (Property::AngularSpeed, PropertyValue::Number(4.0)),
+            (Property::ServoMaxTorque, PropertyValue::Number(1e6)),
+        ],
+    );
+    limit(&mut tree, h, -45.0, 40.0);
+    let t = run(tree, 1.5);
+    assert!((angle(&t, h) - 40.0).abs() < 2.0, "{}", angle(&t, h));
+}

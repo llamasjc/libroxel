@@ -39,7 +39,8 @@ pub enum JointKind {
     /// Part 1 turns only about frame 0's X axis, through frame 0. With a
     /// motor, it is driven at a speed (radians a second) with up to a torque.
     /// A servo's motor also holds its part up against gravity.
-    Hinge { motor: Option<(f32, f32)>, servo: bool },
+    /// With limits, the hinge angle (radians) stays between them.
+    Hinge { motor: Option<(f32, f32)>, servo: bool, limits: Option<(f32, f32)> },
     /// Part 1 slides along frame 0's X axis without turning, between the
     /// limits (studs from frame 0) if there are any.
     Slider { limits: Option<(f32, f32)> },
@@ -698,7 +699,13 @@ impl Rigid {
             }
             let Some(joint) = self.world.impulse_joints.get_mut(*handle, true) else { continue };
             match spec.kind {
-                JointKind::Hinge { motor, .. } => {
+                JointKind::Hinge { motor, limits, .. } => {
+                    match limits {
+                        Some((lo, hi)) => {
+                            joint.data.set_limits(JointAxis::AngX, [lo, hi]);
+                        }
+                        None => joint.data.limit_axes.remove(JointAxesMask::ANG_X),
+                    }
                     // Servos are also pushed round by `drive_servos`.
                     let (speed, torque) = motor.unwrap_or((0.0, 0.0));
                     joint.data.set_motor_model(JointAxis::AngX, MotorModel::ForceBased);
@@ -740,7 +747,9 @@ impl Rigid {
         let links: Vec<(RigidBodyHandle, RigidBodyHandle)> =
             self.joints.values().map(|j| (j.2, j.3)).collect();
         for (_, spec, b0, b1) in self.joints.values() {
-            let JointKind::Hinge { motor: Some((speed, most)), servo: true } = spec.kind else { continue };
+            let JointKind::Hinge { motor: Some((speed, most)), servo: true, .. } = spec.kind else {
+                continue;
+            };
             let (Some(body0), Some(body1)) = (self.world.bodies.get(*b0), self.world.bodies.get(*b1)) else {
                 continue;
             };

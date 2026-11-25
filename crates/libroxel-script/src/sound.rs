@@ -4,7 +4,7 @@
 //! only change that. `Play` and `Stop` also go back to the beginning, which
 //! the host learns from [`take_sound_restarts`].
 
-use libroxel_instance::{ClassKind, InstanceId, Property, PropertyValue};
+use libroxel_instance::{ClassKind, InstanceId, InstanceTree, Property, PropertyValue};
 use mlua::{Lua, MultiValue, Value};
 
 use crate::bindings::{
@@ -82,7 +82,88 @@ pub(crate) fn sound_ended(lua: &Lua, id: InstanceId) -> Vec<crate::ScriptError> 
         args.push_back(Value::String(lua.create_string(sound_id(lua, id))?));
         Ok(args)
     });
+    // A copy playing for a destroyed sound goes once it's done.
+    {
+        let host = host(lua);
+        let mut tree = host.tree.borrow_mut();
+        if marked(&tree, id) {
+            let holder = tree.parent(id).ok().flatten().filter(|p| marked(&tree, *p)).unwrap_or(id);
+            let _ = tree.destroy(holder);
+        }
+    }
     take_errors(lua)
+}
+
+fn marked(tree: &InstanceTree, id: InstanceId) -> bool {
+    matches!(tree.get_extra(id, sound::PLAYED_ON_REMOVE), Ok(Some(PropertyValue::Bool(true))))
+}
+
+/// The longest a copy playing for a destroyed sound stays, in seconds, in
+/// case its file never plays to the end (or can't be found).
+const PLAYED_ON_REMOVE_FOR: f64 = 60.0;
+
+/// Call before destroying `id`: each sound in it (or it) that is set to
+/// `PlayOnRemove` and could be heard plays on as a copy where it was,
+/// held by a hidden part when it was in one, and goes once it's done.
+pub(crate) fn play_on_remove(lua: &Lua, id: InstanceId) {
+    let host = host(lua);
+    let mut tree = host.tree.borrow_mut();
+    let workspace = tree.workspace();
+    let heard = |tree: &InstanceTree, id| {
+        tree.is_descendant_of(id, workspace).unwrap_or(false)
+            || tree.service(ClassKind::Players).is_some_and(|p| tree.is_descendant_of(id, p).unwrap_or(false))
+    };
+    if !heard(&tree, id) {
+        return;
+    }
+    let mut sounds = tree.descendants_of_class(id, ClassKind::Sound);
+    if tree.class(id) == Ok(ClassKind::Sound) && !sounds.contains(&id) {
+        sounds.push(id);
+    }
+    let set = |v: bool| PropertyValue::Bool(v);
+    let now = host.clock.get();
+    for s in sounds {
+        if !matches!(tree.get_extra(s, sound::PLAY_ON_REMOVE), Ok(Some(PropertyValue::Bool(true)))) {
+            continue;
+        }
+        let at = tree
+            .parent(s)
+            .ok()
+            .flatten()
+            .filter(|p| tree.class(*p).is_ok_and(|c| c.is_physical()))
+            .and_then(|p| tree.get_vec3(p, Property::Position));
+        let Ok(copy) = tree.clone_subtree(s) else { continue };
+        let _ = tree.set_extra(copy, sound::PLAY_ON_REMOVE, None);
+        let _ = tree.set_extra(copy, sound::PLAYED_ON_REMOVE, Some(set(true)));
+        let _ = tree.set(copy, Property::Playing, set(true));
+        let holder = match at
+            .and_then(|at| tree.create(ClassKind::Part, sound::PLAY_ON_REMOVE).ok().map(|h| (h, at)))
+        {
+            Some((holder, at)) => {
+                let _ = tree.set(holder, Property::Position, PropertyValue::Vec3(at));
+                let _ = tree.set(
+                    holder,
+                    Property::Size,
+                    PropertyValue::Vec3(libroxel_instance::Vec3::new(0.2, 0.2, 0.2)),
+                );
+                let _ = tree.set(holder, Property::Transparency, PropertyValue::Number(1.0));
+                for p in [Property::CanCollide, Property::CanQuery, Property::CanTouch] {
+                    let _ = tree.set(holder, p, set(false));
+                }
+                let _ = tree.set(holder, Property::Anchored, set(true));
+                let _ = tree.set_extra(holder, sound::PLAYED_ON_REMOVE, Some(set(true)));
+                let _ = tree.set_parent(holder, Some(workspace));
+                let _ = tree.set_parent(copy, Some(holder));
+                holder
+            }
+            None => {
+                let _ = tree.set_parent(copy, Some(workspace));
+                copy
+            }
+        };
+        host.debris.borrow_mut().push((holder, now + PLAYED_ON_REMOVE_FOR));
+        host.world.borrow_mut().sound_restarts.push(copy);
+    }
 }
 
 fn sound_id(lua: &Lua, id: InstanceId) -> String {

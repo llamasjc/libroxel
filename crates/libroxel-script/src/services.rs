@@ -171,6 +171,11 @@ pub(crate) fn input(lua: &Lua, input: UserInput, began: bool, processed: bool) -
     if input == UserInput::MouseButton1 && !processed {
         crate::items::mouse_button(lua, began);
     }
+    if let UserInput::Key(key) = input
+        && !processed
+    {
+        crate::items::mouse_key(lua, key, began);
+    }
     take_errors(lua)
 }
 
@@ -678,10 +683,14 @@ pub(crate) fn step_debris(lua: &Lua, now: f64) {
         *list = later;
         due.into_iter().map(|(id, _)| id).collect()
     };
-    let mut tree = host.tree.borrow_mut();
     for id in due {
-        if tree.exists(id) && !tree.is_destroyed(id).unwrap_or(true) {
-            let _ = tree.destroy(id);
+        let live = {
+            let tree = host.tree.borrow();
+            tree.exists(id) && !tree.is_destroyed(id).unwrap_or(true)
+        };
+        if live {
+            crate::sound::play_on_remove(lua, id);
+            let _ = host.tree.borrow_mut().destroy(id);
         }
     }
 }

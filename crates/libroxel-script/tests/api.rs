@@ -908,6 +908,29 @@ fn tools_equip_activate_and_read_the_mouse() {
 }
 
 #[test]
+fn the_mouse_tells_older_scripts_which_keys_go_down() {
+    use libroxel_instance::KeyCode;
+    use libroxel_script::UserInput;
+    let rt = runtime();
+    add_player(&rt, "Sam");
+    run(
+        &rt,
+        r#"
+        local mouse = game:GetService("Players").LocalPlayer:GetMouse()
+        mouse.KeyDown:Connect(function(key) print("down", key) end)
+        mouse.keyDown:connect(function(key) print("old down", key) end)
+        mouse.KeyUp:Connect(function(key) print("up", string.byte(key)) end)
+    "#,
+    );
+    assert!(rt.input_began(UserInput::Key(KeyCode::Q), false).is_empty());
+    assert!(rt.input_ended(UserInput::Key(KeyCode::Space), false).is_empty());
+    // Keys a text box took, and keys that don't type, don't count.
+    assert!(rt.input_began(UserInput::Key(KeyCode::E), true).is_empty());
+    assert!(rt.input_began(UserInput::Key(KeyCode::LeftShift), false).is_empty());
+    assert_eq!(printed(&rt), vec!["down q", "old down q", "up 32"]);
+}
+
+#[test]
 fn camera_velocity_text_boxes_and_explosions() {
     use libroxel_script::VelocityRequest;
     let rt = runtime();
