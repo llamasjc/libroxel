@@ -12,11 +12,13 @@ pub struct Loading {
     began: Option<f64>,
     came: Option<f64>,
     done: Option<f64>,
+    /// What the loading screen waited on, once it is done, for the Output.
+    finished: Option<String>,
 }
 
 impl Loading {
     pub fn start(&mut self, now: f64) {
-        *self = Self { began: Some(now), came: None, done: None };
+        *self = Self { began: Some(now), ..Self::default() };
     }
 
     pub fn stop(&mut self) {
@@ -25,6 +27,13 @@ impl Loading {
 
     pub fn active(&self) -> bool {
         self.began.is_some()
+    }
+
+    /// Once, when the screen starts to go: how long it was up, and how
+    /// much of that was waiting for the 3D view to fill after the world
+    /// had arrived.
+    pub fn take_finished(&mut self) -> Option<String> {
+        self.finished.take()
     }
 
     /// Draws the loading screen over `view`. Returns true when the player
@@ -48,6 +57,18 @@ impl Loading {
             let filled = !filling || self.came.is_some_and(|c| now - c > LONGEST_FILL);
             if progress.is_none() && filled && now - began >= SHORTEST {
                 self.done = Some(now);
+                let came = self.came.unwrap_or(now);
+                let why = if filling {
+                    format!("gave up waiting for the 3D view after {LONGEST_FILL:.0} s, it was still filling")
+                } else {
+                    "the 3D view had filled".to_owned()
+                };
+                self.finished = Some(format!(
+                    "⏱ Loading screen gone after {:.2} s: the world was in at {:.2} s, then {:.2} s waiting ({why})",
+                    now - began,
+                    came - began,
+                    now - came,
+                ));
             }
         }
         let fade = self.done.map_or(1.0, |d| 1.0 - ((now - d) / FADE) as f32);

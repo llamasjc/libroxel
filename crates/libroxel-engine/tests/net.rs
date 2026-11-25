@@ -254,6 +254,38 @@ fn a_joined_player_sees_the_world_and_plays_in_it() {
 }
 
 #[test]
+fn a_join_says_where_its_time_went() {
+    let tree = Rc::new(RefCell::new(game()));
+    let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| g.character().is_some());
+    let log = printed(&mut guest);
+    // Each step of the join, in order, in the Output.
+    let steps = [
+        "⏱ Join: reached the host",
+        "⏱ Join: this computer is",
+        "⏱ Join: keys agreed with the host",
+        "⏱ Join: the host said hello",
+        "⏱ Join: the first instances arrived",
+        "⏱ Join: the first batch is in",
+        "⏱ Join: so far",
+    ];
+    let at: Vec<usize> = steps
+        .iter()
+        .map(|s| log.iter().position(|l| l.starts_with(s)).unwrap_or_else(|| panic!("no {s:?} in {log:?}")))
+        .collect();
+    assert!(at.is_sorted(), "out of order: {log:?}");
+    // And a joined computer's frames are timed, the host's messages too.
+    let t = guest.take_frame_times();
+    assert!(t.frames > 0);
+    assert!(t.ops_applied > 0 && t.bytes_in > 0, "{t:?}");
+    assert!(t.apply > 0.0 && t.receive > 0.0, "{t:?}");
+}
+
+#[test]
 fn everyone_sees_how_a_joined_player_chose_to_look() {
     use libroxel_engine::character::{BodyColors, Hat, Look};
     use libroxel_instance::Color3;

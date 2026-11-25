@@ -211,6 +211,51 @@ pub struct FrameTimes {
     pub physics: f64,
     /// Everything else in a frame.
     pub other: f64,
+    /// A joined game only: taking in what the host sent (reading the
+    /// socket, decrypting, unpacking and parsing).
+    pub receive: f64,
+    /// A joined game only: putting the host's instances into the tree.
+    pub apply: f64,
+    /// A joined game only: looking through the workspace for explosions.
+    pub explosion_scan: f64,
+    /// A joined game only: bytes read from the host.
+    pub bytes_in: u64,
+    /// A joined game only: the host's operations applied.
+    pub ops_applied: u64,
+    /// A joined game only: the longest one message took to apply.
+    pub slowest_apply: f64,
+    /// A joined game only: the most messages from the host still waiting
+    /// at the end of a frame (growing means falling behind the host).
+    pub most_waiting: usize,
+}
+
+impl FrameTimes {
+    /// The seconds the game step took, summed.
+    pub fn step_seconds(&self) -> f64 {
+        self.change_events
+            + self.scripts
+            + self.physics
+            + self.other
+            + self.receive
+            + self.apply
+            + self.explosion_scan
+    }
+
+    /// Adds `t`'s sums to these.
+    pub fn add(&mut self, t: &FrameTimes) {
+        self.frames += t.frames;
+        self.change_events += t.change_events;
+        self.scripts += t.scripts;
+        self.physics += t.physics;
+        self.other += t.other;
+        self.receive += t.receive;
+        self.apply += t.apply;
+        self.explosion_scan += t.explosion_scan;
+        self.bytes_in += t.bytes_in;
+        self.ops_applied += t.ops_applied;
+        self.slowest_apply = self.slowest_apply.max(t.slowest_apply);
+        self.most_waiting = self.most_waiting.max(t.most_waiting);
+    }
 }
 
 pub struct PlaySession {

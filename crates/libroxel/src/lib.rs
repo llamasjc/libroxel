@@ -323,9 +323,16 @@ fn android_main(app: bevy::android::android_activity::AndroidApp) {
         std::process::exit(0);
     }
     let home = app.internal_data_path();
+    // Logs go where a file manager or a USB cable can reach them
+    // (Android/data/com.libroxel.app/files/logs), not inside the app's
+    // private folder, so a player can send them.
+    let shared = app.external_data_path();
     let _ = bevy::android::ANDROID_APP.set(app);
     if let Some(home) = home {
         unsafe { std::env::set_var("HOME", home) };
+    }
+    if let Some(shared) = shared {
+        unsafe { std::env::set_var(debugging::LOGS_ENV, shared.join("logs")) };
     }
     run();
     std::process::exit(0);

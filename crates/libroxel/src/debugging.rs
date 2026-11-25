@@ -13,9 +13,64 @@ use libroxel_engine::{LogEntry, LogLevel};
 /// How many session logs are kept; older ones are removed.
 const KEEP_LOGS: usize = 20;
 
+/// Names a folder for log files instead of the usual one (set on Android,
+/// where the usual one can't be reached from outside the app).
+pub const LOGS_ENV: &str = "LIBROXEL_LOGS";
+
 /// Where log files go.
 pub fn logs_dir() -> PathBuf {
-    crate::server::data_dir().join("logs")
+    std::env::var_os(LOGS_ENV)
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate::server::data_dir().join("logs"))
+}
+
+/// This device, for speed reports: what it is, how much memory it has,
+/// and (on Android) its model and version.
+pub fn device_line() -> String {
+    let mut line =
+        format!("Device: {} ({}-bit app), {}", std::env::consts::ARCH, usize::BITS, std::env::consts::OS);
+    #[cfg(target_os = "android")]
+    {
+        let prop = |name: &str| {
+            std::process::Command::new("getprop")
+                .arg(name)
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+                .filter(|s| !s.is_empty())
+        };
+        let model = [prop("ro.product.manufacturer"), prop("ro.product.model")]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !model.is_empty() {
+            line.push_str(&format!(", {model}"));
+        }
+        if let Some(version) = prop("ro.build.version.release") {
+            line.push_str(&format!(", Android {version}"));
+        }
+        if let Some(abis) = prop("ro.product.cpu.abilist") {
+            line.push_str(&format!(" (device runs {abis})"));
+        }
+    }
+    if let Some((total, free)) = memory() {
+        line.push_str(&format!(", memory {:.1} GB, {:.1} GB free", total, free));
+    }
+    line.push_str(&format!(", Libroxel {}", crate::update::VERSION));
+    line
+}
+
+/// Total and available memory in GB, where the system says.
+fn memory() -> Option<(f64, f64)> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let field = |name: &str| -> Option<f64> {
+        let line = text.lines().find(|l| l.starts_with(name))?;
+        let kb: f64 = line.split_whitespace().nth(1)?.parse().ok()?;
+        Some(kb / 1_048_576.0)
+    };
+    Some((field("MemTotal:")?, field("MemAvailable:")?))
 }
 
 /// The Output, saved as it grows to a file for this run of the app and to

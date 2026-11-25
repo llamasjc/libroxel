@@ -151,6 +151,8 @@ pub(crate) struct Conn {
     pub(crate) closed: bool,
     /// The longest message taken in; a longer one closes the connection.
     max_message: usize,
+    /// Bytes read off the wire so far, for the speed reports.
+    pub(crate) bytes_read: u64,
 }
 
 impl Conn {
@@ -182,6 +184,7 @@ impl Conn {
             unsent: Vec::new(),
             closed: false,
             max_message,
+            bytes_read: 0,
         };
         if side == Side::Joining {
             conn.unsent.extend_from_slice(MAGIC);
@@ -389,6 +392,7 @@ impl Conn {
                 Ok(0) => self.closed = true,
                 Ok(n) => {
                     taken += n;
+                    self.bytes_read += n as u64;
                     self.wire_in.extend_from_slice(&buf[..n]);
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => break,
@@ -694,6 +698,46 @@ pub(crate) struct Joined {
     total: usize,
     got: usize,
     wrong_version: bool,
+    /// How the join is going, for the Output.
+    clock: JoinClock,
+}
+
+/// When a join got where, and what took its time, put in the Output as
+/// it goes: a report from a slow join then says whether the network, the
+/// world arriving or this computer held it up.
+struct JoinClock {
+    began: Instant,
+    frames: u64,
+    ready: bool,
+    welcomed: bool,
+    first: bool,
+    done: bool,
+    receive: f64,
+    apply: f64,
+    slowest: f64,
+    bytes: u64,
+}
+
+impl JoinClock {
+    fn new(began: Instant) -> Self {
+        Self {
+            began,
+            frames: 0,
+            ready: false,
+            welcomed: false,
+            first: false,
+            done: false,
+            receive: 0.0,
+            apply: 0.0,
+            slowest: 0.0,
+            bytes: 0,
+        }
+    }
+
+    /// `what` happened, with the time since joining began and the frame.
+    fn mark(&self, what: &str) -> String {
+        format!("⏱ Join: {what} after {:.2} s (frame {})", self.began.elapsed().as_secs_f64(), self.frames)
+    }
 }
 
 /// How quickly a part glides to where the host put it, a second.
@@ -1593,6 +1637,7 @@ impl PlaySession {
     /// showing it in `tree`, which is emptied first. The world arrives over
     /// the next few steps.
     pub fn join(tree: SharedTree, address: &str, name: &str) -> Result<Self, String> {
+        let began = Instant::now();
         let address = with_port(address);
         let target: SocketAddr = address
             .to_socket_addrs()
@@ -1601,6 +1646,7 @@ impl PlaySession {
             .ok_or_else(|| "could not find that address".to_owned())?;
         let stream = TcpStream::connect_timeout(&target, Duration::from_secs(5))
             .map_err(|e| format!("could not reach the host: {e}"))?;
+        let reached = began.elapsed().as_secs_f64();
         let mut conn = Conn::new(stream, Side::Joining).map_err(|e| e.to_string())?;
         conn.send(&json!({ "t": "hello", "name": name, "version": PROTOCOL }));
         conn.flush();
@@ -1623,8 +1669,16 @@ impl PlaySession {
             total: 0,
             got: 0,
             wrong_version: false,
+            clock: JoinClock::new(began),
         }));
         session.info("🔗 Joining the game (its address stays hidden here)".to_owned());
+        session.info(format!("⏱ Join: reached the host after {reached:.2} s"));
+        session.info(format!(
+            "⏱ Join: this computer is {} ({}-bit), {}",
+            std::env::consts::ARCH,
+            usize::BITS,
+            std::env::consts::OS,
+        ));
         Ok(session)
     }
 
@@ -2145,8 +2199,21 @@ impl PlaySession {
     pub(crate) fn client_step(&mut self, dt: f32, input: CharacterInput) {
         let Link::Client(mut joined) = std::mem::take(&mut self.link) else { return };
         let tree = self.runtime.tree().clone();
+        let started = Instant::now();
+        let read_before = joined.conn.bytes_read;
         let incoming = joined.conn.receive();
+        let received = started.elapsed().as_secs_f64();
+        let bytes_in = joined.conn.bytes_read - read_before;
         joined.inbox.extend(incoming);
+        let mut applying = 0.0;
+        let mut slowest_apply = 0.0f64;
+        let mut ops_applied = 0u64;
+        let mut marks: Vec<String> = Vec::new();
+        joined.clock.frames += 1;
+        if !joined.clock.ready && joined.conn.ready() {
+            joined.clock.ready = true;
+            marks.push(joined.clock.mark("keys agreed with the host"));
+        }
         let began = std::time::Instant::now();
         while began.elapsed() < APPLY_BUDGET
             && let Some(mut message) = joined.inbox.pop_front()
@@ -2155,6 +2222,13 @@ impl PlaySession {
                 "welcome" => {
                     joined.total = message.get("total").and_then(Json::as_u64).unwrap_or(0) as usize;
                     joined.got = 0;
+                    if !joined.clock.welcomed {
+                        joined.clock.welcomed = true;
+                        marks.push(joined.clock.mark(&format!(
+                            "the host said hello, {} instances in the first batch,",
+                            joined.total
+                        )));
+                    }
                     let t = tree.borrow();
                     let services =
                         message.get("services").and_then(Json::as_object).cloned().unwrap_or_default();
@@ -2178,11 +2252,33 @@ impl PlaySession {
                     if joined.me.is_none() {
                         joined.got += ops.len();
                     }
+                    let at = Instant::now();
                     joined.apply(&mut tree.borrow_mut(), &ops);
+                    let took = at.elapsed().as_secs_f64();
+                    applying += took;
+                    slowest_apply = slowest_apply.max(took);
+                    ops_applied += ops.len() as u64;
+                    if !joined.clock.first {
+                        joined.clock.first = true;
+                        marks.push(joined.clock.mark("the first instances arrived"));
+                    }
                 }
                 "you" => {
                     joined.me = message.get("player").and_then(Json::as_u64);
                     joined.link_waiting(&mut tree.borrow_mut());
+                    if !joined.clock.done {
+                        joined.clock.done = true;
+                        // What this frame has spent so far counts too.
+                        let c = &joined.clock;
+                        let receive = c.receive + received;
+                        let apply = c.apply + applying;
+                        marks.push(c.mark(&format!("the first batch is in ({} instances)", joined.got)));
+                        marks.push(format!(
+                            "⏱ Join: so far {:.1} MB from the host, {receive:.2} s taking it in, {apply:.2} s putting it in the world (slowest message {:.0} ms)",
+                            (c.bytes + bytes_in) as f64 / 1_000_000.0,
+                            c.slowest.max(slowest_apply) * 1000.0,
+                        ));
+                    }
                 }
                 "kicked" => {
                     let why =
@@ -2238,6 +2334,17 @@ impl PlaySession {
                 _ => {}
             }
         }
+        let waiting = joined.inbox.len();
+        if !joined.clock.done {
+            let c = &mut joined.clock;
+            c.receive += received;
+            c.apply += applying;
+            c.slowest = c.slowest.max(slowest_apply);
+            c.bytes += bytes_in;
+        }
+        for mark in marks {
+            self.info(mark);
+        }
         if joined.conn.closed && !joined.conn.ready() {
             joined.wrong_version = true;
         }
@@ -2249,18 +2356,28 @@ impl PlaySession {
         self.adopt_player(&mut joined);
         joined.glide(&mut tree.borrow_mut(), dt);
 
+        let at = Instant::now();
         let changes = tree.borrow_mut().drain_changes();
         let errors = self.runtime.fire_changes(&changes);
         self.collect(errors);
+        let mut change_events = at.elapsed().as_secs_f64();
+        let at = Instant::now();
         let errors = self.runtime.step(dt as f64);
         self.collect(errors);
+        let scripts = at.elapsed().as_secs_f64();
+        let at = Instant::now();
         self.settle_changes();
+        change_events += at.elapsed().as_secs_f64();
+        let mut physics = 0.0;
         if let Some(index) = self.avatars.iter().position(|a| !a.remote) {
             self.advance_hold(index, dt);
+            let at = Instant::now();
             self.move_own_character(&mut joined, index, input, dt);
+            physics = at.elapsed().as_secs_f64();
             self.refresh_hotbar(index);
         }
         // Explosions only flash here: the host does what they do.
+        let at = Instant::now();
         let fresh: Vec<(InstanceId, Vec3, f32)> = {
             let t = tree.borrow();
             t.descendants_of_class(t.workspace(), ClassKind::Explosion)
@@ -2272,6 +2389,7 @@ impl PlaySession {
                 })
                 .collect()
         };
+        let explosion_scan = at.elapsed().as_secs_f64();
         for (explosion, position, radius) in fresh {
             self.exploded.insert(explosion);
             self.blasts.push(Blast { position, radius, age: 0.0 });
@@ -2281,6 +2399,27 @@ impl PlaySession {
             b.age < crate::session::BLAST_TIME
         });
         self.emits.extend(self.runtime.take_emit_requests());
+
+        let t = &mut self.frame_times;
+        t.frames += 1;
+        t.receive += received;
+        t.apply += applying;
+        t.change_events += change_events;
+        t.scripts += scripts;
+        t.physics += physics;
+        t.explosion_scan += explosion_scan;
+        t.other += (started.elapsed().as_secs_f64()
+            - received
+            - applying
+            - change_events
+            - scripts
+            - physics
+            - explosion_scan)
+            .max(0.0);
+        t.bytes_in += bytes_in;
+        t.ops_applied += ops_applied;
+        t.slowest_apply = t.slowest_apply.max(slowest_apply);
+        t.most_waiting = t.most_waiting.max(waiting);
 
         let input = CharacterInput { face: None, ..input };
         if joined.sent_input != Some(input) {

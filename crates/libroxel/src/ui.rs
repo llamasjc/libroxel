@@ -592,7 +592,8 @@ pub fn editor_ui(
                     let all = tree.descendants(tree.root()).map(|d| d.len()).unwrap_or(0);
                     let parts = tree.descendants_of_class(tree.workspace(), ClassKind::Part).len();
                     format!(
-                        "Graphics: {}, quality {level}\nWindow: {:.0} x {:.0}\nInstances: {all}, parts in Workspace: {parts}",
+                        "{}\nGraphics: {}, quality {level}\nWindow: {:.0} x {:.0}\nInstances: {all}, parts in Workspace: {parts}",
+                        crate::debugging::device_line(),
                         adapter,
                         ui.ctx().content_rect().width(),
                         ui.ctx().content_rect().height(),
@@ -629,12 +630,15 @@ pub fn editor_ui(
     if editor.player_mode {
         game_menu(&ctx, editor, engine.session.as_ref(), central, &mut actions, quality.as_deref_mut());
     }
-    match engine.session.as_ref() {
+    match engine.session.as_mut() {
         Some(session) if editor.loading.active() => {
             let filling = libroxel_engine::view::VIEW_FILLING.load(std::sync::atomic::Ordering::Relaxed);
             if editor.loading.show(&ctx, central, now, session.joining(), filling) {
                 editor.loading.stop();
                 actions.push(Action::Stop);
+            }
+            if let Some(text) = editor.loading.take_finished() {
+                session.note(text);
             }
         }
         Some(_) => {}
@@ -4747,14 +4751,10 @@ impl Stats {
             return;
         }
         let t = session.take_frame_times();
-        r.step.frames += t.frames;
-        r.step.change_events += t.change_events;
-        r.step.scripts += t.scripts;
-        r.step.physics += t.physics;
-        r.step.other += t.other;
+        r.step.add(&t);
         let per = |s: f64| if t.frames > 0 { s * 1000.0 / f64::from(t.frames) } else { 0.0 };
         let fps = self.frames as f32 / self.seconds;
-        let step = per(t.change_events + t.scripts + t.physics + t.other);
+        let step = per(t.step_seconds());
         self.text = format!(
             "{fps:.0} FPS ({:.1} ms a frame)\ngame step {step:.1} ms: scripts {:.1}, events {:.1}, physics {:.1}, other {:.1}\ndrawing and the rest {:.1} ms",
             1000.0 / fps.max(0.01),
@@ -4764,6 +4764,13 @@ impl Stats {
             per(t.other),
             (1000.0 / fps.max(0.01)) as f64 - step,
         );
+        if t.receive + t.apply > 0.0 {
+            self.text.push_str(&format!(
+                "\nfrom the host {:.1} ms, into the world {:.1} ms",
+                per(t.receive),
+                per(t.apply)
+            ));
+        }
         self.frames = 0;
         self.seconds = 0.0;
         if r.seconds >= REPORT_EVERY && !self.loading {
@@ -4784,7 +4791,7 @@ impl Stats {
         let t = &r.step;
         let per = |s: f64| if t.frames > 0 { s * 1000.0 / f64::from(t.frames) } else { 0.0 };
         let frame_ms = r.seconds * 1000.0 / r.frames.max(1) as f32;
-        let step = per(t.change_events + t.scripts + t.physics + t.other);
+        let step = per(t.step_seconds());
         let mut out = String::new();
         if loading {
             let _ =
@@ -4809,6 +4816,19 @@ impl Stats {
             per(t.physics),
             per(t.other),
         );
+        if t.receive + t.apply + t.explosion_scan > 0.0 {
+            let _ = writeln!(
+                out,
+                "  joined game: taking in the host's messages {:.1}, putting them in the world {:.1} (slowest message {:.0} ms), looking for explosions {:.1}; {:.1} MB in, {} operations, up to {} messages waiting",
+                per(t.receive),
+                per(t.apply),
+                t.slowest_apply * 1000.0,
+                per(t.explosion_scan),
+                t.bytes_in as f64 / 1_000_000.0,
+                t.ops_applied,
+                t.most_waiting,
+            );
+        }
         let _ = writeln!(out, "drawing and the rest {:.1} ms a frame", frame_ms as f64 - step);
         let frames = f64::from(r.frames.max(1));
         let _ = writeln!(
