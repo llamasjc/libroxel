@@ -316,6 +316,8 @@ pub fn editor_ui(
     editor.platform.chats_tick(editor.menu.open && editor.menu.tab == crate::menu::Tab::Messages);
     let hub = editor.platform.client();
     editor.voice.tick(engine.session.as_mut(), || hub);
+    let hub = editor.platform.client();
+    editor.text_chat.tick(engine.session.as_mut(), || hub);
     if !playing {
         edit_together(engine, editor);
     }
@@ -564,6 +566,10 @@ pub fn editor_ui(
                 hotbar_hit = gui::hotbar(ui, &tree_rc.borrow(), &session.hotbar());
             }
             editor.voice.ui(ui, &tree_rc.borrow());
+            if let Some(name) = editor.text_chat.ui(ui, engine.session.as_mut()) {
+                let evidence = editor.text_chat.evidence(&game_name(editor), &name);
+                editor.platform.report_player(&name, evidence);
+            }
             if let (Some(session), Ok((cam, gt, _, _))) = (engine.session.as_ref(), cameras.single()) {
                 let tree = tree_rc.borrow();
                 for active in session.active_prompts() {
@@ -626,7 +632,15 @@ pub fn editor_ui(
             let list_on = engine.session.as_ref().is_none_or(|s| s.runtime().core_gui_enabled("PlayerList"));
             if playing && list_on {
                 let game = game_name(editor);
-                leaderboard(ui, &tree_rc.borrow(), &mut editor.platform, &game);
+                leaderboard(ui, &tree_rc.borrow(), &mut editor.platform, &editor.text_chat, &game);
+            } else if playing && editor.platform.reporting_player() {
+                let rect = ui.max_rect();
+                egui::Area::new(egui::Id::new("report-player"))
+                    .fixed_pos(egui::pos2(rect.right() - 12.0, rect.top() + 12.0))
+                    .pivot(egui::Align2::RIGHT_TOP)
+                    .show(ui.ctx(), |ui| {
+                        egui::Frame::popup(ui.style()).show(ui, |ui| editor.platform.report_row(ui));
+                    });
             }
             ui.max_rect()
         })
@@ -2220,7 +2234,13 @@ fn property_editor(
 }
 
 /// While playing: everyone's `leaderstats` values in the top-right corner.
-fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree, platform: &mut crate::browse::Platform, game: &str) {
+fn leaderboard(
+    ui: &mut egui::Ui,
+    tree: &InstanceTree,
+    platform: &mut crate::browse::Platform,
+    chat: &crate::text_chat::TextChat,
+    game: &str,
+) {
     let Some(players) = tree.service(ClassKind::Players) else { return };
     // Each player: their name, their stats (name and value), and their team.
     type Row = (String, Vec<(String, String)>, Option<InstanceId>);
@@ -2325,7 +2345,7 @@ fn leaderboard(ui: &mut egui::Ui, tree: &InstanceTree, platform: &mut crate::bro
                             }
                             ui.label(RichText::new(name).color(theme::TEXT)).context_menu(|ui| {
                                 if ui.button(format!("{} {}", theme::icon::FLAG, t("Report"))).clicked() {
-                                    platform.report_player(name, format!("In {game}"));
+                                    platform.report_player(name, chat.evidence(game, name));
                                     ui.close();
                                 }
                             });

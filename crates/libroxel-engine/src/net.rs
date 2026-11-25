@@ -862,6 +862,7 @@ struct Peer {
     /// How many more messages, and script-running actions, they may send.
     messages: Allowance,
     actions: Allowance,
+    chat: Allowance,
     /// Whether the host has been told they are sending too much.
     warned: bool,
     /// What their computer has been sent, when the game streams.
@@ -894,6 +895,7 @@ impl Peer {
             since: now,
             messages: Allowance::new(GUEST_MESSAGES_PER_SECOND, GUEST_MESSAGE_BURST, now),
             actions: Allowance::new(GUEST_ACTIONS_PER_SECOND, GUEST_ACTION_BURST, now),
+            chat: Allowance::new(crate::chat::PER_SECOND, crate::chat::BURST, now),
             warned: false,
             stream: Replicator::default(),
             stream_requests: Vec::new(),
@@ -2313,6 +2315,16 @@ impl PlaySession {
         std::mem::take(&mut self.voice.heard)
     }
 
+    pub fn say(&mut self, text: &str) -> Option<String> {
+        let text = crate::chat::clean(text).filter(|_| self.online())?;
+        self.chat.say(text.clone());
+        Some(text)
+    }
+
+    pub fn take_chat(&mut self) -> Vec<(InstanceId, String)> {
+        std::mem::take(&mut self.chat.heard)
+    }
+
     pub(crate) fn send_to_server(&mut self, says: ClientSays) {
         let Link::Client(joined) = &mut self.link else { return };
         let host_id = |id: InstanceId| joined.back.get(&id).copied();
@@ -2522,6 +2534,17 @@ impl PlaySession {
                             self.voice.relay.push((player, text.to_owned()));
                         }
                     }
+                    "chat" => {
+                        if let Some(text) =
+                            message.get("s").and_then(Json::as_str).and_then(crate::chat::clean)
+                            && peer.chat.spend(1.0, now)
+                        {
+                            if self.avatars.iter().any(|a| !a.remote) {
+                                self.chat.hear(player, text.clone());
+                            }
+                            self.chat.relay.push((player, text));
+                        }
+                    }
                     "activate" => {
                         let down = message.get("down").and_then(Json::as_bool).unwrap_or(false);
                         let tool = self.avatars[index].character.and_then(|c| {
@@ -2582,6 +2605,19 @@ impl PlaySession {
                     && peer.conn.unsent_len() < SEND_AHEAD
                 {
                     peer.conn.send(&json!({ "t": "voice", "p": bits(*from), "d": d }));
+                }
+            }
+        }
+        let mut lines = std::mem::take(&mut self.chat.relay);
+        let out = std::mem::take(&mut self.chat.out);
+        if let Some(me) = self.avatars.iter().find(|a| !a.remote).map(|a| a.player) {
+            lines.extend(out.into_iter().map(|s| (me, s)));
+        }
+        for peer in &mut host.peers {
+            let Some(player) = peer.player else { continue };
+            for (from, s) in &lines {
+                if *from != player && !peer.fresh {
+                    peer.send(json!({ "t": "chat", "p": bits(*from), "s": s }));
                 }
             }
         }
@@ -2952,6 +2988,13 @@ impl PlaySession {
                         self.voice.hear(from, samples);
                     }
                 }
+                "chat" => {
+                    let from = message.get("p").and_then(|p| joined.local_of(p));
+                    let text = message.get("s").and_then(Json::as_str).and_then(crate::chat::clean);
+                    if let (Some(from), Some(text)) = (from, text) {
+                        self.chat.hear(from, text);
+                    }
+                }
                 "refused" => {
                     let why = message.get("why").and_then(Json::as_str).unwrap_or("no reason given");
                     joined.wrong_version |= why.contains("version");
@@ -3106,6 +3149,12 @@ impl PlaySession {
         if joined.me.is_some() {
             for d in out {
                 joined.conn.send(&json!({ "t": "voice", "d": d }));
+            }
+        }
+        let out = std::mem::take(&mut self.chat.out);
+        if joined.me.is_some() {
+            for s in out {
+                joined.conn.send(&json!({ "t": "chat", "s": s }));
             }
         }
         if joined.conn.due_keep_alive(Instant::now()) {

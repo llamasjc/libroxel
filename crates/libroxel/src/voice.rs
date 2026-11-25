@@ -123,7 +123,8 @@ impl Voice {
             let (out, client) = (self.allowed.clone(), client());
             std::thread::spawn(move || {
                 let rule = crate::identity().and_then(|me| client.chat_rule(&me.player_id()));
-                *out.lock().unwrap() = Some(rule.is_ok_and(|r| r.chat == Chat::Standard));
+                *out.lock().unwrap() =
+                    Some(rule.is_ok_and(|r| r.chat == Chat::Standard && r.muted_secs.is_none()));
             });
         }
         let heard = session.take_heard();

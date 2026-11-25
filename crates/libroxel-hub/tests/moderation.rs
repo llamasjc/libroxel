@@ -191,8 +191,11 @@ fn owners_work_through_reports() {
     let mine = hub.security(&bo.id, time, &sign(&bo.key, &security_message(&bo.id, time))).unwrap();
     assert_eq!(mine.warnings.len(), 1);
     assert!(mine.muted_secs.is_some());
+    assert!(hub.chat_rule(&bo.id).unwrap().muted_secs.is_some());
+    assert!(hub.chat_rule(&ana.id).unwrap().muted_secs.is_none());
 
     boss.moderate(&hub, ModAction::Unmute, "", &bo.id, 0).unwrap();
+    assert!(hub.chat_rule(&bo.id).unwrap().muted_secs.is_none());
     bo.send(&hub, &ana, "sorry").unwrap();
     boss.moderate(&hub, ModAction::Ban, "", &bo.id, 24).unwrap();
     assert!(bo.send(&hub, &ana, "hello").unwrap_err().contains("banned"));

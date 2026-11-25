@@ -151,6 +151,8 @@ pub struct Family {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct ChatRule {
     pub chat: Chat,
+    #[serde(default)]
+    pub muted_secs: Option<i64>,
 }
 
 pub(crate) fn create_tables(db: &Connection) -> Result<(), String> {
@@ -750,7 +752,8 @@ pub(crate) async fn family(
 }
 
 pub(crate) async fn chat_rule(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Json<ChatRule> {
-    Json(ChatRule { chat: chat_level(&db.lock().unwrap(), &id) })
+    let db = db.lock().unwrap();
+    Json(ChatRule { chat: chat_level(&db, &id), muted_secs: crate::moderate::muted_for(&db, &id) })
 }
 
 #[cfg(test)]

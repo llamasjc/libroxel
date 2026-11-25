@@ -7,6 +7,7 @@
 
 pub mod camera;
 pub mod character;
+pub mod chat;
 mod clusters;
 pub mod coedit;
 pub mod collision_shapes;

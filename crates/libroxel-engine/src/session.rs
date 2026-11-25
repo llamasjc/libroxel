@@ -298,6 +298,7 @@ pub struct PlaySession {
     pub(crate) next_user_id: u32,
     pub(crate) voice: crate::voice::Voice,
     pub(crate) earned_badges: Vec<String>,
+    pub(crate) chat: crate::chat::Chat,
 }
 
 impl PlaySession {
@@ -345,6 +346,7 @@ impl PlaySession {
             next_user_id: 1,
             voice: Default::default(),
             earned_badges: Vec::new(),
+            chat: Default::default(),
         };
         // Scripts find the camera through the workspace, so it exists from the start.
         session.camera = {
@@ -570,6 +572,10 @@ impl PlaySession {
     /// The local player's GUI container, whose screen GUIs are drawn over the view.
     pub fn player_gui(&self) -> Option<InstanceId> {
         self.local().and_then(|i| self.avatars[i].gui)
+    }
+
+    pub fn local_player(&self) -> Option<InstanceId> {
+        self.local().map(|i| self.avatars[i].player)
     }
 
     /// Everyone in the game, the local player (if any) included.

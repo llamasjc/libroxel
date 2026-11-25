@@ -796,6 +796,35 @@ fn players_hear_each_other() {
 }
 
 #[test]
+fn players_chat_with_bad_words_hidden() {
+    let tree = Rc::new(RefCell::new(game()));
+    let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |_, g| g.character().is_some());
+    let name = |s: &PlaySession, id: InstanceId| s.runtime().tree().borrow().name(id).unwrap().to_owned();
+    let host_name = name(&host, host.players()[0]);
+    assert_eq!(guest.say("gg, what the fuck").as_deref(), Some("gg, what the ####"));
+    assert_eq!(host.say("hi Bea").as_deref(), Some("hi Bea"));
+    for _ in 0..8 {
+        guest.say("spam");
+    }
+    let (mut host_heard, mut guest_heard) = (Vec::new(), Vec::new());
+    for _ in 0..300 {
+        host.step(DT, CharacterInput::default());
+        guest.step(DT, CharacterInput::default());
+        host_heard.extend(host.take_chat().into_iter().map(|(id, s)| (name(&host, id), s)));
+        guest_heard.extend(guest.take_chat().into_iter().map(|(id, s)| (name(&guest, id), s)));
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(host_heard.first(), Some(&("Bea".to_owned(), "gg, what the ####".to_owned())));
+    assert!((5..9).contains(&host_heard.len()));
+    assert_eq!(guest_heard, vec![(host_name, "hi Bea".to_owned())]);
+}
+
+#[test]
 fn a_host_that_cannot_agree_keys_is_a_different_version() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();

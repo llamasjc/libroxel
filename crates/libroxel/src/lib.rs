@@ -51,6 +51,7 @@ mod starter_games;
 mod stats;
 mod templates;
 mod terrain_tools;
+mod text_chat;
 mod theme;
 mod touch;
 mod ui;
@@ -207,6 +208,7 @@ pub struct Editor {
     /// Shift+F1's frame stats.
     pub stats: ui::Stats,
     pub voice: voice::Voice,
+    pub text_chat: text_chat::TextChat,
     /// While playing: the GUI button the left mouse button went down on.
     pub pressed_button: Option<InstanceId>,
     /// The Explorer's filter: only what matches (and what leads to it) shows.
@@ -289,6 +291,7 @@ impl Default for Editor {
             output_cache: Default::default(),
             stats: Default::default(),
             voice: Default::default(),
+            text_chat: Default::default(),
             pressed_button: None,
             explorer_filter: String::new(),
             properties_filter: String::new(),
