@@ -2804,10 +2804,10 @@ pub(crate) fn step(lua: &Lua, dt: f64) -> Vec<ScriptError> {
     // Take only threads due now; ones that wait again are parked for a later frame.
     let mut due: Vec<Waiting> = {
         let host = host(lua);
-        let mut waiting = host.waiting.borrow_mut();
-        let (due, later) = std::mem::take(&mut *waiting).into_iter().partition(|w| w.resume_at <= now);
-        *waiting = later;
-        due
+        // Taken out in place: the (often thousands of) threads still
+        // asleep stay where they are instead of all moving to a new list
+        // every frame.
+        host.waiting.borrow_mut().extract_if(.., |w| w.resume_at <= now).collect()
     };
     due.sort_by(|a, b| a.resume_at.total_cmp(&b.resume_at));
     stop_destroyed_scripts(lua);

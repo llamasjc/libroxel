@@ -1419,7 +1419,21 @@ pub fn property_name(property: Property) -> &'static str {
 
 /// The property of `class` that a script-facing name refers to.
 pub fn property_from_name(class: ClassKind, name: &str) -> Option<Property> {
-    class.properties().iter().copied().find(|p| property_name(*p) == name)
+    // Asked on every property read and write a script makes, so each
+    // class's names are looked up in a table built once.
+    static TABLES: std::sync::OnceLock<
+        std::collections::HashMap<ClassKind, std::collections::HashMap<&'static str, Property>>,
+    > = std::sync::OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        ClassKind::ALL
+            .iter()
+            .map(|&class| (class, class.properties().iter().map(|&p| (property_name(p), p)).collect()))
+            .collect()
+    });
+    match tables.get(&class) {
+        Some(table) => table.get(name).copied(),
+        None => class.properties().iter().copied().find(|p| property_name(*p) == name),
+    }
 }
 
 /// The name scripts see for a kind of property value.
