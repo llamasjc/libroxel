@@ -398,8 +398,8 @@ jobs:
           fi
           export VERSION_CODE="$GITHUB_RUN_NUMBER"
           ndk="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-          for abi in arm64-v8a:aarch64-linux-android:aarch64-linux-android armeabi-v7a:armv7-linux-androideabi:armv7a-linux-androideabi; do
-            IFS=: read -r name target clang <<< "$abi"
+          for abi in arm64-v8a:aarch64-linux-android:aarch64-linux-android:AArch64:ELF64 armeabi-v7a:armv7-linux-androideabi:armv7a-linux-androideabi:ARM:ELF32; do
+            IFS=: read -r name target clang machine class <<< "$abi"
             env="${target//-/_}"
             export "CC_$env=$ndk/bin/${clang}26-clang" "CXX_$env=$ndk/bin/${clang}26-clang++" "AR_$env=$ndk/bin/llvm-ar"
             export "CARGO_TARGET_${env^^}_LINKER=$ndk/bin/${clang}26-clang"
@@ -410,6 +410,10 @@ jobs:
             cp "target/$target/dist/liblibroxel.so" "$libs/"
             lib="${target/armv7/arm}"
             cp "$ndk/sysroot/usr/lib/$lib/libc++_shared.so" "$libs/"
+            # A library that names a symbol phones don't have (as v0.1.15 did
+            # with __clear_cache) makes the app close at launch, so it must
+            # not ship.
+            packaging/ci/check-android-lib.sh "$libs/liblibroxel.so" "$machine" "$class" "$target"
           done
           export ANDROID_KEYSTORE="$RUNNER_TEMP/release.jks"
           if [[ -n "$ANDROID_KEYSTORE_BASE64" ]]; then
@@ -437,6 +441,13 @@ jobs:
               exit 1
             }
           fi
+          # And the libraries as they ended up inside the APK, in case the
+          # packaging picked up something else.
+          inside="$RUNNER_TEMP/apk-libs"
+          rm -rf "$inside"
+          unzip -q -o "$out/apk/release/app-release.apk" 'lib/*' -d "$inside"
+          packaging/ci/check-android-lib.sh "$inside/lib/arm64-v8a/liblibroxel.so" AArch64 ELF64 aarch64-linux-android
+          packaging/ci/check-android-lib.sh "$inside/lib/armeabi-v7a/liblibroxel.so" ARM ELF32 armv7-linux-androideabi
           mkdir dist
           cp "$out/apk/release/app-release.apk" "dist/libroxel-$VERSION-android.apk"
           cp "$out/bundle/release/app-release.aab" "dist/libroxel-$VERSION-android.aab"

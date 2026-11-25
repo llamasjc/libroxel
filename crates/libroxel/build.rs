@@ -25,7 +25,15 @@ fn link_builtins() {
     let target = std::env::var("TARGET").unwrap();
     let key = format!("CARGO_TARGET_{}_LINKER", target.to_uppercase().replace('-', "_"));
     println!("cargo:rerun-if-env-changed={key}");
-    let Ok(linker) = std::env::var(&key) else {
+    let cc = format!("CC_{}", target.replace('-', "_"));
+    println!("cargo:rerun-if-env-changed={cc}");
+    // Without the builtins the library names `__clear_cache`, which phones
+    // don't have, and the app closes the moment it starts.
+    let Some(linker) = std::env::var(&key).ok().or_else(|| std::env::var(&cc).ok()) else {
+        println!(
+            "cargo:warning=neither {key} nor {cc} is set, so the compiler-rt builtins aren't linked \
+             and the Android app may not start; packaging/ci/check-android-lib.sh will tell"
+        );
         return;
     };
     let out = std::process::Command::new(linker)
