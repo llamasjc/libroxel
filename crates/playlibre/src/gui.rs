@@ -27,9 +27,27 @@ pub struct TextBoxes {
     /// a button, a text box or an Active object. Labels and frames let the
     /// press through to what's under them, as on the reference platform.
     pub input: GuiHit,
-    /// Where every object that takes input while playing shows, so a
-    /// finger on one isn't taken for the touch controls.
-    pub inputs: Vec<Rect>,
+    /// Where every object that takes input while playing shows, in the
+    /// order drawn (the last is on top), so a finger on one isn't taken
+    /// for the touch controls and a second finger's tap finds its button.
+    pub inputs: Vec<(InstanceId, ClassKind, Rect)>,
+}
+
+impl TextBoxes {
+    /// The button a finger at `at` is on: the topmost object there that
+    /// takes input, if it's a button (a text box over a button keeps the tap).
+    pub fn button_at(&self, at: Pos2) -> Option<InstanceId> {
+        let (id, class, _) = self.inputs.iter().rev().find(|(_, _, r)| r.contains(at))?;
+        class.is_button().then_some(*id)
+    }
+}
+
+/// Where the pointer is for the game's GUI this frame. A finger lifting
+/// off a touch screen lets go and leaves in the same frame, so where it
+/// let go is kept for that frame: otherwise the release lands on nothing
+/// and the tap never clicks the button it pressed.
+pub fn pointer_pos(input: &egui::InputState) -> Option<Pos2> {
+    input.pointer.hover_pos().or(input.pointer.interact_pos())
 }
 
 fn color(c: Color3, alpha: f32) -> Color32 {
@@ -477,7 +495,7 @@ pub fn draw(
     selected: Option<InstanceId>,
     boxes: &mut TextBoxes,
 ) -> GuiHit {
-    let pointer = ui.ctx().input(|i| i.pointer.hover_pos()).filter(|p| area.contains(*p));
+    let pointer = ui.ctx().input(pointer_pos).filter(|p| area.contains(*p));
     let painter = ui.painter().with_clip_rect(area);
     let mut hit = None;
     // Higher DisplayOrder is drawn later, on top.
@@ -852,7 +870,7 @@ fn draw_children(
             || class == ClassKind::TextBox
             || matches!(tree.get_extra(child, "Active"), Ok(Some(PropertyValue::Bool(true))));
         if takes_input {
-            boxes.inputs.push(r.intersect(painter.clip_rect()));
+            boxes.inputs.push((child, class, r.intersect(painter.clip_rect())));
         }
         if hovered {
             *hit = Some((child, class));
@@ -1116,7 +1134,7 @@ pub fn billboards(
     use bevy::prelude::Vec3 as BVec3;
     let (cam, gt) = camera;
     let area = ui.max_rect();
-    let pointer = ui.ctx().input(|i| i.pointer.hover_pos()).filter(|p| area.contains(*p));
+    let pointer = ui.ctx().input(pointer_pos).filter(|p| area.contains(*p));
     let painter = ui.painter().with_clip_rect(area);
     let eye = gt.translation();
     let right = gt.right().as_vec3();
@@ -1274,7 +1292,7 @@ pub fn surfaces(
     let (cam, gt) = camera;
     let ctx = ui.ctx();
     let area = ui.max_rect();
-    let pointer = ctx.input(|i| i.pointer.hover_pos()).filter(|p| area.contains(*p));
+    let pointer = ctx.input(pointer_pos).filter(|p| area.contains(*p));
     let screen = ui.painter().with_clip_rect(area);
     let eye = gt.translation();
     let mut hit = None;
@@ -1682,5 +1700,65 @@ mod tests {
         let placed = arrange(&tree, screen, Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)));
         let rect = placed.iter().find(|(c, _, _)| *c == wide).unwrap().2;
         assert_eq!(rect.size(), egui::vec2(300.0, 40.0));
+    }
+
+    /// A tap on a touch screen lets go and loses the pointer in one frame:
+    /// the button it pressed must still be under it then, or the tap never
+    /// clicks (phones showed the press every time but rarely the click).
+    #[test]
+    fn a_tap_lets_go_over_the_button_it_pressed() {
+        let mut tree = InstanceTree::new();
+        let root = tree.root();
+        let screen = gui(&mut tree, ClassKind::ScreenGui, root, "Screen");
+        let button = gui(&mut tree, ClassKind::TextButton, screen, "Play");
+        set(
+            &mut tree,
+            button,
+            Property::GuiPosition,
+            PropertyValue::UDim2(UDim2::new(0.0, 100.0, 0.0, 100.0)),
+        );
+        set(&mut tree, button, Property::GuiSize, PropertyValue::UDim2(UDim2::new(0.0, 200.0, 0.0, 80.0)));
+        let area = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let ctx = egui::Context::default();
+        // (Below the top bar the GUI starts under.)
+        let at = Pos2::new(150.0, 100.0 + GUI_INSET + 30.0);
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        // What the windowing layer sends for a finger: down, then up and gone.
+        let frames = [
+            vec![egui::Event::PointerMoved(at), press(true)],
+            vec![press(false), egui::Event::PointerGone],
+            vec![],
+        ];
+        let mut under = Vec::new();
+        for events in frames {
+            let input = egui::RawInput { screen_rect: Some(area), events, ..Default::default() };
+            let mut boxes = TextBoxes::default();
+            let _ = ctx.run_ui(input, |ui| {
+                draw(ui, &tree, root, area, None, &mut boxes);
+            });
+            under.push((boxes.input.map(|(id, _)| id), boxes.button_at(at)));
+        }
+        assert_eq!(under[0], (Some(button), Some(button)), "pressed on the button");
+        assert_eq!(under[1], (Some(button), Some(button)), "still on it as the finger lifts");
+        assert_eq!(under[2].0, None, "and gone the frame after");
+    }
+
+    #[test]
+    fn a_text_box_over_a_button_keeps_the_finger() {
+        let mut boxes = TextBoxes::default();
+        let mut tree = InstanceTree::new();
+        let root = tree.root();
+        let (b, t) =
+            (gui(&mut tree, ClassKind::TextButton, root, "B"), gui(&mut tree, ClassKind::TextBox, root, "T"));
+        let r = |x: f32| Rect::from_min_size(Pos2::new(x, 0.0), egui::vec2(100.0, 50.0));
+        boxes.inputs = vec![(b, ClassKind::TextButton, r(0.0)), (t, ClassKind::TextBox, r(50.0))];
+        assert_eq!(boxes.button_at(Pos2::new(20.0, 10.0)), Some(b));
+        assert_eq!(boxes.button_at(Pos2::new(80.0, 10.0)), None, "the text box is on top");
+        assert_eq!(boxes.button_at(Pos2::new(300.0, 10.0)), None);
     }
 }

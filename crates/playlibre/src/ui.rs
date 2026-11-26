@@ -744,7 +744,8 @@ pub fn editor_ui(
     if playing && !editor.menu.open && !editor.paused {
         editor.touch.hidden = screen_touches.controls_hidden;
         editor.touch.actions = crate::touch::lay_out_actions(central, &screen_touches.buttons);
-        for (id, phase, pos, processed) in editor.touch.show(&ctx, central, &boxes.inputs) {
+        let input_rects: Vec<egui::Rect> = boxes.inputs.iter().map(|(_, _, r)| *r).collect();
+        for (id, phase, pos, processed) in editor.touch.show(&ctx, central, &input_rects) {
             let phase = match phase {
                 egui::TouchPhase::Start => playlibre_script::TouchPhase::Began,
                 egui::TouchPhase::Move => playlibre_script::TouchPhase::Moved,
@@ -768,6 +769,7 @@ pub fn editor_ui(
         touch_input.look += Vec2::new(look.x, -look.y);
         touch_input.zoom += editor.touch.take_zoom();
     } else {
+        editor.touch.follow_touches(&ctx);
         editor.touch.reset();
         touch_input.stick = Vec2::ZERO;
         touch_input.jump = false;
@@ -775,7 +777,7 @@ pub fn editor_ui(
     touch_input.touched = editor.touch.seen;
 
     // Decide who gets the mouse and keyboard this frame.
-    let pointer = ctx.input(|i| i.pointer.hover_pos());
+    let pointer = ctx.input(gui::pointer_pos);
     let over_view = pointer.is_some_and(|p| {
         central.contains(p) && ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background)
     });
@@ -842,6 +844,36 @@ pub fn editor_ui(
         }
     } else {
         editor.pressed_button = None;
+    }
+    // Only the first finger down is the mouse pointer; a second finger (say,
+    // while the thumb walks) taps the game's buttons the same way.
+    let in_view = |p: egui::Pos2| {
+        central.contains(p) && ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background)
+    };
+    for (finger, at, tap) in editor.touch.take_gui_taps() {
+        let under = boxes.button_at(at).filter(|_| playing && in_view(at));
+        match tap {
+            crate::touch::GuiTap::Down => {
+                if let Some(id) = under {
+                    editor.finger_buttons.insert(finger, id);
+                    actions.push(Action::PressButton(id, true));
+                }
+            }
+            crate::touch::GuiTap::Up => {
+                if let Some(id) = editor.finger_buttons.remove(&finger)
+                    && under == Some(id)
+                {
+                    actions.push(Action::PressButton(id, false));
+                    actions.push(Action::ClickButton(id));
+                }
+            }
+            crate::touch::GuiTap::Cancel => {
+                editor.finger_buttons.remove(&finger);
+            }
+        }
+    }
+    if !playing {
+        editor.finger_buttons.clear();
     }
 
     // Mouse buttons for the input service, while playing.

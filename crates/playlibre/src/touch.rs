@@ -7,7 +7,7 @@
 //! thumb reaches it on a phone and a tablet alike. The game's own buttons
 //! keep their taps, even inside the stick's corner.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bevy_egui::egui::{self, Color32, Pos2, Rect, Stroke, TouchPhase, Vec2};
 
@@ -68,6 +68,24 @@ pub struct TouchPad {
     held: HashMap<u64, String>,
     /// Action buttons pressed (true) or let go since last taken.
     presses: Vec<(String, bool)>,
+    /// The finger the windowing layer turns into the mouse pointer: the
+    /// first one down, until it lifts. Its taps on the game's buttons come
+    /// in as mouse presses; any other finger's don't, so they're kept in
+    /// `gui_taps` instead.
+    pointer_finger: Option<u64>,
+    /// Fingers other than the pointer's on the game's buttons.
+    gui_fingers: HashSet<u64>,
+    /// What those fingers did since last taken: which, where, and how.
+    gui_taps: Vec<(u64, Pos2, GuiTap)>,
+}
+
+/// What a finger that isn't the pointer did on the game's buttons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuiTap {
+    Down,
+    Up,
+    /// The system took the finger away: no click.
+    Cancel,
 }
 
 /// A button a game asked for with ContextActionService:BindAction: its
@@ -156,6 +174,7 @@ impl TouchPad {
         let taken = |f: Option<&Finger>| {
             matches!(f, Some(Finger::Stick { .. } | Finger::Jump | Finger::Action | Finger::Gui))
         };
+        let is_pointer = self.follow_pointer_finger(id, phase);
         let action_at = |pos: Pos2| {
             self.actions.iter().find(|b| pos.distance(b.center) <= action_radius(view) * 1.15).cloned()
         };
@@ -170,6 +189,10 @@ impl TouchPad {
                     self.held.insert(id, button.name);
                     Finger::Action
                 } else if on_gui(pos) {
+                    if !is_pointer {
+                        self.gui_fingers.insert(id);
+                        self.gui_taps.push((id, pos, GuiTap::Down));
+                    }
                     Finger::Gui
                 } else if !self.hidden
                     && stick_zone(view).contains(pos)
@@ -218,9 +241,52 @@ impl TouchPad {
                 if let Some(name) = self.held.remove(&id) {
                     self.presses.push((name, false));
                 }
+                if self.gui_fingers.remove(&id) {
+                    let tap = if phase == TouchPhase::End { GuiTap::Up } else { GuiTap::Cancel };
+                    self.gui_taps.push((id, pos, tap));
+                }
                 taken(finger.as_ref())
             }
         }
+    }
+
+    /// Keeps up with which finger is the mouse pointer, as the windowing
+    /// layer picks it, and says whether this touch is that finger's.
+    fn follow_pointer_finger(&mut self, id: u64, phase: TouchPhase) -> bool {
+        match (phase, self.pointer_finger) {
+            (TouchPhase::Start, None) => {
+                self.pointer_finger = Some(id);
+                true
+            }
+            (TouchPhase::End | TouchPhase::Cancel, Some(p)) if p == id => {
+                self.pointer_finger = None;
+                true
+            }
+            (_, p) => p == Some(id),
+        }
+    }
+
+    /// Follows this frame's touches without taking them (while the
+    /// controls are away), so which finger is the pointer stays right.
+    pub fn follow_touches(&mut self, ctx: &egui::Context) {
+        let touches: Vec<(u64, TouchPhase)> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Touch { id, phase, .. } => Some((id.0, *phase)),
+                    _ => None,
+                })
+                .collect()
+        });
+        for (id, phase) in touches {
+            self.follow_pointer_finger(id, phase);
+        }
+    }
+
+    /// The taps on the game's buttons by fingers other than the pointer's
+    /// since last asked.
+    pub fn take_gui_taps(&mut self) -> Vec<(u64, Pos2, GuiTap)> {
+        std::mem::take(&mut self.gui_taps)
     }
 
     /// With exactly two fingers looking, how far apart they are.
@@ -284,6 +350,9 @@ impl TouchPad {
         self.fingers.clear();
         self.held.clear();
         self.presses.clear();
+        // (Not which finger is the pointer: that's the windowing layer's.)
+        self.gui_fingers.clear();
+        self.gui_taps.clear();
         self.look = Vec2::ZERO;
         self.zoom = 0.0;
         self.released = false;
@@ -454,6 +523,37 @@ mod tests {
         assert_eq!(pad.stick(v), Vec2::ZERO);
         assert_eq!(pad.take_look(), Vec2::ZERO);
         assert!(!pad.has_pointer());
+    }
+
+    #[test]
+    fn a_second_finger_taps_the_games_buttons_while_the_thumb_walks() {
+        let mut pad = TouchPad::default();
+        let v = view();
+        let button = Rect::from_min_size(Pos2::new(700.0, 100.0), Vec2::splat(80.0));
+        let on = |p: Pos2| button.contains(p);
+        // The first finger is the mouse pointer: its taps arrive as clicks.
+        pad.touch(1, TouchPhase::Start, Pos2::new(740.0, 140.0), v, on);
+        pad.touch(1, TouchPhase::End, Pos2::new(740.0, 140.0), v, on);
+        assert_eq!(pad.take_gui_taps(), vec![]);
+        // Walking with the thumb, a second finger's tap isn't the pointer's.
+        pad.touch(2, TouchPhase::Start, Pos2::new(120.0, 480.0), v, on);
+        pad.touch(3, TouchPhase::Start, Pos2::new(740.0, 140.0), v, on);
+        pad.touch(3, TouchPhase::End, Pos2::new(745.0, 142.0), v, on);
+        assert_eq!(
+            pad.take_gui_taps(),
+            vec![(3, Pos2::new(740.0, 140.0), GuiTap::Down), (3, Pos2::new(745.0, 142.0), GuiTap::Up),]
+        );
+        assert_eq!(pad.take_look(), Vec2::ZERO, "tapping doesn't look round");
+        // Once the thumb lifts, the next finger down is the pointer again.
+        pad.touch(2, TouchPhase::End, Pos2::new(120.0, 480.0), v, on);
+        pad.touch(4, TouchPhase::Start, Pos2::new(740.0, 140.0), v, on);
+        pad.touch(4, TouchPhase::Cancel, Pos2::new(740.0, 140.0), v, on);
+        assert_eq!(pad.take_gui_taps(), vec![]);
+        // A cancelled extra finger doesn't click.
+        pad.touch(5, TouchPhase::Start, Pos2::new(120.0, 480.0), v, on);
+        pad.touch(6, TouchPhase::Start, Pos2::new(740.0, 140.0), v, on);
+        pad.touch(6, TouchPhase::Cancel, Pos2::new(740.0, 140.0), v, on);
+        assert_eq!(pad.take_gui_taps().last().map(|t| t.2), Some(GuiTap::Cancel));
     }
 
     #[test]

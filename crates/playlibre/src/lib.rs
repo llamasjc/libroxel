@@ -219,6 +219,9 @@ pub struct Editor {
     pub text_chat: text_chat::TextChat,
     /// While playing: the GUI button the left mouse button went down on.
     pub pressed_button: Option<InstanceId>,
+    /// While playing: the GUI button each finger other than the pointer's
+    /// went down on (see `touch::GuiTap`).
+    pub finger_buttons: std::collections::HashMap<u64, InstanceId>,
     /// The Explorer's filter: only what matches (and what leads to it) shows.
     pub explorer_filter: String,
     /// The Properties panel's filter.
@@ -302,6 +305,7 @@ impl Default for Editor {
             voice: Default::default(),
             text_chat: Default::default(),
             pressed_button: None,
+            finger_buttons: Default::default(),
             explorer_filter: String::new(),
             properties_filter: String::new(),
             focus_filter: None,
