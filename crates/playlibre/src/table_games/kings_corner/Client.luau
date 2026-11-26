@@ -32,7 +32,7 @@ local ui = Screen.new(script.Parent, folder, {
 	players = { 2, 4 },
 	look = {
 		background = Color3.fromRGB(0, 79, 15),
-		backgroundImage = "libroxel://baize",
+		backgroundImage = "playlibre://baize",
 		page = Color3.fromRGB(246, 245, 244),
 		ink = INK,
 		soft = Color3.fromRGB(120, 124, 126),
@@ -53,11 +53,11 @@ local ui = Screen.new(script.Parent, folder, {
 		radius = 6,
 	},
 	sounds = {
-		move = "libroxel://cards/click",
-		bad = "libroxel://cards/slide",
-		win = "libroxel://cards/win",
-		lose = "libroxel://cards/lose",
-		draw = "libroxel://cards/lose",
+		move = "playlibre://cards/click",
+		bad = "playlibre://cards/slide",
+		win = "playlibre://cards/win",
+		lose = "playlibre://cards/lose",
+		draw = "playlibre://cards/lose",
 	},
 	colourOf = function(seat)
 		return SEAT_COLOURS[seat]
@@ -91,7 +91,7 @@ local PEEK = 0.04 -- how far the top card sits below the bottom one
 local function newCard(parent, name)
 	local c = make("ImageButton", {
 		Name = name,
-		Image = "libroxel://card-back",
+		Image = "playlibre://card-back",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Size = UDim2.fromScale(CARD_W, CARD_H),
 		BackgroundTransparency = 1,
@@ -105,7 +105,7 @@ local function newCard(parent, name)
 end
 
 local function setFace(c, card)
-	c.Image = "libroxel://card-" .. RANK_LETTERS[Rules.rankOf(card)] .. SUIT_LETTERS[Rules.suitOf(card)]
+	c.Image = "playlibre://card-" .. RANK_LETTERS[Rules.rankOf(card)] .. SUIT_LETTERS[Rules.suitOf(card)]
 	c.ImageColor3 = Color3.fromRGB(255, 255, 255)
 end
 

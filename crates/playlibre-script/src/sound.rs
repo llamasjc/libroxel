@@ -19,10 +19,10 @@ fn set_playing(lua: &Lua, id: InstanceId, playing: bool) -> mlua::Result<()> {
 /// The registry names of the sound methods, by method name, with the
 /// event each fires.
 const METHODS: [(&str, &str, bool, bool, &str); 4] = [
-    (sound::PLAY, "libroxel.sound.play", true, true, "Played"),
-    (sound::STOP, "libroxel.sound.stop", false, true, "Stopped"),
-    (sound::PAUSE, "libroxel.sound.pause", false, false, "Paused"),
-    (sound::RESUME, "libroxel.sound.resume", true, false, "Resumed"),
+    (sound::PLAY, "playlibre.sound.play", true, true, "Played"),
+    (sound::STOP, "playlibre.sound.stop", false, true, "Stopped"),
+    (sound::PAUSE, "playlibre.sound.pause", false, false, "Paused"),
+    (sound::RESUME, "playlibre.sound.resume", true, false, "Resumed"),
 ];
 
 fn is_playing(lua: &Lua, id: InstanceId) -> bool {

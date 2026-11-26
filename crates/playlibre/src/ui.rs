@@ -1928,7 +1928,7 @@ pub(crate) fn class_hint(class: ClassKind) -> Option<&'static str> {
         ClassKind::Decal | ClassKind::Texture => Some(
             "Put one inside a part to show a PNG picture on one Face of it. A Decal stretches the \
              picture over the whole side; a Texture repeats it every StudsPerTileU by StudsPerTileV \
-             studs. Texture is a file name, found like an ImageLabel's; libroxel://smile, star, arrow, \
+             studs. Texture is a file name, found like an ImageLabel's; playlibre://smile, star, arrow, \
              checker, coin and chess pieces (chess-wk to chess-bp) are built in. Color3 tints it.",
         ),
         ClassKind::BodyColors => Some(
@@ -1944,7 +1944,7 @@ pub(crate) fn class_hint(class: ClassKind) -> Option<&'static str> {
         ClassKind::Sound => Some(
             "Plays a WAV or OGG file while the game runs: tick Playing, or call Play, Stop, Pause and \
              Resume from a script (Ended fires when it finishes). SoundId is found like a picture; \
-             libroxel://coin, jump, boom, click, splash, chime and hum are built in. Inside a part it \
+             playlibre://coin, jump, boom, click, splash, chime and hum are built in. Inside a part it \
              gets quieter further from the camera.",
         ),
         ClassKind::BodyAngularVelocity => Some(
@@ -1956,7 +1956,7 @@ pub(crate) fn class_hint(class: ClassKind) -> Option<&'static str> {
         ),
         ClassKind::ImageLabel | ClassKind::ImageButton => Some(
             "Shows a PNG picture. Image is a file name, looked for beside the game file, in an images \
-             folder beside it, or in the games folder's images folder; libroxel://coin is built in. \
+             folder beside it, or in the games folder's images folder; playlibre://coin is built in. \
              ScaleType says whether it stretches, fits or crops; ImageColor3 tints it.",
         ),
         ClassKind::ScrollingFrame => Some(

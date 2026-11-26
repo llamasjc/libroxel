@@ -364,7 +364,7 @@
   clocks and keeps ratings in a data store. The engine thinks in slices of
   about 12 ms and calls `task.wait()` between them, so the scheduler's
   frame share keeps the game responsive while it searches. The pieces are
-  built-in pictures (`libroxel://chess-wk` and so on).
+  built-in pictures (`playlibre://chess-wk` and so on).
 - **Threading.** The Luau VM is single-threaded, so the engine state is a
   Bevy non-send resource and the tree is shared as `Rc<RefCell<_>>`.
 

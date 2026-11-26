@@ -141,6 +141,8 @@ fn settle_sales(db: &Connection, now: i64) -> rusqlite::Result<()> {
         .collect::<rusqlite::Result<_>>()?
     };
     for (id, buyer, seller, amount, time) in due {
+        // "libroxel" is the platform's own account id (from before the
+        // rename to PlayLibre), kept in the shop's records.
         let to_creator = seller != "libroxel" && seller != buyer;
         if to_creator && crate::owner::is_banned(db, &seller) {
             continue;

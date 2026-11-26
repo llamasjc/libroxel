@@ -10,6 +10,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 const SEALED: &str = "enc1:";
 const PEPPERED: &str = "p1:";
+/// Sealed into the database to tell the right key from a wrong one. Its
+/// value predates the rename to PlayLibre; changing it would lock out
+/// databases sealed with it.
 const CHECK: &str = "libroxel";
 
 /// The key file for the database at `path`.

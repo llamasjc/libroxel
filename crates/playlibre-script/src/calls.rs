@@ -8,12 +8,12 @@ use playlibre_instance::{ClassKind, InstanceId, Property};
 use crate::bindings::{LuaColor3, as_instance, host, push_instance, tree_err};
 use crate::names::{self, functions, game_info, http};
 
-const CALLBACKS: &str = "libroxel.callbacks";
-const INVOKE_SERVER_FN: &str = "libroxel.invoke_server";
-const INVOKE_CLIENT_FN: &str = "libroxel.invoke_client";
+const CALLBACKS: &str = "playlibre.callbacks";
+const INVOKE_SERVER_FN: &str = "playlibre.invoke_server";
+const INVOKE_CLIENT_FN: &str = "playlibre.invoke_client";
 /// Answers a call from another computer: see [`crate::net::serve_invoke`].
-pub(crate) const INVOKE_SERVE_FN: &str = "libroxel.invoke_serve";
-const INVOKE_FN: &str = "libroxel.invoke";
+pub(crate) const INVOKE_SERVE_FN: &str = "playlibre.invoke_serve";
+const INVOKE_FN: &str = "playlibre.invoke";
 
 fn runtime_err(message: impl Into<String>) -> mlua::Error {
     mlua::Error::runtime(message.into())

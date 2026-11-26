@@ -1088,7 +1088,7 @@ async fn status(State(db): State<Db>) -> Json<HubStatus> {
         .unwrap_or((0, 0));
     let games: i64 = db.query_row("SELECT COUNT(*) FROM games", [], |r| r.get(0)).unwrap_or(0);
     Json(HubStatus {
-        hub: "libroxel".into(),
+        hub: "playlibre".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         servers: servers as u32,
         players: players as u32,
@@ -1214,6 +1214,10 @@ impl DownloadProof {
 }
 
 const DOWNLOAD_SIGNED_FOR: i64 = 300;
+
+// The `x-libroxel-…` download headers, like the `libroxel …` prefix of
+// every signed message, keep the app's name from before the rename to
+// PlayLibre: copies from before it send them, and signatures cover them.
 
 fn download_signer(headers: &HeaderMap, game_id: &str) -> Option<String> {
     let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());

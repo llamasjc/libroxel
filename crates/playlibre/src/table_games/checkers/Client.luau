@@ -26,7 +26,7 @@ local PIECE_SETS = { "", "wood-" }
 local pieceSet = 1
 local function pieceImage(piece)
 	local name = ({ "black", "white", "black-king", "white-king" })[piece]
-	return "libroxel://draughts-" .. PIECE_SETS[pieceSet] .. name
+	return "playlibre://draughts-" .. PIECE_SETS[pieceSet] .. name
 end
 
 local ui = Screen.new(script.Parent, folder, {
@@ -71,13 +71,13 @@ local ui = Screen.new(script.Parent, folder, {
 		return (if seat == 1 then "Black" else "White") .. " · " .. men + kings .. (if kings > 0 then " (" .. kings .. " kings)" else "")
 	end,
 	sounds = {
-		move = "libroxel://glass/move",
-		capture = "libroxel://glass/capture",
-		start = "libroxel://glass/notify",
-		win = "libroxel://glass/victory",
-		lose = "libroxel://glass/defeat",
-		draw = "libroxel://glass/draw",
-		challenge = "libroxel://glass/challenge",
+		move = "playlibre://glass/move",
+		capture = "playlibre://glass/capture",
+		start = "playlibre://glass/notify",
+		win = "playlibre://glass/victory",
+		lose = "playlibre://glass/defeat",
+		draw = "playlibre://glass/draw",
+		challenge = "playlibre://glass/challenge",
 	},
 	rules = {
 		"Black goes first. Pieces move one square diagonally forward.",

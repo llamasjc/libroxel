@@ -124,7 +124,7 @@ fn animations_move_the_limbs_and_stop() {
             r#"
             local animator = workspace.Player1.Humanoid:WaitForChild("Animator")
             local animation = Instance.new("Animation")
-            animation.AnimationId = "libroxel://wave"
+            animation.AnimationId = "playlibre://wave"
             track = animator:LoadAnimation(animation)
             print(typeof(track), track.Length, track.IsPlaying, track.Looped)
             track.Stopped:Connect(function() print("stopped", track.IsPlaying) end)
@@ -164,7 +164,7 @@ fn animations_move_the_limbs_and_stop() {
             "bad",
             r#"
             local a = Instance.new("Animation")
-            a.AnimationId = "libroxel://moonwalk"
+            a.AnimationId = "playlibre://moonwalk"
             workspace.Player1.Humanoid:LoadAnimation(a)
         "#,
         )

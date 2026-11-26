@@ -14,6 +14,8 @@ use serde_json::{Map, Value, json};
 
 use crate::{ClassKind, Color3, InstanceId, InstanceTree, Property, PropertyValue, TreeError, Vec3};
 
+/// Written in every saved game. It keeps the app's name from before the
+/// rename to PlayLibre, so copies from before it still open new files.
 pub const FORMAT: &str = "libroxel-place";
 pub const VERSION: u64 = 1;
 

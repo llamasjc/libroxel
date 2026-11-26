@@ -382,7 +382,7 @@ function Tracks.build(index, parent)
 		CanCollide = false,
 	})
 	local checker = Instance.new("Texture")
-	checker.Texture = "libroxel://checker"
+	checker.Texture = "playlibre://checker"
 	checker.Face = Enum.NormalId.Top
 	checker.StudsPerTileU = 3
 	checker.StudsPerTileV = 3
@@ -428,7 +428,7 @@ function Tracks.build(index, parent)
 				CanCollide = false,
 			})
 			local star = Instance.new("Decal")
-			star.Texture = "libroxel://star"
+			star.Texture = "playlibre://star"
 			star.Parent = box
 		end
 	end
@@ -452,7 +452,7 @@ function Tracks.build(index, parent)
 			CanCollide = false,
 		})
 		local arrow = Instance.new("Decal")
-		arrow.Texture = "libroxel://arrow"
+		arrow.Texture = "playlibre://arrow"
 		arrow.Face = Enum.NormalId.Top
 		arrow.Parent = plate
 	end

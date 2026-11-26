@@ -3,7 +3,7 @@
 //! `Stop` and `AdjustSpeed`. The engine asks [`pose_for`] how each
 //! character's limbs should be turned.
 //!
-//! A track plays a built-in clip (`libroxel://wave`), a keyframe sequence
+//! A track plays a built-in clip (`playlibre://wave`), a keyframe sequence
 //! a script registered (or the engine supplied for an asset id), or, for
 //! an asset playlibre can't fetch, the built-in clip that the character's
 //! animate script means by the animation's name (its wave, jump, climb and
@@ -268,7 +268,7 @@ impl UserData for LuaTrack {
 /// scripts that play, wait for and stop it still run.
 static SILENT: Clip = Clip { name: "Animation", length: 1.0, looped: false, legs: false, keys: &[] };
 
-const EXTRA_KEY: &str = "libroxel.animation.extra";
+const EXTRA_KEY: &str = "playlibre.animation.extra";
 
 /// A track's other members (its priority and events), kept in Lua.
 fn extra(lua: &Lua, id: u64) -> mlua::Result<mlua::Table> {
@@ -314,8 +314,8 @@ fn extra_member(lua: &Lua, id: u64, key: &str) -> mlua::Result<Value> {
     Ok(made)
 }
 
-const LOAD_KEY: &str = "libroxel.animation.load";
-const PLAYING_KEY: &str = "libroxel.animation.playing";
+const LOAD_KEY: &str = "playlibre.animation.load";
+const PLAYING_KEY: &str = "playlibre.animation.playing";
 
 /// The humanoid an animator or humanoid plays animations for.
 fn humanoid_of(lua: &Lua, id: InstanceId) -> mlua::Result<InstanceId> {
@@ -455,9 +455,9 @@ fn motion_for(lua: &Lua, animation: InstanceId) -> mlua::Result<Rc<Motion>> {
         return Ok(Rc::new(Motion::built_in(clip)));
     }
     // A built-in name that isn't one is a mistake worth saying.
-    if id.starts_with(playlibre_instance::animation::BUILT_IN) {
+    if playlibre_instance::animation::built_in_name(&id).is_some() {
         return Err(runtime_err(format!(
-            "there is no animation {id:?}; built-in ones are libroxel://wave, cheer, point, nod, shake, jacks, dance, jump, fall, climb, hold and laugh"
+            "there is no animation {id:?}; built-in ones are playlibre://wave, cheer, point, nod, shake, jacks, dance, jump, fall, climb, hold and laugh"
         )));
     }
     if let Some((_, motion)) = host.animations.borrow().sequences.get(&id_key(&id)) {

@@ -205,7 +205,7 @@ const GRIP: Vec3 = Vec3::new(0.0, -2.3, 0.1);
 /// Sounds every character has in its root part: its name, file and volume.
 /// The session plays `Jumping` on a jump and `Splash` on falling into water.
 pub const CHARACTER_SOUNDS: &[(&str, &str, f64)] =
-    &[("Jumping", "libroxel://jump", 0.15), ("Splash", "libroxel://splash", 0.5)];
+    &[("Jumping", "playlibre://jump", 0.15), ("Splash", "playlibre://splash", 0.5)];
 
 /// How long swinging a tool takes, in seconds.
 pub const SLASH_TIME: f32 = 0.35;

@@ -1,5 +1,5 @@
 //! Character animations: short clips that move a character's head, arms
-//! and legs. The built-in ones are named `libroxel://wave` and so on.
+//! and legs. The built-in ones are named `playlibre://wave` and so on.
 //!
 //! A clip is a list of key poses at times; between keys the angles are
 //! blended smoothly. Angles are in degrees: an arm or leg's `swing` moves
@@ -40,7 +40,18 @@ pub struct Clip {
 }
 
 /// The start of every built-in animation's id.
-pub const BUILT_IN: &str = "libroxel://";
+pub const BUILT_IN: &str = "playlibre://";
+
+/// How built-in ids started before the rename to PlayLibre. Games saved back
+/// then still use it, so it means the same as [`BUILT_IN`].
+pub const BUILT_IN_BEFORE: &str = "libroxel://";
+
+/// The name after the start of a built-in id (`playlibre://wave` or the
+/// older `libroxel://wave` both give `wave`), or `None` for any other id.
+/// Shared by built-in animations, pictures and sounds.
+pub fn built_in_name(id: &str) -> Option<&str> {
+    id.strip_prefix(BUILT_IN).or_else(|| id.strip_prefix(BUILT_IN_BEFORE))
+}
 
 const fn limb(swing: f32, out: f32) -> Limb {
     Limb { swing, out }
@@ -214,9 +225,9 @@ pub const CLIPS: &[Clip] = &[
     },
 ];
 
-/// The built-in clip an animation id names, like `libroxel://wave`.
+/// The built-in clip an animation id names, like `playlibre://wave`.
 pub fn clip(id: &str) -> Option<&'static Clip> {
-    let name = id.strip_prefix(BUILT_IN)?;
+    let name = built_in_name(id)?;
     CLIPS.iter().find(|c| c.name == name)
 }
 
@@ -276,8 +287,8 @@ mod tests {
 
     #[test]
     fn clips_are_found_by_id_and_blend_between_keys() {
-        let wave = clip("libroxel://wave").unwrap();
-        assert!(clip("libroxel://moonwalk").is_none());
+        let wave = clip("playlibre://wave").unwrap();
+        assert!(clip("playlibre://moonwalk").is_none());
         assert!(clip("wave").is_none());
         assert_eq!(wave.sample(0.0), REST);
         assert_eq!(wave.sample(0.3), WAVE_UP);
@@ -286,7 +297,8 @@ mod tests {
         // Not looped: it holds the end.
         assert_eq!(wave.sample(5.0), REST);
         // Looped: it wraps round.
-        let dance = clip("libroxel://dance").unwrap();
+        let dance = clip("playlibre://dance").unwrap();
+        assert!(std::ptr::eq(clip("libroxel://dance").unwrap(), dance), "games saved before the rename");
         assert_eq!(dance.sample(0.6), dance.sample(1.8));
         for c in CLIPS {
             assert!(c.keys.windows(2).all(|w| w[0].0 <= w[1].0), "{}", c.name);

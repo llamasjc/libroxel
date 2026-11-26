@@ -8,8 +8,8 @@ use playlibre_instance::{ClassKind, InstanceId, Property, PropertyValue, Vec3};
 
 use crate::names;
 
-const LAYER_KEY: &str = "libroxel.lenient";
-const GROUPS_KEY: &str = "libroxel.lenient.groups";
+const LAYER_KEY: &str = "playlibre.lenient";
+const GROUPS_KEY: &str = "playlibre.lenient.groups";
 
 /// Families a class can belong to, most specific first.
 const FAMILIES: &[&str] = &[
@@ -33,7 +33,7 @@ pub(crate) fn install(lua: &Lua, enum_lib: &Table) -> mlua::Result<()> {
     // a game took to start. It runs interpreted; game scripts still get the JIT.
     #[cfg(not(target_arch = "arm"))]
     lua.enable_jit(false);
-    let layer = lua.load(include_str!("lenient.luau")).set_name("=libroxel.lenient").into_function();
+    let layer = lua.load(include_str!("lenient.luau")).set_name("=playlibre.lenient").into_function();
     #[cfg(not(target_arch = "arm"))]
     lua.enable_jit(!cfg!(target_os = "ios"));
     let layer: Table = layer?.call((enum_lib.clone(), lua.globals()))?;

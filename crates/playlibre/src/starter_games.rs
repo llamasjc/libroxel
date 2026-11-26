@@ -289,14 +289,14 @@ mod tests {
             .unwrap();
         steps(&mut session, 5);
         let e2 = "game.Players.Player1.PlayerGui.ChessScreen.BoardColumn.Board.e2.Piece.Image";
-        assert_eq!(value(&session, e2), "libroxel://chess-wp");
+        assert_eq!(value(&session, e2), "playlibre://chess-wp");
         let button = gui_button(&session, "ChessScreen", "Pieces");
         session.click_button(button);
         steps(&mut session, 2);
-        assert_eq!(value(&session, e2), "libroxel://chess-wood-wp");
+        assert_eq!(value(&session, e2), "playlibre://chess-wood-wp");
         session.click_button(button);
         steps(&mut session, 2);
-        assert_eq!(value(&session, e2), "libroxel://chess-wp");
+        assert_eq!(value(&session, e2), "playlibre://chess-wp");
 
         let mut session = start_on(checkers(), true).unwrap();
         steps(&mut session, 10);
@@ -331,20 +331,20 @@ mod tests {
         assert_eq!(value(&session, &format!("{gui}.Panel.Game.Visible")), "true");
         assert_eq!(
             value(&session, &format!("{gui}.BoardColumn.Board.e2.Piece.Image")),
-            "libroxel://chess-wp"
+            "playlibre://chess-wp"
         );
         // An illegal move is refused; a legal one is answered by the computer.
         act(&mut session, r#""move", { game = "1", uci = "e2e5" }"#);
         steps(&mut session, 5);
         assert_eq!(
             value(&session, &format!("{gui}.BoardColumn.Board.e2.Piece.Image")),
-            "libroxel://chess-wp"
+            "playlibre://chess-wp"
         );
         act(&mut session, r#""move", { game = "1", uci = "e2e4" }"#);
         steps(&mut session, 150);
         assert_eq!(
             value(&session, &format!("{gui}.BoardColumn.Board.e4.Piece.Image")),
-            "libroxel://chess-wp"
+            "playlibre://chess-wp"
         );
         // One row in the move list (beside the list's rounded corner), with both moves.
         let moves = format!("{gui}.Panel.Game.Moves");
@@ -374,7 +374,7 @@ mod tests {
         steps(&mut session, 5);
         assert_eq!(
             value(&session, &format!("{gui}.BoardColumn.Board.e2.Piece.Image")),
-            "libroxel://chess-wp"
+            "playlibre://chess-wp"
         );
         // Resigning ends it; back in the lobby the board is cleared for the next game.
         act(&mut session, r#""move", { game = "1", uci = "d2d4" }"#);
@@ -437,14 +437,14 @@ mod tests {
             &mut host,
             &mut guest,
             &format!("{gui}.BoardColumn.Board.e4.Piece.Image"),
-            "libroxel://chess-wp",
+            "playlibre://chess-wp",
         );
         act(if guest_is_white { &host } else { &guest }, r#""move", { game = "1", uci = "e7e5" }"#);
         until(
             &mut host,
             &mut guest,
             &format!("{gui}.BoardColumn.Board.e5.Piece.Image"),
-            "libroxel://chess-bp",
+            "playlibre://chess-bp",
         );
         // Black resigns: white wins and the ratings move.
         act(if guest_is_white { &host } else { &guest }, r#""resign""#);

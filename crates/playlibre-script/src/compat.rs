@@ -1417,7 +1417,8 @@ fn product_info(lua: &Lua, id: f64, kind: &Value) -> mlua::Result<Table> {
 
 /// Badges are kept with the game's saved data, so an award lasts like
 /// a real one: in a store scripts can't name (it holds a control
-/// character), user id to the badges they have.
+/// character), user id to the badges they have. Named before the rename
+/// to PlayLibre, so badges already given stay.
 const BADGE_STORE: &str = "libroxel\u{1f}badges";
 
 fn has_badge(lua: &Lua, user: i64, badge: &str) -> bool {

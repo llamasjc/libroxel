@@ -410,7 +410,7 @@ as before: a mesh part as a box, a picture as nothing, a sound silent.
 | --- | --- |
 | Shapes | Unions, mesh parts and trusses collide with their real shape (a union's own collision pieces, a model's separate pieces, a truss as a solid box). Union and subtraction made by a script while playing (`UnionAsync`, `SubtractAsync`) can't carve: a union becomes one part over all of them and a subtraction keeps the part. A special mesh's file is stretched to its part's size, ignoring its `Scale`. |
 | Terrain | Terrain saved in Studio's newer separate-asset format (expanded terrain) can't be read: the open-source readers leave that data out, so it's left out and the Output panel says so. Terrain is drawn in 1-stud cells, smoothed, rather than the reference platform's 4-stud voxels; `ReadVoxels` and `WriteVoxels` work in the reference platform's units. |
-| Animations | Animations kept online (`rbxassetid://`) can't be fetched, so their tracks play silently for a second (scripts that play, wait for and stop them still run). PlayLibre's built-in `libroxel://` ones move the character. |
+| Animations | Animations kept online (`rbxassetid://`) can't be fetched, so their tracks play silently for a second (scripts that play, wait for and stop them still run). PlayLibre's built-in `playlibre://` ones move the character. |
 | Other classes | API classes PlayLibre has no engine side for (animation controllers, handle adornments, localization tables and so on) keep their class name and every property, so scripts read and set them as on the reference platform. Dialogs show a "Talk" prompt and their conversation. |
 | Online things | Purchases, badges, teleports, other players' avatars and `InsertService:LoadAsset` need the reference platform's servers, so they answer as if nothing was bought or found. |
 | Sound | Sounds play from the `assets` folder; effects such as reverb and equalizers are kept but not heard. |
@@ -499,7 +499,7 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
 - **Images:** `ImageLabel` and `ImageButton` (which has `MouseButton1Click`
   and `Activated` like a text button) show the PNG named by `Image`. A plain
   name is looked for beside the game file, in an `images` folder beside it,
-  and in `~/Projects/playlibre-games/images`. Built in are `libroxel://coin`,
+  and in `~/Projects/playlibre-games/images`. Built in are `playlibre://coin`,
   `smile`, `star`, `arrow` and `checker`, and the table games' pictures:
   chess pieces (`chess-wk` and so on, and wooden ones, `chess-wood-wk`),
   draughts pieces (`draughts-white`, `draughts-wood-white-king` and so on),
@@ -530,12 +530,12 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   like a picture) while `Playing` is true, at `Volume` and `PlaybackSpeed`,
   starting over when it ends if `Looped`. `Play` and `Stop` go back to the
   start, `Pause` and `Resume` don't, and `Ended` fires when it finishes.
-  `libroxel://coin`, `jump`, `boom`, `click`, `splash`, `chime` and `hum`
+  `playlibre://coin`, `jump`, `boom`, `click`, `splash`, `chime` and `hum`
   are made by PlayLibre, and so are four sets of game sounds, `wood`, `glass`,
   `retro` and `digital`, each with `move`, `capture`, `check`, `notify`,
   `victory`, `defeat`, `draw`, `lowtime`, `confirm`, `challenge` and
-  `message` (`libroxel://glass/victory`), and `libroxel://table/drop`, `bad`,
-  `win`, `lose` and `libroxel://cards/click`, `slide`, `win`, `lose`. A sound inside a part gets quieter further from the
+  `message` (`playlibre://glass/victory`), and `playlibre://table/drop`, `bad`,
+  `win`, `lose` and `playlibre://cards/click`, `slide`, `win`, `lose`. A sound inside a part gets quieter further from the
   camera. Characters carry `Jumping` and `Splash` sounds in their root part,
   played when they jump and fall into water. In the sample, coins ding, the
   TNT booms and the finish chimes.
@@ -678,7 +678,7 @@ Scripts use a familiar scene-graph style: an `Instance` tree rooted at
   shape is hit exactly.
 - **Animations:** every character's humanoid has an `Animator`.
   `animator:LoadAnimation(animation)` (or `humanoid:LoadAnimation`) loads an
-  `Animation` whose `AnimationId` is a built-in one: `libroxel://wave`,
+  `Animation` whose `AnimationId` is a built-in one: `playlibre://wave`,
   `cheer`, `point`, `nod`, `shake`, `jacks` or `dance`. The track it gives
   has `Play(fadeTime?, weight?, speed?)`, `Stop(fadeTime?)`, `AdjustSpeed`,
   `AdjustWeight`, `IsPlaying`, `Length`, `Looped`, `Speed`, `TimePosition`

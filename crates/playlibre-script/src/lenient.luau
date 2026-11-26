@@ -4680,13 +4680,13 @@ function L.globals()
 	g.Font = table.freeze({
 		new = font,
 		fromEnum = function(e)
-			return font("libroxel://fonts/" .. e.Name)
+			return font("playlibre://fonts/" .. e.Name)
 		end,
 		fromName = function(name, weight, style)
-			return font("libroxel://fonts/" .. name, weight, style)
+			return font("playlibre://fonts/" .. name, weight, style)
 		end,
 		fromId = function(id, weight, style)
-			return font("libroxel://fonts/" .. tostring(id), weight, style)
+			return font("playlibre://fonts/" .. tostring(id), weight, style)
 		end,
 	})
 

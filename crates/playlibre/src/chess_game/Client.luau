@@ -602,7 +602,7 @@ local function useSoundSet(i)
 	soundSet = i
 	for name, sound in sounds do
 		local set = SOUND_SETS[i]
-		sound.SoundId = if set then "libroxel://" .. set .. "/" .. name else ""
+		sound.SoundId = if set then "playlibre://" .. set .. "/" .. name else ""
 	end
 end
 useSoundSet(1)
@@ -718,7 +718,7 @@ local function drawBoard()
 		end
 		s.button.BackgroundColor3 = colour
 		local name = position and position:pieceName(sq)
-		s.piece.Image = if name then "libroxel://chess-" .. PIECE_SETS[pieceSet] .. name else ""
+		s.piece.Image = if name then "playlibre://chess-" .. PIECE_SETS[pieceSet] .. name else ""
 		local target = targets[sq]
 		s.dot.Visible = target ~= nil and (position == nil or position.board[sq] == 0)
 		s.ring.Visible = target ~= nil and position ~= nil and position.board[sq] ~= 0
@@ -1249,7 +1249,7 @@ for sq, s in squares do
 				pending = moves
 				local colour = if mySide() == 0 then "w" else "b"
 				for letter, choice in promotionChoices do
-					choice.Image = "libroxel://chess-" .. PIECE_SETS[pieceSet] .. colour .. letter
+					choice.Image = "playlibre://chess-" .. PIECE_SETS[pieceSet] .. colour .. letter
 				end
 				promotionCard.Visible = true
 				return

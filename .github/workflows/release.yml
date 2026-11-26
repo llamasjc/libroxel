@@ -435,7 +435,7 @@ jobs:
           else
             export ANDROID_KEYSTORE_PASSWORD=android ANDROID_KEY_ALIAS=playlibre ANDROID_KEY_PASSWORD=android
             keytool -genkeypair -keystore "$ANDROID_KEYSTORE" -storepass android -keypass android \
-              -alias libroxel -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=PlayLibre"
+              -alias playlibre -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=PlayLibre"
           fi
           gradle -p packaging/android --no-daemon assembleRelease bundleRelease
           out=packaging/android/app/build/outputs

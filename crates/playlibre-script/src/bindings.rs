@@ -19,9 +19,9 @@ use mlua::{
 use crate::names::{self, constructors, globals};
 use crate::{OutputLevel, OutputLine, ScriptError, SharedTree};
 
-const INSTANCE_CACHE: &str = "libroxel.instance_cache";
-const WAIT_FOR_CHILD_FN: &str = "libroxel.wait_for_child";
-const SIGNAL_WAIT_FN: &str = "libroxel.signal_wait";
+const INSTANCE_CACHE: &str = "playlibre.instance_cache";
+const WAIT_FOR_CHILD_FN: &str = "playlibre.wait_for_child";
+const SIGNAL_WAIT_FN: &str = "playlibre.signal_wait";
 /// How long a script may run without yielding before it is stopped.
 pub(crate) const RUN_LIMIT: Duration = Duration::from_secs(5);
 
@@ -1024,7 +1024,7 @@ fn pivot_offset(lua: &Lua, id: InstanceId) -> mlua::Result<CFrame> {
 /// Instances parented to an object playlibre only stands in for (one made
 /// in Lua), by instance.
 fn stand_in_parents(lua: &Lua) -> mlua::Result<Table> {
-    const KEY: &str = "libroxel.stand_in_parents";
+    const KEY: &str = "playlibre.stand_in_parents";
     if let Ok(t) = lua.named_registry_value::<Table>(KEY) {
         return Ok(t);
     }
@@ -3519,7 +3519,7 @@ pub(crate) fn fire_touched(lua: &Lua, part: InstanceId, other: InstanceId) -> Ve
 }
 
 /// Where the functions given to `game:BindToClose` are kept.
-pub(crate) const CLOSE_KEY: &str = "libroxel.bind_to_close";
+pub(crate) const CLOSE_KEY: &str = "playlibre.bind_to_close";
 const CLOSING: &str = "BindToClose";
 
 /// Shuts the game down as the reference platform does: every function given to

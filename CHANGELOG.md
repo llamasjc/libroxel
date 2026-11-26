@@ -10,6 +10,12 @@ its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
   only allowed pictures from the site itself, so the browser blocked the
   ones the Hub draws.
 - **Android:** menus stay clear of the notch again in release builds.
+- **Built-in pictures, sounds and animations are `playlibre://…` now**
+  (`playlibre://coin`, `playlibre://wave` and so on) in the editor's help,
+  the starter games and the docs. `libroxel://…` names in games made
+  before the rename still work the same.
+- Script errors no longer name the old `libroxel.` chunks, and the Hub's
+  status page says `"hub": "playlibre"`.
 - **Moving from Libroxel to PlayLibre without losing anyone:**
   - Macs on a Libroxel version update to PlayLibre by themselves (the update
     archive also holds the app under its old name, which their updater

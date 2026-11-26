@@ -159,7 +159,7 @@ fn higher_priorities_play_over_lower_ones_only_where_they_move() {
         local reach = Instance.new("Animation")
         reach.AnimationId = id
         local dance = Instance.new("Animation")
-        dance.AnimationId = "libroxel://dance"
+        dance.AnimationId = "playlibre://dance"
         local under = humanoid:LoadAnimation(dance)
         under.Priority = Enum.AnimationPriority.Idle
         local over = humanoid:LoadAnimation(reach)

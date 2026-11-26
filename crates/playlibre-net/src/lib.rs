@@ -29,7 +29,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
 /// The protocol name both sides agree on. Bump the number when the game's
-/// wire protocol changes in a way old versions cannot read.
+/// wire protocol changes in a way old versions cannot read. It keeps the
+/// app's name from before the rename to PlayLibre, so copies from before
+/// and after it can still play together.
 pub const ALPN: &[u8] = b"libroxel/game/0";
 
 /// Every join code starts with this, so the Join box can tell a code from an

@@ -838,7 +838,7 @@ fn sounds_play_stop_and_end() {
     let mut tree = world();
     let bell = part(&mut tree, ClassKind::Part, "Bell", Vec3::new(0.0, 5.0, 0.0), Vec3::new(2.0, 2.0, 2.0));
     let ding = tree.create(ClassKind::Sound, "Ding").unwrap();
-    tree.set(ding, Property::SoundId, PropertyValue::String("libroxel://chime".into())).unwrap();
+    tree.set(ding, Property::SoundId, PropertyValue::String("playlibre://chime".into())).unwrap();
     tree.set_parent(ding, Some(bell)).unwrap();
     script(
         &mut tree,
@@ -874,7 +874,7 @@ fn sounds_play_stop_and_end() {
     assert_eq!(shared.borrow().get_bool(ding, Property::Playing), Some(false));
     let log: Vec<String> = session.take_log().into_iter().map(|e| e.text).collect();
     assert!(log.contains(&"playing true".to_string()), "{log:?}");
-    assert!(log.contains(&"ended libroxel://chime".to_string()), "{log:?}");
+    assert!(log.contains(&"ended playlibre://chime".to_string()), "{log:?}");
 }
 
 #[test]

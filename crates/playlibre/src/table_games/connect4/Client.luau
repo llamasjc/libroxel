@@ -12,8 +12,8 @@ local make = Screen.make
 
 local COLUMNS, ROWS = Rules.COLUMNS, Rules.ROWS
 local MARBLE = {
-	[1] = "libroxel://c4-red",
-	[2] = "libroxel://c4-green",
+	[1] = "playlibre://c4-red",
+	[2] = "playlibre://c4-green",
 }
 local GRID = Color3.fromRGB(114, 127, 140)
 local TOP_ROW = Color3.fromRGB(67, 67, 67)
@@ -51,11 +51,11 @@ local ui = Screen.new(script.Parent, folder, {
 		return if seat == 1 then "Red" else "Green"
 	end,
 	sounds = {
-		move = "libroxel://table/drop",
-		bad = "libroxel://table/bad",
-		win = "libroxel://table/win",
-		lose = "libroxel://table/lose",
-		draw = "libroxel://table/lose",
+		move = "playlibre://table/drop",
+		bad = "playlibre://table/bad",
+		win = "playlibre://table/win",
+		lose = "playlibre://table/lose",
+		draw = "playlibre://table/lose",
 	},
 	rules = {
 		"Take turns dropping marbles into a column.",

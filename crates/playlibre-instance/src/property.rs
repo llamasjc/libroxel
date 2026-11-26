@@ -233,7 +233,7 @@ pub enum Property {
     MaxTorque,
     /// On a body angular velocity: the most turning force about each axis.
     BodyMaxTorque,
-    /// On a sound: the file to play (or a built-in libroxel:// sound).
+    /// On a sound: the file to play (or a built-in playlibre:// sound).
     SoundId,
     /// On a sound: how loud, 0 to 10 (1 is the file as it is).
     Volume,
@@ -249,7 +249,7 @@ pub enum Property {
     Face,
     /// On a decal or texture: a tint multiplied with the picture.
     DecalColor,
-    /// On an animation: which one (a built-in libroxel:// animation).
+    /// On an animation: which one (a built-in playlibre:// animation).
     AnimationId,
     /// On body colours: the colour of each body part.
     HeadColor,

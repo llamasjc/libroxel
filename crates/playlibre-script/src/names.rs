@@ -1036,6 +1036,9 @@ pub fn enum_item_from_name(kind: EnumKind, name: &str) -> Option<EnumValue> {
 }
 
 /// Names of the instances the engine builds for each player.
+// Extras such as these are kept on instances, so they travel to other
+// copies and into saved games: they keep the `libroxel.` names from before
+// the rename to PlayLibre.
 pub mod character {
     /// What the engine says a character is doing that scripts can't see
     /// from its parts (kept on its humanoid): climbing or swimming.

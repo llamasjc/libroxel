@@ -6,7 +6,7 @@
 //! path is used only when it is inside one of those folders. A game is
 //! someone else's code, so its names never reach the rest of this computer:
 //! no `..`, no network shares (which would make Windows sign in to someone
-//! else's computer), and only ordinary files no bigger than [`MAX_FILE`]. Names starting with `libroxel://` are pictures
+//! else's computer), and only ordinary files no bigger than [`MAX_FILE`]. Names starting with `playlibre://` are pictures
 //! built into PlayLibre: `coin`, `smile`, `star`, `arrow`, `checker`, and
 //! chess pieces named `chess-` then `w` or `b` then `k`, `q`, `r`, `b`, `n` or `p`,
 //! cards named `card-` then `a`, `2` to `10`, `j`, `q` or `k` then `c`, `d`,
@@ -31,7 +31,8 @@ use bevy::image::{CompressedImageFormats, Image, ImageSampler, ImageType};
 use bevy::render::render_resource::TextureFormat;
 
 /// The start of the names of built-in pictures.
-pub const BUILT_IN: &str = "libroxel://";
+pub const BUILT_IN: &str = playlibre_instance::animation::BUILT_IN;
+use playlibre_instance::animation::built_in_name;
 
 /// Built-in pictures, by name after [`BUILT_IN`].
 pub const PICTURES: &[(&str, &[u8])] = &[
@@ -334,7 +335,7 @@ fn ending_of(bytes: &[u8]) -> &'static str {
 pub fn local_file(name: &str) -> Option<(Vec<u8>, String)> {
     let name = name.trim();
     let lower = name.to_ascii_lowercase();
-    if name.is_empty() || name.starts_with(BUILT_IN) || lower.starts_with(HUB_ASSET) {
+    if name.is_empty() || built_in_name(name).is_some() || lower.starts_with(HUB_ASSET) {
         return None;
     }
     if let Some(id) = asset_id(name) {
@@ -377,7 +378,7 @@ pub fn bytes_for(name: &str) -> Option<Vec<u8>> {
     if name.is_empty() {
         return None;
     }
-    if let Some(built_in) = name.strip_prefix(BUILT_IN) {
+    if let Some(built_in) = built_in_name(name) {
         return PICTURES.iter().find(|(n, _)| *n == built_in).map(|(_, b)| b.to_vec());
     }
     if let Some(rest) = name.strip_prefix(HUB_ASSET) {
@@ -691,7 +692,12 @@ mod tests {
         assert_eq!(pixels[3], 0);
         let middle = (32 * 64 + 40) * 4;
         assert!(pixels[middle] > 150 && pixels[middle + 3] == 255, "{:?}", &pixels[middle..middle + 4]);
-        assert!(bytes_for("libroxel://nothing").is_none());
+        assert!(bytes_for("playlibre://nothing").is_none());
+        assert_eq!(
+            bytes_for("libroxel://coin"),
+            bytes_for("playlibre://coin"),
+            "games saved before the rename"
+        );
         assert!(bytes_for("  ").is_none());
     }
 

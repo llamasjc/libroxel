@@ -8,6 +8,7 @@ use crate::{EnumValue, InstanceId, InstanceTree, Material, Property, PropertyVal
 /// The extra a part keeps its custom physical properties in: five numbers
 /// (density, friction, elasticity, friction weight, elasticity weight).
 /// Not the property's own name, which would show scripts the raw text.
+/// Named before the rename to PlayLibre, as saved games have it.
 pub const CUSTOM: &str = "libroxel.physical";
 
 #[derive(Debug, Clone, Copy, PartialEq)]

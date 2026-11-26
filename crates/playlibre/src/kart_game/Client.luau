@@ -128,14 +128,14 @@ local function sound(id, volume)
 	return make("Sound", { SoundId = id, Volume = volume or 0.6 }, screen)
 end
 local sounds = {
-	beep = sound("libroxel://click", 0.8),
-	go = sound("libroxel://chime", 0.8),
-	coin = sound("libroxel://coin", 0.5),
-	boom = sound("libroxel://boom", 0.5),
-	boost = sound("libroxel://jump", 0.6),
-	bonk = sound("libroxel://click", 0.4),
+	beep = sound("playlibre://click", 0.8),
+	go = sound("playlibre://chime", 0.8),
+	coin = sound("playlibre://coin", 0.5),
+	boom = sound("playlibre://boom", 0.5),
+	boost = sound("playlibre://jump", 0.6),
+	bonk = sound("playlibre://click", 0.4),
 }
-local engine = make("Sound", { SoundId = "libroxel://hum", Volume = 0.25, Looped = true }, screen)
+local engine = make("Sound", { SoundId = "playlibre://hum", Volume = 0.25, Looped = true }, screen)
 
 ------------------------------------------------------------------------
 -- A map of the track, drawn with dots.

@@ -71,8 +71,9 @@ fn attribute_from_lua(value: &Value) -> mlua::Result<Option<PropertyValue>> {
 /// Marks an attribute whose value is kept with the scripts rather than in
 /// the tree (kinds the tree has no value for). The text after it numbers
 /// the value, by instance and name; copies of the instance share it.
+/// Named before the rename to PlayLibre, as it travels with attributes.
 const RICH: &str = "\u{1}libroxel-attribute:";
-const RICH_KEY: &str = "libroxel.rich_attributes";
+const RICH_KEY: &str = "playlibre.rich_attributes";
 
 fn rich_values(lua: &Lua) -> mlua::Result<mlua::Table> {
     if let Ok(t) = lua.named_registry_value::<mlua::Table>(RICH_KEY) {
@@ -153,13 +154,13 @@ function codec.decode(text)
 end
 return codec
 "#;
-const CODEC_KEY: &str = "libroxel.rich_attribute_codec";
+const CODEC_KEY: &str = "playlibre.rich_attribute_codec";
 
 fn codec(lua: &Lua) -> mlua::Result<mlua::Table> {
     if let Ok(t) = lua.named_registry_value::<mlua::Table>(CODEC_KEY) {
         return Ok(t);
     }
-    let t: mlua::Table = lua.load(CODEC).set_name("=libroxel.attributes").eval()?;
+    let t: mlua::Table = lua.load(CODEC).set_name("=playlibre.attributes").eval()?;
     lua.set_named_registry_value(CODEC_KEY, &t)?;
     Ok(t)
 }

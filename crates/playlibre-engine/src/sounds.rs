@@ -2,7 +2,7 @@
 //!
 //! A sound name is a WAV or OGG file, looked for in the same folders as
 //! pictures (see [`crate::pictures::set_folders`]). Names starting with
-//! `libroxel://` are sounds made by PlayLibre itself: `coin`, `jump`, `boom`,
+//! `playlibre://` are sounds made by PlayLibre itself: `coin`, `jump`, `boom`,
 //! `click`, `splash`, `chime` and `hum` (which loops smoothly); game sounds
 //! in four sets, `wood/`, `glass/`, `retro/` and `digital/`, each with
 //! [`EVENTS`] (`move`, `capture`, `check` and so on); `table/` sounds
@@ -23,10 +23,11 @@ use bevy::audio::{
 use bevy::prelude::*;
 use playlibre_instance::{ClassKind, InstanceId, InstanceTree, Property, PropertyValue};
 
+#[cfg(test)]
 use crate::pictures::BUILT_IN;
 use crate::view::{EngineState, to_bevy};
 
-/// Built-in sounds that aren't in a set, by name after [`BUILT_IN`].
+/// Built-in sounds that aren't in a set, by name after [`BUILT_IN`](crate::pictures::BUILT_IN).
 pub const SOUNDS: &[&str] = &[
     "coin",
     "jump",
@@ -113,7 +114,7 @@ const FILES: &[(&str, &[u8])] = &[
 /// The file a sound name means, if it can be found.
 pub fn bytes_for(name: &str) -> Option<Vec<u8>> {
     let name = name.trim();
-    if let Some(built_in) = name.strip_prefix(BUILT_IN) {
+    if let Some(built_in) = playlibre_instance::animation::built_in_name(name) {
         let name = renamed(built_in).unwrap_or_else(|| built_in.to_owned());
         if let Some((_, bytes)) = FILES.iter().find(|(n, _)| *n == name) {
             return Some(bytes.to_vec());
@@ -680,7 +681,8 @@ mod tests {
             let peak = s.iter().fold(0.0f32, |m, v| m.max(v.abs()));
             assert!(peak > 0.1 && peak <= 1.0, "{name} peaks at {peak}");
         }
-        assert!(bytes_for("libroxel://nothing").is_none());
+        assert!(bytes_for("playlibre://nothing").is_none());
+        assert!(bytes_for("libroxel://coin").is_some(), "games saved before the rename");
         // The hum loops: its ends meet.
         let hum = synth("hum").unwrap();
         assert!((hum[0] - hum[hum.len() - 1]).abs() < 0.1);
@@ -727,7 +729,7 @@ mod tests {
             assert!(bytes_for(&format!("{BUILT_IN}{old}")).is_some(), "{old}");
         }
         assert_eq!(renamed("lichess/sfx/move").as_deref(), Some("wood/move"));
-        assert!(bytes_for("libroxel://lichess/other/move").is_none());
+        assert!(bytes_for("playlibre://lichess/other/move").is_none());
     }
 
     #[test]
