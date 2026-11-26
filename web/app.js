@@ -204,7 +204,7 @@ async function api(path, { method = 'GET', body, query } = {}) {
 
 const SESSION_KEY = 'playlibre.session';
 let session = loadSession();
-let lastSigned = { friends: 0, party: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0, wallet: 0, badge: 0 };
+let lastSigned = { friends: 0, party: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0, wallet: 0, badge: 0, media: 0, follow: 0, server: 0 };
 
 function loadSession() {
   for (const store of [sessionStorage, localStorage]) {
@@ -629,6 +629,15 @@ function gamePicture(width, height, id) {
   }
   return svg('svg', { viewBox: `0 0 ${width} ${height}`, class: 'scene', 'aria-hidden': 'true' }, ...shapes);
 }
+
+/** A game's own icon when its creator put one up, or else its drawn picture. */
+function gameIcon(width, height, id, info) {
+  const icon = info?.media?.find((m) => m.slot === 0);
+  if (!icon) return gamePicture(width, height, id);
+  return el('img', { class: 'scene shot', src: mediaUrl(id, icon), alt: '', loading: 'lazy', width, height });
+}
+
+const mediaUrl = (id, m) => `${HUB}/games/${encodeURIComponent(id)}/media/${m.slot}-${m.version}`;
 
 /** The usual look for player number `n` (`Look::for_player`). */
 const lookFor = (n) => ({
@@ -1067,7 +1076,7 @@ function gameCard(entry) {
   else meta = el('div', { class: 'meta idle' }, `By ${entry.by}`);
   return el('a', { class: 'game', href: gameHref(entry) },
     el('div', { class: 'pic' },
-      gamePicture(188, 150, entry.key),
+      gameIcon(188, 150, entry.key, entry.game),
       el('span', { class: 'badge', style: `background:${rgb(pictureColour(entry.key))}` }, icon(entry.symbol)),
       inside.length ? el('span', { class: 'faces' }, inside.slice(0, 3).map((f) => portrait(f.player_id, 26, f.look))) : null),
     el('h3', {}, entry.title),
@@ -1136,7 +1145,7 @@ function game() {
   const out = [
     back,
     el('div', { class: 'hero' },
-      el('div', { class: 'pic' }, gamePicture(440, 248, entry.key)),
+      el('div', { class: 'pic' }, gameIcon(440, 248, entry.key, entry.game)),
       el('div', {},
         el('h1', {}, entry.title),
         by,
@@ -1146,7 +1155,20 @@ function game() {
           hostable && el('button', { class: 'btn big', title: 'Host your own server of this game; it shows on this list', onclick: () => launch(appLink('host', entry.key), `Starting a new server of ${entry.title}.`) }, icon(ICON.broadcast), 'New server')),
         el('div', { class: 'hint' }, hint))),
   ];
+  const shots = (entry.game?.media || []).filter((m) => m.slot > 0);
+  if (shots.length) {
+    out.push(el('div', { class: 'shots' }, shots.map((m) =>
+      el('a', { href: mediaUrl(entry.key, m), target: '_blank', rel: 'noopener' },
+        el('img', { src: mediaUrl(entry.key, m), alt: `A screenshot of ${entry.title}`, loading: 'lazy' })))));
+  }
   if (entry.about) out.push(el('div', { class: 'about' }, el('div', { class: 'caps' }, 'About'), entry.about));
+  const genre = entry.game?.genre;
+  const tags = entry.game?.tags || [];
+  if (genre || tags.length) {
+    out.push(el('div', { class: 'tags' },
+      genre && el('a', { class: 'chip', href: `/search?genre=${encodeURIComponent(genre)}` }, genre),
+      tags.map((t) => el('a', { class: 'chip soft-chip', href: `/search?tag=${encodeURIComponent(t)}` }, `#${t}`))));
+  }
   if (hostable) out.push(ratingBar(entry), reportPanel('game', entry.key));
   if (entry.game) out.push(passesPanel(entry));
 
@@ -1345,7 +1367,7 @@ function serverRow(server, entry) {
     ? el('span', {}, `Hosted by ${server.host}`, server.admin_host && el('span', { class: 'tag admin', style: 'margin-left:6px' }, 'Admin'), server.host_verified && el('span', { class: 'tag verified', style: 'margin-left:6px' }, 'Verified'))
     : null;
   return el('div', { class: `server${inside.length ? ' friends' : ''}` },
-    el('div', { class: 'mini' }, gamePicture(52, 52, entry.key)),
+    el('div', { class: 'mini' }, gameIcon(52, 52, entry.key, entry.game)),
     el('div', { class: 'what' },
       el('b', {}, server.name),
       el('small', {},
@@ -1426,7 +1448,32 @@ function personResult(p) {
 
 // --- Search ---------------------------------------------------------------
 
+// Games with one tag or genre, from the Hub: what was asked, and the answer.
+let tagged = { key: null, games: null, error: null };
+
 function searchPage() {
+  const asked = new URLSearchParams(location.search);
+  const tag = asked.get('tag') || '';
+  const genre = asked.get('genre') || '';
+  if (tag || genre) {
+    const key = `${tag}\n${genre}`;
+    if (tagged.key !== key) {
+      tagged = { key, games: null, error: null };
+      api('/games', { query: { tag, genre } })
+        .then((games) => { if (tagged.key === key) tagged.games = games; })
+        .catch((e) => { if (tagged.key === key) tagged.error = e.message; })
+        .finally(() => { if (route.name === 'search') render(); });
+    }
+    const shown = (tagged.games || []).map((g) => byKey(g.game_id) || { key: g.game_id, title: g.title, by: g.author, servers: [], playing: g.playing, game: g, number: g.number, symbol: 'cube' });
+    return [
+      el('a', { class: 'back', href: '/search' }, icon(ICON.left), 'Search'),
+      el('h1', { class: 'title' }, tag ? `#${tag}` : genre),
+      el('p', { class: 'note' }, tag ? 'Games with this tag.' : `${genre} games.`),
+      tagged.error ? status(tagged.error, 'error')
+        : !tagged.games ? el('p', { class: 'soft' }, 'Looking…')
+        : shown.length ? el('div', { class: 'games' }, shown.map(gameCard)) : el('p', { class: 'soft' }, 'No games yet.'),
+    ];
+  }
   return [
     el('h1', { class: 'title' }, 'Search'),
     el('p', { class: 'note' }, 'Find players and games.'),
@@ -2783,6 +2830,7 @@ async function manageGame(id, change, said, then) {
   const time = Date.now();
   const what = change.do === 'settings'
     ? `settings\n${change.private ? 1 : 0}\n${change.max_players}\n${change.title}\n${change.description}`
+    : change.do === 'details' ? `details\n${change.genre}\n${change.tags.join(',')}`
     : change.do === 'restore' ? `restore\n${change.version}` : 'remove';
   const signature = signText(secretKey(), `libroxel manage\n${session.playerId}\n${id}\n${time}\n${what}`);
   try {
@@ -2814,14 +2862,93 @@ function settingsTab(g) {
     if (b.dataset.sure) manageGame(g.game_id, { do: 'remove' }, `Removed ${g.title}.`, () => goTo('/creator'));
     else { b.dataset.sure = '1'; b.replaceChildren(icon(ICON.trash), ' Remove?'); }
   } }, icon(ICON.trash), 'Remove');
-  return el('div', { class: 'form manage' },
-    el('label', { class: 'field' }, el('span', {}, 'Name'), title),
-    el('label', { class: 'field' }, el('span', {}, 'Description'), about),
-    el('label', { class: 'field' }, el('span', {}, 'Who can play'), privacy),
-    el('label', { class: 'field' }, el('span', {}, 'Max players'), most),
-    el('div', { class: 'form-actions' },
-      el('button', { class: 'btn go small', disabled: mine.busy, onclick: save }, icon(ICON.check), 'Save'),
-      remove));
+  const genres = { '': 'None' };
+  for (const g of GENRES) genres[g] = g;
+  const genre = pickFrom(genres, g.genre || '');
+  const tags = el('input', { type: 'text', value: (g.tags || []).join(', '), maxlength: 120, placeholder: 'Up to 5, such as hard, tower, co-op' });
+  const saveDetails = () => manageGame(g.game_id, {
+    do: 'details', genre: genre.value,
+    tags: tags.value.split(',').map((t) => t.trim().toLowerCase().replace(/\s+/g, ' ')).filter(Boolean),
+  }, 'Saved.');
+  return el('div', {},
+    el('div', { class: 'form manage' },
+      el('label', { class: 'field' }, el('span', {}, 'Name'), title),
+      el('label', { class: 'field' }, el('span', {}, 'Description'), about),
+      el('label', { class: 'field' }, el('span', {}, 'Who can play'), privacy),
+      el('label', { class: 'field' }, el('span', {}, 'Max players'), most),
+      el('div', { class: 'form-actions' },
+        el('button', { class: 'btn go small', disabled: mine.busy, onclick: save }, icon(ICON.check), 'Save'),
+        remove)),
+    el('h2', { class: 'subhead' }, 'Genre and tags'),
+    el('div', { class: 'form manage' },
+      el('label', { class: 'field' }, el('span', {}, 'Genre'), genre),
+      el('label', { class: 'field' }, el('span', {}, 'Tags'), tags),
+      el('div', { class: 'form-actions' },
+        el('button', { class: 'btn go small', disabled: mine.busy, onclick: saveDetails }, icon(ICON.check), 'Save'))),
+    picturesPanel(g));
+}
+
+// The game genres a creator can pick (the Hub's GENRES).
+const GENRES = ['Racing', 'Fighting', 'Obby', 'Board and cards', 'Party', 'Tycoon and sim', 'Adventure', 'Horror', 'Shooter', 'Sports', 'Building'];
+const MAX_SCREENSHOTS = 6;
+
+async function sha256Hex(bytes) {
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return Array.from(hash, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function base64Of(bytes) {
+  let text = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(text);
+}
+
+/** Puts up (a File) or takes down (null) a game's icon (slot 0) or a screenshot. */
+async function changePicture(g, slot, file) {
+  if (mine.busy) return;
+  mine.busy = true;
+  render();
+  try {
+    const bytes = file ? new Uint8Array(await file.arrayBuffer()) : null;
+    if (bytes && bytes.length > 6 * 1024 * 1024) throw new Error('Pictures can be at most 6 MB.');
+    const time = Math.max(Date.now(), lastSigned.media + 1);
+    lastSigned.media = time;
+    const what = bytes ? await sha256Hex(bytes) : 'remove';
+    const signature = signText(secretKey(), `playlibre media\n${session.playerId}\n${g.game_id}\n${time}\n${slot}\n${what}`);
+    g.media = await api(`/games/${encodeURIComponent(g.game_id)}/media`, {
+      method: 'POST', body: { player_id: session.playerId, time, slot, image: bytes ? base64Of(bytes) : null, signature },
+    });
+    flash = { text: file ? 'Picture saved.' : 'Picture taken down.' };
+    loadMine(true);
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  } finally {
+    mine.busy = false;
+    render();
+  }
+}
+
+function picturesPanel(g) {
+  const media = g.media || [];
+  const picker = (slot, label) => {
+    const input = el('input', { type: 'file', accept: 'image/png,image/jpeg', style: 'display:none' });
+    input.addEventListener('change', () => input.files[0] && changePicture(g, slot, input.files[0]));
+    return el('label', { class: 'chip', disabled: mine.busy }, input, label);
+  };
+  const tile = (m, label) => el('div', { class: 'shot-tile' },
+    el('img', { src: mediaUrl(g.game_id, m), alt: label }),
+    el('button', { class: 'chip', disabled: mine.busy, onclick: () => changePicture(g, m.slot, null) }, icon(ICON.trash), 'Take down'));
+  const icon0 = media.find((m) => m.slot === 0);
+  const shots = media.filter((m) => m.slot > 0);
+  const free = [];
+  for (let slot = 1; slot <= MAX_SCREENSHOTS; slot++) if (!shots.some((m) => m.slot === slot)) free.push(slot);
+  return el('div', {},
+    el('h2', { class: 'subhead' }, 'Pictures'),
+    el('p', { class: 'note' }, `PNG or JPEG. The icon is cut to a square; screenshots are shown up to ${MAX_SCREENSHOTS} at a time.`),
+    el('div', { class: 'caps group' }, 'Icon'),
+    el('div', { class: 'shot-row' }, icon0 ? tile(icon0, 'Icon') : null, picker(0, icon0 ? 'Change icon' : 'Add an icon')),
+    el('div', { class: 'caps group' }, 'Screenshots'),
+    el('div', { class: 'shot-row' }, shots.map((m) => tile(m, 'Screenshot')), free.length ? picker(free[0], 'Add a screenshot') : null));
 }
 
 function versionsTab(g) {
@@ -2904,7 +3031,7 @@ function myGameCard(g) {
   const bits = [g.private ? 'Private' : 'Public', `v${g.version}`];
   if (g.playing) bits.push(`${count(g.playing)} playing`);
   return el('a', { class: 'game', href: `/creator/${encodeURIComponent(g.game_id)}` },
-    el('div', { class: 'pic' }, gamePicture(188, 150, g.game_id),
+    el('div', { class: 'pic' }, gameIcon(188, 150, g.game_id, g),
       g.private && el('span', { class: 'badge', style: `background:${rgb(pictureColour(g.game_id))}` }, icon(ICON.lock))),
     el('h3', {}, g.title),
     el('div', { class: `meta${g.playing ? ' live' : ' idle'}` }, bits.join(' · ')));
@@ -3238,7 +3365,7 @@ function creatorPage() {
     const base = `/creator/${encodeURIComponent(info.game_id)}`;
     const tab = ['settings', 'passes', 'versions', 'badges'].includes(route.tab) ? route.tab : '';
     out.push(el('div', { class: 'manage-head' },
-      el('div', { class: 'mini' }, gamePicture(64, 64, info.game_id)),
+      el('div', { class: 'mini' }, gameIcon(64, 64, info.game_id, info)),
       el('div', {}, el('h1', { class: 'title' }, info.title),
         el('div', { class: 'soft' }, `${info.private ? 'Private' : 'Public'} · version ${info.version} · ${ago(info.updated_secs_ago)}`)),
       !info.private && el('a', { class: 'chip', href: gameHrefOf(info.game_id, info.number, info.title) }, icon(ICON.play), 'View')));

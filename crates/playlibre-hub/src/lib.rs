@@ -55,7 +55,7 @@ pub use assets::{
     ASSET_PREFIX, MAX_ASSET, OfficialGame, StarterPlace, asset_hash, official, official_from, set_official,
     valid_hash,
 };
-pub use charts::{Chart, ChartStats, Charts, ForYou, Played, for_you_message, guess_genre, wilson};
+pub use charts::{Chart, ChartStats, Charts, ForYou, GENRES, Played, for_you_message, genre_named, guess_genre, wilson};
 mod badges;
 mod cli;
 pub use badges::{
@@ -95,7 +95,11 @@ pub use groups::{
 mod limits;
 mod manage;
 mod market;
-pub use manage::{Change, KEEP_VERSIONS, MOST_PLAYERS, ManageGame, Version, manage_message};
+mod media;
+pub use manage::{
+    Change, KEEP_VERSIONS, MAX_TAG_LEN, MAX_TAGS, MOST_PLAYERS, ManageGame, Version, clean_tag, manage_message,
+};
+pub use media::{ICON_SIZE, MAX_SCREENSHOTS, MAX_UPLOAD, MediaChange, MediaRef, SHOT_SIZE, media_message, redraw};
 pub use market::{
     Asset, AssetData, AssetKind, MAX_MODEL, MAX_PLUGIN, NewAsset, PERMISSIONS, Unmarket, asset_message,
     unmarket_message,
@@ -770,6 +774,14 @@ pub struct GameInfo {
     /// older Hubs don't say.
     #[serde(default)]
     pub number: Option<u64>,
+    /// The genre its creator picked (older Hubs don't say).
+    #[serde(default)]
+    pub genre: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Its icon (slot 0) and screenshots, at `/games/<id>/media/<slot>-<version>`.
+    #[serde(default)]
+    pub media: Vec<MediaRef>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -777,6 +789,10 @@ struct ListQuery {
     q: Option<String>,
     /// Only the servers running this game.
     game_id: Option<String>,
+    /// Only games with this tag.
+    tag: Option<String>,
+    /// Only games of this genre.
+    genre: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -984,6 +1000,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     wallet::create_tables(&db)?;
     earnings::create_tables(&db)?;
     data::create_tables(&db)?;
+    media::create_tables(&db)?;
     // Hubs from before game numbers: number every game there is.
     number_games(&db).map_err(|e| format!("could not number the Hub's games: {e}"))?;
     seal::install(&db, path)?;
@@ -1135,6 +1152,11 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
                 axum::extract::DefaultBodyLimit::max(data::MAX_TRADE * 2 + 64 * 1024),
             )),
         )
+        .route(
+            "/games/{id}/media",
+            post(media::change_media).layer(axum::extract::DefaultBodyLimit::max(media::MAX_UPLOAD * 2)),
+        )
+        .route("/games/{id}/media/{file}", get(media::get_media))
         .route("/passes/buy", post(earnings::buy_pass))
         .route("/passes/{id}/owners/{player}", get(earnings::owns))
         .route("/reports", post(report))
@@ -1224,7 +1246,8 @@ const GAME_COLUMNS: &str = concat!(
     (SELECT COUNT(*) FROM game_votes v WHERE v.game_id = g.game_id AND v.vote = -1),
     (SELECT COUNT(*) FROM game_favorites f WHERE f.game_id = g.game_id),
     gr.group_id, gr.name, gr.tag, gr.color, g.private, g.max_players, closed_games(),
-    (SELECT n.number FROM game_numbers n WHERE n.game_id = g.game_id)"
+    (SELECT n.number FROM game_numbers n WHERE n.game_id = g.game_id), g.genre, g.tags,
+    (SELECT group_concat(m.slot || ':' || m.version) FROM game_media m WHERE m.game_id = g.game_id)"
 );
 const GAMES: &str = "games g LEFT JOIN accounts a ON a.player_id = g.author_id
     LEFT JOIN group_games gg ON gg.game_id = g.game_id LEFT JOIN groups gr ON gr.group_id = gg.group_id";
@@ -1264,6 +1287,9 @@ fn game_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<GameInfo> {
         max_players: r.get::<_, i64>(19)? as u32,
         closed: r.get(20)?,
         number: r.get::<_, Option<i64>>(21)?.map(|n| n as u64),
+        genre: Some(r.get::<_, String>(22)?).filter(|g| !g.is_empty()),
+        tags: r.get::<_, String>(23)?.split(',').filter(|t| !t.is_empty()).map(str::to_owned).collect(),
+        media: media::parse_refs(r.get(24)?),
     })
 }
 
@@ -1274,7 +1300,10 @@ async fn list_games(State(db): State<Db>, Query(query): Query<ListQuery>) -> Jso
     let mut statement = db
         .prepare(&format!(
             "SELECT {GAME_COLUMNS} FROM {GAMES}
-             WHERE (g.title LIKE ?1 OR COALESCE(a.name, g.author) LIKE ?1 OR g.description LIKE ?1)
+             WHERE (g.title LIKE ?1 OR COALESCE(a.name, g.author) LIKE ?1 OR g.description LIKE ?1
+                    OR g.tags LIKE ?1)
+                AND (?2 = '' OR (',' || g.tags || ',') LIKE '%,' || ?2 || ',%')
+                AND (?3 = '' OR g.genre = ?3)
                 AND g.private = 0 AND NOT {hidden} AND NOT {banned}
              ORDER BY g.plays DESC, g.updated DESC LIMIT 200",
             hidden = hidden_sql("game", "g.game_id"),
@@ -1282,7 +1311,14 @@ async fn list_games(State(db): State<Db>, Query(query): Query<ListQuery>) -> Jso
         ))
         .expect("the games query is valid");
     let rows = statement
-        .query_map(params![pattern], |r| game_row(r, now))
+        .query_map(
+            params![
+                pattern,
+                query.tag.as_deref().and_then(clean_tag).unwrap_or_default().replace(['%', '_'], ""),
+                query.genre.as_deref().and_then(genre_named).unwrap_or_default()
+            ],
+            |r| game_row(r, now),
+        )
         .map(|rows| rows.filter_map(Result::ok).collect())
         .unwrap_or_default();
     Json(rows)
@@ -2888,6 +2924,41 @@ impl HubClient {
     /// Trades a game's saved data (see [`DataTrade`]).
     pub fn trade_data(&self, game_id: &str, trade: &DataTrade) -> Result<DataTraded, String> {
         self.post_signed(&format!("/games/{game_id}/data"), trade)
+    }
+
+    /// Puts up (or takes down) a game's icon or a screenshot.
+    pub fn change_media(&self, game_id: &str, change: &MediaChange) -> Result<Vec<MediaRef>, String> {
+        self.post_signed(&format!("/games/{game_id}/media"), change)
+    }
+
+    /// A game's picture (see [`GameInfo::media`]).
+    pub fn media(&self, game_id: &str, media: &MediaRef) -> Result<Vec<u8>, String> {
+        self.agent
+            .get(self.media_url(game_id, media))
+            .call()
+            .map_err(|e| format!("could not get the picture: {e}"))?
+            .body_mut()
+            .with_config()
+            .limit(8 * 1024 * 1024)
+            .read_to_vec()
+            .map_err(|e| e.to_string())
+    }
+
+    /// Games with a tag, a genre, or both (empty for any).
+    pub fn games_with(&self, search: &str, tag: &str, genre: &str) -> Result<Vec<GameInfo>, String> {
+        self.agent
+            .get(format!("{}/games", self.base))
+            .query("q", search)
+            .query("tag", tag)
+            .query("genre", genre)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not reach the Hub: {e}"))
+    }
+
+    /// The address of a game's picture, for showing it.
+    pub fn media_url(&self, game_id: &str, media: &MediaRef) -> String {
+        format!("{}/games/{game_id}/media/{}-{}", self.base, media.slot, media.version)
     }
 
     pub fn buy_pass(&self, buy: &BuyPass) -> Result<Pass, String> {

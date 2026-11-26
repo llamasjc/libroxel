@@ -29,6 +29,27 @@ pub enum Change {
     Settings { title: String, description: String, private: bool, max_players: u32 },
     Restore { version: u32 },
     Remove,
+    /// The game's genre (one of [`crate::GENRES`], or empty for none) and
+    /// up to [`MAX_TAGS`] tags.
+    Details {
+        genre: String,
+        #[serde(default)]
+        tags: Vec<String>,
+    },
+}
+
+/// The most tags a game can have.
+pub const MAX_TAGS: usize = 5;
+/// A tag is at most this many characters.
+pub const MAX_TAG_LEN: usize = 20;
+
+/// A tag as games keep it: lower case, single spaces; `None` when it
+/// isn't one (too short or long, or not letters, digits, spaces and dashes).
+pub fn clean_tag(tag: &str) -> Option<String> {
+    let tag = tag.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    let n = tag.chars().count();
+    ((2..=MAX_TAG_LEN).contains(&n) && tag.chars().all(|c| c.is_alphanumeric() || c == ' ' || c == '-'))
+        .then_some(tag)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -46,6 +67,7 @@ pub fn manage_message(player_id: &str, game_id: &str, time: i64, change: &Change
         }
         Change::Restore { version } => format!("restore\n{version}"),
         Change::Remove => "remove".into(),
+        Change::Details { genre, tags } => format!("details\n{genre}\n{}", tags.join(",")),
     };
     format!("libroxel manage\n{player_id}\n{game_id}\n{time}\n{what}").into_bytes()
 }
@@ -53,6 +75,8 @@ pub fn manage_message(player_id: &str, game_id: &str, time: i64, change: &Change
 pub(crate) fn create_tables(db: &Connection) -> Result<(), String> {
     let _ = db.execute("ALTER TABLE games ADD COLUMN private INTEGER NOT NULL DEFAULT 0", []);
     let _ = db.execute("ALTER TABLE games ADD COLUMN max_players INTEGER NOT NULL DEFAULT 0", []);
+    let _ = db.execute("ALTER TABLE games ADD COLUMN genre TEXT NOT NULL DEFAULT ''", []);
+    let _ = db.execute("ALTER TABLE games ADD COLUMN tags TEXT NOT NULL DEFAULT ''", []);
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS game_versions (
             game_id     TEXT NOT NULL,
@@ -90,6 +114,7 @@ pub(crate) fn keep_version(
 
 pub(crate) fn forget(db: &Connection, game_id: &str) {
     let _ = db.execute("DELETE FROM game_versions WHERE game_id = ?1", params![game_id]);
+    crate::media::forget(db, game_id);
     analytics::forget_game(db, game_id);
 }
 
@@ -263,6 +288,37 @@ pub(crate) async fn manage(
                 )
                 .map_err(internal)?;
             crate::copies::keep(&db, &game_id, &owner, &crate::copies::prints(&place)).map_err(internal)?;
+        }
+        Change::Details { genre, tags } => {
+            let genre = if genre.trim().is_empty() {
+                ""
+            } else {
+                crate::charts::genre_named(&genre)
+                    .ok_or((StatusCode::BAD_REQUEST, "pick one of the genres on the list".to_owned()))?
+            };
+            let mut kept: Vec<String> = Vec::new();
+            for tag in &tags {
+                let Some(tag) = clean_tag(tag) else {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        format!("tags are 2 to {MAX_TAG_LEN} letters, digits, spaces or dashes"),
+                    ));
+                };
+                if crate::filter::clean(&tag).as_deref() != Some(tag.as_str()) {
+                    return Err((StatusCode::BAD_REQUEST, "pick friendlier tags".into()));
+                }
+                if !kept.contains(&tag) {
+                    kept.push(tag);
+                }
+            }
+            if kept.len() > MAX_TAGS {
+                return Err((StatusCode::BAD_REQUEST, format!("a game can have up to {MAX_TAGS} tags")));
+            }
+            db.execute(
+                "UPDATE games SET genre = ?2, tags = ?3 WHERE game_id = ?1",
+                params![game_id, genre, kept.join(",")],
+            )
+            .map_err(internal)?;
         }
         Change::Remove => {
             db.execute("DELETE FROM games WHERE game_id = ?1", params![game_id]).map_err(internal)?;

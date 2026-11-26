@@ -17,7 +17,9 @@ const CHART_SIZE: usize = 30;
 
 const DAY: i64 = 24 * 60 * 60;
 
-const GENRES: [(&str, &[&str]); 7] = [
+/// The genres a creator can pick for a game, with the words that make a
+/// game without one fall into it.
+pub const GENRES: [(&str, &[&str]); 11] = [
     ("Racing", &["kart", "race", "racing", "racer", "car", "drift", "speed"]),
     ("Fighting", &["battle", "royale", "fight", "pvp", "sword", "combat", "arena", "war"]),
     ("Obby", &["obby", "parkour", "obstacle", "tower", "climb", "jump"]),
@@ -28,7 +30,16 @@ const GENRES: [(&str, &[&str]); 7] = [
     ("Party", &["tag", "hide", "seek", "party", "minigame", "minigames"]),
     ("Tycoon and sim", &["tycoon", "simulator", "sim", "roleplay", "town", "city", "farm", "shop"]),
     ("Adventure", &["adventure", "explore", "quest", "story", "dungeon", "survival"]),
+    ("Horror", &["horror", "scary", "spooky", "haunted", "zombie", "zombies"]),
+    ("Shooter", &["shooter", "shooting", "fps", "gun", "guns", "sniper"]),
+    ("Sports", &["sports", "soccer", "football", "basketball", "golf", "tennis", "hockey"]),
+    ("Building", &["build", "building", "builder", "sandbox", "creative", "blocks"]),
 ];
+
+/// The genre named `name` (ignoring case), as the list spells it.
+pub fn genre_named(name: &str) -> Option<&'static str> {
+    GENRES.iter().map(|(g, _)| *g).find(|g| g.eq_ignore_ascii_case(name.trim()))
+}
 
 pub(crate) fn create_tables(db: &Connection) -> Result<(), String> {
     db.execute_batch(
@@ -193,16 +204,17 @@ fn games(db: &Connection) -> Result<Vec<Game>, rusqlite::Error> {
     let today = now / DAY;
     let mut list = Vec::new();
     let mut statement = db.prepare(&format!(
-        "SELECT g.game_id, g.title, g.description, g.created FROM games g
+        "SELECT g.game_id, g.title, g.description, g.created, g.genre FROM games g
          WHERE g.private = 0 AND NOT {} AND NOT {}",
         hidden_sql("game", "g.game_id"),
         crate::owner::banned_sql("g.author_id")
     ))?;
     let rows = statement.query_map([], |r| {
         let (title, about): (String, String) = (r.get(1)?, r.get(2)?);
+        let picked: String = r.get(4)?;
         Ok(Game {
             id: r.get(0)?,
-            genre: guess_genre(&title, &about),
+            genre: genre_named(&picked).or_else(|| guess_genre(&title, &about)),
             age_days: Some((now - r.get::<_, i64>(3)?).max(0) as f64 / DAY as f64),
             ..Game::default()
         })

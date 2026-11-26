@@ -32,6 +32,8 @@ flate2 = "1"
 # Email codes, sent by SMTP (any mail provider: Resend, Brevo, Postmark, your own).
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "hostname", "rustls-tls"] }
 rustrict = "0.7"
+# Game icons and screenshots, drawn again at a set size before they are kept.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [lints]
 workspace = true

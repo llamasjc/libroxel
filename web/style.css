@@ -443,3 +443,16 @@ footer a { color: var(--heading); text-decoration: underline; }
 .market { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
 .market-row { display: block; padding: 12px 14px; background: #fff; border: 1px solid var(--line); border-radius: 8px; color: inherit; text-decoration: none; }
 .market-row:hover { border-color: var(--link); }
+
+/* A game's own pictures: its icon where the drawn picture goes, and screenshots. */
+img.scene.shot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.hero .pic img.scene.shot, .mini img.scene.shot, .manage-head .mini img.scene.shot { position: static; }
+.mini img.scene.shot { width: 100%; height: 100%; border-radius: 6px; }
+.shots { display: flex; gap: 10px; overflow-x: auto; margin: 14px 0; padding-bottom: 4px; }
+.shots img { height: 160px; border-radius: 8px; border: 1px solid rgb(130, 176, 222); display: block; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.tags .soft-chip { opacity: 0.85; }
+.shot-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 6px 0 14px; }
+.shot-tile { display: flex; flex-direction: column; gap: 6px; }
+.shot-tile img { height: 96px; border-radius: 8px; border: 1px solid rgb(130, 176, 222); }
+@media (max-width: 600px) { .shots img { height: 120px; } }
