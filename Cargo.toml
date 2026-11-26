@@ -6,7 +6,7 @@ exclude = ["vendor"]
 default-members = ["crates/playlibre"]
 
 [workspace.package]
-version = "0.1.19"
+version = "0.1.20"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT OR Apache-2.0"
@@ -16,13 +16,13 @@ authors = ["PlayLibre contributors"]
 [workspace.dependencies]
 # A fast hash for maps looked up thousands of times a frame.
 foldhash = "0.2"
-playlibre-instance = { path = "crates/playlibre-instance", version = "0.1.19" }
-playlibre-script = { path = "crates/playlibre-script", version = "0.1.19" }
-playlibre-engine = { path = "crates/playlibre-engine", version = "0.1.19" }
-playlibre-net = { path = "crates/playlibre-net", version = "0.1.19" }
-playlibre-rbx = { path = "crates/playlibre-rbx", version = "0.1.19" }
-playlibre-avatar = { path = "crates/playlibre-avatar", version = "0.1.19" }
-playlibre-hub = { path = "crates/playlibre-hub", version = "0.1.19" }
+playlibre-instance = { path = "crates/playlibre-instance", version = "0.1.20" }
+playlibre-script = { path = "crates/playlibre-script", version = "0.1.20" }
+playlibre-engine = { path = "crates/playlibre-engine", version = "0.1.20" }
+playlibre-net = { path = "crates/playlibre-net", version = "0.1.20" }
+playlibre-rbx = { path = "crates/playlibre-rbx", version = "0.1.20" }
+playlibre-avatar = { path = "crates/playlibre-avatar", version = "0.1.20" }
+playlibre-hub = { path = "crates/playlibre-hub", version = "0.1.20" }
 rbx_mesh = { version = "0.8.2", default-features = false, features = ["mesh", "mesh-v1", "union-graphics", "csgphs-v8-ruzstd"] }
 thiserror = "2"
 serde_json = "1"

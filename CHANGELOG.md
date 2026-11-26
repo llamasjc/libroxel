@@ -3,6 +3,27 @@
 What changed in each release. The full list of commits for each one is on
 its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 
+## 0.1.20 (2026-11-26)
+
+- **Game pages have numbers:** every game has a number, and its page on
+  the website is `/games/<number>/<name>` (such as
+  `/games/12/my-cool-game`). The number alone opens it, a wrong or old
+  name moves to the right address, and old `/game/<id>` links still work.
+  Games a Hub already has are numbered when it starts, and a number never
+  changes or goes to another game. My games in the app has a Page button
+  that opens it.
+- **Website:** the site loads again. 0.1.19 stopped before showing any tabs,
+  because a part of the page was there twice. The site's update also puts
+  its files in place when its folder is a link to the old one.
+- **Avatars:** the app shows the look the account has on the Hub, the
+  same one the website and other players see. Changes made on the website
+  reach a game already being played. Picking a look needs an account.
+- **Credits:** there are no more free daily Credits. Your balance shows at
+  the top right, by your name, in the app and on the website.
+- **Hats:** only Hat-Makers add hats to the catalog. The Hub's owners give
+  that out on the website's Moderation page or with
+  `playlibre-hub hat-maker add|remove`.
+
 ## 0.1.19 (2026-11-26)
 
 - **Hub servers:** the updater sets the Hub up again when its service is
