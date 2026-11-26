@@ -470,6 +470,85 @@ fn number_accounts(db: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Gives every game a number for its page on the website
+/// (`/games/<number>/<name>`): the starter games and published games a Hub
+/// had before numbers came in get the next ones (starters first, then games
+/// in the order they came out), and from then on each new one gets the next
+/// number as it is added. A number stays with its game, and is never given
+/// to another one, even after the game is taken down.
+fn number_games(db: &Connection) -> rusqlite::Result<()> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS game_numbers (
+            game_id     TEXT PRIMARY KEY,
+            number      INTEGER NOT NULL UNIQUE
+        );
+        -- No conflict is possible here (NOT EXISTS), so the INSERT OR REPLACE
+        -- that refreshes the starter games can't hand a game a new number.
+        CREATE TRIGGER IF NOT EXISTS games_get_numbers AFTER INSERT ON games BEGIN
+            INSERT INTO game_numbers (game_id, number)
+            SELECT NEW.game_id, (SELECT COALESCE(MAX(number), 0) + 1 FROM game_numbers)
+            WHERE NOT EXISTS (SELECT 1 FROM game_numbers WHERE game_id = NEW.game_id);
+        END;
+        CREATE TRIGGER IF NOT EXISTS starters_get_numbers AFTER INSERT ON official BEGIN
+            INSERT INTO game_numbers (game_id, number)
+            SELECT 'starter:' || NEW.name, (SELECT COALESCE(MAX(number), 0) + 1 FROM game_numbers)
+            WHERE NOT EXISTS (SELECT 1 FROM game_numbers WHERE game_id = 'starter:' || NEW.name);
+        END;",
+    )?;
+    let tx = db.unchecked_transaction()?;
+    let unnumbered: Vec<String> = tx
+        .prepare(
+            "SELECT 'starter:' || name FROM official
+             WHERE 'starter:' || name NOT IN (SELECT game_id FROM game_numbers)
+             ORDER BY position, name",
+        )?
+        .query_map([], |r| r.get(0))?
+        .chain(
+            tx.prepare(
+                "SELECT game_id FROM games WHERE game_id NOT IN (SELECT game_id FROM game_numbers)
+                 ORDER BY created, rowid",
+            )?
+            .query_map([], |r| r.get(0))?,
+        )
+        .collect::<rusqlite::Result<_>>()?;
+    let next: i64 =
+        tx.query_row("SELECT COALESCE(MAX(number), 0) + 1 FROM game_numbers", [], |r| r.get(0))?;
+    for (i, id) in unnumbered.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO game_numbers (game_id, number) VALUES (?1, ?2)",
+            params![id, next + i as i64],
+        )?;
+    }
+    tx.commit()
+}
+
+/// The end of a game's page address on the website: its title in small
+/// letters, with a dash between words (`My Cool Game!` is `my-cool-game`).
+/// The website makes the same one (`slug` in web/app.js).
+pub fn game_slug(title: &str) -> String {
+    let mut slug = String::new();
+    for c in title.chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c);
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let mut slug = slug.trim_end_matches('-').to_owned();
+    if slug.len() > 60 {
+        slug.truncate(60);
+        slug = slug.trim_end_matches('-').to_owned();
+    }
+    slug
+}
+
+/// A game's page on the website at `site` (such as `https://playlibre.net`),
+/// from its number and title.
+pub fn game_page(site: &str, number: u64, title: &str) -> String {
+    let slug = game_slug(title);
+    if slug.is_empty() { format!("{site}/games/{number}") } else { format!("{site}/games/{number}/{slug}") }
+}
+
 /// How long a name someone gave up stays theirs to take back, in seconds.
 pub const NAME_HELD_FOR_SECS: i64 = 30 * 24 * 60 * 60;
 
@@ -682,6 +761,10 @@ pub struct GameInfo {
     pub max_players: u32,
     #[serde(default)]
     pub closed: bool,
+    /// Its number, for its page on the website (`/games/<number>/<name>`);
+    /// older Hubs don't say.
+    #[serde(default)]
+    pub number: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -895,6 +978,8 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     pictures::create_tables(&db)?;
     wallet::create_tables(&db)?;
     earnings::create_tables(&db)?;
+    // Hubs from before game numbers: number every game there is.
+    number_games(&db).map_err(|e| format!("could not number the Hub's games: {e}"))?;
     seal::install(&db, path)?;
     closed_games(&db, false).map_err(|e| format!("could not set up the Hub database: {e}"))?;
     Ok(db)
@@ -1125,7 +1210,8 @@ const GAME_COLUMNS: &str = concat!(
     (SELECT COUNT(*) FROM game_votes v WHERE v.game_id = g.game_id AND v.vote = 1),
     (SELECT COUNT(*) FROM game_votes v WHERE v.game_id = g.game_id AND v.vote = -1),
     (SELECT COUNT(*) FROM game_favorites f WHERE f.game_id = g.game_id),
-    gr.group_id, gr.name, gr.tag, gr.color, g.private, g.max_players, closed_games()"
+    gr.group_id, gr.name, gr.tag, gr.color, g.private, g.max_players, closed_games(),
+    (SELECT n.number FROM game_numbers n WHERE n.game_id = g.game_id)"
 );
 const GAMES: &str = "games g LEFT JOIN accounts a ON a.player_id = g.author_id
     LEFT JOIN group_games gg ON gg.game_id = g.game_id LEFT JOIN groups gr ON gr.group_id = gg.group_id";
@@ -1164,6 +1250,7 @@ fn game_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<GameInfo> {
         private: r.get(18)?,
         max_players: r.get::<_, i64>(19)? as u32,
         closed: r.get(20)?,
+        number: r.get::<_, Option<i64>>(21)?.map(|n| n as u64),
     })
 }
 
@@ -1191,9 +1278,17 @@ async fn list_games(State(db): State<Db>, Query(query): Query<ListQuery>) -> Jso
 async fn game_info(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<Json<GameInfo>, StatusCode> {
     let db = db.lock().unwrap();
     let now = now();
-    db.query_row(&format!("SELECT {GAME_COLUMNS} FROM {GAMES} WHERE g.game_id = ?1"), params![id], |r| {
-        game_row(r, now)
-    })
+    // Its id, or its number (as its page on the website has it).
+    let number: Option<i64> = id.parse().ok();
+    db.query_row(
+        &format!(
+            "SELECT {GAME_COLUMNS} FROM {GAMES}
+             WHERE g.game_id = ?1 OR g.game_id = (SELECT game_id FROM game_numbers WHERE number = ?2)
+             ORDER BY g.game_id = ?1 DESC LIMIT 1"
+        ),
+        params![id, number],
+        |r| game_row(r, now),
+    )
     .optional()
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     .map(Json)

@@ -25,6 +25,10 @@ pub struct OfficialGame {
     pub symbol: String,
     pub hash: String,
     pub size: u64,
+    /// Its number, for its page on the website (`/games/<number>/<name>`);
+    /// older Hubs don't say.
+    #[serde(default)]
+    pub number: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -141,9 +145,10 @@ pub(crate) async fn list_official(State(db): State<Db>) -> Json<Vec<OfficialGame
 }
 
 pub fn official(db: &Connection) -> Vec<OfficialGame> {
-    let Ok(mut statement) =
-        db.prepare("SELECT name, about, hash, LENGTH(place), symbol FROM official ORDER BY position, name")
-    else {
+    let Ok(mut statement) = db.prepare(
+        "SELECT o.name, o.about, o.hash, LENGTH(o.place), o.symbol, n.number FROM official o
+         LEFT JOIN game_numbers n ON n.game_id = 'starter:' || o.name ORDER BY o.position, o.name",
+    ) else {
         return Vec::new();
     };
     statement
@@ -154,6 +159,7 @@ pub fn official(db: &Connection) -> Vec<OfficialGame> {
                 hash: r.get(2)?,
                 size: r.get::<_, i64>(3)? as u64,
                 symbol: r.get(4)?,
+                number: r.get::<_, Option<i64>>(5)?.map(|n| n as u64),
             })
         })
         .map(|rows| rows.filter_map(Result::ok).collect())

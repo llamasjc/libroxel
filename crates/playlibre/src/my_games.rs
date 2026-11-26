@@ -208,6 +208,15 @@ fn row(state: &mut MyGames, ui: &mut egui::Ui, platform: &Platform, game: &GameI
                 if theme::tool_button(ui, icon::CHART_LINE, t("Numbers"), false).clicked() {
                     crate::report::open_url(&format!("https://playlibre.net/creator/{}", game.game_id));
                 }
+                if let Some(number) = game.number.filter(|_| !game.private)
+                    && theme::tool_button(ui, icon::GLOBE, t("Page"), false).clicked()
+                {
+                    crate::report::open_url(&playlibre_hub::game_page(
+                        "https://playlibre.net",
+                        number,
+                        &game.title,
+                    ));
+                }
                 if let Some(path) = state.files.get(&game.game_id)
                     && theme::tool_button(ui, icon::PENCIL_SIMPLE, t("Edit"), false).clicked()
                 {

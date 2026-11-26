@@ -4,7 +4,7 @@
 // opens the installed app through a playlibre:// link.
 
 import * as crypto from './vendor/crypto.js';
-import { ROUTES, href, routeOf } from './routes.js';
+import { ROUTES, gamePath, href, routeOf } from './routes.js';
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -522,12 +522,12 @@ function isRemembered() {
 /** Every game worth showing, with its live servers, busiest first. */
 function entries() {
   const list = data.official.map((g) => ({
-    key: `starter:${g.name}`, title: g.name, by: 'PlayLibre', about: g.about, symbol: g.symbol || ICON.games,
+    key: `starter:${g.name}`, number: g.number, title: g.name, by: 'PlayLibre', about: g.about, symbol: g.symbol || ICON.games,
     source: 'starter', servers: [],
   }));
   for (const game of data.games) {
     list.push({
-      key: game.game_id, title: game.title, by: game.author, byId: game.author_id, about: game.description,
+      key: game.game_id, number: game.number, title: game.title, by: game.author, byId: game.author_id, about: game.description,
       symbol: ICON.globe, source: 'published', game, servers: [],
     });
   }
@@ -895,7 +895,7 @@ window.addEventListener('unhandledrejection', (e) => crashed(e.reason));
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, charts: chartsPage, profile, creator: creatorPage, market: marketPage, search: searchPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, stats: statsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy, donate: donatePage };
+  const views = { home, game, games: game, charts: chartsPage, profile, creator: creatorPage, market: marketPage, search: searchPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, stats: statsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy, donate: donatePage };
   // An account that signed in with an easy password sees nothing else until it sets a new one.
   loadFamily();
   const needsBirthday = session && familyInfo && !familyInfo.loading && !familyInfo.error && !familyInfo.has_birthday;
@@ -932,7 +932,7 @@ const DESCRIPTIONS = {
 };
 
 function titleFor(r) {
-  if (r.name === 'game') return entries().find((e) => e.key === r.key)?.title || 'Game';
+  if (isGamePage(r)) return gameFor(r)?.title || 'Game';
   if (r.name === 'group') return groupPages.get(r.id)?.group?.name || 'Group';
   return ROUTES[r.name]?.title || 'PlayLibre';
 }
@@ -989,6 +989,20 @@ function home() {
 
 function byKey(key) {
   return entries().find((e) => e.key === key);
+}
+
+/** Where a game's page is: /games/<number>/<name> once the Hub has given it
+ * a number, or else by its id (/game/<id>), which moves to the numbered page
+ * when it opens. */
+function gameHref(entry) {
+  if (entry.number !== undefined && entry.number !== null) return gamePath(entry.number, entry.title);
+  return `/game/${encodeURIComponent(entry.key)}`;
+}
+
+/** A link to the page of the game with this id, from what's known of it. */
+function gameHrefOf(id, number, title) {
+  const known = byKey(id);
+  return gameHref(known || { key: id, number, title });
 }
 
 function gameRow(title, list, link) {
@@ -1051,7 +1065,7 @@ function gameCard(entry) {
   if (inside.length) meta = el('div', { class: 'meta' }, icon(ICON.users), ` ${count(entry.playing)} playing · ${inside.map((f) => f.name).join(', ')}`);
   else if (entry.playing) meta = el('div', { class: 'meta live' }, icon(ICON.users), ` ${count(entry.playing)} playing`);
   else meta = el('div', { class: 'meta idle' }, `By ${entry.by}`);
-  return el('a', { class: 'game', href: `/game/${encodeURIComponent(entry.key)}` },
+  return el('a', { class: 'game', href: gameHref(entry) },
     el('div', { class: 'pic' },
       gamePicture(188, 150, entry.key),
       el('span', { class: 'badge', style: `background:${rgb(pictureColour(entry.key))}` }, icon(entry.symbol)),
@@ -1064,11 +1078,44 @@ function gameCard(entry) {
 
 const view = { hideFull: false };
 
+const isGamePage = (r) => r.name === 'game' || r.name === 'games';
+
+// Games the lists don't hold (private, or past the first lot), by what the
+// address asked for: undefined while asking, null when the Hub has none.
+const lookedUp = new Map();
+
+/** The game a page's address is for: /games/<number>/… or /game/<id>. */
+function gameFor(r) {
+  const asked = r.name === 'games' ? r.number : r.key;
+  if (!asked) return null;
+  const listed = entries().find((e) => (r.name === 'games' ? String(e.number) === asked : e.key === asked));
+  if (listed) return listed;
+  if (!data.loaded) return undefined;
+  if (asked.startsWith('starter:') || asked.startsWith('live:')) return null;
+  if (!lookedUp.has(asked)) {
+    lookedUp.set(asked, undefined);
+    api(`/games/${encodeURIComponent(asked)}`)
+      .then((g) => lookedUp.set(asked, {
+        key: g.game_id, number: g.number, title: g.title, by: g.author, byId: g.author_id, about: g.description,
+        symbol: ICON.globe, source: 'published', game: g, servers: [], playing: 0,
+      }))
+      .catch(() => lookedUp.set(asked, null))
+      .then(() => { if (isGamePage(route)) render(); });
+  }
+  return lookedUp.get(asked);
+}
+
 function game() {
-  const entry = entries().find((e) => e.key === route.key);
+  const entry = gameFor(route);
   const back = el('a', { class: 'back', href: '/' }, icon(ICON.left), 'Home');
   if (!entry) {
-    return [back, data.loaded ? el('div', { class: 'empty' }, "That game isn't here (any more).") : el('p', { class: 'soft' }, 'Loading…')];
+    return [back, entry === undefined ? el('p', { class: 'soft' }, 'Loading…') : el('div', { class: 'empty' }, "That game isn't here (any more).")];
+  }
+  // One address per game: a bare number, a wrong or old name, or an old
+  // link by id all move to /games/<number>/<name>.
+  const canonical = gameHref(entry);
+  if (canonical.startsWith('/games/') && location.pathname !== canonical) {
+    history.replaceState(null, '', canonical + location.search + location.hash);
   }
   const best = bestServer(entry.servers);
   const hostable = entry.source !== 'live';
@@ -1138,7 +1185,7 @@ function loadRatings(key) {
       if (rated.key !== key) return;
       rated.ratings = ratings;
       rated.comments = comments;
-      if (route.name === 'game') render();
+      if (isGamePage(route)) render();
     });
 }
 
@@ -1679,7 +1726,7 @@ function user() {
     el('h2', { class: 'section' }, `Games (${p.games.length})`),
     p.games.length
       ? el('div', { class: 'games' }, p.games.map((g) => gameCard(entries().find((e) => e.key === g.game_id) || {
-        key: g.game_id, title: g.title, by: g.author, servers: [], playing: 0, symbol: ICON.globe,
+        key: g.game_id, number: g.number, title: g.title, by: g.author, servers: [], playing: 0, symbol: ICON.globe,
       })))
       : el('p', { class: 'soft' }, isMe ? 'Games you publish from the app show up here.' : 'No published games yet.'),
     badgesOf(p),
@@ -1970,7 +2017,7 @@ function groupPage() {
 
   const gameList = [el('h2', { class: 'section' }, `Games (${games.length})`)];
   gameList.push(games.length
-    ? el('div', { class: 'games' }, games.map((g) => gameCard(entries().find((e) => e.key === g.game_id) || { key: g.game_id, title: g.title, by: group.name, servers: [], playing: 0, symbol: ICON.globe })))
+    ? el('div', { class: 'games' }, games.map((g) => gameCard(entries().find((e) => e.key === g.game_id) || { key: g.game_id, number: g.number, title: g.title, by: group.name, servers: [], playing: 0, symbol: ICON.globe })))
     : el('p', { class: 'soft' }, 'No games yet.'));
   if (admin) {
     const theirs = (data.me?.games || []).filter((g) => !games.some((x) => x.game_id === g.game_id));
@@ -2103,8 +2150,8 @@ const playerLink = (id, name) => el('a', { href: `/user/${id}` }, el('b', {}, na
 
 function placeOf(q) {
   if (q.text === null) return null;
-  if (q.kind === 'game') return `/game/${q.target}`;
-  if (q.kind === 'comment') return `/game/${q.place}`;
+  if (q.kind === 'game') return gameHrefOf(q.target);
+  if (q.kind === 'comment') return gameHrefOf(q.place);
   if (q.kind === 'group' || q.kind === 'post') return `/group/${q.place}`;
   return null;
 }
@@ -3194,7 +3241,7 @@ function creatorPage() {
       el('div', { class: 'mini' }, gamePicture(64, 64, info.game_id)),
       el('div', {}, el('h1', { class: 'title' }, info.title),
         el('div', { class: 'soft' }, `${info.private ? 'Private' : 'Public'} · version ${info.version} · ${ago(info.updated_secs_ago)}`)),
-      !info.private && el('a', { class: 'chip', href: `/game/${encodeURIComponent(info.game_id)}` }, icon(ICON.play), 'View')));
+      !info.private && el('a', { class: 'chip', href: gameHrefOf(info.game_id, info.number, info.title) }, icon(ICON.play), 'View')));
     out.push(el('div', { class: 'hats' }, [['', 'Numbers'], ['settings', 'Settings'], ['passes', 'Passes'], ['versions', 'Versions'], ['badges', 'Badges']].map(([t, label]) =>
       el('a', { class: `chip${tab === t ? ' on' : ''}`, href: t ? `${base}/${t}` : base }, label))));
     if (tab === 'settings') { out.push(settingsTab(info)); return out; }
