@@ -52,7 +52,7 @@ pub use mlua;
 /// (`RunService:Set3dRenderingEnabled(false)`, as loading screens do).
 pub static RENDERING_3D: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 pub use net::{NetMessage, NetRole, decode as decode_net_value, encode as encode_net_value, map_instances};
-pub use world::{BadgeInfo, PassInfo, VelocityRequest};
+pub use world::{BadgeInfo, GameIdentity, JoinData, PassInfo, Teleport, VelocityRequest};
 
 /// What data stores hold: store, then key, then value.
 pub type SavedData =
@@ -483,6 +483,27 @@ impl ScriptRuntime {
             Ok(()) => bindings::take_errors(&self.lua),
             Err(e) => vec![e],
         }
+    }
+
+    /// Which game, place and server this is (`game.PlaceId` and the like).
+    pub fn set_game_identity(&self, identity: GameIdentity) {
+        bindings::host(&self.lua).world.borrow_mut().teleports.identity = identity;
+    }
+
+    /// What a player arrived with, for `Player:GetJoinData()`.
+    pub fn set_join_data(&self, user_id: i64, join: JoinData) {
+        bindings::host(&self.lua).world.borrow_mut().teleports.joins.insert(user_id, join);
+    }
+
+    /// On a player's computer: what they arrived with, for
+    /// `TeleportService:GetLocalPlayerTeleportData()`.
+    pub fn set_local_join_data(&self, join: JoinData) {
+        bindings::host(&self.lua).world.borrow_mut().teleports.local = join;
+    }
+
+    /// Takes the teleports scripts asked for.
+    pub fn take_teleports(&self) -> Vec<Teleport> {
+        std::mem::take(&mut bindings::host(&self.lua).world.borrow_mut().teleports.queued)
     }
 
     /// Takes the players `Kick` removed, with why.

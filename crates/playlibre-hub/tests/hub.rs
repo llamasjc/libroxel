@@ -236,8 +236,28 @@ fn creators_share_hats_and_others_find_and_wear_them() {
     // Signed by someone else, or not a hat: turned away.
     assert!(client.share_item(&item("Fake", hat.clone(), &[4u8; 32])).is_err());
     assert!(client.share_item(&item("Shoe", serde_json::json!({ "laces": 2 }), &key)).is_err());
+    // Shirts and trousers are a colour (and sleeves).
+    let shirt = serde_json::json!({ "name": "Red tee", "color": [200, 30, 30], "sleeves": false });
+    let tee = NewItem {
+        creator_id: me.clone(),
+        name: "Red tee".into(),
+        kind: "shirt".into(),
+        signature: sign(&key, &item_message(&me, "Red tee", "shirt", &shirt, 6)),
+        data: shirt.clone(),
+        time: 6,
+    };
+    assert_eq!(client.share_item(&tee).unwrap().kind, "shirt");
+    let odd = serde_json::json!({ "color": [300, 0, 0] });
+    let bad = NewItem {
+        kind: "pants".into(),
+        signature: sign(&key, &item_message(&me, "Red tee", "pants", &odd, 7)),
+        data: odd,
+        time: 7,
+        ..tee.clone()
+    };
+    assert!(client.share_item(&bad).is_err());
 
-    let found = client.catalog("top").unwrap();
+    let found = client.catalog("top hat").unwrap();
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].data, hat);
     client.wore(&shared.item_id).unwrap();

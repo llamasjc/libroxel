@@ -655,7 +655,7 @@ fn follow_link(state: &mut HomeState, platform: &mut Platform, list: &[Entry], n
     }
     let key = match &pending.launch {
         Launch::Join(code) => return Some(Pick::Join { code: code.clone(), name: name.to_owned() }),
-        Launch::Play(key) | Launch::Host(key) => key.clone(),
+        Launch::Play(key) | Launch::Host(key) | Launch::Private { game: key, .. } => key.clone(),
     };
     let Some(entry) = list.iter().find(|e| e.key == key).filter(|_| platform.listed()) else {
         if pending.since.elapsed() < std::time::Duration::from_secs(15) {
@@ -664,6 +664,14 @@ fn follow_link(state: &mut HomeState, platform: &mut Platform, list: &[Entry], n
         return None;
     };
     state.view = View::Game(key);
+    if let Launch::Private { game, code } = &pending.launch {
+        // A private server isn't on the lists: the Hub finds it by its code.
+        platform.social.teleporting =
+            Some(crate::social::GameRef { title: entry.title.clone(), game_id: Some(game.clone()) });
+        state.finding_for = Some(entry.key.clone());
+        platform.find_server_with(game, &entry.title, Some(code.clone()));
+        return None;
+    }
     match pending.launch {
         Launch::Host(_) if entry.host_here(platform) => host(entry, platform),
         _ => press_play(state, platform, entry, name),

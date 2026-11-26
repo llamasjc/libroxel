@@ -1052,6 +1052,115 @@ fn badge_service(lua: &Lua, t: &Table) -> mlua::Result<()> {
     })
 }
 
+/// TeleportService: teleports wait for the host (or, on a player's own
+/// computer, for the app), which sends each player on through the Hub.
+fn teleport_service(lua: &Lua, t: &Table) -> mlua::Result<()> {
+    let queue =
+        lua.create_function(|lua, (user, place, code, data): (f64, f64, Option<String>, Value)| {
+            let data = match data {
+                Value::Nil => None,
+                other => Some(crate::services::to_json(&other, 0)?),
+            };
+            if data.as_ref().is_some_and(|d| d.to_string().len() > 64 * 1024) {
+                return Err(mlua::Error::runtime("teleport data can be at most 64 KB"));
+            }
+            let host = host(lua);
+            host.world.borrow_mut().teleports.queued.push(crate::world::Teleport {
+                user_id: user as i64,
+                place_id: place as i64,
+                access_code: code.filter(|c| !c.is_empty()),
+                data,
+            });
+            Ok(())
+        })?;
+    let reserve = lua.create_function(|_, ()| {
+        let mut bytes = [0u8; 16];
+        getrandom::fill(&mut bytes).map_err(|e| mlua::Error::runtime(e.to_string()))?;
+        Ok(bytes.iter().map(|b| format!("{b:02x}")).collect::<String>())
+    })?;
+    let local = lua.create_function(|lua, ()| {
+        let data = host(lua).world.borrow().teleports.local.data.clone();
+        data.map_or(Ok(Value::Nil), |d| crate::services::from_json(lua, &d))
+    })?;
+    let methods: Table = lua
+        .load(
+            r#"local queue, reserve, localData = ...
+            local function each(players)
+                if typeof(players) == "Instance" then
+                    return { players }
+                end
+                return players or {}
+            end
+            local function send(name, placeId, players, code, data)
+                if type(placeId) ~= "number" then
+                    error(name .. " needs a place id", 3)
+                end
+                for _, player in each(players) do
+                    queue(player.UserId, placeId, code, data)
+                end
+            end
+            local function field(options, name)
+                local ok, value = pcall(function()
+                    return options[name]
+                end)
+                return ok and value or nil
+            end
+            return {
+                Teleport = function(_, placeId, player, data)
+                    send("Teleport", placeId, player or game:GetService("Players").LocalPlayer, nil, data)
+                end,
+                TeleportAsync = function(_, placeId, players, options)
+                    local code, data
+                    if options ~= nil then
+                        code = field(options, "ReservedServerAccessCode")
+                        if code == "" then
+                            code = nil
+                        end
+                        if field(options, "ShouldReserveServer") then
+                            code = reserve()
+                        end
+                        local ok, d = pcall(function()
+                            return options:GetTeleportData()
+                        end)
+                        if ok then
+                            data = d
+                        end
+                    end
+                    send("TeleportAsync", placeId, players, code, data)
+                    return { PrivateServerId = code or "", ReservedServerAccessCode = code or "" }
+                end,
+                TeleportToPrivateServer = function(_, placeId, code, players, _spawnName, data)
+                    send("TeleportToPrivateServer", placeId, players, code, data)
+                end,
+                TeleportToPlaceInstance = function(_, placeId, _jobId, player, _spawnName, data)
+                    send("TeleportToPlaceInstance", placeId, player or game:GetService("Players").LocalPlayer, nil, data)
+                end,
+                TeleportPartyAsync = function(_, placeId, players, data)
+                    send("TeleportPartyAsync", placeId, players, nil, data)
+                    return ""
+                end,
+                ReserveServer = function()
+                    local code = reserve()
+                    return code, code
+                end,
+                ReserveServerAsync = function()
+                    local code = reserve()
+                    return code, code
+                end,
+                GetLocalPlayerTeleportData = function()
+                    return localData()
+                end,
+            }"#,
+        )
+        .set_name("=TeleportService")
+        .call((queue, reserve, local))?;
+    for pair in methods.pairs::<String, Function>() {
+        let (name, f) = pair?;
+        t.set(name, f)?;
+    }
+    Ok(())
+}
+
 fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
     let t = lua.create_table()?;
     t.set(NAME, name)?;
@@ -1168,14 +1277,7 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
             }
         }
         BADGE_SERVICE => badge_service(lua, &t)?,
-        TELEPORT_SERVICE => {
-            for go in [TELEPORT, TELEPORT_ASYNC, TELEPORT_TO_PLACE_INSTANCE] {
-                method(lua, &t, go, move |lua, _: MultiValue| {
-                    warn(lua, format!("{TELEPORT_SERVICE}.{go} {NOT_AVAILABLE}"));
-                    Ok(())
-                })?;
-            }
-        }
+        TELEPORT_SERVICE => teleport_service(lua, &t)?,
         SOUND_SERVICE => {
             method(lua, &t, PLAY_LOCAL_SOUND, |_, sound: Value| {
                 if let Value::UserData(ud) = sound {

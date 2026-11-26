@@ -680,6 +680,7 @@ impl Menu {
         if let Some(picked) = platform.catalog_ui(ui, look.item.as_deref()) {
             look.item = picked.map(std::sync::Arc::new);
         }
+        platform.clothes_ui(ui, &mut look);
         if let Some(why) = &platform.look_error {
             ui.add_space(8.0);
             crate::report::error(ui, &tf("Your avatar was not saved: {error}", &[("error", why)]));

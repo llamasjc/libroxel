@@ -35,6 +35,56 @@ pub fn set_local_player_name(name: Option<&str>) {
     LOCAL_NAME.with(|local| *local.borrow_mut() = name);
 }
 
+thread_local! {
+    static JOIN_DATA: std::cell::RefCell<Option<playlibre_instance::serde_json::Value>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+thread_local! {
+    static NEXT_IDENTITY: std::cell::RefCell<Option<playlibre_script::GameIdentity>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Which game, place and server the next session this thread starts is,
+/// for `game.PlaceId` and the like in its scripts from the very start. It
+/// is used once.
+pub fn set_next_game_identity(identity: Option<playlibre_script::GameIdentity>) {
+    NEXT_IDENTITY.with(|n| *n.borrow_mut() = identity);
+}
+
+/// What the next game this thread joins is told this player arrives with,
+/// after a teleport: `{"from": <place id>, "data": <teleport data>}`. It is
+/// used once.
+pub fn set_next_join_data(join: Option<playlibre_instance::serde_json::Value>) {
+    JOIN_DATA.with(|j| *j.borrow_mut() = join);
+}
+
+pub(crate) fn take_next_join_data() -> Option<playlibre_instance::serde_json::Value> {
+    JOIN_DATA.with(|j| j.borrow_mut().take())
+}
+
+/// A player's `UserId` from their proved key: the same on every server, so
+/// saved data (kept by `UserId`) follows them from one server to the next.
+/// Always above the ones counted out to players without a proved key.
+pub fn user_id_for_key(player_id: &str) -> i64 {
+    // FNV-1a: stable across builds and computers.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in player_id.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    // Under 2^53, so a Luau number holds it exactly.
+    1_000_000_000 + (hash % (1 << 52)) as i64
+}
+
+/// The join data a teleported player brought, as scripts see it.
+pub(crate) fn join_data_of(join: &playlibre_instance::serde_json::Value) -> playlibre_script::JoinData {
+    playlibre_script::JoinData {
+        source_place_id: join.get("from").and_then(|f| f.as_i64()).unwrap_or(0),
+        data: join.get("data").filter(|d| !d.is_null()).cloned(),
+    }
+}
+
 /// Who this computer's player is in a session started now.
 pub fn local_player_name() -> String {
     LOCAL_NAME.with(|local| local.borrow().clone()).unwrap_or_else(|| LOCAL_PLAYER_NAME.to_owned())
@@ -303,6 +353,8 @@ pub struct PlaySession {
     pub(crate) host_asks: Vec<playlibre_instance::serde_json::Value>,
     /// What players answered the host (see [`PlaySession::take_player_answers`]).
     pub(crate) player_answers: Vec<(InstanceId, playlibre_instance::serde_json::Value)>,
+    /// `game.PlaceId`: where teleports say players came from.
+    pub(crate) place_id: i64,
 }
 
 impl PlaySession {
@@ -353,6 +405,7 @@ impl PlaySession {
             chat: Default::default(),
             host_asks: Vec::new(),
             player_answers: Vec::new(),
+            place_id: 0,
         };
         // Scripts find the camera through the workspace, so it exists from the start.
         session.camera = {
@@ -388,6 +441,9 @@ impl PlaySession {
                 text: format!("Saved data could not be read, starting fresh: {err}"),
             });
         }
+        if let Some(who) = NEXT_IDENTITY.with(|n| n.borrow_mut().take()) {
+            session.set_game_identity(who);
+        }
         let errors = session.runtime.run_tree_scripts();
         session.collect(errors);
         if with_character {
@@ -399,9 +455,20 @@ impl PlaySession {
     /// Adds a player called `name` (made unique): their player object, GUI
     /// container and backpack, a team, the join event, then their character.
     pub(crate) fn add_player(&mut self, name: &str, remote: bool) -> InstanceId {
-        let tree = self.runtime.tree().clone();
-        let user_id = self.next_user_id;
+        let user_id = self.next_user_id();
+        self.add_player_as(name, remote, user_id)
+    }
+
+    /// The `UserId` the next player without a proved key gets.
+    pub(crate) fn next_user_id(&mut self) -> i64 {
+        let id = self.next_user_id;
         self.next_user_id += 1;
+        i64::from(id)
+    }
+
+    /// [`add_player`](Self::add_player) with a `UserId` of their own.
+    pub(crate) fn add_player_as(&mut self, name: &str, remote: bool, user_id: i64) -> InstanceId {
+        let tree = self.runtime.tree().clone();
         let player = {
             let mut t = tree.borrow_mut();
             let players = t.service(ClassKind::Players).expect("every tree has a players service");
@@ -414,8 +481,7 @@ impl PlaySession {
             }
             let player = t.create(ClassKind::Player, unique).expect("players can be created");
             t.set_parent(player, Some(players)).expect("fresh players can be parented");
-            t.set(player, Property::UserId, PropertyValue::Number(f64::from(user_id)))
-                .expect("players have ids");
+            t.set(player, Property::UserId, PropertyValue::Number(user_id as f64)).expect("players have ids");
             player
         };
         let mut avatar = Avatar::new(player, remote);
@@ -1434,13 +1500,45 @@ impl PlaySession {
     pub fn step(&mut self, dt: f32, input: CharacterInput) {
         self.tidy();
         match self.runtime.net_role() {
-            NetRole::Client => return self.client_step(dt, input),
+            NetRole::Client => {
+                self.client_step(dt, input);
+                return self.send_teleports();
+            }
             NetRole::Server => self.serve_incoming(),
             NetRole::Solo => {}
         }
         self.simulate(dt, input);
+        self.send_teleports();
         if self.runtime.net_role() == NetRole::Server {
             self.serve_outgoing();
+        }
+    }
+
+    /// Which game, place and server this is, for `game.PlaceId` and the like.
+    pub fn set_game_identity(&mut self, identity: playlibre_script::GameIdentity) {
+        self.place_id = identity.place_id;
+        self.runtime.set_game_identity(identity);
+    }
+
+    /// Sends the teleports scripts asked for to the players' computers, as
+    /// `{"kind": "teleport", "place_id", "access_code", "data", "from"}`
+    /// (see [`take_host_asks`](Self::take_host_asks)): the app there asks
+    /// the Hub for that place's server and joins it.
+    fn send_teleports(&mut self) {
+        for go in self.runtime.take_teleports() {
+            let ask = playlibre_instance::serde_json::json!({
+                "kind": "teleport",
+                "place_id": go.place_id,
+                "access_code": go.access_code,
+                "data": go.data,
+                "from": self.place_id,
+            });
+            if self.runtime.net_role() == NetRole::Client {
+                // A LocalScript sending this computer's player.
+                self.host_asks.push(ask);
+            } else if let Some(player) = self.player_with_user_id(go.user_id) {
+                self.ask_player(player, ask);
+            }
         }
     }
 

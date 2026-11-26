@@ -66,6 +66,47 @@ pub(crate) struct WorldState {
     pub(crate) swings: Vec<InstanceId>,
     pub(crate) badges: Badges,
     pub(crate) passes: Passes,
+    pub(crate) teleports: Teleports,
+}
+
+/// Which game, place and server this is: `game.GameId`, `game.PlaceId`,
+/// `game.JobId`, `game.PrivateServerId` and `game.PrivateServerOwnerId`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GameIdentity {
+    pub game_id: i64,
+    pub place_id: i64,
+    pub job_id: String,
+    /// The server's own code on a private or reserved server.
+    pub private_server_id: String,
+    /// The owner's user id on a private server (0 on a reserved one).
+    pub private_server_owner_id: i64,
+}
+
+/// A teleport a script asked for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Teleport {
+    pub user_id: i64,
+    pub place_id: i64,
+    /// A reserved or private server's code.
+    pub access_code: Option<String>,
+    /// What `GetJoinData().TeleportData` gives there.
+    pub data: Option<serde_json::Value>,
+}
+
+/// What a player arrived with: the place they came from and its data.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct JoinData {
+    pub source_place_id: i64,
+    pub data: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct Teleports {
+    pub(crate) identity: GameIdentity,
+    pub(crate) queued: Vec<Teleport>,
+    pub(crate) joins: HashMap<i64, JoinData>,
+    /// On a player's computer: what they arrived with.
+    pub(crate) local: JoinData,
 }
 
 /// A game pass the game sells, as the Hub describes it.

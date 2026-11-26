@@ -1752,8 +1752,8 @@ add(methods, "Player", {
 	end,
 	ClearCharacterAppearance = function() end,
 	RequestStreamAroundAsync = function() end,
-	GetJoinData = function()
-		return {}
+	GetJoinData = function(self)
+		return L.join_data(self.UserId)
 	end,
 	GetFriendStatus = function()
 		return Enum.FriendStatus.NotFriend
@@ -2915,13 +2915,10 @@ local SERVICE_EXTRAS = {
 	TeleportService = {
 		signals = { "TeleportInitFailed", "LocalPlayerArrivedFromTeleport" },
 		methods = {
-			GetLocalPlayerTeleportData = NOOP,
 			GetArrivingTeleportGui = NOOP,
 			SetTeleportGui = NOOP,
 			GetTeleportSetting = NOOP,
 			SetTeleportSetting = NOOP,
-			ReserveServer = returns("", ""),
-			TeleportPartyAsync = NOOP,
 		},
 	},
 	ContentProvider = {

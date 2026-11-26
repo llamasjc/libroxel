@@ -468,3 +468,49 @@ fn game_passes_come_from_the_host_and_prompts_wait_for_the_player() {
     play(&rt, 0.1);
     assert_eq!(printed(&rt), ["finished true 12 true true"]);
 }
+
+#[test]
+fn teleports_wait_for_the_host_and_places_know_who_they_are() {
+    use playlibre_instance::{Property, PropertyValue};
+    let rt = runtime();
+    {
+        let mut tree = rt.tree().borrow_mut();
+        let players = tree.service(ClassKind::Players).unwrap();
+        let player = tree.create(ClassKind::Player, "Sam").unwrap();
+        tree.set(player, Property::UserId, PropertyValue::Number(7.0)).unwrap();
+        tree.set_parent(player, Some(players)).unwrap();
+    }
+    rt.set_game_identity(playlibre_script::GameIdentity {
+        game_id: 3,
+        place_id: 40,
+        job_id: "job".into(),
+        private_server_id: "abc".into(),
+        private_server_owner_id: 9,
+    });
+    rt.set_join_data(
+        7,
+        playlibre_script::JoinData { source_place_id: 41, data: Some(serde_json::json!({ "coins": 5 })) },
+    );
+    run(
+        &rt,
+        r#"
+        local TeleportService = game:GetService("TeleportService")
+        local player = game:GetService("Players"):GetPlayers()[1]
+        print(game.GameId, game.PlaceId, game.JobId, game.PrivateServerId, game.PrivateServerOwnerId)
+        local join = player:GetJoinData()
+        print(join.SourcePlaceId, join.TeleportData.coins)
+        local code, id = TeleportService:ReserveServer(41)
+        print(#code, code == id)
+        TeleportService:TeleportToPrivateServer(41, code, { player }, nil, { level = 2 })
+        TeleportService:Teleport(40, player)
+    "#,
+    );
+    assert_eq!(printed(&rt)[..2], ["3 40 job abc 9".to_owned(), "41 5".to_owned()]);
+    let sent = rt.take_teleports();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[0].user_id, 7);
+    assert_eq!(sent[0].place_id, 41);
+    assert_eq!(sent[0].access_code.as_ref().map(String::len), Some(32));
+    assert_eq!(sent[0].data, Some(serde_json::json!({ "level": 2 })));
+    assert_eq!((sent[1].place_id, sent[1].access_code.clone()), (40, None));
+}

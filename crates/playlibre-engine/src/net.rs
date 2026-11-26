@@ -2063,10 +2063,18 @@ impl PlaySession {
             .map_err(|e| format!("could not reach the host: {e}"))?;
         let reached = began.elapsed().as_secs_f64();
         let mut conn = Conn::new(stream, Side::Joining).map_err(|e| e.to_string())?;
-        conn.send(&json!({ "t": "hello", "name": name, "version": PROTOCOL, "ka": true }));
+        let join = crate::session::take_next_join_data();
+        let mut hello = json!({ "t": "hello", "name": name, "version": PROTOCOL, "ka": true });
+        if let Some(join) = &join {
+            hello["join"] = join.clone();
+        }
+        conn.send(&hello);
         conn.flush();
         *tree.borrow_mut() = InstanceTree::new();
         let mut session = Self::empty(tree, NetRole::Client)?;
+        if let Some(join) = &join {
+            session.runtime.set_local_join_data(crate::session::join_data_of(join));
+        }
         session.link = Link::Client(Box::new(Joined {
             conn,
             ids: HashMap::new(),
@@ -2486,7 +2494,15 @@ impl PlaySession {
                         }
                         peer.asked = name.clone();
                         peer.conn.keeps_alive = message.get("ka").and_then(Json::as_bool) == Some(true);
-                        let player = self.add_player(&name, true);
+                        // Players with a proved key keep their UserId from server to server.
+                        let user_id = match &peer.account {
+                            Some(account) => crate::session::user_id_for_key(account),
+                            None => self.next_user_id(),
+                        };
+                        if let Some(join) = message.get("join").filter(|j| j.to_string().len() <= 80 * 1024) {
+                            self.runtime.set_join_data(user_id, crate::session::join_data_of(join));
+                        }
+                        let player = self.add_player_as(&name, true, user_id);
                         peer.player = Some(player);
                         let shown = tree.borrow().name(player).unwrap_or("A player").to_owned();
                         match peer.conn.safety_code() {

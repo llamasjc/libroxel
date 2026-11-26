@@ -70,6 +70,8 @@ pub struct Social {
     /// The game the home screen last started, so hosting lists it under
     /// that game.
     pub next_game: Option<GameRef>,
+    /// The game a teleport is joining a server of (one that isn't listed).
+    pub teleporting: Option<GameRef>,
     /// This player's server id while they host.
     pub hosting: Option<String>,
     /// The listed server this player joined, while they are in it.
@@ -439,8 +441,11 @@ impl Platform {
                     .chain(party)
                     .find(|s| s.code.trim() == code)
                     .cloned();
-                self.social.next_game =
-                    listed.as_ref().map(|s| GameRef { title: s.game.clone(), game_id: s.game_id.clone() });
+                let teleporting = self.social.teleporting.take();
+                self.social.next_game = listed
+                    .as_ref()
+                    .map(|s| GameRef { title: s.game.clone(), game_id: s.game_id.clone() })
+                    .or(teleporting);
                 self.social.joined = listed;
             }
             Pick::Browse => {}

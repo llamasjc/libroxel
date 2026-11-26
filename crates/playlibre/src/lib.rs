@@ -52,6 +52,7 @@ mod smoke;
 mod social;
 mod starter_games;
 mod stats;
+mod teleport;
 mod templates;
 mod terrain_tools;
 mod text_chat;

@@ -9,8 +9,8 @@ use playlibre_script::names::character as names;
 
 use crate::physics::Physics;
 pub use playlibre_avatar::{
-    ARM_SIZE, ARM_TOP, Avatar, BodyColors, CustomHat, EYE_AT, EYE_SIZE, HEAD_AT, HEAD_SIZE, HIP, Hat,
-    HatPart, HatPiece, LEG_SIZE, Look, NECK, SHOULDER, TORSO_AT, TORSO_SIZE, avatar, color,
+    ARM_SIZE, ARM_TOP, Avatar, BodyColors, Clothing, CustomHat, EYE_AT, EYE_SIZE, HEAD_AT, HEAD_SIZE, HIP,
+    Hat, HatPart, HatPiece, LEG_SIZE, Look, NECK, SHOULDER, TORSO_AT, TORSO_SIZE, Worn, avatar, color,
 };
 
 /// The size of the character's collision box.
@@ -132,19 +132,31 @@ pub fn wear_custom_hat(tree: &mut InstanceTree, model: InstanceId, hat: &CustomH
     Some(accessory)
 }
 
-/// Gives `model` a body colours object holding `colors`.
-fn add_body_colors(tree: &mut InstanceTree, model: InstanceId, colors: BodyColors) {
+/// Gives `model` a body colours object holding `look`'s colours with its
+/// clothes on, and a `Shirt` and `Pants` for the catalog clothes it wears
+/// (which scripts look for).
+fn add_body_colors(tree: &mut InstanceTree, model: InstanceId, look: &Look) {
+    let colors = look.worn();
     let Ok(id) = tree.create(ClassKind::BodyColors, names::BODY_COLORS) else { return };
     let _ = tree.set_parent(id, Some(model));
     for (property, color) in [
         (Property::HeadColor, colors.skin),
-        (Property::LeftArmColor, colors.skin),
-        (Property::RightArmColor, colors.skin),
-        (Property::TorsoColor, colors.shirt),
-        (Property::LeftLegColor, colors.pants),
-        (Property::RightLegColor, colors.pants),
+        (Property::LeftArmColor, colors.arms),
+        (Property::RightArmColor, colors.arms),
+        (Property::TorsoColor, colors.torso),
+        (Property::LeftLegColor, colors.legs),
+        (Property::RightLegColor, colors.legs),
     ] {
         set(tree, id, property, PropertyValue::Color3(color));
+    }
+    for (class, name, worn) in
+        [(ClassKind::Shirt, "Shirt", &look.shirt), (ClassKind::Pants, "Pants", &look.pants)]
+    {
+        if worn.is_some()
+            && let Ok(clothes) = tree.create(class, name)
+        {
+            let _ = tree.set_parent(clothes, Some(model));
+        }
     }
 }
 
@@ -249,7 +261,7 @@ pub struct Pose {
 
 /// Adds a head and limbs to `model`, coloured `colors`. Returns the head
 /// and the limbs; place them with [`pose_rig`].
-pub fn build_rig(tree: &mut InstanceTree, model: InstanceId, colors: BodyColors) -> (InstanceId, Limbs) {
+pub fn build_rig(tree: &mut InstanceTree, model: InstanceId, colors: Worn) -> (InstanceId, Limbs) {
     use part_names::*;
     let mut make = |name: &str, size: Vec3, color: Color3| {
         let id = tree.create(ClassKind::Part, name).expect("parts can be created");
@@ -263,11 +275,11 @@ pub fn build_rig(tree: &mut InstanceTree, model: InstanceId, colors: BodyColors)
     let head = make(HEAD, HEAD_SIZE, colors.skin);
     let dark = color(playlibre_avatar::EYE_COLOR);
     let limbs = Limbs {
-        torso: make(TORSO, TORSO_SIZE, colors.shirt),
-        left_arm: make(LEFT_ARM, ARM_SIZE, colors.skin),
-        right_arm: make(RIGHT_ARM, ARM_SIZE, colors.skin),
-        left_leg: make(LEFT_LEG, LEG_SIZE, colors.pants),
-        right_leg: make(RIGHT_LEG, LEG_SIZE, colors.pants),
+        torso: make(TORSO, TORSO_SIZE, colors.torso),
+        left_arm: make(LEFT_ARM, ARM_SIZE, colors.arms),
+        right_arm: make(RIGHT_ARM, ARM_SIZE, colors.arms),
+        left_leg: make(LEFT_LEG, LEG_SIZE, colors.legs),
+        right_leg: make(RIGHT_LEG, LEG_SIZE, colors.legs),
         left_eye: make(LEFT_EYE, EYE_SIZE, dark),
         right_eye: make(RIGHT_EYE, EYE_SIZE, dark),
     };
@@ -613,7 +625,7 @@ impl Character {
     /// Like [`spawn_dressed`](Self::spawn_dressed), looking like `look`:
     /// coloured by a body colours object, wearing its hat.
     pub fn spawn_wearing(tree: &mut InstanceTree, name: &str, team: Option<Color3>, look: Look) -> Character {
-        let colors = look.colors;
+        let colors = look.worn();
         let at = spawn_point_for(tree, team);
         let ws = tree.workspace();
         let make = |tree: &mut InstanceTree, class, name: &str, parent| {
@@ -650,7 +662,7 @@ impl Character {
                 }
             }
         }
-        add_body_colors(tree, model, colors);
+        add_body_colors(tree, model, &look);
         wear(tree, model, &look);
         let character = Character { model, root, head, humanoid, limbs };
         character.pose(tree, Pose::default());
@@ -661,11 +673,14 @@ impl Character {
     pub fn restyle(&self, tree: &mut InstanceTree, look: Look) {
         let children = tree.children(self.model).map(<[InstanceId]>::to_vec).unwrap_or_default();
         for child in children {
-            if matches!(tree.class(child), Ok(ClassKind::BodyColors | ClassKind::Accessory)) {
+            if matches!(
+                tree.class(child),
+                Ok(ClassKind::BodyColors | ClassKind::Accessory | ClassKind::Shirt | ClassKind::Pants)
+            ) {
                 let _ = tree.destroy(child);
             }
         }
-        add_body_colors(tree, self.model, look.colors);
+        add_body_colors(tree, self.model, &look);
         wear(tree, self.model, &look);
         self.pose(tree, Pose::default());
     }

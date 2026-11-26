@@ -93,6 +93,10 @@ pub use follows::{
     FollowChange, FollowKind, Following, MAX_FOLLOWS, Notification, Notifications, NotificationsSeen,
     follow_message, follows_message, notifications_message, notifications_seen_message,
 };
+pub use places::{
+    MAX_PLACES, MAX_PRIVATE_SERVERS, PlaceChange, PlaceInfo, PrivateAction, PrivateServer,
+    PrivateServerChange, place_download_id, place_message, private_server_message, private_servers_message,
+};
 mod groups;
 pub use groups::{
     GROUP_COLORS, GroupAction, GroupBadge, GroupChange, GroupChanged, GroupInfo, GroupJoin, GroupMember,
@@ -133,6 +137,7 @@ pub use parties::{
 };
 mod password;
 mod pictures;
+mod places;
 mod ratings;
 mod recovery;
 pub use recovery::{
@@ -577,7 +582,7 @@ pub struct NewItem {
     /// Who made it: items always belong to someone.
     pub creator_id: String,
     pub name: String,
-    /// What kind of thing it is; only "hat" for now.
+    /// What kind of thing it is: "hat", "shirt" or "pants" (trousers).
     pub kind: String,
     /// The item itself, as the app saves it.
     pub data: serde_json::Value,
@@ -1015,6 +1020,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     data::create_tables(&db)?;
     media::create_tables(&db)?;
     follows::create_tables(&db)?;
+    places::create_tables(&db)?;
     // Hubs from before game numbers: number every game there is.
     number_games(&db).map_err(|e| format!("could not number the Hub's games: {e}"))?;
     seal::install(&db, path)?;
@@ -1098,6 +1104,8 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         tower_http::decompression::RequestDecompressionLayer::new(),
         axum::extract::DefaultBodyLimit::max(MAX_PLACE * 2 + 64 * 1024),
     );
+    let more_places = big.clone();
+    let squeezed = tower_http::compression::CompressionLayer::new();
     let shared = axum::extract::DefaultBodyLimit::max(MAX_MODEL * 3);
     let pictures = axum::extract::DefaultBodyLimit::max(media::MAX_UPLOAD * 2);
     let saved = (
@@ -1172,6 +1180,11 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/followers/{kind}/{target}", get(follows::get_followers))
         .route("/notifications/{id}", get(follows::get_notifications))
         .route("/notifications/seen", post(follows::notifications_seen))
+        .route("/games/{id}/places", get(places::list_places).post(places::change_place).layer(more_places))
+        .route("/places/{id}", get(places::place_info))
+        .route("/places/{id}/place", get(places::download_place).layer(squeezed))
+        .route("/private-servers", post(places::change_private_server))
+        .route("/private-servers/{id}", get(places::list_private_servers))
         .route("/passes/buy", post(earnings::buy_pass))
         .route("/passes/{id}/owners/{player}", get(earnings::owns))
         .route("/reports", post(report))
@@ -1386,7 +1399,7 @@ const DOWNLOAD_SIGNED_FOR: i64 = 300;
 // every signed message, keep the app's name from before the rename to
 // PlayLibre: copies from before it send them, and signatures cover them.
 
-fn download_signer(headers: &HeaderMap, game_id: &str) -> Option<String> {
+pub(crate) fn download_signer(headers: &HeaderMap, game_id: &str) -> Option<String> {
     let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
     let player_id = header("x-libroxel-player")?;
     let time: i64 = header("x-libroxel-time")?.parse().ok()?;
@@ -1671,6 +1684,22 @@ fn save_account(
     }
 }
 
+/// What the catalog sells: hats, and shirts and trousers ("pants").
+pub const ITEM_KINDS: [&str; 3] = ["hat", "shirt", "pants"];
+
+/// Whether `data` is a shirt or trousers: `{"name", "color": [r, g, b], "sleeves"}`.
+fn is_clothing(data: &serde_json::Value) -> bool {
+    let color = data
+        .get("color")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|c| c.len() == 3 && c.iter().all(|n| n.as_u64().is_some_and(|n| n <= 255)));
+    let sleeves = data.get("sleeves").is_none_or(serde_json::Value::is_boolean);
+    let only_these = data
+        .as_object()
+        .is_some_and(|o| o.keys().all(|k| ["name", "color", "sleeves"].contains(&k.as_str())));
+    color && sleeves && only_these
+}
+
 async fn share_item(
     State(db): State<Db>,
     State(limits): State<Arc<Limits>>,
@@ -1681,16 +1710,24 @@ async fn share_item(
         return Err(too_many("games and items shared"));
     }
     let bad = |why: &str| Err((StatusCode::BAD_REQUEST, why.to_owned()));
-    if item.kind != "hat" {
-        return bad("the catalog only takes hats for now");
+    if !ITEM_KINDS.contains(&item.kind.as_str()) {
+        return bad("the catalog takes hats, shirts and trousers");
     }
     let name = clip(&item.name);
     if name.is_empty() || name != item.name {
         return bad("an item needs a name, without spaces at the ends");
     }
     let data = item.data.to_string();
-    if data.len() > MAX_ITEM || !item.data.get("parts").is_some_and(serde_json::Value::is_array) {
-        return bad("that is not a hat the catalog can take");
+    let fits = match item.kind.as_str() {
+        "hat" => item.data.get("parts").is_some_and(serde_json::Value::is_array),
+        _ => is_clothing(&item.data),
+    };
+    if data.len() > MAX_ITEM || !fits {
+        return bad(if item.kind == "hat" {
+            "that is not a hat the catalog can take"
+        } else {
+            "clothes need a colour, as [red, green, blue] from 0 to 255"
+        });
     }
     if !verify(
         &item.creator_id,
@@ -2102,6 +2139,7 @@ fn server_list(db: &Connection, query: ListQuery) -> Vec<ServerInfo> {
         .prepare(&format!(
             "SELECT {SERVER_COLUMNS} FROM servers
              WHERE (name LIKE ?1 OR game LIKE ?1) AND (?2 IS NULL OR game_id = ?2) AND last_seen >= ?3
+               AND NOT EXISTS (SELECT 1 FROM fleet f WHERE f.server_id = servers.server_id AND f.game_id LIKE '%@%')
              ORDER BY kind ASC, players DESC, first_seen ASC LIMIT 200"
         ))
         .expect("the list query is valid");
@@ -2200,17 +2238,23 @@ async fn play(
     Json(request): Json<PlayRequest>,
 ) -> Result<Json<PlayAnswer>, (StatusCode, String)> {
     let db = db.lock().unwrap();
-    if let (Some(id), Some(signature)) = (&request.player_id, &request.signature)
-        && verify(id, &play_message(id, &request.ticket), signature)
-        && let Some(why) = family::playtime_up(&db, id)
-    {
+    let who = match (&request.player_id, &request.signature) {
+        (Some(id), Some(signature)) if verify(id, &play_message(id, &request.ticket), signature) => {
+            Some(id.as_str())
+        }
+        _ => None,
+    };
+    if let Some(why) = who.and_then(|id| family::playtime_up(&db, id)) {
         return Err((StatusCode::FORBIDDEN, why));
     }
     let Some(fleet) = fleet else {
         return Err((StatusCode::NOT_FOUND, "this Hub doesn't run game servers".into()));
     };
-    fleet.play(&db, &request).map(Json).map_err(|e| match e {
+    fleet.play(&db, &request, who).map(Json).map_err(|e| match e {
         fleet::PlayError::BadRequest(why) => (StatusCode::BAD_REQUEST, why.to_owned()),
+        fleet::PlayError::NotAllowed => {
+            (StatusCode::FORBIDDEN, "only its owner and their friends play on that private server".into())
+        }
         fleet::PlayError::UnknownGame => (StatusCode::NOT_FOUND, "the Hub doesn't know that game".into()),
         fleet::PlayError::Busy => {
             (StatusCode::SERVICE_UNAVAILABLE, "every game server is busy; try again in a minute".into())
@@ -2518,7 +2562,17 @@ impl HubClient {
 
     /// A published game's saved place.
     pub fn download(&self, game_id: &str, proof: Option<&DownloadProof>) -> Result<String, String> {
-        let mut request = self.slow.get(format!("{}/games/{game_id}/place", self.base));
+        self.download_from(&format!("{}/games/{game_id}/place", self.base), proof)
+    }
+
+    /// One of a game's places, for its creator and the Hub's servers; the
+    /// proof is made for [`place_download_id`].
+    pub fn download_place(&self, place_id: i64, proof: Option<&DownloadProof>) -> Result<String, String> {
+        self.download_from(&format!("{}/places/{place_id}/place", self.base), proof)
+    }
+
+    fn download_from(&self, url: &str, proof: Option<&DownloadProof>) -> Result<String, String> {
+        let mut request = self.slow.get(url);
         if let Some(proof) = proof {
             request = request
                 .header("x-libroxel-player", &proof.player_id)
@@ -2946,6 +3000,49 @@ impl HubClient {
     }
 
     /// Puts up (or takes down) a game's icon or a screenshot.
+    /// A game's places, its start place first.
+    pub fn places(&self, game_id: &str) -> Result<Vec<PlaceInfo>, String> {
+        self.agent
+            .get(format!("{}/games/{game_id}/places", self.base))
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn place(&self, place_id: i64) -> Result<PlaceInfo, String> {
+        self.agent
+            .get(format!("{}/places/{place_id}", self.base))
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Adds, changes or removes one of a game's places.
+    pub fn change_place(&self, game_id: &str, change: &PlaceChange) -> Result<Vec<PlaceInfo>, String> {
+        self.post_signed(&format!("/games/{game_id}/places"), change)
+    }
+
+    /// Makes or removes a private server; answers the player's private
+    /// servers (and their friends').
+    pub fn change_private_server(&self, change: &PrivateServerChange) -> Result<Vec<PrivateServer>, String> {
+        self.post_signed("/private-servers", change)
+    }
+
+    pub fn private_servers(
+        &self,
+        player_id: &str,
+        time: i64,
+        signature: &str,
+    ) -> Result<Vec<PrivateServer>, String> {
+        self.agent
+            .get(format!("{}/private-servers/{player_id}", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| e.to_string())
+    }
+
     pub fn change_media(&self, game_id: &str, change: &MediaChange) -> Result<Vec<MediaRef>, String> {
         self.post_signed(&format!("/games/{game_id}/media"), change)
     }

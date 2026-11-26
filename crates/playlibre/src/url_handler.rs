@@ -18,6 +18,11 @@ pub enum Launch {
     Join(String),
     Play(String),
     Host(String),
+    /// A private server: the game and the server's code.
+    Private {
+        game: String,
+        code: String,
+    },
 }
 
 /// A link waiting for the home screen, with when it came.
@@ -61,6 +66,10 @@ pub fn parse(link: &str) -> Option<Launch> {
         "join" => Some(Launch::Join(value.to_owned())),
         "play" => Some(Launch::Play(value.to_owned())),
         "host" => Some(Launch::Host(value.to_owned())),
+        "private" => {
+            let (game, code) = value.rsplit_once(':')?;
+            Some(Launch::Private { game: game.to_owned(), code: code.to_owned() })
+        }
         _ => None,
     }
 }
@@ -185,6 +194,10 @@ mod tests {
             Some(Launch::Play("starter:Kart race".into()))
         );
         assert_eq!(parse("playlibre://host/x7k2q"), Some(Launch::Host("x7k2q".into())));
+        assert_eq!(
+            parse("playlibre://private/x7k2q%3Aabc"),
+            Some(Launch::Private { game: "x7k2q".into(), code: "abc".into() })
+        );
         assert_eq!(parse("playlibre:join/a%2Fb"), Some(Launch::Join("a/b".into())));
         assert_eq!(parse("playlibre://join/caf%C3%A9"), Some(Launch::Join("café".into())));
     }

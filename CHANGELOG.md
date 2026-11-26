@@ -14,6 +14,37 @@ its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
   shows the pass with its price and buys it with the player's Credits,
   `UserOwnsGamePassAsync` answers from the Hub, and `GetProductInfo` with
   `Enum.InfoType.GamePass` gives the pass's name and price.
+- **Game icons and screenshots:** creators put up an icon and up to six
+  screenshots on their game's Settings page on the website. They show on
+  the game's page, in lists and in the app. The Hub draws every picture
+  again at a set size before keeping it.
+- **Genres and tags:** creators pick their game's genre and up to five
+  tags. A game's page links to other games with the same genre or tag,
+  and Search finds games by their tags.
+- **Following and notifications:** follow a game to hear when it is
+  updated, and a creator to hear about their new games. The bell at the
+  top of the website lists friend requests, messages, group invites,
+  badges, sales and news from what you follow.
+- **Games with more than one place:** creators add more places to a game
+  (a lobby and its levels, say) on its Settings page. Scripts send
+  players between them with `TeleportService` (`Teleport`,
+  `TeleportAsync`, `TeleportToPrivateServer`, `TeleportPartyAsync`,
+  `ReserveServer`), with teleport data that `Player:GetJoinData()` and
+  `GetLocalPlayerTeleportData` give back there. `game.PlaceId`,
+  `game.GameId`, `game.JobId`, `game.PrivateServerId` and
+  `game.PrivateServerOwnerId` say where a script is. Every place shares
+  the game's saved data.
+- **Private servers:** make a server of a game for you and your friends
+  from its page on the website. Only you and your friends can join it,
+  and it isn't on the server list. Reserved servers from `ReserveServer`
+  only take the players a script sends there.
+- **Saved data follows you:** a player's `UserId` comes from their key, so
+  it is the same on every server of a game and their saved data finds
+  them.
+- **Clothes:** Hat-Makers add shirts (short or long-sleeved) and trousers
+  to the catalog from the Avatar page on the website. Players wear them in
+  the app and on the website, and characters wearing them have a `Shirt`
+  or `Pants` in them.
 
 ## 0.1.20 (2026-11-26)
 

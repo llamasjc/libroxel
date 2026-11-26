@@ -86,6 +86,24 @@ pub(crate) fn install(lua: &Lua, enum_lib: &Table) -> mlua::Result<()> {
             crate::compat::set_custom_physical(lua, &part, &value)
         })?,
     )?;
+    // Player:GetJoinData(): the place a player came from, and its teleport data.
+    layer.set(
+        "join_data",
+        lua.create_function(|lua, user: Option<f64>| {
+            let joined = user.and_then(|u| {
+                crate::bindings::host(lua).world.borrow().teleports.joins.get(&(u as i64)).cloned()
+            });
+            let t = lua.create_table()?;
+            if let Some(j) = joined {
+                t.set("SourcePlaceId", j.source_place_id)?;
+                if let Some(d) = &j.data {
+                    t.set("TeleportData", crate::services::from_json(lua, d)?)?;
+                }
+                t.set("Members", lua.create_table()?)?;
+            }
+            Ok(t)
+        })?,
+    )?;
     // The phone's vibration motor, for HapticService.
     layer.set(
         "can_vibrate",

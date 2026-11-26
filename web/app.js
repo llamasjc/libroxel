@@ -204,7 +204,7 @@ async function api(path, { method = 'GET', body, query } = {}) {
 
 const SESSION_KEY = 'playlibre.session';
 let session = loadSession();
-let lastSigned = { friends: 0, party: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0, wallet: 0, badge: 0, media: 0, follow: 0, server: 0, notes: 0 };
+let lastSigned = { friends: 0, party: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0, wallet: 0, badge: 0, media: 0, follow: 0, server: 0, notes: 0, place: 0, privateServer: 0 };
 
 function loadSession() {
   for (const store of [sessionStorage, localStorage]) {
@@ -752,6 +752,8 @@ function readLook(look, name, usual = usualLook(name)) {
     skin: colour('skin'), shirt: colour('shirt'), pants: colour('pants'), hat_color: colour('hat_color'),
     hat,
     item: look?.item === undefined ? usual.item : readItem(look.item) || undefined,
+    shirt_item: readClothing(look?.shirt_item) || undefined,
+    pants_item: readClothing(look?.pants_item) || undefined,
   };
 }
 
@@ -759,7 +761,16 @@ function readLook(look, name, usual = usualLook(name)) {
 function lookJson(l) {
   const out = { skin: l.skin, shirt: l.shirt, pants: l.pants, hat: l.hat, hat_color: l.hat_color };
   if (l.item) out.item = l.item.json;
+  if (l.shirt_item) out.shirt_item = l.shirt_item;
+  if (l.pants_item) out.pants_item = l.pants_item;
   return out;
+}
+
+/** A catalog shirt or trousers, if it fits (`Clothing::from_json`). */
+function readClothing(item) {
+  const c = item?.color;
+  if (!Array.isArray(c) || c.length !== 3 || !c.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) return null;
+  return { name: typeof item.name === 'string' ? [...item.name].slice(0, 40).join('') : 'Clothes', color: c, sleeves: item.sleeves === true };
 }
 
 const lookTag = (look) => (look ? `?v=${fnv(JSON.stringify(look)).toString(36)}` : '');
@@ -1252,7 +1263,7 @@ function game() {
       tags.map((t) => el('a', { class: 'chip soft-chip', href: `/search?tag=${encodeURIComponent(t)}` }, `#${t}`))));
   }
   if (hostable) out.push(ratingBar(entry), reportPanel('game', entry.key));
-  if (entry.game) out.push(passesPanel(entry));
+  if (entry.game) out.push(passesPanel(entry), privateServersPanel(entry));
 
   const hide = el('input', { type: 'checkbox', checked: view.hideFull });
   hide.addEventListener('change', () => { view.hideFull = hide.checked; render(); });
@@ -2609,9 +2620,69 @@ function avatar() {
         mine(item) ? priceField(item) : !owned(item) ? el('button', { class: 'chip go', onclick: () => buyItem(item) }, `Buy for ${item.price}`)
           : el('button', { class: 'chip', disabled: same(hat), onclick: () => { look.item = hat; api(`/catalog/${encodeURIComponent(item.item_id)}/wear`, { method: 'POST' }).catch(() => {}); changed(); } }, same(hat) ? 'Wearing' : 'Wear'))))
       : el('p', { class: 'soft' }, 'Nothing in the catalog yet.'),
+    clothesPanel(look, changed),
     el('div', { class: 'form-actions' }, save),
     draft.message && status(draft.message.text, draft.message.kind),
   ];
+}
+
+const clothesForm = { name: '', kind: 'shirt', color: '#2060c0', sleeves: false, busy: false };
+
+/** Shares a shirt or trousers to the catalog (Hat-Makers only, as hats). */
+async function shareClothes() {
+  const f = clothesForm;
+  const name = f.name.trim();
+  if (!name || f.busy) return;
+  f.busy = true;
+  render();
+  const data = { color: f.color.match(/[0-9a-f]{2}/gi).map((h) => parseInt(h, 16)), name };
+  if (f.kind === 'shirt') data.sleeves = f.sleeves;
+  // Keys in the order the Hub writes them, as the signature covers the text.
+  const time = Date.now();
+  const signature = signText(secretKey(), `libroxel item\n${session.playerId}\n${name}\n${f.kind}\n${JSON.stringify(data)}\n${time}`);
+  try {
+    await api('/catalog', { method: 'POST', body: { creator_id: session.playerId, name, kind: f.kind, data, time, signature } });
+    flash = { text: `${name} is in the catalog.` };
+    f.name = '';
+    catalog.at = 0;
+    loadCatalog();
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  f.busy = false;
+  render();
+}
+
+function clothesPanel(look, changed) {
+  const clothes = catalog.items.filter((i) => i.kind === 'shirt' || i.kind === 'pants').map((i) => [i, readClothing(i.data)]).filter(([, c]) => c);
+  const slot = (item) => (item.kind === 'shirt' ? 'shirt_item' : 'pants_item');
+  const same = (item, c) => JSON.stringify(look[slot(item)] || null) === JSON.stringify(c);
+  const owned = (item) => !item.price || item.creator_id === session.playerId || walletInfo?.owned?.includes(item.item_id);
+  const f = clothesForm;
+  const kind = pickFrom({ shirt: 'Shirt', pants: 'Trousers' }, f.kind);
+  kind.addEventListener('change', () => { f.kind = kind.value; render(); });
+  const colour = el('input', { type: 'color', class: 'swatch pick', value: f.color });
+  colour.addEventListener('change', () => { f.color = colour.value; });
+  const sleeves = el('input', { type: 'checkbox', checked: f.sleeves });
+  sleeves.addEventListener('change', () => { f.sleeves = sleeves.checked; });
+  return el('div', {},
+    el('h2', { class: 'section' }, 'Clothes'),
+    el('p', { class: 'note' }, 'Shirts and trousers in the catalog, worn over your colours.'),
+    [['shirt_item', 'shirt'], ['pants_item', 'trousers']].map(([key, label]) => look[key] && el('div', { class: 'form-actions' },
+      `Wearing ${look[key].name}`, el('button', { class: 'chip', onclick: () => { delete look[key]; changed(); } }, `Take off the ${label}`))),
+    clothes.length ? el('div', { class: 'catalog' }, clothes.map(([item, c]) => el('div', { class: 'item' },
+      el('b', {}, el('span', { class: 'swatch', style: `--c:${c.color.join(', ')};display:inline-block;width:14px;height:14px;vertical-align:middle;margin-right:6px` }), item.name),
+      el('small', {}, `${item.kind === 'shirt' ? (c.sleeves ? 'Long-sleeved shirt' : 'Shirt') : 'Trousers'} by ${item.creator} · worn ${item.wears}`),
+      !owned(item) ? el('button', { class: 'chip go', onclick: () => buyItem(item) }, `Buy for ${item.price}`)
+        : el('button', { class: 'chip', disabled: same(item, c), onclick: () => { look[slot(item)] = c; api(`/catalog/${encodeURIComponent(item.item_id)}/wear`, { method: 'POST' }).catch(() => {}); changed(); } }, same(item, c) ? 'Wearing' : 'Wear'))))
+      : el('p', { class: 'soft' }, 'No clothes in the catalog yet.'),
+    mayMakeItems() && el('div', { class: 'form manage' },
+      el('div', { class: 'caps' }, 'Make clothes'),
+      el('label', { class: 'field' }, el('span', {}, 'Name'), el('input', { type: 'text', maxlength: 40, value: f.name, oninput: (e) => { f.name = e.target.value; } })),
+      el('label', { class: 'field' }, el('span', {}, 'Kind'), kind),
+      el('label', { class: 'field' }, el('span', {}, 'Colour'), colour),
+      f.kind === 'shirt' && el('label', { class: 'field' }, el('span', {}, 'Long sleeves'), sleeves),
+      el('div', { class: 'form-actions' }, el('button', { class: 'btn go small', disabled: f.busy, onclick: shareClothes }, icon(ICON.check), 'Add to the catalog'))));
 }
 
 function profile() {
@@ -2968,7 +3039,66 @@ function settingsTab(g) {
       el('label', { class: 'field' }, el('span', {}, 'Tags'), tags),
       el('div', { class: 'form-actions' },
         el('button', { class: 'btn go small', disabled: mine.busy, onclick: saveDetails }, icon(ICON.check), 'Save'))),
-    picturesPanel(g));
+    picturesPanel(g),
+    placesPanel(g));
+}
+
+// --- Places: a game's other places, which TeleportService sends players to ---
+
+const placeLists = new Map();
+
+function loadPlaces(gameId) {
+  if (placeLists.has(gameId)) return placeLists.get(gameId);
+  placeLists.set(gameId, null);
+  api(`/games/${encodeURIComponent(gameId)}/places`).then((list) => { placeLists.set(gameId, list); render(); }).catch(() => placeLists.set(gameId, []));
+  return null;
+}
+
+async function changePlace(g, placeId, name, text, said) {
+  if (mine.busy) return;
+  mine.busy = true;
+  render();
+  const time = Math.max(Date.now(), lastSigned.place + 1);
+  lastSigned.place = time;
+  const what = text == null ? 'remove' : await sha256Hex(new TextEncoder().encode(text));
+  const body = { player_id: session.playerId, time, place_id: placeId, name, place: text, signature: '' };
+  body.signature = signText(secretKey(), `playlibre place\n${session.playerId}\n${g.game_id}\n${time}\n${placeId}\n${name}\n${what}`);
+  try {
+    placeLists.set(g.game_id, await api(`/games/${encodeURIComponent(g.game_id)}/places`, { method: 'POST', body }));
+    flash = { text: said };
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  mine.busy = false;
+  render();
+}
+
+function placesPanel(g) {
+  const list = loadPlaces(g.game_id);
+  const name = el('input', { type: 'text', maxlength: 50, placeholder: 'Such as Level 2' });
+  const file = el('input', { type: 'file', accept: '.lrx' });
+  const add = async () => {
+    const f = file.files[0];
+    if (!name.value.trim() || !f) { flash = { text: 'Give the place a name and pick its .lrx file.', kind: 'error' }; render(); return; }
+    changePlace(g, 0, name.value.trim(), await f.text(), `Added ${name.value.trim()}.`);
+  };
+  const replace = (p) => {
+    const input = el('input', { type: 'file', accept: '.lrx', style: 'display:none' });
+    input.addEventListener('change', async () => input.files[0] && changePlace(g, p.place_id, p.name, await input.files[0].text(), `Updated ${p.name}.`));
+    return el('label', { class: 'chip', disabled: mine.busy }, input, icon(ICON.refresh), 'Update');
+  };
+  return el('div', {},
+    el('h2', { class: 'subhead' }, 'Places'),
+    el('p', { class: 'note' }, 'More places for this game, such as a lobby and its levels. Scripts send players between them with TeleportService and the place number, which game.PlaceId gives in each place. Saved data is shared by all of them.'),
+    !list ? el('p', { class: 'soft' }, 'Loading…') : el('div', { class: 'versions' }, list.map((p) => el('div', { class: 'person' },
+      el('div', { class: 'what' }, el('b', {}, p.start ? `${p.name} (start)` : p.name), el('small', { class: 'soft' }, `Place ${p.place_id} · v${p.version} · ${size(p.size)}`)),
+      el('div', { class: 'buttons' }, p.start
+        ? el('span', { class: 'soft' }, 'Changes when you publish')
+        : [replace(p), el('button', { class: 'chip', disabled: mine.busy, onclick: () => changePlace(g, p.place_id, p.name, null, `Removed ${p.name}.`) }, icon(ICON.trash), 'Remove')])))),
+    el('div', { class: 'form manage' },
+      el('label', { class: 'field' }, el('span', {}, 'Name'), name),
+      el('label', { class: 'field' }, el('span', {}, 'Place file'), file),
+      el('div', { class: 'form-actions' }, el('button', { class: 'btn go small', disabled: mine.busy, onclick: add }, icon(ICON.check), 'Add place'))));
 }
 
 // The game genres a creator can pick (the Hub's GENRES).
@@ -3220,6 +3350,60 @@ function passesPanel(entry) {
           if (b.dataset.sure) buyPass(p);
           else { b.dataset.sure = '1'; b.replaceChildren(`Buy for ${credits(p.price)}?`); }
         } }, credits(p.price)))))));
+}
+
+// --- Private servers: a server of a game for its owner and their friends ---
+
+let privates = { who: null, list: null, busy: false, name: '' };
+
+function loadPrivateServers() {
+  if (!session) return null;
+  if (privates.who === session.playerId) return privates.list;
+  privates = { who: session.playerId, list: null, busy: false, name: '' };
+  const time = Date.now();
+  const signature = signText(secretKey(), `playlibre private servers\n${session.playerId}\n${time}`);
+  api(`/private-servers/${session.playerId}`, { query: { time, signature } })
+    .then((list) => { privates.list = list; render(); })
+    .catch(() => { privates.list = []; });
+  return null;
+}
+
+async function changePrivateServer(action, gameId, name, code, said) {
+  if (privates.busy) return;
+  privates.busy = true;
+  render();
+  const time = Math.max(Date.now(), lastSigned.privateServer + 1);
+  lastSigned.privateServer = time;
+  const body = { player_id: session.playerId, action, game_id: gameId, name, code, time };
+  body.signature = signText(secretKey(), `playlibre private server\n${session.playerId}\n${action}\n${gameId}\n${name}\n${code}\n${time}`);
+  try {
+    privates.list = await api('/private-servers', { method: 'POST', body });
+    privates.name = '';
+    flash = { text: said };
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  privates.busy = false;
+  render();
+}
+
+function privateServersPanel(entry) {
+  if (!session || entry.game?.private) return null;
+  const list = (loadPrivateServers() || []).filter((p) => p.game_id === entry.key);
+  const name = el('input', { type: 'text', maxlength: 50, value: privates.name, placeholder: `Such as ${session.name || 'My'}'s server`, oninput: (e) => { privates.name = e.target.value; } });
+  return el('div', { class: 'about' }, el('div', { class: 'caps' }, 'Private servers'),
+    el('p', { class: 'note' }, 'A server of your own: only you and your friends can play on it.'),
+    list.length ? el('div', { class: 'versions' }, list.map((p) => el('div', { class: 'person' },
+      el('div', { class: 'what' }, el('b', {}, p.name), el('small', { class: 'soft' }, `${p.owner_id === session.playerId ? 'Yours' : `${p.owner}'s`}${p.players ? ` · ${p.players} playing` : ''}`)),
+      el('div', { class: 'buttons' },
+        el('button', { class: 'chip', onclick: () => launch(appLink('private', `${entry.key}:${p.code}`), `Joining ${p.name}.`) }, icon(ICON.play), 'Play'),
+        p.owner_id === session.playerId && el('button', { class: 'chip', disabled: privates.busy, onclick: (e) => {
+          const b = e.currentTarget;
+          if (b.dataset.sure) changePrivateServer('remove', '', '', p.code, `Removed ${p.name}.`);
+          else { b.dataset.sure = '1'; b.replaceChildren(icon(ICON.trash), ' Remove?'); }
+        } }, icon(ICON.trash), 'Remove'))))) : null,
+    el('div', { class: 'form-actions' }, name,
+      el('button', { class: 'btn small', disabled: privates.busy, onclick: () => name.value.trim() && changePrivateServer('create', entry.key, name.value.trim(), '', `Made ${name.value.trim()}. Your friends see it here too.`) }, icon(ICON.check), 'Make one')));
 }
 
 async function changePass(gameId, c, said) {

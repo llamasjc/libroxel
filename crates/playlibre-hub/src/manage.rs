@@ -122,6 +122,7 @@ pub(crate) fn keep_version(
 pub(crate) fn forget(db: &Connection, game_id: &str) {
     let _ = db.execute("DELETE FROM game_versions WHERE game_id = ?1", params![game_id]);
     crate::media::forget(db, game_id);
+    crate::places::forget(db, game_id);
     let _ = db.execute("DELETE FROM follows WHERE kind = 'game' AND target = ?1", params![game_id]);
     analytics::forget_game(db, game_id);
 }

@@ -44,7 +44,7 @@ fn bot(tree: &mut InstanceTree, parent: InstanceId) -> InstanceId {
         shirt: Color3::from_rgb8(80, 130, 220),
         pants: Color3::from_rgb8(50, 60, 80),
     };
-    let (head, limbs) = build_rig(tree, model, colors);
+    let (head, limbs) = build_rig(tree, model, colors.into());
     add_joints(tree, root, head, &limbs);
     pose_rig(tree, root, head, &limbs, Default::default());
     add(tree, model, ClassKind::Humanoid, playlibre_script::names::character::HUMANOID);

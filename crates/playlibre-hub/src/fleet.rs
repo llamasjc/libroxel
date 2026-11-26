@@ -80,6 +80,14 @@ pub struct PlayRequest {
     pub player_id: Option<String>,
     #[serde(default)]
     pub signature: Option<String>,
+    /// One of the game's places (`game.PlaceId`), when it isn't the start place.
+    #[serde(default)]
+    pub place_id: Option<i64>,
+    /// A server of its own: a private server's code, or a code a game got
+    /// from `TeleportService:ReserveServer`. Only players sent with the
+    /// code play there, and it isn't on the list.
+    #[serde(default)]
+    pub access_code: Option<String>,
 }
 
 pub fn play_message(player_id: &str, ticket: &str) -> Vec<u8> {
@@ -159,9 +167,31 @@ pub(crate) fn is_fleet(db: &Connection, server_id: &str) -> bool {
         .is_some()
 }
 
+/// What a server of the fleet runs: a game, and maybe one of its other
+/// places (`#p<number>`) and a server of its own (`@<code>`).
+pub(crate) fn target(game_id: &str, place_id: Option<i64>, code: Option<&str>) -> String {
+    let mut t = game_id.to_owned();
+    if let Some(p) = place_id {
+        t.push_str(&format!("#p{p}"));
+    }
+    if let Some(c) = code {
+        t.push('@');
+        t.push_str(c);
+    }
+    t
+}
+
+/// The game a fleet target runs.
+pub(crate) fn game_of(target: &str) -> &str {
+    target.split(['#', '@']).next().unwrap_or(target)
+}
+
+/// Whether `server_id` is a fleet server running `game_id` (any of its
+/// places, on any server of its own).
 pub(crate) fn runs(db: &Connection, server_id: &str, game_id: &str) -> bool {
     db.query_row(
-        "SELECT 1 FROM fleet WHERE server_id = ?1 AND game_id = ?2",
+        "SELECT 1 FROM fleet WHERE server_id = ?1
+             AND (game_id = ?2 OR substr(game_id, 1, length(?2) + 1) IN (?2 || '#', ?2 || '@'))",
         params![server_id, game_id],
         |_| Ok(()),
     )
@@ -226,8 +256,16 @@ fn known(db: &Connection, now: i64) -> Vec<Known> {
         .unwrap_or_default()
 }
 
+/// How a new server runs its game.
+struct Run<'a> {
+    place_id: Option<i64>,
+    code: Option<&'a str>,
+    private_owner: Option<&'a str>,
+}
+
 pub(crate) enum PlayError {
     BadRequest(&'static str),
+    NotAllowed,
     UnknownGame,
     Busy,
     Failed,
@@ -238,8 +276,14 @@ impl Fleet {
         Self { options, state: Default::default() }
     }
 
-    /// Finds or starts a server of `request.game_id` for one player.
-    pub(crate) fn play(&self, db: &Connection, request: &PlayRequest) -> Result<PlayAnswer, PlayError> {
+    /// Finds or starts a server of `request.game_id` for one player, who
+    /// proved they are `who` (if they did).
+    pub(crate) fn play(
+        &self,
+        db: &Connection,
+        request: &PlayRequest,
+        who: Option<&str>,
+    ) -> Result<PlayAnswer, PlayError> {
         let ticket = request.ticket.trim();
         if !(8..=64).contains(&ticket.len()) || !ticket.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(PlayError::BadRequest("a ticket is 8 to 64 letters and digits"));
@@ -248,6 +292,34 @@ impl Fleet {
         if !runnable(db, game_id) {
             return Err(PlayError::UnknownGame);
         }
+        let place_id = match request.place_id {
+            Some(p) if crate::places::start_place(db, game_id) != Some(p) => {
+                if crate::places::place(db, p).is_none_or(|found| found.game_id != game_id) {
+                    return Err(PlayError::BadRequest("that game has no such place"));
+                }
+                Some(p)
+            }
+            _ => None,
+        };
+        let code = request.access_code.as_deref().map(str::trim).filter(|c| !c.is_empty());
+        let mut private_owner = None;
+        if let Some(c) = code {
+            if !(8..=64).contains(&c.len()) || !c.chars().all(|c| c.is_ascii_alphanumeric()) {
+                return Err(PlayError::BadRequest("a server's code is 8 to 64 letters and digits"));
+            }
+            if let Some((private_game, owner)) = crate::places::private_owner(db, c) {
+                if private_game != game_id {
+                    return Err(PlayError::BadRequest("that private server is for another game"));
+                }
+                if !crate::places::may_join(db, c, who) {
+                    return Err(PlayError::NotAllowed);
+                }
+                private_owner = Some(owner);
+            }
+        }
+        let target = target(game_id, place_id, code);
+        let game_id = target.as_str();
+        let run = Run { place_id, code, private_owner: private_owner.as_deref() };
         let now = crate::now();
         let mut state = self.state.lock().unwrap();
         state.tickets.retain(|_, (_, at)| at.elapsed() < TICKET_HOLD);
@@ -293,7 +365,7 @@ impl Fleet {
             state.tickets.insert(ticket.to_owned(), (server_id.clone(), Instant::now()));
             // That one is now full: start the next one before anyone needs it.
             if filled + 1 >= max && !ours.clone().any(starting) {
-                let _ = self.start(db, &mut state, &servers, game_id);
+                let _ = self.start(db, &mut state, &servers, game_id, &run);
             }
             return Ok(PlayAnswer { code: Some(code), server_id: Some(server_id), wait: false });
         }
@@ -309,7 +381,7 @@ impl Fleet {
         if state.failed.get(game_id).is_some_and(|at| at.elapsed() < FAILED_FOR) {
             return Err(PlayError::Failed);
         }
-        let server_id = self.start(db, &mut state, &servers, game_id)?;
+        let server_id = self.start(db, &mut state, &servers, game_id, &run)?;
         state.tickets.insert(ticket.to_owned(), (server_id, Instant::now()));
         Ok(PlayAnswer { wait: true, ..Default::default() })
     }
@@ -321,6 +393,7 @@ impl Fleet {
         state: &mut State,
         servers: &[Known],
         game_id: &str,
+        run: &Run,
     ) -> Result<String, PlayError> {
         let o = &self.options;
         let now = crate::now();
@@ -344,10 +417,20 @@ impl Fleet {
             let log = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(o.dir.join(format!("{}.log", log_name(game_id))))?;
-            Command::new(&o.program)
-                .arg("server")
-                .args(["--game", game_id])
+                .open(o.dir.join(format!("{}.log", log_name(game_of(game_id)))))?;
+            let mut command = Command::new(&o.program);
+            command.arg("server");
+            if let Some(p) = run.place_id {
+                command.args(["--place", &p.to_string()]);
+            }
+            if let Some(c) = run.code {
+                command.args(["--access-code", c]);
+            }
+            if let Some(owner) = run.private_owner {
+                command.args(["--private-owner", owner]);
+            }
+            command
+                .args(["--game", game_of(game_id)])
                 .arg("--key")
                 .arg(&key_file)
                 .args(["--port", "0"])

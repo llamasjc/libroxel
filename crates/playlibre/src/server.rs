@@ -33,6 +33,9 @@ usage:
       --udp-port <n>           take players on this UDP port (open it in the
                                firewall so they connect directly)
       --stop-when-empty <s>    stop once nobody has been in it for s seconds
+      --place <n>              host that place of the game (game.PlaceId)
+      --access-code <code>     a server of its own: a private or reserved one
+      --private-owner <id>     the player whose private server it is
   playlibre help                show this
 ";
 
@@ -131,6 +134,9 @@ fn server(args: &[String]) -> Result<(), String> {
             "--key",
             "--udp-port",
             "--stop-when-empty",
+            "--place",
+            "--access-code",
+            "--private-owner",
         ],
     )?;
     let hub = if flags.has("--no-hub") { HubUse::None } else { HubUse::usual() };
@@ -138,6 +144,9 @@ fn server(args: &[String]) -> Result<(), String> {
         HubUse::At(address) => address.clone(),
         HubUse::None => playlibre_hub::hub_address(),
     });
+    let place_id: Option<i64> =
+        flags.get("--place").map(|p| p.parse()).transpose().map_err(|_| "--place needs a number")?;
+    let mut game_identity = None;
     let (game, text, key, game_id) = match (flags.rest.first(), flags.get("--game")) {
         (Some(path), _) => {
             let text = std::fs::read_to_string(path).map_err(|e| format!("could not read {path}: {e}"))?;
@@ -151,7 +160,15 @@ fn server(args: &[String]) -> Result<(), String> {
                 flags.get("--key").map_or_else(|| data_dir().join("server-identity.key"), PathBuf::from);
             let identity = Identity::load_or_create(&key)
                 .map_err(|e| format!("could not load {}: {e}", key.display()))?;
-            let (game, text) = game_by_id(id, &hub, &identity)?;
+            let (game, text, who) = game_by_id(id, place_id, &hub, &identity)?;
+            game_identity = Some(playlibre_script::GameIdentity {
+                job_id: identity.player_id(),
+                private_server_id: flags.get("--access-code").unwrap_or_default().to_owned(),
+                private_server_owner_id: flags
+                    .get("--private-owner")
+                    .map_or(0, playlibre_engine::session::user_id_for_key),
+                ..who
+            });
             (game, text, key, Some(id))
         }
         (None, None) => return Err("usage: playlibre server <game.lrx> (see playlibre help)".into()),
@@ -173,6 +190,7 @@ fn server(args: &[String]) -> Result<(), String> {
             .transpose()
             .map_err(|_| "--udp-port needs a number")?,
         stop_when_empty: (stop_when_empty > 0).then(|| Duration::from_secs(stop_when_empty)),
+        identity: game_identity,
     };
     if settings.stop_when_empty.is_some() {
         // A server that comes and goes: if the computer runs short of
@@ -201,8 +219,14 @@ fn starters() -> Result<(), String> {
 }
 
 /// A game's title and saved place by its id: a starter game, or a published
-/// one fetched from the Hub.
-fn game_by_id(id: &str, hub: &HubUse, identity: &Identity) -> Result<(String, String), String> {
+/// one fetched from the Hub (its start place, or `place`), and which game
+/// and place it is for its scripts.
+fn game_by_id(
+    id: &str,
+    place: Option<i64>,
+    hub: &HubUse,
+    identity: &Identity,
+) -> Result<(String, String, playlibre_script::GameIdentity), String> {
     // From the Hub even when this server isn't listed on it.
     let address = match hub {
         HubUse::At(address) => address.clone(),
@@ -211,15 +235,34 @@ fn game_by_id(id: &str, hub: &HubUse, identity: &Identity) -> Result<(String, St
     let client = HubClient::new(&address);
     if let Some(name) = id.strip_prefix("starter:") {
         if let Ok(text) = client.official_place(name) {
-            return Ok((name.to_owned(), text));
+            return Ok((name.to_owned(), text, Default::default()));
         }
         let game = crate::starter_games::starter(name).ok_or(format!("there is no starter game {name}"))?;
         let text = place::save(&(game.build)()).map_err(|e| format!("could not save {name}: {e}"))?;
-        return Ok((game.name.to_owned(), text));
+        return Ok((game.name.to_owned(), text, Default::default()));
     }
     let info = client.game(id)?;
-    let proof = playlibre_hub::DownloadProof::new(id, identity.player_id(), |m| identity.sign(m));
-    Ok((info.title, client.download(id, Some(&proof))?))
+    let places = client.places(id).unwrap_or_default();
+    let start = places.iter().find(|p| p.start).map_or(0, |p| p.place_id);
+    let who = |place_id| playlibre_script::GameIdentity {
+        game_id: info.number.map_or(0, |n| n as i64),
+        place_id,
+        ..Default::default()
+    };
+    match place.filter(|p| *p != start) {
+        Some(place) => {
+            let for_id = playlibre_hub::place_download_id(place);
+            let proof =
+                playlibre_hub::DownloadProof::new(&for_id, identity.player_id(), |m| identity.sign(m));
+            let text = client.download_place(place, Some(&proof))?;
+            Ok((info.title.clone(), text, who(place)))
+        }
+        None => {
+            let proof = playlibre_hub::DownloadProof::new(id, identity.player_id(), |m| identity.sign(m));
+            let text = client.download(id, Some(&proof))?;
+            Ok((info.title.clone(), text, who(start)))
+        }
+    }
 }
 
 /// Whether a server lists itself on the Hub.
@@ -258,6 +301,8 @@ pub struct ServerSettings {
     pub udp_port: Option<u16>,
     /// Stop once nobody has been in it for this long.
     pub stop_when_empty: Option<Duration>,
+    /// Which game, place and server it is, for `game.PlaceId` and the like.
+    pub identity: Option<playlibre_script::GameIdentity>,
 }
 
 /// Hosts a game with no window until `stop` is set, telling `say` what happens.
@@ -274,6 +319,7 @@ pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicB
         game_id,
         udp_port,
         stop_when_empty,
+        identity: game_identity,
     } = settings;
     let (tree, report) = place::load(&text).map_err(|e| format!("could not load {game}: {e}"))?;
     for warning in report.warnings {
@@ -299,6 +345,7 @@ pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicB
         _ => None,
     };
     let start_data = saved.as_ref().map(|s| s.start_json());
+    playlibre_engine::session::set_next_game_identity(game_identity);
     let mut session = PlaySession::host(Rc::new(RefCell::new(tree)), port, start_data.as_deref(), false)?;
     let mut passes = match (&hub, &game_id) {
         (HubUse::At(address), Some(id)) => crate::game_passes::HostPasses::new(HubClient::new(address), id),

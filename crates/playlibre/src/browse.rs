@@ -36,6 +36,8 @@ pub struct Platform {
     pub awards: crate::awards::Awards,
     /// Game passes bought inside games.
     pub shop: crate::game_passes::Shop,
+    /// Teleports scripts send this player on.
+    pub teleport: crate::teleport::Teleporter,
     /// The Hub's address ([`playlibre_hub::hub_address`]). It isn't
     /// something to change in the app: there is one Hub.
     pub hub_address: String,
@@ -247,6 +249,7 @@ impl Default for Platform {
             item_shared: Arc::default(),
             wallet: None,
             shop: Default::default(),
+            teleport: Default::default(),
             wallet_found: Arc::default(),
             wallet_busy: false,
             wallet_error: None,
@@ -827,6 +830,95 @@ impl Platform {
             });
         }
         picked
+    }
+
+    /// Shirts and trousers in the catalog, to wear. Changes `look` when one
+    /// is put on or taken off.
+    pub fn clothes_ui(&mut self, ui: &mut egui::Ui, look: &mut playlibre_engine::character::Look) {
+        use playlibre_engine::character::Clothing;
+        use std::sync::Arc;
+        let clothes: Vec<_> = self
+            .items
+            .iter()
+            .filter(|i| i.kind == "shirt" || i.kind == "pants")
+            .filter_map(|i| Some((i.clone(), Clothing::from_json(&i.data)?)))
+            .collect();
+        if clothes.is_empty() && look.shirt.is_none() && look.pants.is_none() {
+            return;
+        }
+        ui.add_space(12.0);
+        ui.label(RichText::new("Clothes").font(crate::theme::display(17.0)));
+        ui.label(
+            RichText::new("Shirts and trousers in the catalog, worn over your colours.")
+                .color(crate::theme::MUTED),
+        );
+        for (label, worn) in [("shirt", &mut look.shirt), ("trousers", &mut look.pants)] {
+            if let Some(w) = worn.as_ref() {
+                let name = w.name.clone();
+                ui.horizontal(|ui| {
+                    ui.label(format!("Wearing {name}"));
+                    if ui.button(format!("Take off the {label}")).clicked() {
+                        *worn = None;
+                    }
+                });
+            }
+        }
+        let me = self.account.as_ref().map(|a| a.player_id.clone());
+        let owned: Vec<String> = self.wallet.as_ref().map(|w| w.owned.clone()).unwrap_or_default();
+        let mut buying = None;
+        let mut worn_id = None;
+        ui.horizontal_wrapped(|ui| {
+            for (item, clothing) in &clothes {
+                let has = item.price == 0
+                    || me.as_deref() == Some(item.creator_id.as_str())
+                    || owned.contains(&item.item_id);
+                let slot = if item.kind == "shirt" { &mut look.shirt } else { &mut look.pants };
+                let on = slot.as_deref() == Some(clothing);
+                crate::theme::panel().inner_margin(10.0).show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            let (rect, _) =
+                                ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                            let c = clothing.color;
+                            let rgb = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u8;
+                            ui.painter().rect_filled(
+                                rect,
+                                3.0,
+                                egui::Color32::from_rgb(rgb(c.r), rgb(c.g), rgb(c.b)),
+                            );
+                            ui.strong(&item.name);
+                        });
+                        ui.label(RichText::new(format!("by {} · worn {}", item.creator, item.wears)).small());
+                        if !has {
+                            if ui
+                                .add_enabled(
+                                    !self.wallet_busy,
+                                    egui::Button::new(format!("Buy for {}", item.price)),
+                                )
+                                .clicked()
+                            {
+                                buying = Some((item.item_id.clone(), item.price));
+                            }
+                        } else if ui
+                            .add_enabled(!on, egui::Button::new(if on { "Wearing" } else { "Wear" }))
+                            .clicked()
+                        {
+                            *slot = Some(Arc::new(clothing.clone()));
+                            worn_id = Some(item.item_id.clone());
+                        }
+                    });
+                });
+            }
+        });
+        if let Some((id, price)) = buying {
+            self.wallet_send(WalletAction::Buy(id, price));
+        }
+        if let Some(id) = worn_id {
+            let client = self.client();
+            std::thread::spawn(move || {
+                let _ = client.wore(&id);
+            });
+        }
     }
 
     /// Asks why, when the ⚑ beside a game or hat was pressed, and shows
@@ -1997,6 +2089,12 @@ impl Platform {
     /// one with room or starts one), in the background. The answer comes
     /// from [`take_found`](Self::take_found).
     pub fn find_server(&mut self, game_id: &str, title: &str) {
+        self.find_server_with(game_id, title, None);
+    }
+
+    /// [`find_server`](Self::find_server), on a server of its own: a
+    /// private server's code.
+    pub fn find_server_with(&mut self, game_id: &str, title: &str, access_code: Option<String>) {
         if self.finding.is_some() {
             return;
         }
@@ -2009,6 +2107,7 @@ impl Platform {
         let mut request = playlibre_hub::PlayRequest {
             game_id: game_id.to_owned(),
             ticket: playlibre_hub::new_secret(),
+            access_code,
             ..Default::default()
         };
         if let Ok(me) = crate::identity()

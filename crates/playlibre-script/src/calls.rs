@@ -65,10 +65,26 @@ pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> m
                 };
             return Ok(Some(crate::bindings::vector_value(world)));
         }
-        game_info::JOB_ID if class == ClassKind::DataModel => {
-            return Ok(Some(Value::String(lua.create_string("")?)));
+        game_info::JOB_ID | "PrivateServerId" if class == ClassKind::DataModel => {
+            let host = host(lua);
+            let world = host.world.borrow();
+            let who = &world.teleports.identity;
+            let text = if key == game_info::JOB_ID { &who.job_id } else { &who.private_server_id };
+            return Ok(Some(Value::String(lua.create_string(text)?)));
         }
-        game_info::PLACE_ID | game_info::GAME_ID | game_info::CREATOR_ID if class == ClassKind::DataModel => {
+        game_info::PLACE_ID | game_info::GAME_ID | "PrivateServerOwnerId"
+            if class == ClassKind::DataModel =>
+        {
+            let host = host(lua);
+            let world = host.world.borrow();
+            let who = &world.teleports.identity;
+            return Ok(Some(Value::Integer(match key {
+                game_info::PLACE_ID => who.place_id,
+                game_info::GAME_ID => who.game_id,
+                _ => who.private_server_owner_id,
+            })));
+        }
+        game_info::CREATOR_ID if class == ClassKind::DataModel => {
             return Ok(Some(Value::Integer(0)));
         }
         _ => return Ok(None),

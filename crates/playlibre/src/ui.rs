@@ -321,6 +321,28 @@ pub fn editor_ui(
         let game = editor.platform.playing_game_id(engine.session.is_some());
         let account = editor.platform.account.as_ref().map(|a| a.player_id.clone());
         editor.platform.shop.tick(engine.session.as_mut(), &hub, game.as_deref(), account.as_deref());
+        let teleported =
+            editor.platform.teleport.tick(engine.session.as_mut(), &hub, game.as_deref(), account.is_some());
+        match teleported {
+            Some(Ok(arrive)) => {
+                let title = editor
+                    .platform
+                    .social
+                    .joined
+                    .as_ref()
+                    .map(|s| s.game.clone())
+                    .or_else(|| editor.platform.social.next_game.as_ref().map(|g| g.title.clone()))
+                    .unwrap_or_default();
+                editor.platform.social.teleporting =
+                    Some(crate::social::GameRef { title, game_id: Some(arrive.game_id) });
+                log(engine, LogLevel::Info, "Teleporting…");
+                let name = editor.platform.name.clone();
+                menu_pick(crate::menu::Pick::Join { code: arrive.code, name }, engine, editor, now);
+                return Ok(());
+            }
+            Some(Err(why)) => log(engine, LogLevel::Warn, format!("Could not teleport: {why}")),
+            None => {}
+        }
     }
     for name in std::mem::take(&mut editor.platform.awards.earned) {
         log(engine, LogLevel::Info, format!("Badge earned: {name}"));
@@ -992,7 +1014,7 @@ fn new_npc(tree: &mut InstanceTree, ground: playlibre_instance::Vec3) -> Option<
         shirt: Color3::from_rgb8(150, 150, 160),
         pants: Color3::from_rgb8(90, 90, 100),
     };
-    let (head, limbs) = playlibre_engine::character::build_rig(tree, model, colors);
+    let (head, limbs) = playlibre_engine::character::build_rig(tree, model, colors.into());
     playlibre_engine::character::add_joints(tree, root, head, &limbs);
     playlibre_engine::character::pose_rig(tree, root, head, &limbs, Default::default());
     let humanoid = tree.create(ClassKind::Humanoid, names::character::HUMANOID).ok()?;

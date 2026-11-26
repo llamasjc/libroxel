@@ -346,6 +346,55 @@ impl CustomHat {
     }
 }
 
+/// A shirt or trousers from the catalog: a colour (and, for a shirt,
+/// whether its sleeves are long).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Clothing {
+    pub name: String,
+    pub color: Color3,
+    /// Long sleeves colour the arms too.
+    pub sleeves: bool,
+}
+
+impl Clothing {
+    /// As the catalog keeps it: `{"name", "color": [r, g, b], "sleeves"}`.
+    pub fn to_json(&self) -> playlibre_instance::serde_json::Value {
+        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let c = self.color;
+        playlibre_instance::serde_json::json!({
+            "name": self.name,
+            "color": [byte(c.r), byte(c.g), byte(c.b)],
+            "sleeves": self.sleeves,
+        })
+    }
+
+    /// Reads [`to_json`](Self::to_json)'s object, if it is clothing.
+    pub fn from_json(value: &playlibre_instance::serde_json::Value) -> Option<Clothing> {
+        let a = value.get("color")?.as_array().filter(|a| a.len() == 3)?;
+        let n = |i: usize| a[i].as_u64().filter(|n| *n <= 255).map(|n| n as u8);
+        Some(Clothing {
+            name: value.get("name").and_then(|n| n.as_str()).unwrap_or("Clothes").chars().take(40).collect(),
+            color: Color3::from_rgb8(n(0)?, n(1)?, n(2)?),
+            sleeves: value.get("sleeves").and_then(|s| s.as_bool()).unwrap_or(false),
+        })
+    }
+}
+
+/// The colours a look's body is drawn in, with its clothes on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Worn {
+    pub skin: Color3,
+    pub torso: Color3,
+    pub arms: Color3,
+    pub legs: Color3,
+}
+
+impl From<BodyColors> for Worn {
+    fn from(c: BodyColors) -> Worn {
+        Worn { skin: c.skin, torso: c.shirt, arms: c.skin, legs: c.pants }
+    }
+}
+
 /// How a player looks: their body colours and what they wear.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Look {
@@ -354,6 +403,10 @@ pub struct Look {
     pub hat_color: Color3,
     /// A hat from the catalog, worn instead of `hat`.
     pub item: Option<std::sync::Arc<CustomHat>>,
+    /// A shirt from the catalog, worn instead of the shirt colour.
+    pub shirt: Option<std::sync::Arc<Clothing>>,
+    /// Trousers from the catalog, worn instead of the trousers colour.
+    pub pants: Option<std::sync::Arc<Clothing>>,
 }
 
 impl Look {
@@ -364,6 +417,20 @@ impl Look {
             hat: Hat::None,
             hat_color: color(avatar().hat_color),
             item: None,
+            shirt: None,
+            pants: None,
+        }
+    }
+
+    /// The colours its body is drawn in, with its clothes on.
+    pub fn worn(&self) -> Worn {
+        let c = self.colors;
+        let shirt = self.shirt.as_ref();
+        Worn {
+            skin: c.skin,
+            torso: shirt.map_or(c.shirt, |s| s.color),
+            arms: shirt.filter(|s| s.sleeves).map_or(c.skin, |s| s.color),
+            legs: self.pants.as_ref().map_or(c.pants, |p| p.color),
         }
     }
 
@@ -382,6 +449,12 @@ impl Look {
         });
         if let Some(item) = &self.item {
             json["item"] = item.to_json();
+        }
+        if let Some(shirt) = &self.shirt {
+            json["shirt_item"] = shirt.to_json();
+        }
+        if let Some(pants) = &self.pants {
+            json["pants_item"] = pants.to_json();
         }
         json
     }
@@ -412,6 +485,14 @@ impl Look {
                 Some(item) => CustomHat::from_json(item).map(std::sync::Arc::new),
                 None => fallback.item,
             },
+            shirt: match value.get("shirt_item") {
+                Some(item) => Clothing::from_json(item).map(std::sync::Arc::new),
+                None => fallback.shirt,
+            },
+            pants: match value.get("pants_item") {
+                Some(item) => Clothing::from_json(item).map(std::sync::Arc::new),
+                None => fallback.pants,
+            },
         }
     }
 }
@@ -441,15 +522,15 @@ pub fn pieces(look: &Look) -> Vec<Piece> {
         neon: false,
         on_head,
     };
-    let BodyColors { skin, shirt, pants } = look.colors;
+    let Worn { skin, torso: shirt, arms, legs: pants } = look.worn();
     let arm = SHOULDER - Vec3::new(0.0, ARM_SIZE.y * 0.5 - ARM_TOP, 0.0);
     let leg = HIP - Vec3::new(0.0, LEG_SIZE.y * 0.5, 0.0);
     let eye = color(EYE_COLOR);
     let mut out = vec![
         block(HEAD_AT, HEAD_SIZE, skin, true),
         block(TORSO_AT, TORSO_SIZE, shirt, false),
-        block(flip(arm), ARM_SIZE, skin, false),
-        block(arm, ARM_SIZE, skin, false),
+        block(flip(arm), ARM_SIZE, arms, false),
+        block(arm, ARM_SIZE, arms, false),
         block(flip(leg), LEG_SIZE, pants, false),
         block(leg, LEG_SIZE, pants, false),
         block(flip(EYE_AT), EYE_SIZE, eye, true),
