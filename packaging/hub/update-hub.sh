@@ -31,6 +31,9 @@ GAME_SERVERS=yes
 
 state=/var/lib/playlibre-update
 install -d -m 755 "$state"
+# Until the Hub's service is set up (a first run, or one cut short), the
+# version on record isn't really in place: install it again.
+[ -f /etc/systemd/system/playlibre-hub.service ] || rm -f "$state/release"
 log() { echo "playlibre-hub-update: $*"; }
 
 by_hand=no
@@ -173,7 +176,7 @@ releases="$(api application/vnd.github+json "https://api.github.com/repos/$REPO/
 release="$(jq -c '[.[] | select((.draft | not) and (.prerelease | not))
     | select(any(.assets[]; .name == "playlibre-hub-linux-x86_64" or .name == "libroxel-hub-linux-x86_64"))]
     | sort_by(.published_at) | last // empty' <<<"$releases")"
-[ -n "$release" ] || { log "no release of $REPO carries the Hub yet"; exit 0; }
+[ -n "$release" ] || { log "no release of $REPO carries the Hub yet (to build main instead: sudo playlibre-hub-update --from-source)"; exit 0; }
 tag="$(jq -r .tag_name <<<"$release")"
 current="$(cat "$state/release" 2>/dev/null || true)"
 if [ "$tag" = "$current" ]; then

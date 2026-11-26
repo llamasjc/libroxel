@@ -3,8 +3,11 @@
 What changed in each release. The full list of commits for each one is on
 its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 
-## Unreleased
+## 0.1.19 (2026-11-26)
 
+- **Hub servers:** the updater sets the Hub up again when its service is
+  missing, instead of saying it is already on that version and leaving
+  the Hub stopped (which a server moved from Libroxel could hit).
 - **Website:** avatar pictures (heads on profiles and friends, whole bodies
   on profiles and the Avatar page) now show. The site's security rules
   only allowed pictures from the site itself, so the browser blocked the
