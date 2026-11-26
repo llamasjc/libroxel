@@ -41,29 +41,63 @@ pub enum Shielded {
 }
 
 /// Code already worked out, by its hash: the code, what it became, and how.
-type Cache = Mutex<HashMap<u64, (Arc<str>, Arc<str>, Shielded)>>;
+type Cache = Mutex<(HashMap<u64, (Arc<str>, Arc<str>, Shielded)>, usize)>;
+
+/// How much code (in and out) the cache holds before starting again. By
+/// size, not count: a big game can have thousands of modules, and working
+/// them all out again for each player who joins froze its server.
+const CACHE_BYTES: usize = 512 * 1024 * 1024;
+
+fn cache() -> &'static Cache {
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Works out every one of `sources` ahead of time, on other threads, so
+/// that the first player to join a big game doesn't wait while its server
+/// does it (several seconds for a few megabytes of code, while the game
+/// stood still for everyone). [`shield`] then finds them done.
+pub fn warm(sources: Vec<Arc<str>>) {
+    if sources.is_empty() {
+        return;
+    }
+    let threads = std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, 8);
+    let sources = Arc::new(Mutex::new(sources));
+    for _ in 0..threads {
+        let sources = sources.clone();
+        let _ = std::thread::Builder::new().name("shield warm-up".into()).spawn(move || {
+            loop {
+                let Some(source) = sources.lock().unwrap_or_else(|e| e.into_inner()).pop() else { break };
+                shield(&source);
+            }
+        });
+    }
+}
 
 /// `source` as a player's computer gets it, and how it was changed.
 /// The same code is only worked out once (hosts send it to every player).
 pub fn shield(source: &str) -> (Arc<str>, Shielded) {
-    static CACHE: OnceLock<Cache> = OnceLock::new();
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     source.hash(&mut hasher);
     let key = hasher.finish();
-    let cache = CACHE.get_or_init(Default::default);
-    if let Some((original, out, how)) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key)
+    if let Some((original, out, how)) = cache().lock().unwrap_or_else(|e| e.into_inner()).0.get(&key)
         && **original == *source
     {
         return (out.clone(), *how);
     }
     let (out, how) = work_out(source);
     let out: Arc<str> = out.into();
-    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
-    if cache.len() >= 4096 {
-        cache.clear();
+    let mut cache = cache().lock().unwrap_or_else(|e| e.into_inner());
+    let (entries, bytes) = &mut *cache;
+    let size = source.len() + out.len();
+    if *bytes + size > CACHE_BYTES {
+        entries.clear();
+        *bytes = 0;
     }
-    cache.insert(key, (source.into(), out.clone(), how));
+    if entries.insert(key, (source.into(), out.clone(), how)).is_none() {
+        *bytes += size;
+    }
     (out, how)
 }
 

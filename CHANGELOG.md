@@ -5,6 +5,17 @@ its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 
 ## Unreleased
 
+- **Big games on servers:** a game with more than 5,000 parts no longer
+  streams unless it turns `StreamingEnabled` on itself. Before, its
+  players only got the parts near them, so scripts that use far parts
+  (`workspace.Shop.Counter`) stopped with an error, though the game
+  worked in the editor. Every part now comes, as it does there.
+- **Faster first join:** a server makes its players' code hard to read
+  as it starts, on other threads, instead of while the first player
+  joins. In a test game with 300 modules this took the server's longest
+  pause from about 1 s to 19 ms. It also remembers that code by size
+  rather than by count, so a game with thousands of modules isn't worked
+  out again for each player.
 - **Saved progress:** games played on the Hub's servers keep their data
   stores on the Hub, so coins, levels and unlocks carry over from one
   server to the next and outlast a server stopping. Servers trade changes

@@ -9,9 +9,10 @@ const DT: f32 = 1.0 / 60.0;
 const MODELS: usize = 3000;
 const PARTS_EACH: usize = 20;
 
-fn heavy() -> InstanceTree {
+fn heavy(streaming: bool) -> InstanceTree {
     let mut tree = InstanceTree::new();
     let ws = tree.workspace();
+    tree.set(ws, Property::StreamingEnabled, PropertyValue::Bool(streaming)).unwrap();
     let floor = tree.create(ClassKind::Part, "Floor").unwrap();
     tree.set_parent(floor, Some(ws)).unwrap();
     tree.set(floor, Property::Size, PropertyValue::Vec3(Vec3::new(2000.0, 1.0, 2000.0))).unwrap();
@@ -37,7 +38,18 @@ fn heavy() -> InstanceTree {
 
 #[test]
 fn joining_a_heavy_game_comes_in_over_many_short_steps() {
-    let tree = Rc::new(RefCell::new(heavy()));
+    join_heavy(false);
+}
+
+#[test]
+fn joining_a_heavy_streamed_game_comes_in_over_many_short_steps() {
+    join_heavy(true);
+}
+
+/// Without streaming every part comes, as the game's scripts expect;
+/// with it, the ones near the player.
+fn join_heavy(streaming: bool) {
+    let tree = Rc::new(RefCell::new(heavy(streaming)));
     let mut host = PlaySession::host(tree, 0, None, true).unwrap();
     let port = host.host_address().unwrap().port();
     for _ in 0..3 {
@@ -46,7 +58,7 @@ fn joining_a_heavy_game_comes_in_over_many_short_steps() {
     let mut guest =
         PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
             .unwrap();
-    let near = |x: f32, z: f32| x.hypot(z) < 900.0;
+    let near = |x: f32, z: f32| !streaming || x.hypot(z) < 900.0;
     let want =
         (0..MODELS).filter(|m| near((m % 60) as f32 * 30.0 - 900.0, (m / 60) as f32 * 30.0 - 900.0)).count()
             * PARTS_EACH;

@@ -73,9 +73,6 @@ const STREAM_STEP: usize = 2_000;
 /// a streamed player's terrain is looked at when it hasn't changed.
 const TERRAIN_STEP: usize = 256;
 const TERRAIN_LOOK: u64 = 15;
-/// A game with more parts than this streams, even without `StreamingEnabled`,
-/// letting go of parts a little past the radius.
-const BIG_MAP: usize = 5_000;
 /// The longest message a host takes from a joined computer. What players
 /// send (their moves, clicks and `FireServer` arguments) is small; anything
 /// longer is someone trying to fill the host's memory.
@@ -799,12 +796,13 @@ pub(crate) enum Link {
 pub(crate) struct Hosting {
     listener: TcpListener,
     peers: Vec<Peer>,
-    /// `Workspace.StreamingEnabled`, or a big map, when hosting began (it
-    /// can't change while the game runs): each player is sent only what's
-    /// near them.
+    /// `Workspace.StreamingEnabled` when hosting began (it can't change
+    /// while the game runs): each player is sent only what's near them.
+    /// Only the game turns it on, however big its map: its scripts were
+    /// written for one or the other, and a game written without it counts
+    /// on every part being there (`workspace.Shop.Counter`), as it is
+    /// when it's played in the editor.
     streaming: bool,
-    /// Whether it streams because the map is big.
-    big: bool,
     replicator: Option<Replicator>,
     priming: Option<Receiver<Replicator>>,
     /// Teleports found but not sent yet: player, number, where, facing.
@@ -2023,20 +2021,36 @@ impl PlaySession {
             .map_err(|e| format!("could not host on port {port}: {e}"))?;
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let mut session = Self::start_inner(tree, play_here, saved_data, NetRole::Server)?;
-        let (streaming, big) = {
+        let streaming = {
             let t = session.runtime.tree().borrow();
-            let ws = t.workspace();
-            let parts = t
-                .descendants(ws)
-                .map_or(0, |d| d.iter().filter(|i| t.class(**i).is_ok_and(ClassKind::is_physical)).count());
-            let big = parts > BIG_MAP;
-            (big || t.get_bool(ws, Property::StreamingEnabled).unwrap_or(false), big)
+            // The code players' computers will get is made hard to read
+            // now, on other threads, rather than while the first player
+            // joins (see `playlibre_script::shield::warm`).
+            let server_only =
+                [ClassKind::ServerStorage, ClassKind::ServerScriptService].map(|c| t.service(c));
+            let sources = t
+                .children(t.root())
+                .unwrap_or_default()
+                .iter()
+                .filter(|s| !server_only.contains(&Some(**s)))
+                .flat_map(|s| t.descendants(*s).unwrap_or_default())
+                .filter(|id| {
+                    t.class(*id).is_ok_and(|c| matches!(c, ClassKind::LocalScript | ClassKind::ModuleScript))
+                })
+                .filter_map(|id| match t.get(id, Property::Source) {
+                    Ok(PropertyValue::String(source)) if !source.trim().is_empty() => {
+                        Some(source.as_str().into())
+                    }
+                    _ => None,
+                })
+                .collect();
+            playlibre_script::shield::warm(sources);
+            t.get_bool(t.workspace(), Property::StreamingEnabled).unwrap_or(false)
         };
         session.link = Link::Host(Box::new(Hosting {
             listener,
             peers: Vec::new(),
             streaming,
-            big,
             replicator: None,
             priming: None,
             teleports: Vec::new(),
@@ -2805,7 +2819,7 @@ impl PlaySession {
             .max(t.get_number(ws, Property::StreamingMinRadius).unwrap_or(64.0)) as f32;
         let opportunistic = t.get_enum(ws, Property::StreamOutBehavior)
             == Some(playlibre_instance::EnumValue::StreamOutBehavior(StreamOutBehavior::Opportunistic));
-        let keep = if opportunistic || host.big { radius * 1.5 } else { f32::INFINITY };
+        let keep = if opportunistic { radius * 1.5 } else { f32::INFINITY };
         let players = t
             .service(ClassKind::Players)
             .map(|p| t.children(p).unwrap_or_default().to_vec())

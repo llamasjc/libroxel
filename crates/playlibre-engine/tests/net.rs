@@ -708,7 +708,7 @@ fn a_game_without_streaming_still_sends_everything() {
 }
 
 #[test]
-fn a_big_map_streams_even_without_streaming_on() {
+fn a_big_map_without_streaming_sends_every_part() {
     let tree = Rc::new(RefCell::new(game()));
     {
         let mut t = tree.borrow_mut();
@@ -725,13 +725,10 @@ fn a_big_map_streams_even_without_streaming_on() {
     let mut guest =
         PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
             .unwrap();
+    // Its scripts count on far parts being there, as in the editor.
     until(&mut host, &mut guest, CharacterInput::default(), |_, g| {
-        g.character().is_some() && has(g, &["Lamp"])
+        g.character().is_some() && has(g, &["Lamp"]) && has(g, &["Field", "Rock"])
     });
-    assert!(
-        has(&guest, &["Field"]) && !has(&guest, &["Field", "Rock"]),
-        "far parts of a big map aren't sent"
-    );
 }
 
 #[test]
