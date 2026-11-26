@@ -2889,8 +2889,6 @@ function chart(points, { bars = false, label }) {
   return add(box, [area, tip]);
 }
 
-let walletSigned = 0;
-const walletTime = () => (walletSigned = Math.max(Date.now(), walletSigned + 1));
 const credits = (n) => `${count(n)} Credits`;
 const money = (cents) => `$${(cents / 100).toFixed(2)}`;
 
