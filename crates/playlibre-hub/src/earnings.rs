@@ -833,7 +833,20 @@ pub(crate) async fn buy_pass(State(db): State<Db>, Json(b): Json<BuyPass>) -> Re
         kind: "pass".into(),
         amount: price,
     };
+    let seller = sale.seller_id.clone();
     wallet::buy(&db, &sale)?;
+    if let Ok(name) = db.query_row("SELECT name FROM passes WHERE pass_id = ?1", params![b.pass_id], |r| {
+        r.get::<_, String>(0)
+    }) {
+        crate::follows::notify(
+            &db,
+            &seller,
+            "sale",
+            "",
+            &format!("{} bought your pass {name}", crate::follows::name_of(&db, &b.player_id)),
+            "/creator",
+        );
+    }
     db.execute(
         "INSERT OR IGNORE INTO owned (player_id, item_id, time) VALUES (?1, ?2, ?3)",
         params![b.player_id, item_id, now()],

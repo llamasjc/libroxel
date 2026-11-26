@@ -655,6 +655,17 @@ pub(crate) async fn change_group(
                 params![group_id, them, now],
             )
             .map_err(internal)?;
+            let group: String = db
+                .query_row("SELECT name FROM groups WHERE group_id = ?1", params![group_id], |r| r.get(0))
+                .unwrap_or_default();
+            crate::follows::notify(
+                &db,
+                them,
+                "group",
+                &group_id,
+                &format!("You're invited to join {group}"),
+                &format!("/group/{group_id}"),
+            );
         }
         GroupAction::Accept => {
             need(GroupRole::Admin)?;

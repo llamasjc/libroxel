@@ -204,7 +204,7 @@ async function api(path, { method = 'GET', body, query } = {}) {
 
 const SESSION_KEY = 'playlibre.session';
 let session = loadSession();
-let lastSigned = { friends: 0, party: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0, wallet: 0, badge: 0, media: 0, follow: 0, server: 0 };
+let lastSigned = { friends: 0, party: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0, wallet: 0, badge: 0, media: 0, follow: 0, server: 0, notes: 0 };
 
 function loadSession() {
   for (const store of [sessionStorage, localStorage]) {
@@ -495,6 +495,7 @@ async function refresh() {
     } catch {
       data.forYou = data.forYou || null;
     }
+    await Promise.all([loadNotifications(), loadFollowing()]);
     try {
       data.me = await api(`/accounts/${session.playerId}`);
       if (data.me.name !== session.name) saveSession({ ...session, name: data.me.name }, isRemembered());
@@ -507,8 +508,84 @@ async function refresh() {
     data.party = null;
     data.forYou = null;
     data.me = null;
+    data.notes = null;
+    data.following = null;
   }
   data.loaded = true;
+}
+
+async function loadNotifications() {
+  try {
+    const time = Date.now();
+    const signature = signText(secretKey(), `playlibre notifications\n${session.playerId}\n${time}`);
+    data.notes = await api(`/notifications/${session.playerId}`, { query: { time, signature } });
+  } catch {
+    data.notes = data.notes || null;
+  }
+}
+
+async function loadFollowing() {
+  try {
+    const time = Date.now();
+    const signature = signText(secretKey(), `playlibre follows\n${session.playerId}\n${time}`);
+    data.following = await api(`/follows/${session.playerId}`, { query: { time, signature } });
+  } catch {
+    data.following = data.following || null;
+  }
+}
+
+const isFollowing = (kind, target) => (kind === 'game' ? data.following?.games : data.following?.creators)?.includes(target) || false;
+
+async function changeFollow(kind, target, follow, name) {
+  if (!session) { goTo('/sign-in'); return; }
+  const time = Math.max(Date.now(), lastSigned.follow + 1);
+  lastSigned.follow = time;
+  const signature = signText(secretKey(), `playlibre follow\n${session.playerId}\n${kind}\n${target}\n${follow ? 1 : 0}\n${time}`);
+  try {
+    data.following = await api('/follows', { method: 'POST', body: { player_id: session.playerId, kind, target, follow, time, signature } });
+    flash = { text: follow ? `You'll hear when ${name} ${kind === 'game' ? 'is updated' : 'puts out a new game'}.` : `You stopped following ${name}.` };
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  render();
+}
+
+function followButton(kind, target, name) {
+  const on = isFollowing(kind, target);
+  return el('button', { class: `chip${on ? ' on' : ''}`, title: on ? 'Stop following' : kind === 'game' ? 'Hear when it is updated' : 'Hear about their new games', onclick: () => changeFollow(kind, target, !on, name) },
+    icon(ICON.bell), on ? 'Following' : 'Follow');
+}
+
+async function markNotificationsSeen() {
+  const top = data.notes?.items?.[0];
+  if (!top || !data.notes.unseen) return;
+  const time = Math.max(Date.now(), lastSigned.notes + 1);
+  lastSigned.notes = time;
+  const up = top.notification_id;
+  const signature = signText(secretKey(), `playlibre notifications seen\n${session.playerId}\n${up}\n${time}`);
+  try {
+    data.notes = await api('/notifications/seen', { method: 'POST', body: { player_id: session.playerId, up_to: up, time, signature } });
+    render();
+  } catch {
+    // Seen next time.
+  }
+}
+
+const NOTE_ICONS = { friend: 'userPlus', message: 'chat', group: 'shield', badge: 'star', sale: 'crown', update: 'refresh', new_game: 'games' };
+
+function notificationsPage() {
+  if (!session) return needSignIn('Sign in to see your notifications.');
+  const notes = data.notes;
+  if (notes?.unseen) setTimeout(markNotificationsSeen, 1500);
+  return [
+    el('h1', { class: 'title' }, 'Notifications'),
+    el('p', { class: 'note' }, 'Friend requests, messages, invites, badges, sales and news from games and creators you follow.'),
+    !notes ? el('p', { class: 'soft' }, 'Loading…')
+      : !notes.items.length ? el('div', { class: 'empty' }, 'Nothing yet. Follow games and creators to hear about their updates.')
+      : el('div', { class: 'notes' }, notes.items.map((n) => el('a', { class: `person note-row${n.seen ? '' : ' unseen'}`, href: n.link || '/' },
+        el('div', { class: 'note-icon' }, icon(ICON[NOTE_ICONS[n.kind]] || ICON.bell)),
+        el('div', { class: 'what' }, el('b', {}, n.text), el('small', { class: 'soft' }, ago(n.secs_ago)))))),
+  ];
 }
 
 function isRemembered() {
@@ -805,9 +882,13 @@ function tabs() {
     const unread = chats.list?.reduce((n, c) => n + c.unread, 0) || 0;
     const messages = el('a', { class: `tab iconbtn${route.name === 'messages' ? ' active' : ''}`, href: '/messages', title: 'Messages' },
       icon(ICON.chat), unread > 0 && el('span', { class: 'badge' }, unread > 99 ? '99+' : unread));
+    const unseen = data.notes?.unseen || 0;
+    const bell = el('a', { class: `tab iconbtn${route.name === 'notifications' ? ' active' : ''}`, href: '/notifications', title: 'Notifications' },
+      icon(ICON.bell), unseen > 0 && el('span', { class: 'badge' }, unseen > 99 ? '99+' : unseen));
     fill(who,
       donate,
       search,
+      bell,
       data.me?.admin && el('a', { class: `tab iconbtn${route.name === 'moderation' ? ' active' : ''}`, href: '/moderation', title: 'Moderation' }, icon(ICON.flag)),
       data.me?.admin && el('a', { class: `tab iconbtn${route.name === 'stats' ? ' active' : ''}`, href: '/stats', title: 'Stats' }, icon(ICON.signal)),
       messages,
@@ -904,7 +985,7 @@ window.addEventListener('unhandledrejection', (e) => crashed(e.reason));
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, games: game, charts: chartsPage, profile, creator: creatorPage, market: marketPage, search: searchPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, stats: statsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy, donate: donatePage };
+  const views = { home, game, games: game, charts: chartsPage, profile, creator: creatorPage, market: marketPage, search: searchPage, notifications: notificationsPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, stats: statsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy, donate: donatePage };
   // An account that signed in with an easy password sees nothing else until it sets a new one.
   loadFamily();
   const needsBirthday = session && familyInfo && !familyInfo.loading && !familyInfo.error && !familyInfo.has_birthday;
@@ -1152,7 +1233,8 @@ function game() {
         el('div', { class: 'stats' }, stats.map(([v, l]) => el('div', {}, el('b', {}, v), el('span', { class: 'caps' }, l)))),
         el('div', { class: 'actions' },
           play,
-          hostable && el('button', { class: 'btn big', title: 'Host your own server of this game; it shows on this list', onclick: () => launch(appLink('host', entry.key), `Starting a new server of ${entry.title}.`) }, icon(ICON.broadcast), 'New server')),
+          hostable && el('button', { class: 'btn big', title: 'Host your own server of this game; it shows on this list', onclick: () => launch(appLink('host', entry.key), `Starting a new server of ${entry.title}.`) }, icon(ICON.broadcast), 'New server'),
+          entry.game && followButton('game', entry.key, entry.title)),
         el('div', { class: 'hint' }, hint))),
   ];
   const shots = (entry.game?.media || []).filter((m) => m.slot > 0);
@@ -1766,6 +1848,7 @@ function user() {
         el('h1', {}, p.name, ' ', p.badge && badge(p.badge), ' ', p.admin && el('span', { class: 'tag admin' }, 'Admin'), ' ', p.verified && el('span', { class: 'tag verified' }, 'Verified'), ' ', p.hat_maker && el('span', { class: 'tag verified' }, 'Hat-Maker')),
         el('div', { class: 'soft' }, `#${p.number ?? 0} · `, days < 1 ? 'Joined today' : `Joined ${ago(p.joined_secs_ago)}`),
         (action || (session && !isMe)) && el('div', { style: 'margin-top:8px' }, action, ' ',
+          session && !isMe && p.games.length > 0 && followButton('creator', p.player_id, p.name), ' ',
           session && !isMe && el('button', { class: 'chip', title: 'Report', onclick: () => startReport('player', p.player_id, p.name) }, icon(ICON.flag)))),
       bodyPicture(p.player_id, p.look)),
     reportPanel('player', p.player_id),

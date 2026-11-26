@@ -224,6 +224,15 @@ pub(crate) async fn send_message(
         params![sent.message_id, sent.from_id, sent.to_id, sent.text, sent.sent],
     )
     .map_err(internal)?;
+    let name = crate::follows::name_of(&db, &sent.from_id);
+    crate::follows::notify(
+        &db,
+        &sent.to_id,
+        "message",
+        &sent.from_id,
+        &format!("New message from {name}"),
+        "/messages",
+    );
     db.execute(
         "DELETE FROM messages WHERE message_id IN (
              SELECT message_id FROM messages

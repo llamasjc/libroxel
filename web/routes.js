@@ -14,6 +14,7 @@ export const ROUTES = {
   charts: { title: 'Charts', params: [] },
   profile: { title: 'Profile', params: [] },
   search: { title: 'Search', params: [] },
+  notifications: { title: 'Notifications', params: [] },
   friends: { title: 'Friends', params: [] },
   groups: { title: 'Groups', params: [] },
   avatar: { title: 'Avatar', params: [] },

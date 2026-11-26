@@ -294,11 +294,23 @@ pub(crate) async fn change_friend(
             if count >= MAX_FRIENDS {
                 return Err((StatusCode::BAD_REQUEST, format!("you can have up to {MAX_FRIENDS} friends")));
             }
-            db.execute(
-                "INSERT OR IGNORE INTO friends (from_id, to_id, accepted, since) VALUES (?1, ?2, 0, ?3)",
-                params![me, them, now()],
-            )
-            .map_err(internal)?;
+            let asked = db
+                .execute(
+                    "INSERT OR IGNORE INTO friends (from_id, to_id, accepted, since) VALUES (?1, ?2, 0, ?3)",
+                    params![me, them, now()],
+                )
+                .map_err(internal)?;
+            if asked > 0 {
+                let name = crate::follows::name_of(&db, me);
+                crate::follows::notify(
+                    &db,
+                    them,
+                    "friend",
+                    me,
+                    &format!("{name} wants to be friends"),
+                    "/friends",
+                );
+            }
             Ok(Json(FriendState::Requested))
         }
         FriendAction::Remove => {

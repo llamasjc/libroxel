@@ -87,7 +87,12 @@ pub use family::{
 };
 mod filter;
 mod fleet;
+mod follows;
 pub use fleet::{FleetOptions, PlayAnswer, PlayRequest, play_message};
+pub use follows::{
+    FollowChange, FollowKind, Following, MAX_FOLLOWS, Notification, Notifications, NotificationsSeen,
+    follow_message, follows_message, notifications_message, notifications_seen_message,
+};
 mod groups;
 pub use groups::{
     GROUP_COLORS, GroupAction, GroupBadge, GroupChange, GroupChanged, GroupInfo, GroupJoin, GroupMember,
@@ -787,6 +792,9 @@ pub struct GameInfo {
     /// Its icon (slot 0) and screenshots, at `/games/<id>/media/<slot>-<version>`.
     #[serde(default)]
     pub media: Vec<MediaRef>,
+    /// Players following it.
+    #[serde(default)]
+    pub followers: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1006,6 +1014,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     earnings::create_tables(&db)?;
     data::create_tables(&db)?;
     media::create_tables(&db)?;
+    follows::create_tables(&db)?;
     // Hubs from before game numbers: number every game there is.
     number_games(&db).map_err(|e| format!("could not number the Hub's games: {e}"))?;
     seal::install(&db, path)?;
@@ -1090,6 +1099,11 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         axum::extract::DefaultBodyLimit::max(MAX_PLACE * 2 + 64 * 1024),
     );
     let shared = axum::extract::DefaultBodyLimit::max(MAX_MODEL * 3);
+    let pictures = axum::extract::DefaultBodyLimit::max(media::MAX_UPLOAD * 2);
+    let saved = (
+        tower_http::decompression::RequestDecompressionLayer::new(),
+        axum::extract::DefaultBodyLimit::max(data::MAX_TRADE * 2 + 64 * 1024),
+    );
     Router::new()
         .route("/", get(status))
         .route("/servers", get(list_servers))
@@ -1150,18 +1164,14 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/earnings/{id}", get(earnings::get_earnings))
         .route("/earnings/cash-out", post(earnings::cash_out))
         .route("/games/{id}/passes", get(earnings::list_passes).post(earnings::change_pass))
-        .route(
-            "/games/{id}/data",
-            post(data::trade_data).layer((
-                tower_http::decompression::RequestDecompressionLayer::new(),
-                axum::extract::DefaultBodyLimit::max(data::MAX_TRADE * 2 + 64 * 1024),
-            )),
-        )
-        .route(
-            "/games/{id}/media",
-            post(media::change_media).layer(axum::extract::DefaultBodyLimit::max(media::MAX_UPLOAD * 2)),
-        )
+        .route("/games/{id}/data", post(data::trade_data).layer(saved))
+        .route("/games/{id}/media", post(media::change_media).layer(pictures))
         .route("/games/{id}/media/{file}", get(media::get_media))
+        .route("/follows", post(follows::change_follow))
+        .route("/follows/{id}", get(follows::get_following))
+        .route("/followers/{kind}/{target}", get(follows::get_followers))
+        .route("/notifications/{id}", get(follows::get_notifications))
+        .route("/notifications/seen", post(follows::notifications_seen))
         .route("/passes/buy", post(earnings::buy_pass))
         .route("/passes/{id}/owners/{player}", get(earnings::owns))
         .route("/reports", post(report))
@@ -1252,7 +1262,8 @@ const GAME_COLUMNS: &str = concat!(
     (SELECT COUNT(*) FROM game_favorites f WHERE f.game_id = g.game_id),
     gr.group_id, gr.name, gr.tag, gr.color, g.private, g.max_players, closed_games(),
     (SELECT n.number FROM game_numbers n WHERE n.game_id = g.game_id), g.genre, g.tags,
-    (SELECT group_concat(m.slot || ':' || m.version) FROM game_media m WHERE m.game_id = g.game_id)"
+    (SELECT group_concat(m.slot || ':' || m.version) FROM game_media m WHERE m.game_id = g.game_id),
+    (SELECT COUNT(*) FROM follows fo WHERE fo.kind = 'game' AND fo.target = g.game_id)"
 );
 const GAMES: &str = "games g LEFT JOIN accounts a ON a.player_id = g.author_id
     LEFT JOIN group_games gg ON gg.game_id = g.game_id LEFT JOIN groups gr ON gr.group_id = gg.group_id";
@@ -1295,6 +1306,7 @@ fn game_row(r: &rusqlite::Row, now: i64) -> rusqlite::Result<GameInfo> {
         genre: Some(r.get::<_, String>(22)?).filter(|g| !g.is_empty()),
         tags: r.get::<_, String>(23)?.split(',').filter(|t| !t.is_empty()).map(str::to_owned).collect(),
         media: media::parse_refs(r.get(24)?),
+        followers: r.get::<_, i64>(25)? as u32,
     })
 }
 
@@ -1492,6 +1504,7 @@ async fn publish(
             .map_err(internal)?;
             manage::keep_version(&db, id, version + 1, &title, &game.place, now).map_err(internal)?;
             copies::keep(&db, id, &owner, &prints).map_err(internal)?;
+            follows::game_published(&db, id, &title, author_id.as_deref(), false);
             Ok(Json(Published { game_id: id.to_owned(), version: version as u32 + 1 }))
         }
         None => {
@@ -1507,6 +1520,7 @@ async fn publish(
             .map_err(internal)?;
             manage::keep_version(&db, &id, 1, &title, &game.place, now).map_err(internal)?;
             copies::keep(&db, &id, &owner, &prints).map_err(internal)?;
+            follows::game_published(&db, &id, &title, author_id.as_deref(), true);
             Ok(Json(Published { game_id: id, version: 1 }))
         }
     }
@@ -2964,6 +2978,39 @@ impl HubClient {
     /// The address of a game's picture, for showing it.
     pub fn media_url(&self, game_id: &str, media: &MediaRef) -> String {
         format!("{}/games/{game_id}/media/{}-{}", self.base, media.slot, media.version)
+    }
+
+    pub fn change_follow(&self, change: &FollowChange) -> Result<Following, String> {
+        self.post_signed("/follows", change)
+    }
+
+    pub fn following(&self, player_id: &str, time: i64, signature: &str) -> Result<Following, String> {
+        self.agent
+            .get(format!("{}/follows/{player_id}", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn notifications(
+        &self,
+        player_id: &str,
+        time: i64,
+        signature: &str,
+    ) -> Result<Notifications, String> {
+        self.agent
+            .get(format!("{}/notifications/{player_id}", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn notifications_seen(&self, seen: &NotificationsSeen) -> Result<Notifications, String> {
+        self.post_signed("/notifications/seen", seen)
     }
 
     pub fn buy_pass(&self, buy: &BuyPass) -> Result<Pass, String> {

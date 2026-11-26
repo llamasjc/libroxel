@@ -509,5 +509,12 @@ pub(crate) async fn award(
     }
     fresh(&db, me, "award", award.time)?;
     let new = give(&db, me, &award.badge_id);
+    if new {
+        let title: String = db
+            .query_row("SELECT title FROM games WHERE game_id = ?1", params![award.game_id], |r| r.get(0))
+            .unwrap_or_default();
+        let link = crate::follows::game_link(&db, &award.game_id, &title);
+        crate::follows::notify(&db, me, "badge", "", &format!("You earned the badge {}", badge.name), &link);
+    }
     Ok(Json(Awarded { badge, new }))
 }
