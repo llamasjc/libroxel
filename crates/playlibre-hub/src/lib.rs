@@ -64,6 +64,11 @@ pub use badges::{
     badge_message, platform_badge,
 };
 mod copies;
+mod data;
+pub use data::{
+    DataChange, DataTrade, DataTraded, MAX_GAME_DATA, MAX_TRADE, MAX_VALUE as MAX_DATA_VALUE, changes_hash,
+    data_message,
+};
 mod earnings;
 pub use earnings::{
     BuyPass, CREATOR_SHARE, CashOut, EarnedDay, Earnings, EarningsSettings, GameEarnings, HOLD_DAYS,
@@ -978,6 +983,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     pictures::create_tables(&db)?;
     wallet::create_tables(&db)?;
     earnings::create_tables(&db)?;
+    data::create_tables(&db)?;
     // Hubs from before game numbers: number every game there is.
     number_games(&db).map_err(|e| format!("could not number the Hub's games: {e}"))?;
     seal::install(&db, path)?;
@@ -1122,6 +1128,13 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/earnings/{id}", get(earnings::get_earnings))
         .route("/earnings/cash-out", post(earnings::cash_out))
         .route("/games/{id}/passes", get(earnings::list_passes).post(earnings::change_pass))
+        .route(
+            "/games/{id}/data",
+            post(data::trade_data).layer((
+                tower_http::decompression::RequestDecompressionLayer::new(),
+                axum::extract::DefaultBodyLimit::max(data::MAX_TRADE * 2 + 64 * 1024),
+            )),
+        )
         .route("/passes/buy", post(earnings::buy_pass))
         .route("/passes/{id}/owners/{player}", get(earnings::owns))
         .route("/reports", post(report))
@@ -2870,6 +2883,11 @@ impl HubClient {
 
     pub fn change_pass(&self, game_id: &str, change: &PassChange) -> Result<Vec<Pass>, String> {
         self.post_signed(&format!("/games/{game_id}/passes"), change)
+    }
+
+    /// Trades a game's saved data (see [`DataTrade`]).
+    pub fn trade_data(&self, game_id: &str, trade: &DataTrade) -> Result<DataTraded, String> {
+        self.post_signed(&format!("/games/{game_id}/data"), trade)
     }
 
     pub fn buy_pass(&self, buy: &BuyPass) -> Result<Pass, String> {

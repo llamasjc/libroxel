@@ -1079,7 +1079,38 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
             ] {
                 let signal: Value = t.get(event)?;
                 method(lua, &t, prompt, move |lua, (player, id): (Value, Value)| {
-                    warn(lua, format!("{MARKETPLACE_SERVICE}.{prompt} {NOT_AVAILABLE}"));
+                    // Passes of a game on the Hub: the host asks the player.
+                    if prompt == PROMPT_GAME_PASS_PURCHASE && host(lua).world.borrow().passes.on {
+                        let user = match &player {
+                            Value::UserData(ud) => {
+                                mlua::ObjectLike::get::<Option<f64>>(ud, "UserId").ok().flatten()
+                            }
+                            _ => None,
+                        };
+                        let pass = match &id {
+                            Value::Integer(n) => Some(*n),
+                            Value::Number(n) if n.fract() == 0.0 => Some(*n as i64),
+                            _ => None,
+                        };
+                        let (Some(user), Some(pass)) = (user, pass) else {
+                            return Err(mlua::Error::runtime(
+                                "PromptGamePassPurchase needs a player and a game pass id",
+                            ));
+                        };
+                        let user = user as i64;
+                        let host = host(lua);
+                        let mut world = host.world.borrow_mut();
+                        let p = &mut world.passes;
+                        let sold = p.info.iter().any(|i| i.id == pass);
+                        if sold && !p.owned.contains(&(user, pass)) {
+                            if !p.prompts.contains(&(user, pass)) {
+                                p.prompts.push((user, pass));
+                            }
+                            return Ok(());
+                        }
+                    } else {
+                        warn(lua, format!("{MARKETPLACE_SERVICE}.{prompt} {NOT_AVAILABLE}"));
+                    }
                     let who = if by_user_id {
                         match &player {
                             Value::UserData(ud) => {
@@ -1097,13 +1128,37 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
                     defer.call::<()>((signal.clone(), who, id))
                 })?;
             }
-            for owns in [
-                USER_OWNS_GAME_PASS_ASYNC,
-                PLAYER_OWNS_ASSET,
-                "PlayerOwnsAssetAsync",
-                "PlayerOwnsBundle",
-                "PlayerOwnsBundleAsync",
-            ] {
+            // Waits (as the real call does) until the host has looked up
+            // the player's passes, for at most ten seconds.
+            let known = lua.create_function(|lua, user: f64| {
+                let host = host(lua);
+                let world = host.world.borrow();
+                Ok(!world.passes.on || world.passes.known.contains(&(user as i64)))
+            })?;
+            let has = lua.create_function(|lua, (user, pass): (f64, f64)| {
+                Ok(host(lua).world.borrow().passes.owned.contains(&(user as i64, pass as i64)))
+            })?;
+            let owns_pass: Function = lua
+                .load(
+                    "local known, has = ...
+                     return function(_, userId, passId)
+                         if type(userId) ~= \"number\" or type(passId) ~= \"number\" then
+                             error(\"UserOwnsGamePassAsync needs a user id and a game pass id\", 2)
+                         end
+                         local waited = 0
+                         while not known(userId) and waited < 10 do
+                             waited += task.wait(0.1)
+                         end
+                         return has(userId, passId)
+                     end",
+                )
+                .set_name("=MarketplaceService")
+                .call((known, has))?;
+            t.set(USER_OWNS_GAME_PASS_ASYNC, owns_pass.clone())?;
+            t.set("UserOwnsGamePass", owns_pass)?;
+            for owns in
+                [PLAYER_OWNS_ASSET, "PlayerOwnsAssetAsync", "PlayerOwnsBundle", "PlayerOwnsBundleAsync"]
+            {
                 method(lua, &t, owns, |_, _: MultiValue| Ok(false))?;
             }
             for info in [GET_PRODUCT_INFO, "GetProductInfoAsync"] {
@@ -1404,6 +1459,14 @@ fn product_info(lua: &Lua, id: f64, kind: &Value) -> mlua::Result<Table> {
     if kind.ends_with(".GamePass") {
         info.set("TargetId", id)?;
         info.set("ProductType", "Game Pass")?;
+        let host = host(lua);
+        let world = host.world.borrow();
+        if let Some(pass) = world.passes.info.iter().find(|p| p.id as f64 == id) {
+            info.set("Name", pass.name.as_str())?;
+            info.set("Description", pass.description.as_str())?;
+            info.set("PriceInRobux", pass.price)?;
+            info.set("IsForSale", true)?;
+        }
     } else if kind.ends_with(".Product") {
         info.set("ProductId", id)?;
         info.set("ProductType", "Developer Product")?;

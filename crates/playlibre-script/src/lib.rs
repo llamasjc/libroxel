@@ -52,7 +52,11 @@ pub use mlua;
 /// (`RunService:Set3dRenderingEnabled(false)`, as loading screens do).
 pub static RENDERING_3D: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 pub use net::{NetMessage, NetRole, decode as decode_net_value, encode as encode_net_value, map_instances};
-pub use world::{BadgeInfo, VelocityRequest};
+pub use world::{BadgeInfo, PassInfo, VelocityRequest};
+
+/// What data stores hold: store, then key, then value.
+pub type SavedData =
+    std::collections::BTreeMap<String, std::collections::BTreeMap<String, serde_json::Value>>;
 
 /// Measures GUI text: the text, its size in points and the width it wraps
 /// at, giving how wide and tall it is. The app hands in the one its GUI
@@ -435,6 +439,52 @@ impl ScriptRuntime {
         world.badges.owned.extend(ids.into_iter().map(|id| (user_id, id)));
     }
 
+    /// The game's passes, from the Hub. From now on `UserOwnsGamePassAsync`
+    /// waits for each player's passes (see [`add_owned_passes`](Self::add_owned_passes))
+    /// and purchase prompts go to the host (see [`take_pass_prompts`](Self::take_pass_prompts)).
+    pub fn set_pass_info(&self, info: Vec<PassInfo>) {
+        let host = bindings::host(&self.lua);
+        let mut world = host.world.borrow_mut();
+        world.passes.on = true;
+        world.passes.info = info;
+    }
+
+    /// The passes a player owns, once the host has looked them up.
+    pub fn add_owned_passes(&self, user_id: i64, ids: impl IntoIterator<Item = i64>) {
+        let host = bindings::host(&self.lua);
+        let mut world = host.world.borrow_mut();
+        world.passes.known.insert(user_id);
+        world.passes.owned.extend(ids.into_iter().map(|id| (user_id, id)));
+    }
+
+    /// Takes the `PromptGamePassPurchase` calls waiting: user id, pass id.
+    pub fn take_pass_prompts(&self) -> Vec<(i64, i64)> {
+        std::mem::take(&mut bindings::host(&self.lua).world.borrow_mut().passes.prompts)
+    }
+
+    /// A purchase prompt closed: fires `PromptGamePassPurchaseFinished` for
+    /// the player, after noting the pass as theirs when they bought it.
+    pub fn pass_prompt_finished(&self, user_id: i64, pass_id: i64, bought: bool) -> Vec<ScriptError> {
+        if bought {
+            let host = bindings::host(&self.lua);
+            host.world.borrow_mut().passes.owned.insert((user_id, pass_id));
+        }
+        let source = format!(
+            "local userId, passId, bought = {user_id}, {pass_id}, {bought}
+             local market = game:GetService(\"MarketplaceService\")
+             for _, player in game:GetService(\"Players\"):GetPlayers() do
+                 if player.UserId == userId then
+                     market.PromptGamePassPurchaseFinished:Fire(player, passId, bought)
+                     return
+                 end
+             end"
+        );
+        match self.run("MarketplaceService", &source) {
+            Ok(()) => bindings::take_errors(&self.lua),
+            Err(e) => vec![e],
+        }
+    }
+
     /// Takes the players `Kick` removed, with why.
     pub fn take_kicks(&self) -> Vec<(InstanceId, String)> {
         world::take_kicks(&self.lua)
@@ -542,6 +592,20 @@ impl ScriptRuntime {
     /// Everything data stores hold, as JSON to keep between play sessions.
     pub fn save_data(&self) -> String {
         services::save_data(&self.lua)
+    }
+
+    /// Everything data stores hold: store, then key, then value. A server
+    /// that keeps its data elsewhere compares two of these to see what
+    /// scripts changed.
+    pub fn data_snapshot(&self) -> SavedData {
+        bindings::host(&self.lua).data.borrow().clone()
+    }
+
+    /// Puts a value saved elsewhere (another server of the same game) into
+    /// a data store, or removes the key with `None`, without counting it as
+    /// a change scripts made.
+    pub fn set_saved_value(&self, store: &str, key: &str, value: Option<serde_json::Value>) {
+        services::set_saved_value(&self.lua, store, key, value)
     }
 
     /// Tells scripts where the mouse points (for `Player:GetMouse()`), or

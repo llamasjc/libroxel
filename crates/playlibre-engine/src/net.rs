@@ -2234,6 +2234,22 @@ impl PlaySession {
         }
     }
 
+    /// Sends an ask to a player on another computer.
+    pub(crate) fn send_ask(&mut self, player: InstanceId, ask: Json) {
+        if let Link::Host(host) = &mut self.link
+            && let Some(peer) = host.peers.iter_mut().find(|p| p.player == Some(player))
+        {
+            peer.conn.send(&json!({ "t": "ask", "a": ask }));
+        }
+    }
+
+    /// Sends an answer to the host.
+    pub(crate) fn send_answer(&mut self, answer: Json) {
+        if let Link::Client(joined) = &mut self.link {
+            joined.conn.send(&json!({ "t": "answer", "a": answer }));
+        }
+    }
+
     /// The players who joined from other computers, for the host to see.
     pub fn joined_players(&self) -> Vec<(InstanceId, String)> {
         let Link::Host(host) = &self.link else { return Vec::new() };
@@ -2543,6 +2559,13 @@ impl PlaySession {
                         }
                     }
                     "reset" => self.reset_character_for(index),
+                    "answer" => {
+                        if let Some(answer) = message.get("a").filter(|a| a.is_object())
+                            && self.player_answers.len() < 256
+                        {
+                            self.player_answers.push((player, answer.clone()));
+                        }
+                    }
                     "voice" => {
                         if let Some(text) = message.get("d").and_then(Json::as_str)
                             && let Some(samples) = crate::voice::from_wire(text)
@@ -2952,6 +2975,13 @@ impl PlaySession {
                             (c.bytes + bytes_in) as f64 / 1_000_000.0,
                             c.slowest.max(slowest_apply) * 1000.0,
                         ));
+                    }
+                }
+                "ask" => {
+                    if let Some(ask) = message.get("a").filter(|a| a.is_object())
+                        && self.host_asks.len() < 64
+                    {
+                        self.host_asks.push(ask.clone());
                     }
                 }
                 "badge" => {

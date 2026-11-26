@@ -34,6 +34,8 @@ pub struct Downloaded {
 pub struct Platform {
     pub badges: crate::groups::Badges,
     pub awards: crate::awards::Awards,
+    /// Game passes bought inside games.
+    pub shop: crate::game_passes::Shop,
     /// The Hub's address ([`playlibre_hub::hub_address`]). It isn't
     /// something to change in the app: there is one Hub.
     pub hub_address: String,
@@ -244,6 +246,7 @@ impl Default for Platform {
             fetched_items: Arc::default(),
             item_shared: Arc::default(),
             wallet: None,
+            shop: Default::default(),
             wallet_found: Arc::default(),
             wallet_busy: false,
             wallet_error: None,

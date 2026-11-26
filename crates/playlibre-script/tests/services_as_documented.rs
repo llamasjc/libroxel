@@ -422,3 +422,49 @@ fn purchases_close_unbought_and_badges_are_remembered() {
     run(&rt2, r#"print(game:GetService("BadgeService"):UserHasBadgeAsync(42, 7))"#);
     assert_eq!(printed(&rt2), ["true"]);
 }
+
+#[test]
+fn game_passes_come_from_the_host_and_prompts_wait_for_the_player() {
+    use playlibre_instance::{Property, PropertyValue};
+    let rt = runtime();
+    {
+        let mut tree = rt.tree().borrow_mut();
+        let players = tree.service(ClassKind::Players).unwrap();
+        let player = tree.create(ClassKind::Player, "Sam").unwrap();
+        tree.set(player, Property::UserId, PropertyValue::Number(7.0)).unwrap();
+        tree.set_parent(player, Some(players)).unwrap();
+    }
+    rt.set_pass_info(vec![playlibre_script::PassInfo {
+        id: 12,
+        name: "VIP".into(),
+        description: "The VIP room".into(),
+        price: 40,
+    }]);
+    run(
+        &rt,
+        r#"
+        local MarketplaceService = game:GetService("MarketplaceService")
+        local player = game:GetService("Players"):GetPlayers()[1]
+        MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(who, id, bought)
+            print("finished", who == player, id, bought, MarketplaceService:UserOwnsGamePassAsync(who.UserId, id))
+        end)
+        local info = MarketplaceService:GetProductInfo(12, Enum.InfoType.GamePass)
+        print(info.Name, info.PriceInRobux, info.IsForSale)
+        task.spawn(function()
+            print("owns", MarketplaceService:UserOwnsGamePassAsync(7, 12))
+            MarketplaceService:PromptGamePassPurchase(player, 12)
+        end)
+    "#,
+    );
+    play(&rt, 0.3);
+    // Waits until the host has looked the player up.
+    assert_eq!(printed(&rt), ["VIP 40 true"]);
+    rt.add_owned_passes(7, []);
+    play(&rt, 0.3);
+    assert_eq!(printed(&rt), ["owns false"]);
+    assert_eq!(rt.take_pass_prompts(), [(7, 12)]);
+    let errors = rt.pass_prompt_finished(7, 12, true);
+    assert!(errors.is_empty(), "{errors:?}");
+    play(&rt, 0.1);
+    assert_eq!(printed(&rt), ["finished true 12 true true"]);
+}

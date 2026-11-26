@@ -3,6 +3,18 @@
 What changed in each release. The full list of commits for each one is on
 its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 
+## Unreleased
+
+- **Saved progress:** games played on the Hub's servers keep their data
+  stores on the Hub, so coins, levels and unlocks carry over from one
+  server to the next and outlast a server stopping. Servers trade changes
+  with the Hub every few seconds and send the last ones when they stop.
+  A creator hosting their own game keeps its data there too.
+- **Game passes inside games:** `MarketplaceService:PromptGamePassPurchase`
+  shows the pass with its price and buys it with the player's Credits,
+  `UserOwnsGamePassAsync` answers from the Hub, and `GetProductInfo` with
+  `Enum.InfoType.GamePass` gives the pass's name and price.
+
 ## 0.1.20 (2026-11-26)
 
 - **Game pages have numbers:** every game has a number, and its page on

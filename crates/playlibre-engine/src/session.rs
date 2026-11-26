@@ -299,6 +299,10 @@ pub struct PlaySession {
     pub(crate) voice: crate::voice::Voice,
     pub(crate) earned_badges: Vec<String>,
     pub(crate) chat: crate::chat::Chat,
+    /// What the host asked the player on this computer (see [`PlaySession::take_host_asks`]).
+    pub(crate) host_asks: Vec<playlibre_instance::serde_json::Value>,
+    /// What players answered the host (see [`PlaySession::take_player_answers`]).
+    pub(crate) player_answers: Vec<(InstanceId, playlibre_instance::serde_json::Value)>,
 }
 
 impl PlaySession {
@@ -347,6 +351,8 @@ impl PlaySession {
             voice: Default::default(),
             earned_badges: Vec::new(),
             chat: Default::default(),
+            host_asks: Vec::new(),
+            player_answers: Vec::new(),
         };
         // Scripts find the camera through the workspace, so it exists from the start.
         session.camera = {
@@ -994,6 +1000,21 @@ impl PlaySession {
         self.runtime.save_data()
     }
 
+    /// What data stores hold now (see [`playlibre_script::ScriptRuntime::data_snapshot`]).
+    pub fn data_snapshot(&self) -> playlibre_script::SavedData {
+        self.runtime.data_snapshot()
+    }
+
+    /// Puts in a value another server of the game saved (`None` removes the key).
+    pub fn set_saved_value(
+        &self,
+        store: &str,
+        key: &str,
+        value: Option<playlibre_instance::serde_json::Value>,
+    ) {
+        self.runtime.set_saved_value(store, key, value)
+    }
+
     /// Ends the session: every player leaves (firing the leave event, where
     /// games usually save), so call this before throwing the session away.
     pub fn stop(&mut self) {
@@ -1240,6 +1261,86 @@ impl PlaySession {
     /// Badges a game gave the player on this computer.
     pub fn take_earned_badges(&mut self) -> Vec<String> {
         std::mem::take(&mut self.earned_badges)
+    }
+
+    /// The game's passes, from the Hub (see [`playlibre_script::ScriptRuntime::set_pass_info`]).
+    pub fn set_passes(&mut self, info: Vec<playlibre_script::PassInfo>) {
+        self.runtime.set_pass_info(info);
+    }
+
+    /// The passes `player` owns, once looked up on the Hub.
+    pub fn add_owned_passes(&mut self, player: InstanceId, ids: Vec<i64>) {
+        if let Some(user) = self.user_id_of(player) {
+            self.runtime.add_owned_passes(user, ids);
+        }
+    }
+
+    /// A player's `UserId`.
+    pub fn user_id_of(&self, player: InstanceId) -> Option<i64> {
+        self.runtime.tree().borrow().get_number(player, Property::UserId).map(|n| n as i64)
+    }
+
+    /// The player with that `UserId`.
+    pub fn player_with_user_id(&self, user: i64) -> Option<InstanceId> {
+        self.avatars.iter().map(|a| a.player).find(|p| self.user_id_of(*p) == Some(user))
+    }
+
+    /// A purchase prompt for `player` closed (see
+    /// [`playlibre_script::ScriptRuntime::pass_prompt_finished`]).
+    pub fn pass_prompt_finished(&mut self, player: InstanceId, pass: i64, bought: bool) {
+        if let Some(user) = self.user_id_of(player) {
+            let errors = self.runtime.pass_prompt_finished(user, pass, bought);
+            self.collect(errors);
+        }
+    }
+
+    /// Takes what the host asked the player on this computer to do, such as
+    /// `{"kind": "pass", ...}` (buy a game pass) or `{"kind": "teleport", ...}`.
+    pub fn take_host_asks(&mut self) -> Vec<playlibre_instance::serde_json::Value> {
+        std::mem::take(&mut self.host_asks)
+    }
+
+    /// Answers something the host asked (see [`take_host_asks`](Self::take_host_asks)).
+    pub fn answer_host(&mut self, answer: playlibre_instance::serde_json::Value) {
+        if self.runtime.net_role() == NetRole::Client {
+            self.send_answer(answer);
+        } else if let Some(me) = self.local_player() {
+            self.player_answers.push((me, answer));
+        }
+    }
+
+    /// Asks `player` something (see [`take_host_asks`](Self::take_host_asks)):
+    /// on this computer, or sent to theirs.
+    pub fn ask_player(&mut self, player: InstanceId, ask: playlibre_instance::serde_json::Value) {
+        if self.avatar_of(player).is_some_and(|i| !self.avatars[i].remote) {
+            self.host_asks.push(ask);
+        } else {
+            self.send_ask(player, ask);
+        }
+    }
+
+    /// Takes what players answered the host.
+    pub fn take_player_answers(&mut self) -> Vec<(InstanceId, playlibre_instance::serde_json::Value)> {
+        std::mem::take(&mut self.player_answers)
+    }
+
+    /// Puts back asks taken but meant for someone else.
+    pub fn put_back_asks(&mut self, asks: Vec<playlibre_instance::serde_json::Value>) {
+        self.host_asks.splice(0..0, asks);
+    }
+
+    /// Puts back answers taken but meant for someone else.
+    pub fn put_back_answers(&mut self, answers: Vec<(InstanceId, playlibre_instance::serde_json::Value)>) {
+        self.player_answers.splice(0..0, answers);
+    }
+
+    /// Takes the `PromptGamePassPurchase` calls scripts made: player, pass id.
+    pub fn take_pass_prompts(&mut self) -> Vec<(InstanceId, i64)> {
+        self.runtime
+            .take_pass_prompts()
+            .into_iter()
+            .filter_map(|(user, pass)| Some((self.player_with_user_id(user)?, pass)))
+            .collect()
     }
 
     /// The game's badges, and which of them the player on this computer has.

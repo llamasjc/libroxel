@@ -275,6 +275,12 @@ pub fn editor_ui(
     editor.log_file.write_new(&engine.log);
     crate::report::crash_screen(&ctx, &mut editor.crash);
     recovery_screen(&ctx, engine, editor);
+    {
+        let hub = editor.platform.client();
+        let credits = editor.platform.balance().map(|(n, _)| n);
+        let signed_in = editor.platform.account.is_some();
+        editor.platform.shop.ui(&ctx, engine.session.as_mut(), &hub, credits, signed_in);
+    }
     keep_unsaved_copy(engine, editor, now);
     // Model files dropped on the window come in as parts.
     for file in ctx.input(|i| i.raw.dropped_files.clone()) {
@@ -310,6 +316,12 @@ pub fn editor_ui(
     }
     editor.platform.social_tick(engine.session.is_some());
     editor.platform.awards_tick(engine.session.as_mut());
+    {
+        let hub = editor.platform.client();
+        let game = editor.platform.playing_game_id(engine.session.is_some());
+        let account = editor.platform.account.as_ref().map(|a| a.player_id.clone());
+        editor.platform.shop.tick(engine.session.as_mut(), &hub, game.as_deref(), account.as_deref());
+    }
     for name in std::mem::take(&mut editor.platform.awards.earned) {
         log(engine, LogLevel::Info, format!("Badge earned: {name}"));
     }

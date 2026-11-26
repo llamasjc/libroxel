@@ -646,6 +646,29 @@ pub(crate) fn save_data(lua: &Lua) -> String {
     serde_json::to_string_pretty(&*host.data.borrow()).unwrap_or_else(|_| "{}".into())
 }
 
+/// Puts one key's value in from elsewhere (or removes it), forgetting the
+/// key's history in this session.
+pub(crate) fn set_saved_value(lua: &Lua, store: &str, key: &str, value: Option<serde_json::Value>) {
+    let host = host(lua);
+    {
+        let mut data = host.data.borrow_mut();
+        match value {
+            Some(v) => {
+                data.entry(store.to_owned()).or_default().insert(key.to_owned(), v);
+            }
+            None => {
+                if let Some(s) = data.get_mut(store) {
+                    s.remove(key);
+                    if s.is_empty() {
+                        data.remove(store);
+                    }
+                }
+            }
+        }
+    }
+    host.data_info.borrow_mut().remove(&(store.to_owned(), key.to_owned()));
+}
+
 /// Replaces all saved data with `json` (as written by [`save_data`]).
 pub(crate) fn load_data(lua: &Lua, json: &str) -> Result<(), String> {
     let data: DataStores = serde_json::from_str(json).map_err(|e| e.to_string())?;

@@ -65,6 +65,30 @@ pub(crate) struct WorldState {
     /// Tools that were just used (their `Activated` fired).
     pub(crate) swings: Vec<InstanceId>,
     pub(crate) badges: Badges,
+    pub(crate) passes: Passes,
+}
+
+/// A game pass the game sells, as the Hub describes it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PassInfo {
+    pub id: i64,
+    pub name: String,
+    pub description: String,
+    pub price: u32,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct Passes {
+    /// Whether the host keeps track of passes at all (a published game on
+    /// a Hub). Until it says so, nobody owns any and prompts close unbought.
+    pub(crate) on: bool,
+    pub(crate) info: Vec<PassInfo>,
+    /// User id, pass id.
+    pub(crate) owned: std::collections::HashSet<(i64, i64)>,
+    /// Users whose passes the host has looked up.
+    pub(crate) known: std::collections::HashSet<i64>,
+    /// `PromptGamePassPurchase` calls waiting for the host: user id, pass id.
+    pub(crate) prompts: Vec<(i64, i64)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

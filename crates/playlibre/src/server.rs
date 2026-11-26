@@ -279,9 +279,31 @@ pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicB
     for warning in report.warnings {
         say(format!("warning: {warning}"));
     }
-    let mut session = PlaySession::host(Rc::new(RefCell::new(tree)), port, None, false)?;
     let identity =
         Identity::load_or_create(&key).map_err(|e| format!("could not load {}: {e}", key.display()))?;
+    // A game's saved data lives on the Hub, so players keep their progress
+    // from one server to the next.
+    let mut saved = match (&hub, &game_id) {
+        (HubUse::At(address), Some(id)) => {
+            match crate::saved_data::SavedOnHub::start(HubClient::new(address), identity.clone(), id) {
+                Ok(saved) => {
+                    say("Saved data is kept on the Hub.".into());
+                    Some(saved)
+                }
+                Err(e) => {
+                    say(format!("Saved data lasts only while this server runs: {e}"));
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+    let start_data = saved.as_ref().map(|s| s.start_json());
+    let mut session = PlaySession::host(Rc::new(RefCell::new(tree)), port, start_data.as_deref(), false)?;
+    let mut passes = match (&hub, &game_id) {
+        (HubUse::At(address), Some(id)) => crate::game_passes::HostPasses::new(HubClient::new(address), id),
+        _ => None,
+    };
     // Port 0 picks a free one: the tunnel needs the one it got.
     let port = session.host_address().map_or(port, |a| a.port());
     let tunnel = HostTunnel::start_on(&identity, Network::Internet, port, udp_port)?;
@@ -365,6 +387,12 @@ pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicB
                 hub_said = said;
             }
         }
+        if let Some(passes) = passes.as_mut() {
+            passes.tick(&mut session, None);
+        }
+        if let Some(said) = saved.as_mut().and_then(|s| s.tick(&session)) {
+            say(said);
+        }
         for line in session.take_log() {
             let level = match line.level {
                 LogLevel::Info => "",
@@ -380,6 +408,13 @@ pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicB
         } else {
             next = now;
         }
+    }
+    // Everyone leaves (where games save), then the last changes go to the Hub.
+    session.stop();
+    if let Some(saved) = saved.as_mut()
+        && let Err(e) = saved.finish(&session)
+    {
+        say(format!("Could not save the last data on the Hub: {e}"));
     }
     say("Server stopped.".into());
     Ok(())
