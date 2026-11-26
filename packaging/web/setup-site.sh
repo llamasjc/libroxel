@@ -141,8 +141,12 @@ sed -i -e "s#<meta name=\"playlibre-hub\" content=\"[^\"]*\">#<meta name=\"playl
 sed -i "s#https://playlibre.net#https://$DOMAIN#g" "$new/index.html" "$new/robots.txt" "$new/sitemap.xml"
 chmod -R a+rX "$new"
 # Swap the files in, keeping the downloads; files gone from the site go.
-find /var/www/playlibre -mindepth 1 -maxdepth 1 ! -name downloads -exec rm -rf {} +
-find "$new" -mindepth 1 -maxdepth 1 ! -name downloads -exec mv -t /var/www/playlibre {} +
+# The folder may be a link (to the old /var/www/libroxel): find doesn't go
+# into a link it's given, so nothing old would be cleared and moving the
+# new folders over the old ones would fail. Work in the real folder.
+www="$(readlink -f /var/www/playlibre)"
+find "$www" -mindepth 1 -maxdepth 1 ! -name downloads -exec rm -rf {} +
+find "$new" -mindepth 1 -maxdepth 1 ! -name downloads -exec mv -t "$www" {} +
 rm -rf "$new"
 
 echo "== HTTPS with Caddy (/etc/caddy/sites/site.caddy)"
