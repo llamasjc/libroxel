@@ -22,6 +22,7 @@ mod browse;
 mod command;
 mod debugging;
 mod file_picker;
+mod game_icons;
 mod game_passes;
 mod game_ratings;
 mod graphics;

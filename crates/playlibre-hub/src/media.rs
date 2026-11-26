@@ -61,7 +61,8 @@ pub struct MediaChange {
 
 /// What a creator signs: the picture by its SHA-256, or "remove".
 pub fn media_message(player_id: &str, game_id: &str, time: i64, slot: u32, image: Option<&[u8]>) -> Vec<u8> {
-    let what = image.map_or_else(|| "remove".to_owned(), |b| data_encoding::HEXLOWER.encode(&Sha256::digest(b)));
+    let what =
+        image.map_or_else(|| "remove".to_owned(), |b| data_encoding::HEXLOWER.encode(&Sha256::digest(b)));
     format!("playlibre media\n{player_id}\n{game_id}\n{time}\n{slot}\n{what}").into_bytes()
 }
 
@@ -103,12 +104,8 @@ pub fn redraw(bytes: &[u8], slot: u32) -> Result<(Vec<u8>, &'static str), String
     let mut out = Cursor::new(Vec::new());
     if slot == 0 {
         let side = picture.width().min(picture.height());
-        let square = picture.crop_imm(
-            (picture.width() - side) / 2,
-            (picture.height() - side) / 2,
-            side,
-            side,
-        );
+        let square =
+            picture.crop_imm((picture.width() - side) / 2, (picture.height() - side) / 2, side, side);
         let icon = square.resize_exact(ICON_SIZE, ICON_SIZE, FilterType::Lanczos3);
         DynamicImage::ImageRgba8(icon.to_rgba8())
             .write_to(&mut out, ImageFormat::Png)
@@ -121,7 +118,9 @@ pub fn redraw(bytes: &[u8], slot: u32) -> Result<(Vec<u8>, &'static str), String
         } else {
             picture
         };
-        DynamicImage::ImageRgb8(shot.to_rgb8()).write_to(&mut out, ImageFormat::Jpeg).map_err(|e| e.to_string())?;
+        DynamicImage::ImageRgb8(shot.to_rgb8())
+            .write_to(&mut out, ImageFormat::Jpeg)
+            .map_err(|e| e.to_string())?;
         Ok((out.into_inner(), "image/jpeg"))
     }
 }
@@ -145,7 +144,8 @@ pub(crate) async fn change_media(
     }
     let bytes = match &c.image {
         Some(text) => {
-            let b = data_encoding::BASE64.decode(text.as_bytes()).map_err(|_| bad("that picture is garbled"))?;
+            let b =
+                data_encoding::BASE64.decode(text.as_bytes()).map_err(|_| bad("that picture is garbled"))?;
             if b.len() > MAX_UPLOAD {
                 return Err(bad(format!("pictures can be at most {} MB", MAX_UPLOAD / 1024 / 1024)));
             }
@@ -153,7 +153,11 @@ pub(crate) async fn change_media(
         }
         None => None,
     };
-    if !verify(&c.player_id, &media_message(&c.player_id, &game_id, c.time, c.slot, bytes.as_deref()), &c.signature) {
+    if !verify(
+        &c.player_id,
+        &media_message(&c.player_id, &game_id, c.time, c.slot, bytes.as_deref()),
+        &c.signature,
+    ) {
         return Err((StatusCode::FORBIDDEN, "the signature does not match".into()));
     }
     {
@@ -180,7 +184,9 @@ pub(crate) async fn change_media(
              ON CONFLICT(game_id, slot) DO UPDATE SET bytes = ?3, mime = ?4, version = ?5",
             params![game_id, c.slot, bytes, mime, c.time],
         ),
-        None => db.execute("DELETE FROM game_media WHERE game_id = ?1 AND slot = ?2", params![game_id, c.slot]),
+        None => {
+            db.execute("DELETE FROM game_media WHERE game_id = ?1 AND slot = ?2", params![game_id, c.slot])
+        }
     }
     .map_err(internal)?;
     Ok(Json(refs(&db, &game_id)))

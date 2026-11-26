@@ -55,7 +55,9 @@ pub use assets::{
     ASSET_PREFIX, MAX_ASSET, OfficialGame, StarterPlace, asset_hash, official, official_from, set_official,
     valid_hash,
 };
-pub use charts::{Chart, ChartStats, Charts, ForYou, GENRES, Played, for_you_message, genre_named, guess_genre, wilson};
+pub use charts::{
+    Chart, ChartStats, Charts, ForYou, GENRES, Played, for_you_message, genre_named, guess_genre, wilson,
+};
 mod badges;
 mod cli;
 pub use badges::{
@@ -97,12 +99,15 @@ mod manage;
 mod market;
 mod media;
 pub use manage::{
-    Change, KEEP_VERSIONS, MAX_TAG_LEN, MAX_TAGS, MOST_PLAYERS, ManageGame, Version, clean_tag, manage_message,
+    Change, KEEP_VERSIONS, MAX_TAG_LEN, MAX_TAGS, MOST_PLAYERS, ManageGame, Version, clean_tag,
+    manage_message,
 };
-pub use media::{ICON_SIZE, MAX_SCREENSHOTS, MAX_UPLOAD, MediaChange, MediaRef, SHOT_SIZE, media_message, redraw};
 pub use market::{
     Asset, AssetData, AssetKind, MAX_MODEL, MAX_PLUGIN, NewAsset, PERMISSIONS, Unmarket, asset_message,
     unmarket_message,
+};
+pub use media::{
+    ICON_SIZE, MAX_SCREENSHOTS, MAX_UPLOAD, MediaChange, MediaRef, SHOT_SIZE, media_message, redraw,
 };
 mod messages;
 mod moderate;

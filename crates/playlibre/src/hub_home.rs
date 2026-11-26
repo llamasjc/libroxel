@@ -73,6 +73,14 @@ struct Entry {
 }
 
 impl Entry {
+    /// Its own pictures, when its creator put some up.
+    fn media(&self) -> &[playlibre_hub::MediaRef] {
+        match &self.source {
+            Source::Published(game) => &game.media,
+            _ => &[],
+        }
+    }
+
     fn playing(&self) -> u32 {
         self.servers.iter().map(|s| s.players).sum()
     }
@@ -344,7 +352,7 @@ fn game_tile(ui: &mut egui::Ui, entry: &Entry, friends: &[&Friend]) -> egui::Res
         };
         painter.add(glow.as_shape(picture, 8));
     }
-    paint_blocks(&painter, picture, &entry.key);
+    crate::game_icons::paint(&painter, picture, &entry.key, entry.media());
     let chip = egui::Rect::from_min_size(picture.min + egui::vec2(8.0, 8.0), egui::vec2(26.0, 26.0));
     theme::glass(&painter, chip, 6.0, colour);
     painter.text(
@@ -1010,7 +1018,7 @@ fn game_page(
         // The picture.
         let (rect, _) = ui.allocate_exact_size(egui::vec2(440.0, 248.0), egui::Sense::hover());
         let painter = ui.painter_at(rect);
-        paint_blocks(&painter, rect, &entry.key);
+        crate::game_icons::paint(&painter, rect, &entry.key, entry.media());
         painter.rect_stroke(
             rect,
             theme::CORNER,

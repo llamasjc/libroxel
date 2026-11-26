@@ -7,7 +7,7 @@ use playlibre_hub::{Change, GameInfo, MOST_PLAYERS, ManageGame, Version, creator
 
 use crate::browse::Platform;
 use crate::i18n::{t, tf};
-use crate::menu::{Game, paint_blocks};
+use crate::menu::Game;
 use crate::theme::{self, icon};
 
 type Slot<T> = Arc<Mutex<Option<Result<T, String>>>>;
@@ -170,7 +170,7 @@ fn row(state: &mut MyGames, ui: &mut egui::Ui, platform: &Platform, game: &GameI
     theme::panel().show(ui, |ui| {
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(56.0, 56.0), egui::Sense::hover());
-            paint_blocks(ui.painter(), rect, &game.game_id);
+            crate::game_icons::paint(ui.painter(), rect, &game.game_id, &game.media);
             ui.vertical(|ui| {
                 ui.label(RichText::new(&game.title).font(theme::display(17.0)).color(theme::HEADING));
                 let mut bits = vec![

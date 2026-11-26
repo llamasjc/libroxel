@@ -26,8 +26,15 @@ pub struct Version {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "do", rename_all = "snake_case")]
 pub enum Change {
-    Settings { title: String, description: String, private: bool, max_players: u32 },
-    Restore { version: u32 },
+    Settings {
+        title: String,
+        description: String,
+        private: bool,
+        max_players: u32,
+    },
+    Restore {
+        version: u32,
+    },
     Remove,
     /// The game's genre (one of [`crate::GENRES`], or empty for none) and
     /// up to [`MAX_TAGS`] tags.
