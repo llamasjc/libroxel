@@ -782,6 +782,15 @@ impl ScriptRuntime {
         self.lua.used_memory()
     }
 
+    /// Collects all of the scripts' garbage now, rather than bit by bit
+    /// over the next frames. Objects for destroyed instances that no
+    /// script holds go too, so those instances can be freed.
+    pub fn collect_garbage(&self) {
+        // A second pass takes what the first one's finalizers let go.
+        let _ = self.lua.gc_collect();
+        let _ = self.lua.gc_collect();
+    }
+
     /// Runs every waiting thread each step, however long it takes, so a
     /// game plays out the same on a slow computer (for tests).
     pub fn set_steady(&self, on: bool) {

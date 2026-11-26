@@ -30,7 +30,12 @@ struct Sample {
     slots: usize,
 }
 
-fn sample(session: &PlaySession) -> Sample {
+/// Measures after a full garbage collection: script objects for destroyed
+/// instances otherwise keep those instances for a while, as many as a few
+/// thousand at the top of the collector's cycle, which says nothing about
+/// a leak.
+fn sample(session: &mut PlaySession) -> Sample {
+    session.free_unused_now();
     let tree = session.runtime().tree().borrow();
     Sample {
         lua: session.runtime().used_memory(),
@@ -83,7 +88,7 @@ fn a_busy_server_stays_level_over_a_long_run() {
         // Warmed up once the first fifth is done: caches filled, a few
         // guests have come and gone.
         if i == steps / 5 {
-            warm = Some(sample(&host));
+            warm = Some(sample(&mut host));
         }
         if i > steps / 5 {
             peak_lua = peak_lua.max(host.runtime().used_memory());
@@ -96,7 +101,7 @@ fn a_busy_server_stays_level_over_a_long_run() {
     }
     assert!(errors.is_empty(), "script errors during the soak: {errors:?}");
     let warm = warm.unwrap();
-    let end = sample(&host);
+    let end = sample(&mut host);
     eprintln!(
         "soak: instances in the game {} -> {}; slots held {} -> {}",
         warm.live, end.live, warm.slots, end.slots

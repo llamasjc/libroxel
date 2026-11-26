@@ -1343,6 +1343,20 @@ impl PlaySession {
         }
     }
 
+    /// Collects the scripts' garbage and frees, right away, every
+    /// destroyed instance that nothing holds any more (for soak tests:
+    /// otherwise how many are left waiting depends on where the collector
+    /// is in its cycle, which can be thousands).
+    pub fn free_unused_now(&mut self) {
+        self.runtime.collect_garbage();
+        // The first pass frees what was already waiting and notes the
+        // rest; the second frees those.
+        for _ in 0..2 {
+            self.tidy_steps = TIDY_EVERY;
+            self.tidy();
+        }
+    }
+
     /// Frees what the game destroyed, every [`TIDY_EVERY`] steps: a game
     /// that keeps making and destroying things (bullets, effects, players'
     /// characters) otherwise kept every one of them for as long as it ran,
