@@ -802,6 +802,7 @@ function tabs() {
       data.me?.admin && el('a', { class: `tab iconbtn${route.name === 'moderation' ? ' active' : ''}`, href: '/moderation', title: 'Moderation' }, icon(ICON.flag)),
       data.me?.admin && el('a', { class: `tab iconbtn${route.name === 'stats' ? ' active' : ''}`, href: '/stats', title: 'Stats' }, icon(ICON.signal)),
       messages,
+      creditsChip(),
       el('span', { class: 'caps' }, 'Playing as'),
       el('a', { class: 'name', href: '/profile' }, session.name || 'You'),
       el('button', { class: 'chip iconbtn', title: 'Sign out', onclick: signOut }, icon(ICON.signOut)),
@@ -2309,8 +2310,6 @@ async function walletPost(path, body, message) {
   }
 }
 
-const claimDaily = () => walletPost('/wallet/daily', {}, (t) => `libroxel daily\n${session.playerId}\n${t}`);
-
 const buyItem = (item) => walletPost('/shop/buy', { item_id: item.item_id, price: item.price },
   (t) => `libroxel buy\n${session.playerId}\n${item.item_id}\n${item.price}\n${t}`);
 
@@ -2320,15 +2319,24 @@ async function priceItem(item, price) {
   if (ok) { catalog.at = 0; loadCatalog(); }
 }
 
+/** For now only PlayLibre certified accounts (verified, or the Hub's owners) make catalog hats. */
+const mayMakeItems = () => Boolean(data.me && (data.me.verified || data.me.admin));
+
+/** The account's Credits, at the top right by its name. */
+function creditsChip() {
+  loadWallet();
+  const w = walletInfo;
+  if (!w || w.loading || w.error || w.balance == null) return null;
+  return el('a', { class: `tab credits${route.name === 'avatar' ? ' active' : ''}`, href: '/avatar', title: `Your ${w.currency}. Spend them on hats on the Avatar page.` },
+    icon(BADGE_GLYPHS.coin), String(w.balance));
+}
+
 function walletBar() {
   const w = walletInfo;
   if (!w || w.loading) return null;
   if (w.error) return status(w.error, 'error');
   return el('div', { class: 'form-actions' },
     el('b', {}, `${w.balance} ${w.currency}`),
-    w.daily_ready
-      ? el('button', { class: 'chip', onclick: claimDaily }, `Get ${w.daily} free`)
-      : el('span', { class: 'soft' }, 'Back tomorrow for more'),
     w.may_spend != null && el('span', { class: 'soft' }, w.may_spend ? `${w.may_spend} left to spend this month` : 'Spending is off'));
 }
 
@@ -2394,7 +2402,9 @@ function avatar() {
         el('div', { class: 'form-actions' },
           el('button', { class: 'chip', onclick: () => { draft.look = lookFor(0n); changed(); } }, 'Back to the usual look')))),
     el('h2', { class: 'section' }, 'Catalog'),
-    el('p', { class: 'note' }, 'Hats people made and shared. To make one, build it from parts in the editor, select its model and use Model > Share as hat.'),
+    el('p', { class: 'note' }, mayMakeItems()
+      ? 'Hats in the catalog. To add one, build it from parts in the editor, select its model and use Model > Share as hat.'
+      : 'Hats in the catalog. For now only PlayLibre certified accounts make them.'),
     walletBar(),
     look.item && el('div', { class: 'form-actions' }, `Wearing ${look.item.name}`, el('button', { class: 'chip', onclick: () => { delete look.item; changed(); } }, 'Take it off')),
     hats.length

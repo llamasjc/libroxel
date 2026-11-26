@@ -212,13 +212,17 @@ The first build compiles Bevy and takes a while. After that it is quick.
   no one can rename into it and pass for you. One address can make 5
   accounts an hour, and every address is limited in how fast it calls the
   Hub, publishes, shares and reports.
-- **Catalog:** make a hat in the editor from up to 32 parts (each at most
-  6 studs across), select its model and use **Model > Share as hat**. Its
+- **Catalog:** for now only PlayLibre certified accounts (a verified badge,
+  or one of the Hub's owners) add hats; the Hub turns everyone else away
+  and the app hides the button. Such an account makes a hat in the editor
+  from up to 32 parts (each at most
+  6 studs across), selects its model and uses **Model > Share as hat**. Its
   bottom sits on the character's head, centred. It goes in the catalog on
   the Hub, signed as you, and everyone using that Hub sees it on the
   **👤 Avatar** tab under **Catalog** with a **Wear** button. A worn catalog
-  hat goes with you into every game, including ones you join. Everything
-  in the catalog is free.
+  hat goes with you into every game, including ones you join. A hat can
+  have a price in Credits; the account's Credits show at the top right of
+  the app and the website. There are no free Credits for signing in.
 - **Safety:** bad words in chat come out as `#`s (the starter games'
   chat, and `TextService:FilterStringAsync` for any game's scripts), and
   player names with bad words become `Player`. A host can remove a joined

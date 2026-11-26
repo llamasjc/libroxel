@@ -20,7 +20,6 @@ type Slot<T> = Arc<Mutex<Option<Result<T, String>>>>;
 
 enum WalletAction {
     Read,
-    Daily,
     Buy(String, u32),
 }
 
@@ -671,10 +670,6 @@ impl Platform {
                         time,
                         &me.sign(&playlibre_hub::wallet_message(&player_id, time)),
                     ),
-                    WalletAction::Daily => {
-                        let signature = me.sign(&playlibre_hub::daily_message(&player_id, time));
-                        client.claim_daily(&playlibre_hub::Daily { player_id, time, signature })
-                    }
                     WalletAction::Buy(item_id, price) => {
                         let signature =
                             me.sign(&playlibre_hub::buy_message(&player_id, &item_id, price, time));
@@ -686,24 +681,35 @@ impl Platform {
         });
     }
 
+    /// Reads the wallet again when it is a minute old.
+    fn keep_wallet_fresh(&mut self) {
+        if self.account.is_some() && self.wallet_fetched.is_none_or(|t| t.elapsed() > Duration::from_secs(60))
+        {
+            self.wallet_send(WalletAction::Read);
+        }
+    }
+
+    /// The signed-in account's Credits and their name, for the top bar.
+    pub fn balance(&mut self) -> Option<(i64, String)> {
+        self.keep_wallet_fresh();
+        self.account.as_ref()?;
+        self.wallet.as_ref().map(|w| (w.balance, w.currency.clone()))
+    }
+
+    /// Whether this account may put hats in the catalog: for now only
+    /// PlayLibre certified accounts (a verified badge, or the Hub's owners).
+    pub fn may_make_items(&self) -> bool {
+        self.account.as_ref().is_some_and(|p| p.verified || p.admin)
+    }
+
     fn wallet_row(&mut self, ui: &mut egui::Ui) {
         if self.account.is_none() {
             return;
         }
-        if self.wallet_fetched.is_none_or(|t| t.elapsed() > Duration::from_secs(60)) {
-            self.wallet_send(WalletAction::Read);
-        }
-        let mut claim = false;
+        self.keep_wallet_fresh();
         ui.horizontal(|ui| match &self.wallet {
             Some(w) => {
                 ui.strong(format!("{} {}", w.balance, w.currency));
-                if w.daily_ready {
-                    claim = ui
-                        .add_enabled(!self.wallet_busy, egui::Button::new(format!("Get {} free", w.daily)))
-                        .clicked();
-                } else {
-                    ui.label(RichText::new("Back tomorrow for more").color(crate::theme::MUTED));
-                }
                 match w.may_spend {
                     Some(0) => {
                         ui.label(RichText::new("Spending is off").color(crate::theme::MUTED));
@@ -724,9 +730,6 @@ impl Platform {
         if let Some(e) = &self.wallet_error {
             ui.colored_label(egui::Color32::from_rgb(220, 90, 80), e);
         }
-        if claim {
-            self.wallet_send(WalletAction::Daily);
-        }
     }
 
     /// The catalog part of the Avatar tab: hats to put on. Returns the one
@@ -742,13 +745,13 @@ impl Platform {
         }
         let mut picked = None;
         ui.label(RichText::new("Catalog").font(crate::theme::display(17.0)));
-        ui.label(
-            RichText::new(
-                "Hats people made and shared. To make one, build it from parts in the editor, select its \
-                 model and use Model > Share as hat.",
-            )
-            .color(crate::theme::MUTED),
-        );
+        let note = if self.may_make_items() {
+            "Hats in the catalog. To add one, build it from parts in the editor, select its model and use \
+             Model > Share as hat."
+        } else {
+            "Hats in the catalog. For now only PlayLibre certified accounts make them."
+        };
+        ui.label(RichText::new(note).color(crate::theme::MUTED));
         if let Some(hat) = wearing {
             ui.horizontal(|ui| {
                 ui.label(format!("Wearing {}", hat.name));

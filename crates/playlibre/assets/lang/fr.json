@@ -254,6 +254,7 @@
  "Players joining go on the AutoAssignable team with the fewest players. A SpawnLocation with Neutral off and the same TeamColor is where that team spawns. Scripts can set `player.Team`.": "Les joueurs qui rejoignent vont dans l'équipe AutoAssignable qui a le moins de joueurs. Un SpawnLocation avec Neutral désactivé et la même TeamColor est l'endroit où cette équipe apparaît. Les scripts peuvent changer `player.Team`.",
  "Playing": "En jeu",
  "Playing as": "Tu joues en tant que",
+ "Your Credits. Spend them on hats in the Avatar tab.": "Tes crédits. Dépense-les en chapeaux dans l'onglet Avatar.",
  "Playing as {name}": "Tu joues en tant que {name}",
  "Playing: edits are undone when you stop": "En jeu : les modifications sont annulées à l'arrêt",
  "Plays a WAV or OGG file while the game runs: tick Playing, or call Play, Stop, Pause and Resume from a script (Ended fires when it finishes). SoundId is found like a picture; playlibre://coin, jump, boom, click, splash, chime and hum are built in. Inside a part it gets quieter further from the camera.": "Joue un fichier WAV ou OGG pendant le jeu : coche Playing, ou appelle Play, Stop, Pause et Resume depuis un script (Ended se déclenche à la fin). SoundId se cherche comme une image ; playlibre://coin, jump, boom, click, splash, chime et hum sont intégrés. Dans une pièce, il est plus faible plus la caméra est loin.",

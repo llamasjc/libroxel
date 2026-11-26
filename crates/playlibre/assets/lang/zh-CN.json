@@ -254,6 +254,7 @@
  "Players joining go on the AutoAssignable team with the fewest players. A SpawnLocation with Neutral off and the same TeamColor is where that team spawns. Scripts can set `player.Team`.": "加入的玩家会进入 AutoAssignable 且人数最少的队伍。Neutral 关闭且 TeamColor 相同的 SpawnLocation 是该队伍的出生点。脚本可以设置 `player.Team`。",
  "Playing": "正在玩",
  "Playing as": "当前身份",
+ "Your Credits. Spend them on hats in the Avatar tab.": "你的点数。可以在“形象”标签里用来买帽子。",
  "Playing as {name}": "当前身份：{name}",
  "Playing: edits are undone when you stop": "游玩中：停止后所做的编辑会被撤销",
  "Plays a WAV or OGG file while the game runs: tick Playing, or call Play, Stop, Pause and Resume from a script (Ended fires when it finishes). SoundId is found like a picture; playlibre://coin, jump, boom, click, splash, chime and hum are built in. Inside a part it gets quieter further from the camera.": "在游戏运行时播放 WAV 或 OGG 文件：勾选 Playing，或在脚本中调用 Play、Stop、Pause 和 Resume（结束时触发 Ended）。SoundId 的查找方式与图片相同；playlibre://coin、jump、boom、click、splash、chime 和 hum 是内置的。放在零件中时，离摄像机越远声音越小。",

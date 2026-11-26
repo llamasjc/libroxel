@@ -1,7 +1,7 @@
 use playlibre_hub::{
-    AccountUpdate, BuyPass, CashOut, Daily, HubClient, PassAction, PassChange, Publish, account_message,
-    buy_pass_message, cash_out_message, daily_message, earnings_message, pass_message, player_id_of,
-    publish_message, sign,
+    AccountUpdate, BuyPass, CashOut, HubClient, PassAction, PassChange, Publish, account_message,
+    buy_pass_message, cash_out_message, earnings_message, open_db, pass_message, player_id_of,
+    publish_message, sign, top_up,
 };
 
 fn ms() -> i64 {
@@ -77,7 +77,10 @@ fn earnings(hub: &HubClient, key: &[u8; 32]) -> playlibre_hub::Earnings {
 
 #[test]
 fn passes_sell_and_earnings_show_up() {
-    let running = playlibre_hub::start("127.0.0.1:0".parse().unwrap(), None).unwrap();
+    let dir = std::env::temp_dir().join(format!("playlibre-earnings-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("hub.sqlite");
+    let running = playlibre_hub::start("127.0.0.1:0".parse().unwrap(), Some(&path)).unwrap();
     let hub = HubClient::new(&running.url());
     let (maker, fan) = ([70u8; 32], [71u8; 32]);
     join(&hub, &maker, "maker");
@@ -90,9 +93,8 @@ fn passes_sell_and_earnings_show_up() {
     let vip = list[0].pass_id;
     assert!(list[0].owned);
 
-    let (fan_id, time) = (player_id_of(&fan), ms());
-    let signature = sign(&fan, &daily_message(&fan_id, time));
-    hub.claim_daily(&Daily { player_id: fan_id.clone(), time, signature }).unwrap();
+    let fan_id = player_id_of(&fan);
+    assert!(top_up(&open_db(Some(&path)).unwrap(), &fan_id, 25, "pay_fan").unwrap());
 
     assert!(!hub.owns_pass(vip, &fan_id).unwrap());
     assert!(buy(&hub, &fan, vip, 19).unwrap_err().contains("price"));

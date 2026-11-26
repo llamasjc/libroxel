@@ -475,7 +475,12 @@ impl Menu {
         ui.add_space(10.0);
         ui.spacing_mut().item_spacing.x = 2.0;
         let chip = player_chip_width(ui, &self.name);
-        let right = chip + 260.0 + 24.0 + if crate::update::ready().is_some() { 110.0 } else { 0.0 };
+        let credits = platform.balance();
+        let right = chip
+            + 260.0
+            + 24.0
+            + if credits.is_some() { 80.0 } else { 0.0 }
+            + if crate::update::ready().is_some() { 110.0 } else { 0.0 };
         let wide: f32 =
             TOP_TABS.iter().map(|(_, glyph, label)| theme::tab_width(ui, glyph, t(label))).sum::<f32>()
                 + 2.0 * TOP_TABS.len() as f32;
@@ -511,6 +516,13 @@ impl Menu {
             ui.spacing_mut().item_spacing.x = 8.0;
             if player_chip(ui, &self.name, platform.account.is_some()).clicked() {
                 self.go(Tab::Profile);
+            }
+            // The account's Credits, by its name.
+            if let Some((balance, _)) = &credits {
+                let shown = theme::tab(ui, theme::icon::COIN, &balance.to_string(), false);
+                if shown.on_hover_text(t("Your Credits. Spend them on hats in the Avatar tab.")).clicked() {
+                    self.go(Tab::Avatar);
+                }
             }
             if platform.account.is_some() {
                 let unread = platform.chats.unread();

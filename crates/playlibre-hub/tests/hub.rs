@@ -211,8 +211,11 @@ fn players_claim_names_and_their_signed_games_show_them() {
 
 #[test]
 fn creators_share_hats_and_others_find_and_wear_them() {
-    use playlibre_hub::{NewItem, item_message, player_id_of, sign, unlist_message};
-    let hub = start("127.0.0.1:0".parse().unwrap(), None).unwrap();
+    use playlibre_hub::{NewItem, add_owner, item_message, open_db, player_id_of, sign, unlist_message};
+    let dir = std::env::temp_dir().join(format!("playlibre-hats-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("hub.sqlite");
+    let hub = start("127.0.0.1:0".parse().unwrap(), Some(&path)).unwrap();
     let client = HubClient::new(&hub.url());
     let key = [3u8; 32];
     let me = player_id_of(&key);
@@ -225,6 +228,9 @@ fn creators_share_hats_and_others_find_and_wear_them() {
         data,
         time: 5,
     };
+    // Only PlayLibre certified accounts (here, an owner) make hats for now.
+    assert!(client.share_item(&item("Top hat", hat.clone(), &key)).unwrap_err().contains("certified"));
+    add_owner(&open_db(Some(&path)).unwrap(), &me).unwrap();
     let shared = client.share_item(&item("Top hat", hat.clone(), &key)).unwrap();
     assert_eq!(shared.creator, "Someone");
     // Signed by someone else, or not a hat: turned away.

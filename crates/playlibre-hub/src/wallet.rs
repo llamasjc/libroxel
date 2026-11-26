@@ -8,7 +8,6 @@ use super::{Db, now, verify};
 use crate::social::now_ms;
 
 pub const CURRENCY: &str = "Credits";
-pub const DAILY: i64 = 25;
 pub const MAX_PRICE: u32 = 100_000;
 const MONTH_SECS: i64 = 30 * 24 * 60 * 60;
 const CLOCK_SLACK_MS: i64 = 10 * 60 * 1000;
@@ -313,15 +312,15 @@ pub struct Entry {
 pub struct Wallet {
     pub currency: String,
     pub balance: i64,
+    /// Free Credits once a day are gone: always 0 and false, kept so apps
+    /// from before still read the wallet.
+    #[serde(default)]
     pub daily: i64,
+    #[serde(default)]
     pub daily_ready: bool,
     pub owned: Vec<String>,
     pub history: Vec<Entry>,
     pub may_spend: Option<i64>,
-}
-
-fn today() -> String {
-    (now() / 86_400).to_string()
 }
 
 pub fn wallet(db: &Connection, player_id: &str) -> Wallet {
@@ -340,22 +339,12 @@ pub fn wallet(db: &Connection, player_id: &str) -> Wallet {
     {
         owned = rows.filter_map(Result::ok).collect();
     }
-    let claimed = db
-        .query_row(
-            "SELECT 1 FROM ledger WHERE player_id = ?1 AND reason = 'daily' AND reference = ?2",
-            params![player_id, today()],
-            |_| Ok(()),
-        )
-        .optional()
-        .ok()
-        .flatten()
-        .is_some();
     let limit = crate::family::settings_of(db, player_id).spend_limit;
     Wallet {
         currency: CURRENCY.into(),
         balance: balance(db, player_id),
-        daily: DAILY,
-        daily_ready: !claimed,
+        daily: 0,
+        daily_ready: false,
         owned,
         history,
         may_spend: limit.map(|most| (i64::from(most) - spent(db, player_id)).max(0)),
@@ -364,10 +353,6 @@ pub fn wallet(db: &Connection, player_id: &str) -> Wallet {
 
 pub fn wallet_message(player_id: &str, time: i64) -> Vec<u8> {
     format!("libroxel wallet\n{player_id}\n{time}").into_bytes()
-}
-
-pub fn daily_message(player_id: &str, time: i64) -> Vec<u8> {
-    format!("libroxel daily\n{player_id}\n{time}").into_bytes()
 }
 
 pub fn buy_message(player_id: &str, item_id: &str, price: u32, time: i64) -> Vec<u8> {
@@ -380,13 +365,6 @@ pub fn price_message(player_id: &str, item_id: &str, price: u32, time: i64) -> V
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WalletSigned {
-    pub time: i64,
-    pub signature: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Daily {
-    pub player_id: String,
     pub time: i64,
     pub signature: String,
 }
@@ -468,13 +446,10 @@ pub(crate) async fn get_wallet(
     Ok(Json(wallet(&db.lock().unwrap(), &id)))
 }
 
-pub(crate) async fn claim_daily(State(db): State<Db>, Json(d): Json<Daily>) -> Result<Json<Wallet>, Failed> {
-    let db = db.lock().unwrap();
-    check(&db, &d.player_id, &daily_message(&d.player_id, d.time), &d.signature, d.time)?;
-    if !credit(&db, &d.player_id, DAILY as u32, "daily", &today()).map_err(internal)? {
-        return Err((StatusCode::CONFLICT, "come back tomorrow for more".into()));
-    }
-    Ok(Json(wallet(&db, &d.player_id)))
+/// Apps from before still offer free Credits once a day; the Hub no longer
+/// gives them.
+pub(crate) async fn no_daily() -> Failed {
+    (StatusCode::GONE, "PlayLibre no longer gives free Credits".into())
 }
 
 pub(crate) async fn buy_item(State(db): State<Db>, Json(b): Json<Buy>) -> Result<Json<Wallet>, Failed> {

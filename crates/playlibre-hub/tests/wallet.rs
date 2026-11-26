@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use playlibre_hub::{
-    AccountUpdate, Birthday, Buy, Consent, Daily, FamilyChange, HubClient, Mail, NewItem, SetPrice,
-    account_message, birthday_message, buy_message, consent_message, daily_message, family_message,
-    item_message, player_id_of, price_message, sign, wallet_message,
+    AccountUpdate, Birthday, Buy, Consent, FamilyChange, HubClient, Mail, NewItem, SetPrice, account_message,
+    add_owner, birthday_message, buy_message, consent_message, family_message, item_message, open_db,
+    player_id_of, price_message, sign, top_up, wallet_message,
 };
 
 fn ms() -> i64 {
@@ -32,10 +32,20 @@ fn wallet(hub: &HubClient, key: &[u8; 32]) -> playlibre_hub::Wallet {
     hub.wallet(&id, t, &sign(key, &wallet_message(&id, t))).unwrap()
 }
 
-fn daily(hub: &HubClient, key: &[u8; 32]) -> Result<playlibre_hub::Wallet, String> {
-    let (player_id, time) = (player_id_of(key), ms());
-    let signature = sign(key, &daily_message(&player_id, time));
-    hub.claim_daily(&Daily { player_id, time, signature })
+/// A Hub with its database at a fresh path, so tests can do what whoever
+/// runs it does (name owners, add Credits as a payment would).
+fn hub_at(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("playlibre-wallet-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir.join("hub.sqlite")
+}
+
+fn pay(path: &std::path::Path, key: &[u8; 32], credits: u32, payment: &str) {
+    assert!(top_up(&open_db(Some(path)).unwrap(), &player_id_of(key), credits, payment).unwrap());
+}
+
+fn certify(path: &std::path::Path, key: &[u8; 32]) {
+    add_owner(&open_db(Some(path)).unwrap(), &player_id_of(key)).unwrap();
 }
 
 fn buy(hub: &HubClient, key: &[u8; 32], item_id: &str, price: u32) -> Result<playlibre_hub::Wallet, String> {
@@ -51,24 +61,32 @@ fn price(hub: &HubClient, key: &[u8; 32], item_id: &str, price: u32) -> Result<(
 }
 
 fn share_hat(hub: &HubClient, key: &[u8; 32]) -> playlibre_hub::Item {
+    try_share_hat(hub, key).unwrap()
+}
+
+fn try_share_hat(hub: &HubClient, key: &[u8; 32]) -> Result<playlibre_hub::Item, String> {
     let data = serde_json::json!({ "name": "Box", "parts": [
         { "size": [1.0, 1.0, 1.0], "at": [0.0, 1.2, 0.0], "turn": [0.0, 0.0, 0.0], "shape": "Block", "color": [9, 9, 9], "neon": false }
     ] });
     let (creator_id, time) = (player_id_of(key), ms() / 1000);
     let signature = sign(key, &item_message(&creator_id, "Box", "hat", &data, time));
     hub.share_item(&NewItem { creator_id, name: "Box".into(), kind: "hat".into(), data, time, signature })
-        .unwrap()
 }
 
 #[test]
-fn daily_credits_buy_a_hat_once() {
-    let running = playlibre_hub::start("127.0.0.1:0".parse().unwrap(), None).unwrap();
+fn credits_buy_a_hat_once() {
+    let path = hub_at("buy");
+    let running = playlibre_hub::start("127.0.0.1:0".parse().unwrap(), Some(&path)).unwrap();
     let hub = HubClient::new(&running.url());
     let (maker, me) = ([90u8; 32], [91u8; 32]);
     save_look(&hub, &maker, "hatmaker", serde_json::json!({})).unwrap();
     save_look(&hub, &me, "shopper", serde_json::json!({})).unwrap();
+    certify(&path, &maker);
     assert_eq!(wallet(&hub, &me).balance, 0);
-    assert!(wallet(&hub, &me).daily_ready);
+    // No free Credits any more, not even once a day.
+    assert!(!wallet(&hub, &me).daily_ready);
+    // Only PlayLibre certified accounts put hats in the catalog for now.
+    assert!(try_share_hat(&hub, &me).unwrap_err().contains("certified"));
 
     let party =
         hub.catalog("Party hat").unwrap().into_iter().find(|i| i.item_id == "shop-party-hat").unwrap();
@@ -88,14 +106,12 @@ fn daily_credits_buy_a_hat_once() {
         save_look(&hub, &me, "shopper", serde_json::json!({ "item": hat.data })).unwrap_err().contains("buy")
     );
 
-    let w = daily(&hub, &me).unwrap();
-    assert_eq!(w.balance, playlibre_hub::DAILY);
-    assert!(!w.daily_ready);
-    assert!(daily(&hub, &me).unwrap_err().contains("tomorrow"));
+    pay(&path, &me, 25, "pay_shopper");
+    assert_eq!(wallet(&hub, &me).balance, 25);
 
     assert!(buy(&hub, &me, &hat.item_id, 5).unwrap_err().contains("price"));
     let w = buy(&hub, &me, &hat.item_id, 10).unwrap();
-    assert_eq!(w.balance, playlibre_hub::DAILY - 10);
+    assert_eq!(w.balance, 15);
     assert_eq!(w.owned, vec![hat.item_id.clone()]);
     assert_eq!((w.history[0].reason.as_str(), w.history[0].amount), ("buy", -10));
     assert!(buy(&hub, &me, &hat.item_id, 10).unwrap_err().contains("already"));
@@ -106,11 +122,13 @@ fn daily_credits_buy_a_hat_once() {
 fn a_parent_can_turn_spending_off() {
     let outbox = Arc::new(Mutex::new(Vec::new()));
     let options = playlibre_hub::HubOptions { mail: Mail::Outbox(outbox.clone()), ..Default::default() };
-    let running = playlibre_hub::start_with("127.0.0.1:0".parse().unwrap(), None, options).unwrap();
+    let path = hub_at("parent");
+    let running = playlibre_hub::start_with("127.0.0.1:0".parse().unwrap(), Some(&path), options).unwrap();
     let hub = HubClient::new(&running.url());
     let (maker, kid) = ([93u8; 32], [92u8; 32]);
     save_look(&hub, &maker, "hatmaker2", serde_json::json!({})).unwrap();
     save_look(&hub, &kid, "kidshopper", serde_json::json!({})).unwrap();
+    certify(&path, &maker);
     let hat = share_hat(&hub, &maker);
     price(&hub, &maker, &hat.item_id, 10).unwrap();
     outbox.lock().unwrap().clear();
@@ -147,8 +165,8 @@ fn a_parent_can_turn_spending_off() {
     change.signature = sign(&kid, &family_message(&change));
     hub.change_family(&change).unwrap();
 
-    daily(&hub, &kid).unwrap();
+    pay(&path, &kid, 25, "pay_kid");
     assert_eq!(wallet(&hub, &kid).may_spend, Some(0));
     assert!(buy(&hub, &kid, &hat.item_id, 10).unwrap_err().contains("parent"));
-    assert_eq!(wallet(&hub, &kid).balance, playlibre_hub::DAILY);
+    assert_eq!(wallet(&hub, &kid).balance, 25);
 }

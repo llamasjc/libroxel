@@ -146,8 +146,8 @@ pub use social::{
 };
 pub use stats::{Crash, CrashGroup, PING_EVERY_SECS, Ping, Share, Usage, UsageDay, admin_message};
 pub use wallet::{
-    Buy, CURRENCY, DAILY, Daily, Entry, MAX_PRICE, Refused, Sale, SetPrice, Wallet, balance, buy,
-    buy_message, credit, daily_message, debit, owns, price_message, spent, top_up, wallet_message,
+    Buy, CURRENCY, Entry, MAX_PRICE, Refused, Sale, SetPrice, Wallet, balance, buy, buy_message, credit,
+    debit, owns, price_message, spent, top_up, wallet_message,
 };
 
 /// The port a Hub listens on unless told otherwise.
@@ -1026,7 +1026,7 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/catalog/{id}/wear", post(wear_item))
         .route("/catalog/{id}/price", post(wallet::set_price))
         .route("/shop/buy", post(wallet::buy_item))
-        .route("/wallet/daily", post(wallet::claim_daily))
+        .route("/wallet/daily", post(wallet::no_daily))
         .route("/wallet/{id}", get(wallet::get_wallet))
         .route("/earnings/{id}", get(earnings::get_earnings))
         .route("/earnings/cash-out", post(earnings::cash_out))
@@ -1502,6 +1502,13 @@ fn save_account(
     }
 }
 
+/// For now only PlayLibre certified accounts (a verified badge, or one of
+/// the Hub's owners) put hats in the catalog.
+fn may_make_items(db: &Connection, player_id: &str) -> bool {
+    db.query_row(&format!("SELECT {}", security::verified_sql("?1")), params![player_id], |r| r.get(0))
+        .unwrap_or(false)
+}
+
 async fn share_item(
     State(db): State<Db>,
     State(limits): State<Arc<Limits>>,
@@ -1533,6 +1540,12 @@ async fn share_item(
     let db = db.lock().unwrap();
     if crate::owner::is_banned(&db, &item.creator_id) {
         return Err((StatusCode::FORBIDDEN, "this account is banned from PlayLibre".into()));
+    }
+    if !may_make_items(&db, &item.creator_id) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "only PlayLibre certified accounts can add to the catalog for now".into(),
+        ));
     }
     let item_id = new_game_id();
     db.execute(
@@ -2727,10 +2740,6 @@ impl HubClient {
             .build()
             .call();
         self.answer(request)
-    }
-
-    pub fn claim_daily(&self, daily: &Daily) -> Result<Wallet, String> {
-        self.post_signed("/wallet/daily", daily)
     }
 
     pub fn buy_item(&self, buy: &Buy) -> Result<Wallet, String> {

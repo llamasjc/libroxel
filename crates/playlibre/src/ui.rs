@@ -4669,21 +4669,24 @@ fn model_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mu
                 actions.push(Action::OpenMarket);
             }
         });
-        theme::ribbon_group(ui, "Avatar", |ui| {
-            let selected = editor.selection;
-            ui.add_enabled_ui(selected.is_some(), |ui| {
-                if theme::ribbon_button(ui, icon::T_SHIRT, "Share as hat", false)
-                    .on_hover_text(
-                        "Put the selected model's parts in the catalog as a hat anyone can wear. It sits with its \
-                         bottom on the head, so build it the way up it goes.",
-                    )
-                    .clicked()
-                    && let Some(id) = selected
-                {
-                    actions.push(Action::ShareHat(id));
-                }
+        // For now only PlayLibre certified accounts make catalog hats.
+        if editor.platform.may_make_items() {
+            theme::ribbon_group(ui, "Avatar", |ui| {
+                let selected = editor.selection;
+                ui.add_enabled_ui(selected.is_some(), |ui| {
+                    if theme::ribbon_button(ui, icon::T_SHIRT, "Share as hat", false)
+                        .on_hover_text(
+                            "Put the selected model's parts in the catalog as a hat anyone can wear. It sits with its \
+                             bottom on the head, so build it the way up it goes.",
+                        )
+                        .clicked()
+                        && let Some(id) = selected
+                    {
+                        actions.push(Action::ShareHat(id));
+                    }
+                });
             });
-        });
+        }
         theme::ribbon_group(ui, "Effects", |ui| {
             for (class, label) in [
                 (ClassKind::PointLight, "Light"),
