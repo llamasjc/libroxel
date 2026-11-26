@@ -82,6 +82,11 @@ pub struct Platform {
     look_to_save: Option<Json>,
     look_saving: bool,
     look_saved: Slot<()>,
+    /// Why the last avatar change didn't reach the Hub, if it didn't.
+    pub look_error: Option<String>,
+    /// The Hub said this computer has no account: a guest, who plays
+    /// with the usual look and can't pick another.
+    guest: bool,
     account_saved: Slot<String>,
     account_busy: bool,
     pub account: Option<Profile>,
@@ -196,6 +201,8 @@ impl Default for Platform {
             look_to_save: None,
             look_saving: false,
             look_saved: Arc::default(),
+            look_error: None,
+            guest: false,
             saved_accounts: None,
             account_saved: Arc::default(),
             account_busy: false,
@@ -361,6 +368,7 @@ impl Platform {
             self.account_busy = false;
             match result {
                 Ok(Some(mut profile)) => {
+                    self.guest = false;
                     let old = self.account.take().filter(|a| a.player_id == profile.player_id);
                     if let Some(old) = &old {
                         if self.account_name == old.name {
@@ -391,6 +399,11 @@ impl Platform {
                 Ok(None) => {
                     self.account = None;
                     self.look_to_save = None;
+                    // A guest: back to the usual look, once.
+                    if !self.guest {
+                        self.guest = true;
+                        self.account_look = Some(Json::Null);
+                    }
                 }
                 Err(e) if e == playlibre_hub::SIGNED_OUT => self.signed_out(),
                 Err(e) => self.account_status = Some(Err(e)),
@@ -860,8 +873,17 @@ impl Platform {
         !self.account_busy && self.account_hub.as_deref() == Some(self.hub_address.as_str())
     }
 
+    /// The account's look when it first arrives or changes on the Hub (it
+    /// was saved on the website or another computer), or `Null` once the
+    /// Hub says this computer has no account.
     pub fn take_account_look(&mut self) -> Option<Json> {
         self.account_look.take()
+    }
+
+    /// Whether the Hub said this computer has no account. Guests play with
+    /// the usual look; picking a look needs an account.
+    pub fn is_guest(&self) -> bool {
+        self.account.is_none() && self.guest
     }
 
     pub fn save_look(&mut self, look: Json) {
@@ -882,8 +904,19 @@ impl Platform {
     }
 
     fn send_look(&mut self) {
-        if self.look_saved.lock().unwrap().take().is_some() {
+        let saved = self.look_saved.lock().unwrap().take();
+        if let Some(result) = saved {
             self.look_saving = false;
+            match result {
+                Ok(()) => self.look_error = None,
+                Err(e) if e == playlibre_hub::SIGNED_OUT => self.signed_out(),
+                Err(e) => {
+                    // Not saved: look the account up again, so this computer
+                    // goes back to the look the Hub (and so everyone) has.
+                    self.look_error = Some(e);
+                    self.account_checked = None;
+                }
+            }
         }
         if self.look_saving || self.account_busy {
             return;
@@ -895,7 +928,7 @@ impl Platform {
         let client = self.client();
         let out = self.look_saved.clone();
         std::thread::spawn(move || {
-            let _ = crate::identity().and_then(|me| {
+            let result = crate::identity().and_then(|me| {
                 let player_id = me.player_id();
                 let message = playlibre_hub::account_message(&player_id, &name, &about, &look, time);
                 client.update_account(&AccountUpdate {
@@ -909,7 +942,7 @@ impl Platform {
                     time,
                 })
             });
-            *out.lock().unwrap() = Some(Ok(()));
+            *out.lock().unwrap() = Some(result);
         });
     }
 
@@ -1742,6 +1775,8 @@ impl Platform {
     /// signing out, so the new one is looked up afresh.
     fn account_changed(&mut self, said: Result<String, String>) {
         self.account = None;
+        self.guest = false;
+        self.look_error = None;
         self.account_name.clear();
         self.account_about.clear();
         self.account_hub = None;
@@ -1798,7 +1833,7 @@ impl Platform {
     }
 
     /// The account part of the Avatar tab. `look` is the avatar as saved.
-    pub fn account_ui(&mut self, ui: &mut egui::Ui, look: Json) {
+    pub fn account_ui(&mut self, ui: &mut egui::Ui) {
         self.look_up_account();
         ui.label(RichText::new("Your account").font(crate::theme::display(17.0)));
         let about = if self.account.is_some() {
@@ -1841,6 +1876,12 @@ impl Platform {
         ui.horizontal(|ui| {
             let label = if self.account.is_some() { "Save changes" } else { "Make an account" };
             if ui.add_enabled(valid && !self.account_busy, egui::Button::new(label)).clicked() {
+                // A new account starts with the usual look for its name (as
+                // one made on the website does); an old one keeps its own.
+                let look = match &self.account {
+                    Some(account) => account.look.clone(),
+                    None => playlibre_avatar::look_of(&Json::Null, &name).to_json(),
+                };
                 self.save_account(look);
             }
             if self.account_busy {

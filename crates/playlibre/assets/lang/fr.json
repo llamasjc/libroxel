@@ -471,5 +471,9 @@
  "{n}% liked": "{n} % d'avis positifs",
  "{part} colour {colour}": "Couleur {part} : {colour}",
  "{shape} part": "Pièce {shape}",
- "{why} You can also host it yourself.": "{why} Tu peux aussi l'héberger toi-même."
+ "{why} You can also host it yourself.": "{why} Tu peux aussi l'héberger toi-même.",
+ "Make an account or sign in to choose how you look. Until then you play with the usual look.": "Crée un compte ou connecte-toi pour choisir ton apparence. D'ici là, tu joues avec l'apparence habituelle.",
+ "Make an account or sign in": "Créer un compte ou se connecter",
+ "Looking up your account…": "Recherche de ton compte…",
+ "Your avatar was not saved: {error}": "Ton avatar n'a pas été enregistré : {error}"
 }

@@ -713,7 +713,9 @@ pub fn home_tab(
     // Hello, with your own face.
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(64.0, 64.0), egui::Sense::hover());
-        let look = platform.account.as_ref().map_or(Json::Null, |a| a.look.clone());
+        // A guest has the usual look, as in games.
+        let look =
+            platform.account.as_ref().map_or_else(|| Look::for_player(0).to_json(), |a| a.look.clone());
         paint_avatar(ui.painter(), rect.center(), 30.0, &look, name);
         ui.add_space(8.0);
         ui.vertical(|ui| {

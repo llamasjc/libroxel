@@ -471,5 +471,9 @@
  "{n}% liked": "{n}% curtiram",
  "{part} colour {colour}": "Cor de {part}: {colour}",
  "{shape} part": "Peça {shape}",
- "{why} You can also host it yourself.": "{why} Você também pode hospedar."
+ "{why} You can also host it yourself.": "{why} Você também pode hospedar.",
+ "Make an account or sign in to choose how you look. Until then you play with the usual look.": "Crie uma conta ou entre para escolher seu visual. Até lá, você joga com o visual padrão.",
+ "Make an account or sign in": "Criar uma conta ou entrar",
+ "Looking up your account…": "Procurando sua conta…",
+ "Your avatar was not saved: {error}": "Seu avatar não foi salvo: {error}"
 }

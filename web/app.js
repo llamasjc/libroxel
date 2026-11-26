@@ -2332,19 +2332,31 @@ function walletBar() {
     w.may_spend != null && el('span', { class: 'soft' }, w.may_spend ? `${w.may_spend} left to spend this month` : 'Spending is off'));
 }
 
+/**
+ * The look and words being changed, from the account as the Hub has it.
+ * Anything the saved look leaves out is the usual look for the name, as in
+ * the app, in games and in the Hub's pictures. A look saved somewhere else
+ * (the app, another computer) replaces one that hasn't been touched here.
+ */
 function startDraft() {
-  if (!draft || draft.for !== session.playerId) {
-    draft = { for: session.playerId, look: readLook(data.me.look, data.me.name, lookFor(0n)), about: data.me.about || '', message: null };
+  const from = JSON.stringify(data.me.look ?? null);
+  const mine = draft && draft.for === session.playerId;
+  if (!mine || (!draft.touched && draft.from !== from)) {
+    draft = {
+      for: session.playerId, from, touched: false,
+      look: readLook(data.me.look, data.me.name), about: data.me.about || '',
+      message: mine ? draft.message : null,
+    };
   }
 }
 
 function avatar() {
-  if (!session) return needSignIn('Sign in to change how you look in every game you play.');
+  if (!session) return needSignIn('Choosing how you look needs an account: sign in, or make one, and your avatar is the same in every game, here and in the app. Until then you play with the usual look.');
   if (!data.me) return [el('h1', { class: 'title' }, 'Your avatar'), el('p', { class: 'soft' }, data.loaded ? 'Your account could not be loaded.' : 'Loading…')];
   startDraft();
   loadCatalog();
   const look = draft.look;
-  const changed = () => { draft.message = null; render(); };
+  const changed = () => { draft.message = null; draft.touched = true; render(); };
   const swatches = (key, choices) => {
     const pick = el('input', { type: 'color', class: 'swatch pick', value: `#${look[key].map((v) => v.toString(16).padStart(2, '0')).join('')}` });
     pick.addEventListener('change', () => { look[key] = pick.value.match(/[0-9a-f]{2}/gi).map((h) => parseInt(h, 16)); changed(); });
@@ -2403,7 +2415,7 @@ function profile() {
   if (!data.me) return [el('h1', { class: 'title' }, 'Profile'), el('p', { class: 'soft' }, data.loaded ? 'Your account could not be loaded.' : 'Loading…')];
   startDraft();
   const about = el('textarea', { rows: 3, maxlength: 2000 }, draft.about);
-  about.addEventListener('input', () => { draft.about = about.value; });
+  about.addEventListener('input', () => { draft.about = about.value; draft.touched = true; });
   const save = el('button', { class: 'btn go', onclick: () => saveAccount(save) }, icon(ICON.check), 'Save');
   return [
     el('div', { class: 'hello' },
@@ -2433,7 +2445,7 @@ async function saveAccount(button) {
     await api('/accounts', { method: 'POST', body: { player_id: session.playerId, name, about, look, time, signature } });
     draft.message = { text: 'Saved. You look like this in every game now.' };
     await refresh();
-    draft.look = readLook(data.me.look, name, lookFor(0n));
+    Object.assign(draft, { look: readLook(data.me.look, name), from: JSON.stringify(data.me.look ?? null), touched: false });
   } catch (e) {
     draft.message = { text: e.message, kind: 'error' };
   }

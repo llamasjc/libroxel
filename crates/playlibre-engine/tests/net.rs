@@ -317,6 +317,45 @@ fn everyone_sees_how_a_joined_player_chose_to_look() {
     until(&mut host, &mut guest, CharacterInput::default(), |h, g| dressed(h) && dressed(g));
 }
 
+/// The account's look can arrive after the game has started (the app
+/// joins before the Hub answers, or it was changed on the website): the
+/// character already playing changes, for everyone, hat taken off too.
+#[test]
+fn a_look_that_arrives_mid_game_dresses_the_character_already_playing() {
+    use playlibre_engine::character::{BodyColors, Hat, Look};
+    use playlibre_instance::Color3;
+    let tree = Rc::new(RefCell::new(game()));
+    let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Cy")
+            .unwrap();
+    let crowned = Look { hat: Hat::Crown, ..Look::for_player(0) };
+    guest.set_local_look(crowned);
+    let part = |session: &PlaySession, name: &str| {
+        let tree = session.runtime().tree().borrow();
+        let ws = tree.workspace();
+        let cy = tree.find_first_child(ws, "Cy").ok().flatten()?;
+        tree.find_first_child(cy, name).ok().flatten()
+    };
+    until(&mut host, &mut guest, CharacterInput::default(), |h, g| {
+        part(h, "Crown").is_some() && part(g, "Crown").is_some()
+    });
+    let blue = Color3::from_rgb8(30, 60, 220);
+    guest.set_local_look(Look {
+        colors: BodyColors { shirt: blue, ..BodyColors::for_player(0) },
+        ..Look::for_player(0)
+    });
+    let blue_shirt = |session: &PlaySession| {
+        let torso = part(session, "Torso");
+        let tree = session.runtime().tree().borrow();
+        torso.and_then(|t| tree.get_color(t, Property::Color)).is_some_and(|c| (c.b - blue.b).abs() < 0.01)
+    };
+    until(&mut host, &mut guest, CharacterInput::default(), |h, g| {
+        blue_shirt(h) && blue_shirt(g) && part(h, "Crown").is_none() && part(g, "Crown").is_none()
+    });
+}
+
 #[test]
 fn the_host_removes_a_player_who_then_cannot_come_back() {
     let tree = Rc::new(RefCell::new(game()));

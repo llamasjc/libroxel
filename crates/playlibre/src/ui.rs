@@ -302,10 +302,10 @@ pub fn editor_ui(
     editor.platform.tick(hosting);
     editor.platform.look_up_account();
     if let Some(look) = editor.platform.take_account_look() {
-        editor.menu.use_look(&look);
-        let look = editor.menu.look();
+        let name = editor.platform.account.as_ref().map_or("", |a| a.name.as_str()).to_owned();
+        let look = editor.menu.use_look(&look, &name);
         if let Some(session) = engine.session.as_mut() {
-            session.set_local_look(look);
+            session.set_local_look(look.unwrap_or_else(|| playlibre_engine::character::Look::for_player(0)));
         }
     }
     editor.platform.social_tick(engine.session.is_some());
@@ -3584,7 +3584,9 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
             };
             match started {
                 Ok(mut session) => {
-                    session.set_local_look(editor.menu.look());
+                    if let Some(look) = editor.menu.playing_look(&editor.platform) {
+                        session.set_local_look(look);
+                    }
                     let lines = session.take_log();
                     if let Some(address) = session.host_address() {
                         log(engine, LogLevel::Info, format!("{what} on port {}", address.port()));

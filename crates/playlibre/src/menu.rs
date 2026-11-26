@@ -432,10 +432,9 @@ impl Menu {
                         None
                     }
                     Tab::Profile => {
-                        let look = self.look().to_json();
                         theme::heading(ui, t("Profile"));
                         ui.add_space(8.0);
-                        platform.account_ui(ui, look);
+                        platform.account_ui(ui);
                         ui.add_space(8.0);
                         crate::voice::toggle(ui);
                         None
@@ -574,16 +573,54 @@ impl Menu {
             .clone()
     }
 
-    pub fn use_look(&mut self, json: &playlibre_instance::serde_json::Value) {
-        let look = Look::from_json(json, self.look());
+    /// Takes the account's look from the Hub, as the Avatar page on the
+    /// website and every other computer show it: all of it, so anything it
+    /// leaves out (a hat taken off) is the usual for `name`, never what this
+    /// computer had before. `Null` (a guest) goes back to the usual look.
+    /// Returns the look to play with: `None` for the usual one.
+    pub fn use_look(&mut self, json: &playlibre_instance::serde_json::Value, name: &str) -> Option<Look> {
+        if json.is_null() {
+            self.look = None;
+            let _ = std::fs::remove_file(avatar_file());
+            return None;
+        }
+        let look = playlibre_avatar::look_of(json, name);
         if self.look.as_ref() != Some(&look) {
             let _ = std::fs::create_dir_all(data_dir())
                 .and_then(|_| std::fs::write(avatar_file(), look.to_json().to_string()));
-            self.look = Some(look);
+            self.look = Some(look.clone());
         }
+        Some(look)
+    }
+
+    /// The look to play a game with: the account's (kept on this computer
+    /// for when the Hub can't be reached), or `None` for a guest, who has
+    /// the usual look.
+    pub fn playing_look(&mut self, platform: &Platform) -> Option<Look> {
+        (!platform.is_guest()).then(|| self.look())
     }
 
     fn avatar_tab(&mut self, ui: &mut egui::Ui, platform: &mut Platform) {
+        if platform.account.is_none() {
+            // Picking a look needs an account: it's kept there, so it's the
+            // same in every game, on the website and on every computer.
+            theme::heading(ui, t("Your avatar"));
+            if platform.account_known() {
+                ui.label(
+                    RichText::new(t(
+                        "Make an account or sign in to choose how you look. Until then you play with the usual look.",
+                    ))
+                    .color(SOFT),
+                );
+                ui.add_space(12.0);
+                if ui.button(t("Make an account or sign in")).clicked() {
+                    self.go(Tab::Profile);
+                }
+            } else {
+                ui.label(RichText::new(t("Looking up your account…")).color(SOFT));
+            }
+            return;
+        }
         let mut look = self.look();
         theme::heading(ui, t("Your avatar"));
         ui.label(
@@ -630,6 +667,10 @@ impl Menu {
         ui.add_space(24.0);
         if let Some(picked) = platform.catalog_ui(ui, look.item.as_deref()) {
             look.item = picked.map(std::sync::Arc::new);
+        }
+        if let Some(why) = &platform.look_error {
+            ui.add_space(8.0);
+            crate::report::error(ui, &tf("Your avatar was not saved: {error}", &[("error", why)]));
         }
         if Some(&look) != self.look.as_ref() {
             platform.save_look(look.to_json());

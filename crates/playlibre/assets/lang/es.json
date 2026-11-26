@@ -471,5 +471,9 @@
  "{n}% liked": "{n}% de me gusta",
  "{part} colour {colour}": "Color de {part}: {colour}",
  "{shape} part": "Pieza {shape}",
- "{why} You can also host it yourself.": "{why} También puedes alojarlo tú."
+ "{why} You can also host it yourself.": "{why} También puedes alojarlo tú.",
+ "Make an account or sign in to choose how you look. Until then you play with the usual look.": "Crea una cuenta o inicia sesión para elegir tu aspecto. Hasta entonces juegas con el aspecto de siempre.",
+ "Make an account or sign in": "Crear una cuenta o iniciar sesión",
+ "Looking up your account…": "Buscando tu cuenta…",
+ "Your avatar was not saved: {error}": "Tu avatar no se guardó: {error}"
 }
