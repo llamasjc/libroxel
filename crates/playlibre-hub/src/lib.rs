@@ -102,8 +102,8 @@ pub use messages::{
     Conversation, MAX_MESSAGE, Message, Moderation, NewMessage, message_message, read_messages_message,
 };
 pub use moderate::{
-    Appeal, AppealAsk, ChatLine, Dashboard, LogEntry, MAX_APPEAL, ModAction, ModChange, OpenAppeal, Penalty,
-    Queued, ReportReason, Standing, Warning, WarningsSeen, appeal_message, moderate_message,
+    Appeal, AppealAsk, ChatLine, Dashboard, HatMaker, LogEntry, MAX_APPEAL, ModAction, ModChange, OpenAppeal,
+    Penalty, Queued, ReportReason, Standing, Warning, WarningsSeen, appeal_message, moderate_message,
     moderation_message, warnings_seen_message,
 };
 mod owner;
@@ -127,7 +127,10 @@ mod social;
 mod stats;
 mod wallet;
 use limits::{Caller, Limit, Limits, too_many};
-pub use owner::{AccountRow, accounts, add_owner, ban, ban_until, owners, remove_owner, rename, unban};
+pub use owner::{
+    AccountRow, accounts, add_owner, ban, ban_until, hat_makers, owners, remove_owner, rename, set_hat_maker,
+    unban,
+};
 pub use password::{
     MIN_PASSWORD, PASSWORD_MEMORY_KIB, PASSWORD_PASSES, PasswordSet, SignIn, SignInSalt, SignedIn,
     password_message, password_problem, seal_password, seal_password_with, sign_in_message, weak_password,
@@ -594,6 +597,9 @@ pub struct Profile {
     /// Whether they have a verified badge (whoever runs the Hub gives them out).
     #[serde(default)]
     pub verified: bool,
+    /// Whether they may add hats to the catalog (owners give it out).
+    #[serde(default)]
+    pub hat_maker: bool,
     #[serde(default)]
     pub groups: Vec<GroupBadge>,
     #[serde(default)]
@@ -1502,13 +1508,6 @@ fn save_account(
     }
 }
 
-/// For now only PlayLibre certified accounts (a verified badge, or one of
-/// the Hub's owners) put hats in the catalog.
-fn may_make_items(db: &Connection, player_id: &str) -> bool {
-    db.query_row(&format!("SELECT {}", security::verified_sql("?1")), params![player_id], |r| r.get(0))
-        .unwrap_or(false)
-}
-
 async fn share_item(
     State(db): State<Db>,
     State(limits): State<Arc<Limits>>,
@@ -1541,11 +1540,8 @@ async fn share_item(
     if crate::owner::is_banned(&db, &item.creator_id) {
         return Err((StatusCode::FORBIDDEN, "this account is banned from PlayLibre".into()));
     }
-    if !may_make_items(&db, &item.creator_id) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "only PlayLibre certified accounts can add to the catalog for now".into(),
-        ));
+    if !owner::is_hat_maker(&db, &item.creator_id) {
+        return Err((StatusCode::FORBIDDEN, "only Hat-Makers can add to the catalog for now".into()));
     }
     let item_id = new_game_id();
     db.execute(
@@ -1835,6 +1831,7 @@ async fn profile(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<J
         .map(|rows| rows.filter_map(Result::ok).collect())
         .unwrap_or_default();
     let admin = owner::is_owner(&db, &player_id);
+    let hat_maker = owner::is_hat_maker(&db, &player_id);
     let verified = db
         .query_row(&format!("SELECT {}", security::verified_sql("?1")), params![player_id], |r| r.get(0))
         .unwrap_or(false);
@@ -1848,6 +1845,7 @@ async fn profile(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> Result<J
         joined_secs_ago: now - created,
         admin,
         verified,
+        hat_maker,
         games,
         groups,
         badge,

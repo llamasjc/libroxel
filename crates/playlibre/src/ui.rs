@@ -4669,7 +4669,7 @@ fn model_tab(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mu
                 actions.push(Action::OpenMarket);
             }
         });
-        // For now only PlayLibre certified accounts make catalog hats.
+        // For now only Hat-Makers make catalog hats.
         if editor.platform.may_make_items() {
             theme::ribbon_group(ui, "Avatar", |ui| {
                 let selected = editor.selection;

@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use playlibre_hub::{
     AccountUpdate, Birthday, Buy, Consent, FamilyChange, HubClient, Mail, NewItem, SetPrice, account_message,
-    add_owner, birthday_message, buy_message, consent_message, family_message, item_message, open_db,
-    player_id_of, price_message, sign, top_up, wallet_message,
+    birthday_message, buy_message, consent_message, family_message, item_message, open_db, player_id_of,
+    price_message, set_hat_maker, sign, top_up, wallet_message,
 };
 
 fn ms() -> i64 {
@@ -44,8 +44,8 @@ fn pay(path: &std::path::Path, key: &[u8; 32], credits: u32, payment: &str) {
     assert!(top_up(&open_db(Some(path)).unwrap(), &player_id_of(key), credits, payment).unwrap());
 }
 
-fn certify(path: &std::path::Path, key: &[u8; 32]) {
-    add_owner(&open_db(Some(path)).unwrap(), &player_id_of(key)).unwrap();
+fn hat_maker(path: &std::path::Path, key: &[u8; 32]) {
+    set_hat_maker(&open_db(Some(path)).unwrap(), &player_id_of(key), true).unwrap();
 }
 
 fn buy(hub: &HubClient, key: &[u8; 32], item_id: &str, price: u32) -> Result<playlibre_hub::Wallet, String> {
@@ -81,12 +81,14 @@ fn credits_buy_a_hat_once() {
     let (maker, me) = ([90u8; 32], [91u8; 32]);
     save_look(&hub, &maker, "hatmaker", serde_json::json!({})).unwrap();
     save_look(&hub, &me, "shopper", serde_json::json!({})).unwrap();
-    certify(&path, &maker);
+    hat_maker(&path, &maker);
     assert_eq!(wallet(&hub, &me).balance, 0);
     // No free Credits any more, not even once a day.
     assert!(!wallet(&hub, &me).daily_ready);
-    // Only PlayLibre certified accounts put hats in the catalog for now.
-    assert!(try_share_hat(&hub, &me).unwrap_err().contains("certified"));
+    // Only Hat-Makers put hats in the catalog for now.
+    assert!(try_share_hat(&hub, &me).unwrap_err().contains("Hat-Makers"));
+    assert!(hub.profile("hatmaker").unwrap().unwrap().hat_maker);
+    assert!(!hub.profile("shopper").unwrap().unwrap().hat_maker);
 
     let party =
         hub.catalog("Party hat").unwrap().into_iter().find(|i| i.item_id == "shop-party-hat").unwrap();
@@ -128,7 +130,7 @@ fn a_parent_can_turn_spending_off() {
     let (maker, kid) = ([93u8; 32], [92u8; 32]);
     save_look(&hub, &maker, "hatmaker2", serde_json::json!({})).unwrap();
     save_look(&hub, &kid, "kidshopper", serde_json::json!({})).unwrap();
-    certify(&path, &maker);
+    hat_maker(&path, &maker);
     let hat = share_hat(&hub, &maker);
     price(&hub, &maker, &hat.item_id, 10).unwrap();
     outbox.lock().unwrap().clear();

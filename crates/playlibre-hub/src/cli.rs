@@ -33,6 +33,9 @@ pub const HUB_HELP: &str = "\
   owner add|remove <name or player id>
                                owners are the Hub's admins and may list
                                Official servers
+  hat-makers                   list the Hat-Makers: the only accounts (with
+                               the owners) that add hats to the catalog
+  hat-maker add|remove <name>  give or take away Hat-Maker
   ban <name> [reason]          ban an account; unban <name> lets it back
   verify|unverify <name>       give or take away a verified badge
   badge give|take <name> <badge>
@@ -216,6 +219,21 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
         ["owner", "remove", who] => {
             crate::remove_owner(&crate::open_db(Some(&data))?, who)?;
             println!("{who} is no longer an owner.");
+            Ok(())
+        }
+        ["hat-makers"] => {
+            let makers = crate::hat_makers(&crate::open_db(Some(&data))?);
+            if makers.is_empty() {
+                println!("No Hat-Makers besides the owners. Add one: hub hat-maker add <name>");
+            }
+            for (id, name) in makers {
+                println!("{:<20} {id}", name.as_deref().unwrap_or("?"));
+            }
+            Ok(())
+        }
+        ["hat-maker", how @ ("add" | "remove"), who] => {
+            crate::set_hat_maker(&crate::open_db(Some(&data))?, who, *how == "add")?;
+            println!("{who} {}", if *how == "add" { "is a Hat-Maker." } else { "is no longer a Hat-Maker." });
             Ok(())
         }
         ["ban", who, reason @ ..] => {

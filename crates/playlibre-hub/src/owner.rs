@@ -15,6 +15,10 @@ pub(crate) fn create_tables(db: &Connection) -> Result<(), String> {
             player_id   TEXT PRIMARY KEY,
             since       INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS hat_makers (
+            player_id   TEXT PRIMARY KEY,
+            since       INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS banned (
             player_id   TEXT PRIMARY KEY,
             reason      TEXT NOT NULL,
@@ -51,6 +55,49 @@ pub(crate) fn is_owner(db: &Connection, player_id: &str) -> bool {
         .ok()
         .flatten()
         .is_some()
+}
+
+/// Whether `player_id` is a Hat-Maker: for now only Hat-Makers add hats to
+/// the catalog. The Hub's owners always are, and give it to others.
+pub(crate) fn is_hat_maker(db: &Connection, player_id: &str) -> bool {
+    is_owner(db, player_id)
+        || db
+            .query_row("SELECT 1 FROM hat_makers WHERE player_id = ?1", params![player_id], |_| Ok(()))
+            .optional()
+            .ok()
+            .flatten()
+            .is_some()
+}
+
+/// Makes `who` (an account name or player id) a Hat-Maker, or takes it
+/// away. Returns their player id.
+pub fn set_hat_maker(db: &Connection, who: &str, on: bool) -> Result<String, String> {
+    let id = resolve(db, who)?;
+    if on {
+        db.execute("INSERT OR IGNORE INTO hat_makers (player_id, since) VALUES (?1, ?2)", params![id, now()])
+            .map_err(|e| e.to_string())?;
+    } else if db
+        .execute("DELETE FROM hat_makers WHERE player_id = ?1", params![id])
+        .map_err(|e| e.to_string())?
+        == 0
+    {
+        return Err(format!("{who} is not a Hat-Maker"));
+    }
+    Ok(id)
+}
+
+/// The Hat-Makers given it by hand (owners are ones too), with their names.
+pub fn hat_makers(db: &Connection) -> Vec<(String, Option<String>)> {
+    let Ok(mut statement) = db.prepare(
+        "SELECT h.player_id, a.name FROM hat_makers h LEFT JOIN accounts a ON a.player_id = h.player_id
+         ORDER BY h.since",
+    ) else {
+        return Vec::new();
+    };
+    statement
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
 }
 
 /// The player id for `who`: an account name, or a player id as it is.

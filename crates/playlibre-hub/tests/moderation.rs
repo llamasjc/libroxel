@@ -316,3 +316,34 @@ fn players_report_players_and_appeal() {
     drop(running);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn owners_give_and_take_hat_maker() {
+    let dir = std::env::temp_dir().join(format!("playlibre-hat-makers-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let data = dir.join("hub.sqlite");
+    let running = start("127.0.0.1:0".parse().unwrap(), Some(&data)).unwrap();
+    let hub = HubClient::new(&running.url());
+    let (boss, ana) = (Player::new(41), Player::new(42));
+    boss.claim(&hub, "Chef");
+    ana.claim(&hub, "Hatty");
+    assert!(!hub.profile("Hatty").unwrap().unwrap().hat_maker);
+    // Only owners give it out, and owners are Hat-Makers themselves.
+    assert!(ana.moderate(&hub, ModAction::HatMaker, "", "Hatty", 0).is_err());
+    add_owner(&open_db(Some(&data)).unwrap(), "Chef").unwrap();
+    assert!(hub.profile("Chef").unwrap().unwrap().hat_maker);
+
+    boss.moderate(&hub, ModAction::HatMaker, "", "Hatty", 0).unwrap();
+    assert!(hub.profile("Hatty").unwrap().unwrap().hat_maker);
+    let board = boss.dashboard(&hub).unwrap();
+    assert_eq!(board.hat_makers.len(), 1);
+    assert_eq!(board.hat_makers[0].name.as_deref(), Some("Hatty"));
+    assert_eq!(board.log[0].action, "hat_maker");
+
+    boss.moderate(&hub, ModAction::NoHatMaker, "", &ana.id, 0).unwrap();
+    assert!(!hub.profile("Hatty").unwrap().unwrap().hat_maker);
+    assert!(boss.dashboard(&hub).unwrap().hat_makers.is_empty());
+    assert!(boss.moderate(&hub, ModAction::NoHatMaker, "", &ana.id, 0).is_err());
+    drop(running);
+    let _ = std::fs::remove_dir_all(&dir);
+}

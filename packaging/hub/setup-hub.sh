@@ -352,6 +352,15 @@ exec sudo -u playlibre /usr/local/bin/playlibre-hub "$@" --data /var/lib/playlib
 ADMIN
 chmod 755 /usr/local/bin/playlibre-admin
 
+# The official Hub's own admin: the account llamas becomes an owner, once,
+# on the first setup or update that has this. Only if that account is
+# already there, so no one can make it later to become an owner.
+seeded=/var/lib/playlibre/owner-llamas-done
+if [ "$DOMAIN" = hub.playlibre.net ] && [ ! -e "$seeded" ] && [ -f /var/lib/playlibre/hub.sqlite ]; then
+    if /usr/local/bin/playlibre-admin owner add llamas; then :; else echo "No account llamas here, so no owner was added."; fi
+    touch "$seeded"
+fi
+
 systemctl daemon-reload
 systemctl enable --now playlibre-hub playlibre-hub-backup.timer >/dev/null
 if [ -n "$REPO" ] && [ -x /usr/local/bin/playlibre-hub-update ]; then

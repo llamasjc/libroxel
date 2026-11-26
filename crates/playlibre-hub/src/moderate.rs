@@ -81,6 +81,10 @@ pub enum ModAction {
     Unban,
     Accept,
     Deny,
+    /// Lets a player add hats to the catalog.
+    HatMaker,
+    /// Takes that away.
+    NoHatMaker,
 }
 
 impl ModAction {
@@ -95,6 +99,8 @@ impl ModAction {
             ModAction::Unban => "unban",
             ModAction::Accept => "accept",
             ModAction::Deny => "deny",
+            ModAction::HatMaker => "hat_maker",
+            ModAction::NoHatMaker => "no_hat_maker",
         }
     }
 }
@@ -277,6 +283,16 @@ pub struct Dashboard {
     pub log: Vec<LogEntry>,
     #[serde(default)]
     pub appeals: Vec<OpenAppeal>,
+    /// Players given Hat-Maker by hand (owners are ones anyway).
+    #[serde(default)]
+    pub hat_makers: Vec<HatMaker>,
+}
+
+/// A player who may add hats to the catalog.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HatMaker {
+    pub player_id: String,
+    pub name: Option<String>,
 }
 
 /// An appeal waiting for a moderator.
@@ -546,7 +562,9 @@ pub fn dashboard(db: &Connection) -> Dashboard {
             a
         })
         .collect();
-    Dashboard { reports, banned, muted, log, appeals }
+    let hat_makers =
+        owner::hat_makers(db).into_iter().map(|(player_id, name)| HatMaker { player_id, name }).collect();
+    Dashboard { reports, banned, muted, log, appeals, hat_makers }
 }
 
 fn log_entries(db: &Connection, filter: &str, player_id: &str, limit: i64) -> Vec<LogEntry> {
@@ -694,6 +712,9 @@ pub fn apply(db: &Connection, moderator_id: &str, c: &ModChange) -> Result<(), S
         ModAction::Unban => {
             player = who()?;
             owner::unban(db, &player)?;
+        }
+        ModAction::HatMaker | ModAction::NoHatMaker => {
+            player = owner::set_hat_maker(db, &who()?, c.action == ModAction::HatMaker)?;
         }
         ModAction::Accept | ModAction::Deny => {
             if kind != "appeal" {

@@ -228,8 +228,8 @@ fn creators_share_hats_and_others_find_and_wear_them() {
         data,
         time: 5,
     };
-    // Only PlayLibre certified accounts (here, an owner) make hats for now.
-    assert!(client.share_item(&item("Top hat", hat.clone(), &key)).unwrap_err().contains("certified"));
+    // Only Hat-Makers (owners are ones) make hats for now.
+    assert!(client.share_item(&item("Top hat", hat.clone(), &key)).unwrap_err().contains("Hat-Makers"));
     add_owner(&open_db(Some(&path)).unwrap(), &me).unwrap();
     let shared = client.share_item(&item("Top hat", hat.clone(), &key)).unwrap();
     assert_eq!(shared.creator, "Someone");

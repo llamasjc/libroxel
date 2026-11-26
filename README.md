@@ -212,11 +212,11 @@ The first build compiles Bevy and takes a while. After that it is quick.
   no one can rename into it and pass for you. One address can make 5
   accounts an hour, and every address is limited in how fast it calls the
   Hub, publishes, shares and reports.
-- **Catalog:** for now only PlayLibre certified accounts (a verified badge,
-  or one of the Hub's owners) add hats; the Hub turns everyone else away
-  and the app hides the button. Such an account makes a hat in the editor
-  from up to 32 parts (each at most
-  6 studs across), selects its model and uses **Model > Share as hat**. Its
+- **Catalog:** for now only Hat-Makers add hats; the Hub turns everyone
+  else away and the app hides the button. The Hub's owners are Hat-Makers
+  and give it out (or take it away) on the website's **Moderation** page or
+  with `playlibre-hub hat-maker add|remove <name>`. A Hat-Maker makes a hat in the editor
+  from up to 32 parts (each at most 6 studs across), selects its model and uses **Model > Share as hat**. Its
   bottom sits on the character's head, centred. It goes in the catalog on
   the Hub, signed as you, and everyone using that Hub sees it on the
   **👤 Avatar** tab under **Catalog** with a **Wear** button. A worn catalog

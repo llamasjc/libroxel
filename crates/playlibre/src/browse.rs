@@ -697,9 +697,9 @@ impl Platform {
     }
 
     /// Whether this account may put hats in the catalog: for now only
-    /// PlayLibre certified accounts (a verified badge, or the Hub's owners).
+    /// Hat-Makers (the Hub's owners give it out, and are ones themselves).
     pub fn may_make_items(&self) -> bool {
-        self.account.as_ref().is_some_and(|p| p.verified || p.admin)
+        self.account.as_ref().is_some_and(|p| p.hat_maker || p.admin)
     }
 
     fn wallet_row(&mut self, ui: &mut egui::Ui) {
@@ -749,7 +749,7 @@ impl Platform {
             "Hats in the catalog. To add one, build it from parts in the editor, select its model and use \
              Model > Share as hat."
         } else {
-            "Hats in the catalog. For now only PlayLibre certified accounts make them."
+            "Hats in the catalog. For now only Hat-Makers make them."
         };
         ui.label(RichText::new(note).color(crate::theme::MUTED));
         if let Some(hat) = wearing {

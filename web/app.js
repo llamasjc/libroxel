@@ -1669,7 +1669,7 @@ function user() {
     el('div', { class: 'hello' },
       portrait(p.player_id, 84, p.look),
       el('div', {},
-        el('h1', {}, p.name, ' ', p.badge && badge(p.badge), ' ', p.admin && el('span', { class: 'tag admin' }, 'Admin'), ' ', p.verified && el('span', { class: 'tag verified' }, 'Verified')),
+        el('h1', {}, p.name, ' ', p.badge && badge(p.badge), ' ', p.admin && el('span', { class: 'tag admin' }, 'Admin'), ' ', p.verified && el('span', { class: 'tag verified' }, 'Verified'), ' ', p.hat_maker && el('span', { class: 'tag verified' }, 'Hat-Maker')),
         el('div', { class: 'soft' }, `#${p.number ?? 0} · `, days < 1 ? 'Joined today' : `Joined ${ago(p.joined_secs_ago)}`),
         (action || (session && !isMe)) && el('div', { style: 'margin-top:8px' }, action, ' ',
           session && !isMe && el('button', { class: 'chip', title: 'Report', onclick: () => startReport('player', p.player_id, p.name) }, icon(ICON.flag)))),
@@ -2173,6 +2173,23 @@ function logRow(l) {
     l.text && el('div', { class: 'soft' }, l.text));
 }
 
+/** Who may add hats to the catalog: owners give Hat-Maker and take it away. */
+function hatMakersPanel(makers) {
+  const name = el('input', { type: 'text', placeholder: 'Account name', maxlength: 40 });
+  const add = () => {
+    const who = name.value.trim();
+    if (who) moderate('hat_maker', { player_id: who }, `${who} is a Hat-Maker.`);
+  };
+  name.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+  return el('div', {},
+    el('h2', { class: 'section' }, `Hat-Makers (${makers.length})`),
+    el('p', { class: 'note' }, 'Only Hat-Makers (and owners) can add hats to the catalog.'),
+    el('div', { class: 'buttons' }, name, el('button', { class: 'chip', disabled: mod.busy, onclick: add }, icon(ICON.userPlus), 'Make Hat-Maker')),
+    makers.map((m) => el('div', { class: 'person' },
+      el('div', { class: 'what' }, playerLink(m.player_id, m.name)),
+      el('div', { class: 'buttons' }, el('button', { class: 'chip', disabled: mod.busy, onclick: () => moderate('no_hat_maker', { player_id: m.player_id }, `${m.name || 'They'} can no longer make hats.`) }, 'Take away')))));
+}
+
 function moderationPage() {
   if (!session) return needSignIn('Sign in to moderate.');
   if (mod.for !== session.playerId || (!mod.busy && Date.now() - mod.at > 30000)) loadModeration();
@@ -2188,6 +2205,7 @@ function moderationPage() {
   out.push(el('div', { class: 'columns' },
     el('div', {}, el('h2', { class: 'subhead' }, `Banned (${b.banned.length})`), b.banned.map((p) => penaltyRow(p, 'unban', 'Unbanned.'))),
     el('div', {}, el('h2', { class: 'subhead' }, `Muted (${b.muted.length})`), b.muted.map((p) => penaltyRow(p, 'unmute', 'Unmuted.')))));
+  out.push(hatMakersPanel(b.hat_makers || []));
   out.push(el('h2', { class: 'section' }, 'Log'));
   out.push(b.log.length ? b.log.map(logRow) : el('p', { class: 'soft' }, 'Nothing yet.'));
   return out;
@@ -2319,8 +2337,8 @@ async function priceItem(item, price) {
   if (ok) { catalog.at = 0; loadCatalog(); }
 }
 
-/** For now only PlayLibre certified accounts (verified, or the Hub's owners) make catalog hats. */
-const mayMakeItems = () => Boolean(data.me && (data.me.verified || data.me.admin));
+/** For now only Hat-Makers (the Hub's owners give it out, and are ones themselves) make catalog hats. */
+const mayMakeItems = () => Boolean(data.me && (data.me.hat_maker || data.me.admin));
 
 /** The account's Credits, at the top right by its name. */
 function creditsChip() {
@@ -2404,7 +2422,7 @@ function avatar() {
     el('h2', { class: 'section' }, 'Catalog'),
     el('p', { class: 'note' }, mayMakeItems()
       ? 'Hats in the catalog. To add one, build it from parts in the editor, select its model and use Model > Share as hat.'
-      : 'Hats in the catalog. For now only PlayLibre certified accounts make them.'),
+      : 'Hats in the catalog. For now only Hat-Makers make them.'),
     walletBar(),
     look.item && el('div', { class: 'form-actions' }, `Wearing ${look.item.name}`, el('button', { class: 'chip', onclick: () => { delete look.item; changed(); } }, 'Take it off')),
     hats.length
