@@ -5,6 +5,13 @@ its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 
 ## Unreleased
 
+- **Loading screen lines:** the turning cubes on the loading screen no
+  longer flash thin lines across the screen. When a cube face turned
+  almost side-on, the corners of its outline were drawn as long needles;
+  faces and their edges are now drawn separately so no corner can stick
+  out. The little cubes going round behind the big one are now hidden by
+  it instead of showing through.
+
 - **Big games on servers:** a game with more than 5,000 parts no longer
   streams unless it turns `StreamingEnabled` on itself. Before, its
   players only got the parts near them, so scripts that use far parts

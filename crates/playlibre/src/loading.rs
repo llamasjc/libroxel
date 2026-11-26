@@ -183,16 +183,23 @@ fn draw(painter: &egui::Painter, rect: Rect, t: f32, progress: f32, alpha: f32) 
         Stroke::new(1.5, fade_color(theme::ACCENT, alpha * (0.35 + 0.35 * glow))),
     );
 
+    // The little cubes going round: the ones on the far side first, so the
+    // big cube hides them, then the big cube, then the near ones over it.
+    let orbit = |behind: bool| {
+        for i in 0..3 {
+            let a = t * 1.8 + i as f32 * std::f32::consts::TAU / 3.0;
+            if (a.sin() < 0.0) != behind {
+                continue;
+            }
+            let at = ring_center + vec2(a.cos() * unit * 2.4, a.sin() * unit * 0.7);
+            let small = Cube { yaw: -t * 2.0 + i as f32, pitch: 0.55, size: unit * 0.22, stretch: 1.0 };
+            small.faces(painter, at, alpha * if behind { 0.55 } else { 1.0 });
+        }
+    };
+    orbit(true);
     let cube = Cube { yaw, pitch: 0.55, size: unit, stretch: squash };
     cube.faces(painter, center - vec2(0.0, lift), alpha);
-
-    for i in 0..3 {
-        let a = t * 1.8 + i as f32 * std::f32::consts::TAU / 3.0;
-        let at = ring_center + vec2(a.cos() * unit * 2.4, a.sin() * unit * 0.7);
-        let small = Cube { yaw: -t * 2.0 + i as f32, pitch: 0.55, size: unit * 0.22, stretch: 1.0 };
-        let behind = a.sin() < 0.0;
-        small.faces(painter, at, alpha * if behind { 0.55 } else { 1.0 });
-    }
+    orbit(false);
 
     let mark =
         painter.layout_no_wrap("PlayLibre".to_owned(), theme::light(30.0), fade_color(Color32::WHITE, alpha));
@@ -269,6 +276,13 @@ impl Cube {
             [l[0] / n, l[1] / n, l[2] / n]
         };
         let base = theme::ACCENT;
+        // The faces go in as plain triangles and the edges as separate
+        // lines, never as outlined polygons: as the cube turns, a face seen
+        // almost side-on is a sliver with needle-sharp corners, and egui
+        // joins a closed outline's corners with miters it never cuts short,
+        // so those corners shot thin lines right across the screen.
+        let mut mesh = egui::Mesh::default();
+        let mut edges: Vec<(usize, usize)> = Vec::with_capacity(9);
         for (corners, normal) in FACES {
             let n = self.turn(normal);
             if n[2] <= 0.0 {
@@ -276,13 +290,25 @@ impl Cube {
             }
             let lit = 0.45 + 0.55 * (n[0] * light[0] + n[1] * light[1] + n[2] * light[2]).max(0.0);
             let tint = |c: u8| ((c as f32 * lit) + 40.0 * lit * lit).min(255.0) as u8;
-            let fill = Color32::from_rgb(tint(base.r()), tint(base.g()), tint(base.b()));
-            let points: Vec<Pos2> = corners.iter().map(|i| self.point(center, CORNERS[*i])).collect();
-            painter.add(Shape::convex_polygon(
-                points,
-                fade_color(fill, alpha),
-                Stroke::new(1.5, fade_color(Color32::from_white_alpha(90), alpha)),
-            ));
+            let fill = fade_color(Color32::from_rgb(tint(base.r()), tint(base.g()), tint(base.b())), alpha);
+            let first = mesh.vertices.len() as u32;
+            for i in corners {
+                mesh.colored_vertex(self.point(center, CORNERS[i]), fill);
+            }
+            mesh.add_triangle(first, first + 1, first + 2);
+            mesh.add_triangle(first, first + 2, first + 3);
+            for k in 0..4 {
+                let (a, b) = (corners[k], corners[(k + 1) % 4]);
+                let edge = (a.min(b), a.max(b));
+                if !edges.contains(&edge) {
+                    edges.push(edge);
+                }
+            }
+        }
+        painter.add(Shape::mesh(mesh));
+        let stroke = Stroke::new(1.5, fade_color(Color32::from_white_alpha(90), alpha));
+        for (a, b) in edges {
+            painter.line_segment([self.point(center, CORNERS[a]), self.point(center, CORNERS[b])], stroke);
         }
     }
 
@@ -310,6 +336,33 @@ mod tests {
         }
         assert!(!loading.covering());
         assert!(loading.take_finished().is_some_and(|t| t.contains("nothing new came from the host")));
+    }
+
+    /// Every way the cubes turn, nothing they draw reaches past their own
+    /// corners. Faces seen side-on used to send lines across the screen.
+    #[test]
+    fn turning_cubes_draw_nothing_past_their_corners() {
+        let ctx = egui::Context::default();
+        let center = pos2(400.0, 400.0);
+        let size = 40.0;
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            for step in 0..3600 {
+                let yaw = step as f32 * std::f32::consts::TAU / 3600.0;
+                for stretch in [0.88, 1.0] {
+                    Cube { yaw, pitch: 0.55, size, stretch }.faces(ui.painter(), center, 1.0);
+                }
+            }
+        });
+        // A cube's corners are at most size * sqrt(3) from its middle, a
+        // little more when squashed, and its lines are 1.5 wide.
+        let reach = size * 1.12 * 3f32.sqrt() + 3.0;
+        for clipped in ctx.tessellate(output.shapes, 1.0) {
+            let egui::epaint::Primitive::Mesh(mesh) = clipped.primitive else { continue };
+            for vertex in &mesh.vertices {
+                let far = (vertex.pos - center).length();
+                assert!(far <= reach, "drew {far:.1} from the middle, reach is {reach:.1}");
+            }
+        }
     }
 
     #[test]
