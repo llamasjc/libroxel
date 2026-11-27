@@ -1124,11 +1124,16 @@ impl GraphicsQuality {
         self.since_drop += dt;
         self.slow_for = if self.average > goal * 1.1 { self.slow_for + dt } else { 0.0 };
         self.fast_for = if self.average < goal * 1.04 { self.fast_for + dt } else { 0.0 };
-        if self.since_drop > 60.0 {
-            self.ceiling = self.top();
+        if self.since_drop > 60.0 && self.ceiling < self.top() {
+            self.ceiling += 1;
+            self.since_drop = 0.0;
         }
         if self.slow_for > 1.5 && self.level > 1 {
-            let step = if self.average > goal * 1.6 { 2 } else { 1 };
+            let step = match self.average / goal {
+                r if r > 2.5 => 3,
+                r if r > 1.6 => 2,
+                _ => 1,
+            };
             self.level = self.level.saturating_sub(step).max(1);
             self.ceiling = self.level;
             self.slow_for = 0.0;
@@ -1231,6 +1236,18 @@ impl GraphicsQuality {
     /// How far away parts are still drawn, in studs.
     pub fn view_distance(&self) -> f32 {
         Self::VIEW_DISTANCE[self.index()]
+    }
+
+    pub fn render_share(&self) -> f32 {
+        if self.phone {
+            return 1.0;
+        }
+        match self.level {
+            1 => 0.6,
+            2 => 0.7,
+            3 => 0.85,
+            _ => 1.0,
+        }
     }
 
     /// On a phone or tablet, how many pixels the 3D view draws for each

@@ -1,5 +1,5 @@
-//! Drawing the 3D view with fewer pixels than the screen has, on phones
-//! and tablets (see [`GraphicsQuality::render_density`]).
+//! Drawing the 3D view with fewer pixels than the screen has, on phones,
+//! tablets and slow computers (see [`GraphicsQuality::render_density`]).
 //!
 //! The 3D camera then draws into a picture the shape of the window but
 //! smaller, which the UI lays under itself stretched to fill the 3D view.
@@ -47,7 +47,10 @@ pub fn apply(
     let Ok(window) = window.single() else { return };
     let ppp = window.scale_factor();
     scale.pixels_per_point = ppp;
-    let share = share(quality.as_ref().and_then(|q| q.render_density()), ppp);
+    let share = match quality.as_ref() {
+        Some(q) if q.render_density().is_none() => q.render_share(),
+        q => share(q.and_then(|q| q.render_density()), ppp),
+    };
     let size = UVec2::new(
         ((window.physical_width() as f32 * share).ceil() as u32).max(1),
         ((window.physical_height() as f32 * share).ceil() as u32).max(1),

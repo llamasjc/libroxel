@@ -3522,6 +3522,7 @@ fn menu_pick(pick: crate::menu::Pick, engine: &mut EngineState, editor: &mut Edi
         match engine.session.is_some() {
             true => {
                 editor.player_mode = true;
+                editor.joined_from_editor = false;
                 editor.menu.open = false;
             }
             false => {
