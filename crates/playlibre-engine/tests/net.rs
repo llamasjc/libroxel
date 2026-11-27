@@ -929,3 +929,65 @@ fn a_joined_player_gets_the_lighting_the_host_has() {
         extra(g, "ExposureCompensation") == Some(PropertyValue::Number(1.0))
     });
 }
+
+#[test]
+fn values_and_collision_groups_reach_a_joined_player() {
+    let mut world = game();
+    let sss = world.service(ClassKind::ServerScriptService).unwrap();
+    code(
+        &mut world,
+        ClassKind::Script,
+        sss,
+        "Packed",
+        r#"
+        local ps = game:GetService("PhysicsService")
+        ps:RegisterCollisionGroup("Leaves")
+        ps:CollisionGroupSetCollidable("Leaves", "Default", false)
+        local r = Instance.new("RemoteEvent")
+        r.Name = "Packed"
+        r.Parent = game.ReplicatedStorage
+        r.OnServerEvent:Connect(function(_, b, s, n)
+            print("back", buffer.tostring(b), #s, n)
+        end)
+        game.Players.PlayerAdded:Connect(function(p)
+            task.wait(0.3)
+            r:FireClient(p, buffer.fromstring("abc"), "\255\0", math.huge, NumberRange.new(1, 2), BrickColor.new("Bright red"))
+        end)
+        "#,
+    );
+    let starter = world.starter_scripts(ClassKind::StarterPlayerScripts).unwrap();
+    code(
+        &mut world,
+        ClassKind::LocalScript,
+        starter,
+        "Unpack",
+        r#"
+        local ps = game:GetService("PhysicsService")
+        local r = game.ReplicatedStorage:WaitForChild("Packed")
+        r.OnClientEvent:Connect(function(b, s, n, range, colour)
+            print("got", buffer.tostring(b), #s, n, range.Max, colour.Name)
+            print("groups", ps:IsCollisionGroupRegistered("Leaves"), ps:CollisionGroupsAreCollidable("Leaves", "Default"))
+            r:FireServer(b, s, n)
+        end)
+        "#,
+    );
+    let mut host = PlaySession::host(Rc::new(RefCell::new(world)), 0, None, false).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    let (mut seen, mut back) = (Vec::new(), Vec::new());
+    for _ in 0..600 {
+        host.step(DT, CharacterInput::default());
+        guest.step(DT, CharacterInput::default());
+        seen.extend(printed(&mut guest));
+        back.extend(printed(&mut host));
+        if back.iter().any(|l| l.starts_with("back")) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(seen.iter().any(|l| l == "got abc 2 inf 2 Bright red"), "{seen:?}");
+    assert!(seen.iter().any(|l| l == "groups true false"), "{seen:?}");
+    assert!(back.iter().any(|l| l == "back abc 2 inf"), "{back:?}");
+}

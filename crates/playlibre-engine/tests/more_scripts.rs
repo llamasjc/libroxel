@@ -467,3 +467,23 @@ fn tweens_say_where_they_are_and_how_they_ended() {
         vec!["Begin true", "Playing", "done Completed", "Completed", "stopped Cancelled", "Cancelled"]
     );
 }
+
+#[test]
+fn a_cloned_script_starts_where_it_is_put() {
+    let out = run(r#"
+        if script:GetAttribute("Copy") then
+            print("copy runs in " .. script.Parent.Name)
+            return
+        end
+        local actor = Instance.new("Actor")
+        actor.Name = "Box"
+        local copy = script:Clone()
+        copy:SetAttribute("Copy", true)
+        copy.Parent = actor
+        actor.Parent = workspace
+        local stored = script:Clone()
+        stored:SetAttribute("Copy", true)
+        stored.Parent = game.ReplicatedStorage
+    "#);
+    assert_eq!(out.iter().filter(|l| l.starts_with("copy runs")).collect::<Vec<_>>(), ["copy runs in Box"]);
+}

@@ -2964,6 +2964,79 @@ fn runs_where_it_is(tree: &playlibre_instance::InstanceTree, id: InstanceId) -> 
     false
 }
 
+/// Queues the scripts that were put where they run (a cloned script
+/// parented into the workspace or a player's scripts), so they start on
+/// the next step, as they would on the reference platform.
+fn queue_moved_scripts(lua: &Lua, changes: &[Change]) {
+    let moved: Vec<InstanceId> = changes
+        .iter()
+        .filter_map(|c| match c {
+            Change::Reparented { id, new_parent: Some(_), .. } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    if moved.is_empty() {
+        return;
+    }
+    let role = crate::net::role(lua);
+    let me = crate::services::local_player(lua);
+    let host = host(lua);
+    let tree = host.tree.borrow();
+    let running = host.running_scripts.borrow();
+    let mut queue = host.to_start.borrow_mut();
+    for root in moved {
+        for class in script_homes(&tree, root, role, me) {
+            let itself = (tree.class(root) == Ok(class)).then_some(root);
+            for id in itself.into_iter().chain(tree.descendants_of_class(root, class)) {
+                if !running.contains(&id)
+                    && !queue.contains(&id)
+                    && tree.get_bool(id, Property::Disabled) != Some(true)
+                    && runs_where_it_is(&tree, id)
+                {
+                    queue.push(id);
+                }
+            }
+        }
+    }
+}
+
+/// Which kinds of script run at `id` on this computer: `Script`s in the
+/// workspace or the server script service (not on a joined computer),
+/// `LocalScript`s in this computer's player's scripts, GUI, backpack or
+/// character.
+fn script_homes(
+    tree: &playlibre_instance::InstanceTree,
+    id: InstanceId,
+    role: crate::net::NetRole,
+    me: Option<InstanceId>,
+) -> Vec<ClassKind> {
+    let mut homes = Vec::new();
+    let mut at = tree.parent(id).ok().flatten();
+    while let Some(a) = at {
+        let Ok(class) = tree.class(a) else { break };
+        match class {
+            ClassKind::Workspace | ClassKind::ServerScriptService => {
+                if role != crate::net::NetRole::Client {
+                    homes.push(ClassKind::Script);
+                }
+                break;
+            }
+            ClassKind::PlayerScripts | ClassKind::PlayerGui | ClassKind::Backpack => {
+                if me.is_some() && tree.parent(a).ok().flatten() == me {
+                    homes.push(ClassKind::LocalScript);
+                }
+                break;
+            }
+            ClassKind::Model if me.is_some_and(|p| tree.get_ref(p, Property::Character) == Some(a)) => {
+                homes.push(ClassKind::LocalScript);
+            }
+            _ => {}
+        }
+        at = tree.parent(a).ok().flatten();
+    }
+    homes
+}
+
 /// Starts the scripts enabled since the last step.
 fn start_enabled_scripts(lua: &Lua) -> Vec<ScriptError> {
     let queued = std::mem::take(&mut *host(lua).to_start.borrow_mut());
@@ -3192,6 +3265,7 @@ pub(crate) fn fire_plain(lua: &Lua, signal: SignalKind) -> Vec<ScriptError> {
 
 /// Fires change events for everything in `changes` that a script is listening to.
 pub(crate) fn fire_changes(lua: &Lua, changes: &[Change]) -> Vec<ScriptError> {
+    queue_moved_scripts(lua, changes);
     let errors = fire_heard_changes(lua, changes);
     forget_destroyed(lua, changes);
     errors

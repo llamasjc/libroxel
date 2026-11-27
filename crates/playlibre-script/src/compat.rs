@@ -31,7 +31,12 @@ fn runtime_err(message: impl Into<String>) -> mlua::Error {
 
 /// A named colour, by its place in [`BRICK_COLORS`].
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct LuaBrickColor(usize);
+pub(crate) struct LuaBrickColor(pub(crate) usize);
+
+/// The named colour at `i`, if there is one.
+pub(crate) fn brick_color(i: usize) -> Option<LuaBrickColor> {
+    (i < BRICK_COLORS.len()).then_some(LuaBrickColor(i))
+}
 
 fn brick_rgb(i: usize) -> Color3 {
     let [r, g, b] = BRICK_COLORS[i].2;
@@ -1366,29 +1371,33 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
 pub(crate) struct CollisionGroups {
     registered: Vec<String>,
     apart: std::collections::BTreeSet<(String, String)>,
-    /// Whether the place's own groups (set up in Studio) were read yet.
-    seeded: bool,
+    /// The workspace's `CollisionGroups` text these were last read from or
+    /// written to.
+    seen: Option<String>,
 }
 
-/// Starts from the place's own collision groups, once: the file reader
-/// keeps them on the workspace as `CollisionGroups` text, entries of
-/// `name^number^mask` separated by `\` (bit `n` of the mask set: the
-/// group collides with group `n`).
+const GROUPS_EXTRA: &str = "CollisionGroups";
+
+/// Keeps the groups in step with the workspace's `CollisionGroups` text:
+/// entries of `name^number^mask` separated by `\` (bit `n` of the mask
+/// set: the group collides with group `n`). The file reader puts the
+/// place's own groups there, and the text is sent to players' computers
+/// with the workspace, so theirs match the server's.
 fn seed_collision_groups(lua: &Lua) {
     let host = host(lua);
-    if host.groups.borrow().seeded {
-        return;
-    }
     // Read again later if the tree is busy right now.
     let Ok(tree) = host.tree.try_borrow() else { return };
-    let text = match tree.get_extra(tree.workspace(), "CollisionGroups") {
-        Ok(Some(PropertyValue::String(text))) => Some(text),
-        _ => None,
+    let text = match tree.get_extra(tree.workspace(), GROUPS_EXTRA) {
+        Ok(Some(PropertyValue::String(text))) => text,
+        _ => String::new(),
     };
     drop(tree);
     let mut groups = host.groups.borrow_mut();
-    groups.seeded = true;
-    let Some(text) = text else { return };
+    if groups.seen.as_deref() == Some(text.as_str()) {
+        return;
+    }
+    groups.registered.clear();
+    groups.apart.clear();
     let mut list: Vec<(String, u32, u32)> = Vec::new();
     for entry in text.split('\\').filter(|e| !e.is_empty()) {
         let mut parts = entry.rsplitn(3, '^');
@@ -1409,6 +1418,37 @@ fn seed_collision_groups(lua: &Lua) {
             }
         }
     }
+    groups.seen = Some(text);
+}
+
+/// Writes the groups back as the workspace's `CollisionGroups` text.
+fn store_collision_groups(lua: &Lua) {
+    let host = host(lua);
+    let text = {
+        let groups = host.groups.borrow();
+        let names: Vec<&str> = std::iter::once(playlibre_instance::DEFAULT_COLLISION_GROUP)
+            .chain(groups.registered.iter().map(String::as_str))
+            .take(32)
+            .collect();
+        let mut text = String::new();
+        for (i, a) in names.iter().enumerate() {
+            let mut mask: u32 = 0;
+            for (j, b) in names.iter().enumerate() {
+                if !groups.apart.contains(&pair((*a).to_owned(), (*b).to_owned())) {
+                    mask |= 1 << j;
+                }
+            }
+            if i > 0 {
+                text.push('\\');
+            }
+            text.push_str(&format!("{a}^{i}^{}", mask as i32));
+        }
+        text
+    };
+    let Ok(mut tree) = host.tree.try_borrow_mut() else { return };
+    let ws = tree.workspace();
+    let _ = tree.set_extra(ws, GROUPS_EXTRA, Some(PropertyValue::String(text.clone())));
+    host.groups.borrow_mut().seen = Some(text);
 }
 
 fn pair(a: String, b: String) -> (String, String) {
@@ -1427,6 +1467,8 @@ fn physics_service(lua: &Lua, t: &Table) -> mlua::Result<()> {
         let mut groups = host.groups.borrow_mut();
         if name != playlibre_instance::DEFAULT_COLLISION_GROUP && !groups.registered.contains(&name) {
             groups.registered.push(name);
+            drop(groups);
+            store_collision_groups(lua);
         }
         Ok(())
     };
@@ -1438,6 +1480,8 @@ fn physics_service(lua: &Lua, t: &Table) -> mlua::Result<()> {
         let mut groups = host.groups.borrow_mut();
         groups.registered.retain(|g| *g != name);
         groups.apart.retain(|(a, b)| *a != name && *b != name);
+        drop(groups);
+        store_collision_groups(lua);
         Ok(())
     })?;
     method(lua, t, IS_COLLISION_GROUP_REGISTERED, |lua, name: String| {
@@ -1454,6 +1498,8 @@ fn physics_service(lua: &Lua, t: &Table) -> mlua::Result<()> {
         } else {
             groups.apart.insert(pair(a, b));
         }
+        drop(groups);
+        store_collision_groups(lua);
         Ok(())
     })?;
     method(lua, t, COLLISION_GROUPS_ARE_COLLIDABLE, |lua, (a, b): (String, String)| {

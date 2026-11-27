@@ -53,7 +53,7 @@ impl UserData for ColorKeypoint {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct LuaNumberSequence(Vec<(f32, f32)>);
+pub(crate) struct LuaNumberSequence(pub(crate) Vec<(f32, f32)>);
 
 impl UserData for LuaNumberSequence {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
@@ -65,7 +65,7 @@ impl UserData for LuaNumberSequence {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct LuaColorSequence(Vec<(f32, Color3)>);
+pub(crate) struct LuaColorSequence(pub(crate) Vec<(f32, Color3)>);
 
 impl UserData for LuaColorSequence {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {

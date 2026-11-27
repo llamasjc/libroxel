@@ -15,6 +15,8 @@ use playlibre_instance::{CFrame, Color3, EnumKind, InstanceId, Rotation, UDim, U
 
 use crate::ScriptError;
 use crate::bindings::{LuaColor3, LuaEnumItem, SignalKind, as_instance, host, push_instance, take_errors};
+use crate::compat::LuaBrickColor;
+use crate::effects::{LuaColorSequence, LuaNumberRange, LuaNumberSequence};
 use crate::types::{LuaCFrame, LuaUDim, LuaUDim2, LuaVector2};
 
 /// Which side of a game this runtime is.
@@ -71,7 +73,15 @@ fn runtime_err(message: impl Into<String>) -> mlua::Error {
 // ---------------------------------------------------------------------------
 
 fn number(n: f64) -> Json {
-    serde_json::Number::from_f64(n).map_or(Json::Null, Json::Number)
+    match serde_json::Number::from_f64(n) {
+        Some(n) => Json::Number(n),
+        None if n.is_nan() => json!({ "$n": "nan" }),
+        None => json!({ "$n": if n > 0.0 { "inf" } else { "-inf" } }),
+    }
+}
+
+fn bytes(b: &[u8]) -> Json {
+    Json::String(data_encoding::BASE64.encode(b))
 }
 
 fn floats(values: &[f32]) -> Json {
@@ -94,7 +104,11 @@ fn encode_at(value: &Value, depth: usize) -> mlua::Result<Json> {
         Value::Boolean(b) => Json::Bool(*b),
         Value::Integer(n) => number(*n as f64),
         Value::Number(n) => number(*n),
-        Value::String(s) => Json::String(s.to_str()?.to_owned()),
+        Value::String(s) => match s.to_str() {
+            Ok(text) => Json::String(text.to_owned()),
+            Err(_) => json!({ "$s": bytes(&s.as_bytes()) }),
+        },
+        Value::Buffer(b) => json!({ "$b": bytes(&b.to_vec()) }),
         Value::Table(table) => {
             let len = table.raw_len();
             let pairs: Vec<(Value, Value)> = table.pairs::<Value, Value>().collect::<mlua::Result<_>>()?;
@@ -143,6 +157,16 @@ fn encode_at(value: &Value, depth: usize) -> mlua::Result<Json> {
                 json!({ "$cf": floats(&all) })
             } else if let Ok(e) = ud.borrow::<LuaEnumItem>() {
                 json!({ "$e": [e.0.kind().kind_name(), e.0.file_name()] })
+            } else if let Ok(r) = ud.borrow::<LuaNumberRange>() {
+                json!({ "$nr": floats(&[r.0.x, r.0.y]) })
+            } else if let Ok(seq) = ud.borrow::<LuaNumberSequence>() {
+                let points: Vec<f32> = seq.0.iter().flat_map(|&(t, v)| [t, v]).collect();
+                json!({ "$ns": floats(&points) })
+            } else if let Ok(seq) = ud.borrow::<LuaColorSequence>() {
+                let points: Vec<f32> = seq.0.iter().flat_map(|&(t, c)| [t, c.r, c.g, c.b]).collect();
+                json!({ "$cs": floats(&points) })
+            } else if let Ok(b) = ud.borrow::<LuaBrickColor>() {
+                json!({ "$bc": b.0 })
             } else {
                 return Err(runtime_err("that value can't be sent over the network"));
             }
@@ -163,6 +187,16 @@ fn tagged<'a>(map: &'a serde_json::Map<String, Json>, tag: &str) -> Option<&'a J
 fn float_list(json: &Json, len: usize) -> Option<Vec<f32>> {
     let items = json.as_array().filter(|a| a.len() == len)?;
     items.iter().map(|v| v.as_f64().map(|f| f as f32)).collect()
+}
+
+/// A list of floats whose length is a multiple of `each`, at most `most` long.
+fn float_groups(json: &Json, each: usize, most: usize) -> Option<Vec<f32>> {
+    let items = json.as_array().filter(|a| a.len() % each == 0 && a.len() <= most)?;
+    items.iter().map(|v| v.as_f64().map(|f| f as f32)).collect()
+}
+
+fn unbytes(json: &Json) -> Option<Vec<u8>> {
+    data_encoding::BASE64.decode(json.as_str()?.as_bytes()).ok()
 }
 
 /// Turns [`encode`]'s JSON back into a script value. Instances that don't
@@ -189,6 +223,36 @@ pub fn decode(lua: &Lua, json: &Json) -> mlua::Result<Value> {
                     tree.exists(id) && !tree.is_destroyed(id).unwrap_or(true)
                 };
                 return Ok(if alive { Value::UserData(push_instance(lua, id)?) } else { Value::Nil });
+            }
+            if let Some(n) = tagged(map, "$n").and_then(Json::as_str) {
+                return Ok(Value::Number(match n {
+                    "inf" => f64::INFINITY,
+                    "-inf" => f64::NEG_INFINITY,
+                    _ => f64::NAN,
+                }));
+            }
+            if let Some(b) = tagged(map, "$s").and_then(unbytes) {
+                return Ok(Value::String(lua.create_string(b)?));
+            }
+            if let Some(b) = tagged(map, "$b").and_then(unbytes) {
+                return Ok(Value::Buffer(lua.create_buffer(b)?));
+            }
+            if let Some(v) = tagged(map, "$nr").and_then(|j| float_list(j, 2)) {
+                return Ok(Value::UserData(lua.create_userdata(LuaNumberRange(Vec2::new(v[0], v[1])))?));
+            }
+            if let Some(v) = tagged(map, "$ns").and_then(|j| float_groups(j, 2, 40)) {
+                let points = v.chunks(2).map(|p| (p[0], p[1])).collect();
+                return Ok(Value::UserData(lua.create_userdata(LuaNumberSequence(points))?));
+            }
+            if let Some(v) = tagged(map, "$cs").and_then(|j| float_groups(j, 4, 80)) {
+                let points = v.chunks(4).map(|p| (p[0], Color3::new(p[1], p[2], p[3]))).collect();
+                return Ok(Value::UserData(lua.create_userdata(LuaColorSequence(points))?));
+            }
+            if let Some(i) = tagged(map, "$bc").and_then(Json::as_u64) {
+                return Ok(match crate::compat::brick_color(i as usize) {
+                    Some(b) => Value::UserData(lua.create_userdata(b)?),
+                    None => Value::Nil,
+                });
             }
             if let Some(v) = tagged(map, "$v3").and_then(|j| float_list(j, 3)) {
                 return Ok(crate::bindings::vector_value(Vec3::new(v[0], v[1], v[2])));
