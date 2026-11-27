@@ -3,7 +3,7 @@
 What changed in each release. The full list of commits for each one is on
 its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 
-## Unreleased
+## 0.1.22 (2026-11-27)
 
 - **No free Credits:** badges no longer give Credits, and a creator's
   share of a sale only counts what the buyer paid for. On the Hub,
@@ -15,6 +15,8 @@ its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
   button sit at the top left, the player list starts hidden, the pause menu
   has bigger buttons and fits short screens, and buttons and text are
   bigger to tap.
+
+## 0.1.21 (2026-11-26)
 
 - **Loading screen lines:** the turning cubes on the loading screen no
   longer flash thin lines across the screen. When a cube face turned
