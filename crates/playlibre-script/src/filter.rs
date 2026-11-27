@@ -58,7 +58,8 @@ fn is_bad(word: &str) -> bool {
     let plain_word: String = word.chars().map(plain).collect();
     let squashed = squash(word);
     let words = squashed_list(WORDS);
-    if WORDS.contains(&plain_word.as_str()) || words.contains(&squashed) {
+    let squashed_counts = squashed.len() >= 3 || plain_word.len() > squashed.len();
+    if WORDS.contains(&plain_word.as_str()) || squashed_counts && words.contains(&squashed) {
         return true;
     }
     squashed_list(STEMS).iter().any(|stem| squashed.starts_with(stem.as_str()))
@@ -69,36 +70,98 @@ fn in_word(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '@' | '$' | '!' | '|')
 }
 
-/// `text` with every bad word replaced by as many `#`s as it has letters.
+/// `text` with every bad word replaced by as many `#`s as it has letters,
+/// including words split up with spaces or dots (`f u c k`, `sh.it`).
 pub fn filter(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut word = String::new();
-    let flush = |word: &mut String, out: &mut String| {
-        if word.is_empty() {
-            return;
+    let chars: Vec<char> = text.chars().collect();
+    let mut hidden = vec![false; chars.len()];
+    let mut hide = |start: usize, end: usize| {
+        let core = trim_core(&chars, start, end);
+        for h in &mut hidden[core.0..core.1] {
+            *h = true;
         }
-        // Symbols at the ends are punctuation, not letters ("shit!").
-        let core = word.trim_matches(|c: char| !c.is_alphanumeric());
-        if !core.is_empty() && is_bad(core) {
-            let start = word.find(core).unwrap_or(0);
-            out.push_str(&word[..start]);
-            out.extend(std::iter::repeat_n('#', core.chars().count()));
-            out.push_str(&word[start + core.len()..]);
-        } else {
-            out.push_str(word);
-        }
-        word.clear();
     };
-    for c in text.chars() {
-        if in_word(c) {
-            word.push(c);
-        } else {
-            flush(&mut word, &mut out);
-            out.push(c);
+    for (start, end) in runs(&chars, in_word) {
+        if is_bad_run(&chars, start, end) {
+            hide(start, end);
         }
     }
-    flush(&mut word, &mut out);
+    let pieces = runs(&chars, |c| !splits(c));
+    let mut i = 0;
+    while i < pieces.len() {
+        let mut joined = String::new();
+        let mut found = None;
+        for j in i..pieces.len().min(i + MAX_PIECES) {
+            if j > i {
+                let gap = &chars[pieces[j - 1].1..pieces[j].0];
+                if gap.len() > 3 || gap.contains(&'\n') {
+                    break;
+                }
+            }
+            let (a, b) = trim_core(&chars, pieces[j].0, pieces[j].1);
+            if a == b || !chars[a..b].iter().all(|c| in_word(*c)) {
+                break;
+            }
+            joined.extend(&chars[a..b]);
+            if j > i && squash(&joined).chars().count() >= 3 && is_bad(&joined) {
+                found = Some(j);
+                break;
+            }
+            if b - a > 3 {
+                break;
+            }
+        }
+        if let Some(j) = found {
+            for p in &pieces[i..=j] {
+                hide(p.0, p.1);
+            }
+            i = j + 1;
+        } else {
+            i += 1;
+        }
+    }
+    chars.iter().zip(hidden).map(|(c, h)| if h { '#' } else { *c }).collect()
+}
+
+const MAX_PIECES: usize = 10;
+
+fn splits(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '.' | '-' | '_' | '*' | ',' | '+' | '~')
+}
+
+fn runs(chars: &[char], keep: impl Fn(char) -> bool) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (i, c) in chars.iter().enumerate() {
+        match (keep(*c), start) {
+            (true, None) => start = Some(i),
+            (false, Some(s)) => {
+                out.push((s, i));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        out.push((s, chars.len()));
+    }
     out
+}
+
+/// Symbols at the ends are punctuation, not letters ("shit!").
+fn trim_core(chars: &[char], mut start: usize, mut end: usize) -> (usize, usize) {
+    while start < end && !chars[start].is_alphanumeric() {
+        start += 1;
+    }
+    while end > start && !chars[end - 1].is_alphanumeric() {
+        end -= 1;
+    }
+    (start, end)
+}
+
+fn is_bad_run(chars: &[char], start: usize, end: usize) -> bool {
+    let (a, b) = trim_core(chars, start, end);
+    a < b && is_bad(&chars[a..b].iter().collect::<String>())
 }
 
 #[cfg(test)]
@@ -112,15 +175,40 @@ mod tests {
         assert_eq!(filter("you are 5h1t!"), "you are ####!");
         assert_eq!(filter("shiiiit"), "#######");
         assert_eq!(filter("a$$hole"), "#######");
+        assert_eq!(filter("asss"), "####");
+    }
+
+    #[test]
+    fn split_up_bad_words_are_hidden() {
+        assert_eq!(filter("fu ck"), "## ##");
+        assert_eq!(filter("f u c k you"), "# # # # you");
+        assert_eq!(filter("what the f.u.c.k"), "what the #.#.#.#");
+        assert_eq!(filter("sh it happens"), "## ## happens");
+        assert_eq!(filter("fu cking lag"), "## ##### lag");
+        assert_eq!(filter("a ss hole"), "# ## ####");
+        assert_eq!(filter("b-i-t-c-h!"), "#-#-#-#-#!");
     }
 
     #[test]
     fn ordinary_words_are_left_alone() {
-        for fine in
-            ["class", "assassin", "Scunthorpe", "grape", "hello there", "pass the ball", "cocktail", "1337"]
-        {
+        for fine in [
+            "class",
+            "assassin",
+            "Scunthorpe",
+            "grape",
+            "hello there",
+            "pass the ball",
+            "as",
+            "cocktail",
+            "1337",
+        ] {
             assert_eq!(filter(fine), fine);
         }
         assert_eq!(filter("gg, nice obby :)"), "gg, nice obby :)");
+        for fine in
+            ["it's hit", "a s d f", "as soon as", "is hit", "go to the shop", "who reads it", "I am at a b c"]
+        {
+            assert_eq!(filter(fine), fine);
+        }
     }
 }

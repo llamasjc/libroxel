@@ -112,17 +112,47 @@ impl TextChat {
         if !self.open && ui.input(|i| i.key_pressed(Key::Slash)) && !ui.ctx().egui_wants_keyboard_input() {
             self.open = true;
             self.focus = true;
+            ui.ctx().input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(t) if t == "/")));
         }
         let shown = |text: &str| if level == Chat::Strict { strict_filter(text) } else { text.to_owned() };
         let now = Instant::now();
         let mut report = None;
         let mut toggle = None;
         let rect = ui.max_rect();
-        egui::Area::new("text-chat".into())
-            .fixed_pos(rect.left_bottom() + egui::vec2(10.0, -60.0))
-            .pivot(egui::Align2::LEFT_BOTTOM)
-            .show(ui.ctx(), |ui| {
+        egui::Area::new("text-chat".into()).fixed_pos(rect.left_top() + egui::vec2(54.0, 10.0)).show(
+            ui.ctx(),
+            |ui| {
                 ui.set_max_width(340.0);
+                ui.horizontal(|ui| {
+                    if theme::block_button(ui, theme::Kind::Plain, icon::CHAT_CIRCLE, "", 30.0).clicked() {
+                        self.open = !self.open;
+                        self.focus = self.open;
+                    }
+                    if !self.open {
+                        return;
+                    }
+                    let hint = if muted_by_hub { t("You are muted") } else { t("Chat") };
+                    let field = egui::TextEdit::singleline(&mut self.draft)
+                        .char_limit(MAX_CHAT)
+                        .hint_text(hint)
+                        .desired_width(280.0);
+                    let response = ui.add_enabled(!muted_by_hub, field);
+                    if std::mem::take(&mut self.focus) {
+                        response.request_focus();
+                    }
+                    if response.lost_focus() {
+                        if ui.input(|i| i.key_pressed(Key::Enter)) {
+                            let typed = std::mem::take(&mut self.draft);
+                            let typed = if level == Chat::Strict { strict_filter(&typed) } else { typed };
+                            if let (Some(said), Some(me)) = (session.say(&typed), self.me) {
+                                let name =
+                                    session.runtime().tree().borrow().name(me).unwrap_or("?").to_owned();
+                                self.lines.push_back(Line { from: me, name, text: said, at: now });
+                            }
+                        }
+                        self.open = false;
+                    }
+                });
                 let recent: Vec<&Line> = self
                     .lines
                     .iter()
@@ -171,40 +201,8 @@ impl TextChat {
                         }
                     });
                 }
-                ui.horizontal(|ui| {
-                    if theme::block_button(ui, theme::Kind::Plain, icon::CHAT_CIRCLE, "", 30.0).clicked() {
-                        self.open = !self.open;
-                        self.focus = self.open;
-                    }
-                    if !self.open {
-                        return;
-                    }
-                    if self.draft == "/" {
-                        self.draft.clear();
-                    }
-                    let hint = if muted_by_hub { t("You are muted") } else { t("Chat") };
-                    let field = egui::TextEdit::singleline(&mut self.draft)
-                        .char_limit(MAX_CHAT)
-                        .hint_text(hint)
-                        .desired_width(280.0);
-                    let response = ui.add_enabled(!muted_by_hub, field);
-                    if std::mem::take(&mut self.focus) {
-                        response.request_focus();
-                    }
-                    if response.lost_focus() {
-                        if ui.input(|i| i.key_pressed(Key::Enter)) {
-                            let typed = std::mem::take(&mut self.draft);
-                            let typed = if level == Chat::Strict { strict_filter(&typed) } else { typed };
-                            if let (Some(said), Some(me)) = (session.say(&typed), self.me) {
-                                let name =
-                                    session.runtime().tree().borrow().name(me).unwrap_or("?").to_owned();
-                                self.lines.push_back(Line { from: me, name, text: said, at: now });
-                            }
-                        }
-                        self.open = false;
-                    }
-                });
-            });
+            },
+        );
         if let Some(name) = toggle
             && !self.muted.remove(&name)
         {
