@@ -97,6 +97,9 @@ const KEEP_ALIVE: Duration = Duration::from_secs(1);
 /// as lost (Wi-Fi that dropped, a computer that went to sleep). Only for a
 /// side that sends keep-alives: older copies don't.
 pub const SILENCE_LIMIT: Duration = Duration::from_secs(20);
+pub(crate) const LOG_BACKLOG: usize = 5_000;
+const LOG_RECENT: usize = 500;
+const LOG_LINE: usize = 4_000;
 
 /// The services whose contents every computer sees.
 const SHARED: [ClassKind; 6] = [
@@ -801,6 +804,8 @@ pub(crate) struct Hosting {
     network_joins: bool,
     /// How long a joined computer may say nothing before it is let go.
     silence: Duration,
+    log_access: Option<LogAccess>,
+    recent_log: VecDeque<Json>,
 }
 
 impl Drop for Hosting {
@@ -819,6 +824,8 @@ impl Drop for Hosting {
 /// Says which player's computer a connection to the game comes from (by
 /// the address it connects from), when something can vouch for it.
 pub type GuestLookup = Box<dyn Fn(SocketAddr) -> Option<String> + Send + Sync>;
+
+pub type LogAccess = Box<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// Someone removed from a hosted game.
 #[derive(Debug, Clone, PartialEq)]
@@ -857,6 +864,7 @@ struct Peer {
     stream_requests: Vec<(Vec3, Instant)>,
     /// `PersistentPerPlayer` models `AddPersistentPlayer` added them to.
     persistent: HashSet<InstanceId>,
+    logs: bool,
 }
 
 enum Out {
@@ -885,6 +893,7 @@ impl Peer {
             stream: Replicator::default(),
             stream_requests: Vec::new(),
             persistent: HashSet::new(),
+            logs: false,
         }
     }
 
@@ -2046,6 +2055,8 @@ impl PlaySession {
             who: None,
             network_joins: true,
             silence: SILENCE_LIMIT,
+            log_access: None,
+            recent_log: VecDeque::new(),
         }));
         Ok(session)
     }
@@ -2291,6 +2302,12 @@ impl PlaySession {
         if let Link::Host(host) = &mut self.link {
             host.who = Some(lookup);
             host.network_joins = false;
+        }
+    }
+
+    pub fn set_log_access(&mut self, access: LogAccess) {
+        if let Link::Host(host) = &mut self.link {
+            host.log_access = Some(access);
         }
     }
 
@@ -2643,6 +2660,32 @@ impl PlaySession {
         self.link = Link::Host(host);
     }
 
+    fn share_log(&mut self, host: &mut Hosting) {
+        let lines: Vec<Json> = std::mem::take(&mut self.shared_log).iter().map(log_json).collect();
+        host.recent_log.extend(lines.iter().cloned());
+        let extra = host.recent_log.len().saturating_sub(LOG_RECENT);
+        host.recent_log.drain(..extra);
+        let Some(access) = &host.log_access else { return };
+        for peer in &mut host.peers {
+            if peer.player.is_none() {
+                continue;
+            }
+            if !peer.logs {
+                if !peer.account.as_deref().is_some_and(access) {
+                    continue;
+                }
+                peer.logs = true;
+                peer.send(json!({ "t": "logs" }));
+                let recent: Vec<Json> = host.recent_log.iter().cloned().collect();
+                if !recent.is_empty() {
+                    peer.send(json!({ "t": "log", "l": recent }));
+                }
+            } else if !lines.is_empty() {
+                peer.send(json!({ "t": "log", "l": lines }));
+            }
+        }
+    }
+
     /// Sends joined computers what changed this step and what scripts sent them.
     pub(crate) fn serve_outgoing(&mut self) {
         let Link::Host(mut host) = std::mem::take(&mut self.link) else { return };
@@ -2681,6 +2724,7 @@ impl PlaySession {
                 }
             }
         }
+        self.share_log(&mut host);
         if host.peers.iter().all(|p| p.player.is_none()) {
             // No one to send to: forget what was sent, so the first to join gets everything.
             host.replicator = None;
@@ -3000,6 +3044,17 @@ impl PlaySession {
                         && self.host_asks.len() < 64
                     {
                         self.host_asks.push(ask.clone());
+                    }
+                }
+                "logs" => self.sees_server_log = true,
+                "log" if self.sees_server_log => {
+                    for line in message.get("l").and_then(Json::as_array).into_iter().flatten() {
+                        if self.server_log.len() >= LOG_BACKLOG {
+                            break;
+                        }
+                        if let Some(entry) = log_from(line) {
+                            self.server_log.push(entry);
+                        }
                     }
                 }
                 "badge" => {
@@ -3433,6 +3488,29 @@ impl PlaySession {
             }
         }
     }
+}
+
+fn log_json(entry: &crate::session::LogEntry) -> Json {
+    use crate::session::LogLevel;
+    let level = match entry.level {
+        LogLevel::Info => 0,
+        LogLevel::Warn => 1,
+        LogLevel::Error => 2,
+    };
+    let text: String = entry.text.chars().take(LOG_LINE).collect();
+    json!([level, (entry.time * 100.0).round() / 100.0, text])
+}
+
+fn log_from(line: &Json) -> Option<crate::session::LogEntry> {
+    use crate::session::LogLevel;
+    let level = match line.get(0)?.as_u64()? {
+        0 => LogLevel::Info,
+        1 => LogLevel::Warn,
+        _ => LogLevel::Error,
+    };
+    let time = line.get(1)?.as_f64()?;
+    let text = line.get(2)?.as_str()?.chars().take(LOG_LINE).collect();
+    Some(crate::session::LogEntry { level, time, text })
 }
 
 #[cfg(test)]

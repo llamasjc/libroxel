@@ -719,6 +719,7 @@ pub fn editor_ui(
 
     if editor.player_mode {
         game_menu(&ctx, editor, engine.session.as_ref(), central, &mut actions, quality.as_deref_mut());
+        game_logs(&ctx, editor, engine);
     }
     match engine.session.as_mut() {
         Some(session) if editor.loading.active() => {
@@ -1517,6 +1518,12 @@ fn game_menu(
                             editor.menu_tab = tab;
                         }
                     }
+                    if session.is_some_and(sees_logs)
+                        && theme::tab(ui, icon::TERMINAL_WINDOW, t("Logs"), false).clicked()
+                    {
+                        editor.paused = false;
+                        editor.logs_shown = true;
+                    }
                 });
                 ui.separator();
                 let chrome =
@@ -1656,6 +1663,62 @@ fn team_colour(tree: &InstanceTree, team: InstanceId) -> Option<Color32> {
     let c = tree.get_color(team, Property::TeamColor)?;
     let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     Some(Color32::from_rgb(byte(c.r), byte(c.g), byte(c.b)))
+}
+
+fn sees_logs(session: &PlaySession) -> bool {
+    !session.is_joined() || session.sees_server_log()
+}
+
+fn game_logs(ctx: &egui::Context, editor: &mut Editor, engine: &mut EngineState) {
+    let Some(session) = engine.session.as_mut() else {
+        editor.server_log.clear();
+        editor.logs_shown = false;
+        return;
+    };
+    editor.server_log.extend(session.take_server_log());
+    let extra = editor.server_log.len().saturating_sub(5_000);
+    editor.server_log.drain(..extra);
+    if !sees_logs(session) {
+        editor.logs_shown = false;
+        return;
+    }
+    if !ctx.egui_wants_keyboard_input() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F9)) {
+        editor.logs_shown = !editor.logs_shown;
+    }
+    if !editor.logs_shown {
+        return;
+    }
+    let joined = session.is_joined();
+    let mut open = true;
+    egui::Window::new(format!("{}  {}", icon::TERMINAL_WINDOW, t("Logs")))
+        .id(egui::Id::new("game-logs"))
+        .open(&mut open)
+        .default_size([560.0, 320.0])
+        .resizable(true)
+        .show(ctx, |ui| {
+            if joined {
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(!editor.logs_server, t("Client")).clicked() {
+                        editor.logs_server = false;
+                    }
+                    if ui.selectable_label(editor.logs_server, t("Server")).clicked() {
+                        editor.logs_server = true;
+                    }
+                });
+                ui.separator();
+            }
+            let log = if joined && editor.logs_server { &editor.server_log } else { &engine.log };
+            let skip = log.len().saturating_sub(1_000);
+            egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
+                for entry in &log[skip..] {
+                    let text = format!("[{:>6.1}s] {}", entry.time, entry.text);
+                    ui.label(RichText::new(text).monospace().color(level_color(entry.level)));
+                }
+            });
+        });
+    if !open {
+        editor.logs_shown = false;
+    }
 }
 
 fn pause_settings(
@@ -3982,6 +4045,11 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                             Ok(tunnel) => {
                                 // Players who come through it are known by their keys.
                                 session.set_guest_lookup(Box::new(tunnel.guest_lookup()));
+                                session.set_log_access(crate::server::log_access(
+                                    playlibre_hub::hub_address(),
+                                    crate::identity().ok().map(|me| me.player_id()),
+                                    None,
+                                ));
                                 editor.tunnel = Some(Tunnel::Host(tunnel));
                                 if let Ok(me) = crate::identity() {
                                     let game = editor.file.as_ref().and_then(|f| f.file_stem()).map_or_else(

@@ -318,6 +318,9 @@ pub struct PlaySession {
     /// that isn't `remote`.
     pub(crate) avatars: Vec<Avatar>,
     pub(crate) log: Vec<LogEntry>,
+    pub(crate) shared_log: Vec<LogEntry>,
+    pub(crate) server_log: Vec<LogEntry>,
+    pub(crate) sees_server_log: bool,
     /// Explosions that have already gone off.
     pub(crate) exploded: std::collections::HashSet<InstanceId>,
     /// Humanoids whose Died event has fired (it fires once).
@@ -386,6 +389,9 @@ impl PlaySession {
             physics: Physics::default(),
             avatars: Vec::new(),
             log: Vec::new(),
+            shared_log: Vec::new(),
+            server_log: Vec::new(),
+            sees_server_log: false,
             exploded: Default::default(),
             died: Default::default(),
             tidy_steps: 0,
@@ -1464,11 +1470,18 @@ impl PlaySession {
     }
 
     pub(crate) fn info(&mut self, text: impl Into<String>) {
-        self.log.push(LogEntry { level: LogLevel::Info, time: self.runtime.clock(), text: text.into() });
+        self.push_log(LogEntry { level: LogLevel::Info, time: self.runtime.clock(), text: text.into() });
     }
 
     pub(crate) fn warn(&mut self, text: impl Into<String>) {
-        self.log.push(LogEntry { level: LogLevel::Warn, time: self.runtime.clock(), text: text.into() });
+        self.push_log(LogEntry { level: LogLevel::Warn, time: self.runtime.clock(), text: text.into() });
+    }
+
+    fn push_log(&mut self, entry: LogEntry) {
+        if self.runtime.net_role() == NetRole::Server && self.shared_log.len() < crate::net::LOG_BACKLOG {
+            self.shared_log.push(entry.clone());
+        }
+        self.log.push(entry);
     }
 
     pub(crate) fn collect(&mut self, errors: Vec<playlibre_script::ScriptError>) {
@@ -1478,16 +1491,24 @@ impl PlaySession {
                 OutputLevel::Print => LogLevel::Info,
                 OutputLevel::Warn => LogLevel::Warn,
             };
-            self.log.push(LogEntry { level, time, text: line.text });
+            self.push_log(LogEntry { level, time, text: line.text });
         }
         for err in errors {
-            self.log.push(LogEntry { level: LogLevel::Error, time, text: tidy_trace(&err.to_string()) });
+            self.push_log(LogEntry { level: LogLevel::Error, time, text: tidy_trace(&err.to_string()) });
         }
     }
 
     /// Takes the log lines produced since the last call.
     pub fn take_log(&mut self) -> Vec<LogEntry> {
         std::mem::take(&mut self.log)
+    }
+
+    pub fn sees_server_log(&self) -> bool {
+        self.sees_server_log
+    }
+
+    pub fn take_server_log(&mut self) -> Vec<LogEntry> {
+        std::mem::take(&mut self.server_log)
     }
 
     /// Runs one frame: scripts, then character movement and physics, then

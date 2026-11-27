@@ -409,6 +409,36 @@ fn a_removed_player_with_a_proved_id_cant_come_back_under_another_name() {
 }
 
 #[test]
+fn only_players_let_in_see_the_host_log() {
+    let log_for = |key: &'static str| {
+        let tree = Rc::new(RefCell::new(game()));
+        let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+        host.set_guest_lookup(Box::new(move |_| Some(key.to_owned())));
+        host.set_log_access(Box::new(|account| account == "owner-key"));
+        let port = host.host_address().unwrap().port();
+        let mut guest = PlaySession::join(
+            Rc::new(RefCell::new(InstanceTree::new())),
+            &format!("127.0.0.1:{port}"),
+            "Bea",
+        )
+        .unwrap();
+        until(&mut host, &mut guest, CharacterInput::default(), |h, _| h.joined_players().len() == 1);
+        for _ in 0..60 {
+            host.step(DT, CharacterInput::default());
+            guest.step(DT, CharacterInput::default());
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        (guest.sees_server_log(), guest.take_server_log().into_iter().map(|l| l.text).collect::<Vec<_>>())
+    };
+    let (sees, lines) = log_for("owner-key");
+    assert!(sees);
+    assert!(lines.iter().any(|l| l == "hello Bea"), "{lines:?}");
+    let (sees, lines) = log_for("someone-else");
+    assert!(!sees);
+    assert!(lines.is_empty(), "{lines:?}");
+}
+
+#[test]
 fn bad_words_are_not_allowed_in_names() {
     let tree = Rc::new(RefCell::new(game()));
     let mut host = PlaySession::host(tree, 0, None, true).unwrap();

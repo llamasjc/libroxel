@@ -265,6 +265,40 @@ fn game_by_id(
     }
 }
 
+pub(crate) fn log_access(
+    address: String,
+    owner: Option<String>,
+    game_id: Option<String>,
+) -> playlibre_engine::net::LogAccess {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    let owner = Arc::new(Mutex::new(owner));
+    if let Some(id) = game_id.filter(|id| !id.starts_with("starter:")) {
+        let (owner, address) = (owner.clone(), address.clone());
+        std::thread::spawn(move || {
+            let author = HubClient::new(&address).game(&id).ok().and_then(|g| g.author_id);
+            *owner.lock().unwrap() = author;
+        });
+    }
+    let admins: Arc<Mutex<HashMap<String, bool>>> = Arc::default();
+    Box::new(move |account: &str| {
+        if owner.lock().unwrap().as_deref() == Some(account) {
+            return true;
+        }
+        let mut known = admins.lock().unwrap();
+        if let Some(admin) = known.get(account) {
+            return *admin;
+        }
+        known.insert(account.to_owned(), false);
+        let (admins, address, account) = (admins.clone(), address.clone(), account.to_owned());
+        std::thread::spawn(move || {
+            let admin = HubClient::new(&address).profile(&account).ok().flatten().is_some_and(|p| p.admin);
+            admins.lock().unwrap().insert(account, admin);
+        });
+        false
+    })
+}
+
 /// Whether a server lists itself on the Hub.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HubUse {
@@ -356,6 +390,11 @@ pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicB
     let tunnel = HostTunnel::start_on(&identity, Network::Internet, port, udp_port)?;
     // Players who come through it are known by their keys.
     session.set_guest_lookup(Box::new(tunnel.guest_lookup()));
+    let address = match &hub {
+        HubUse::At(address) => address.clone(),
+        HubUse::None => playlibre_hub::hub_address(),
+    };
+    session.set_log_access(log_access(address, None, game_id.clone()));
     say(format!("Hosting {game} on port {port}. Getting a join code…"));
 
     let hub = match hub {
