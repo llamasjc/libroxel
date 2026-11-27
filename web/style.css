@@ -442,6 +442,19 @@ footer a { color: var(--heading); text-decoration: underline; }
 .manage input[type=number] { width: 120px; padding: 7px 9px; background: #fff; border: 1px solid rgb(171, 173, 179); border-radius: 3px; }
 .versions { max-width: 560px; display: flex; flex-direction: column; gap: 8px; }
 
+.shop { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.shop-item { display: flex; flex-direction: column; gap: 4px; padding: 10px; background: rgba(255, 255, 255, 0.894); border: 1px solid rgb(160, 196, 230); border-radius: 8px; }
+.shop-item > a { display: flex; flex-direction: column; gap: 6px; color: inherit; text-decoration: none; }
+.shop-item > a:hover b { color: var(--link); }
+.shop-item .chip { align-self: flex-start; }
+.item-pic { display: block; width: 100%; height: auto; aspect-ratio: 1; object-fit: contain; background: rgb(190, 226, 250); border-radius: 6px; }
+.figure .item-pic { width: 240px; }
+.price { display: flex; align-items: center; gap: 4px; font-weight: 600; }
+.owns { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin: 4px 0 14px; }
+.own { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px; background: #fff; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font: 12px var(--body); color: var(--text); }
+.own .item-pic { width: 84px; }
+.own.on { border-color: var(--accent-deep); outline: 2px solid rgb(102, 167, 232); }
+.own span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .market { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
 .market-row { display: block; padding: 12px 14px; background: #fff; border: 1px solid var(--line); border-radius: 8px; color: inherit; text-decoration: none; }
 .market-row:hover { border-color: var(--link); }

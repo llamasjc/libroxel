@@ -996,7 +996,7 @@ window.addEventListener('unhandledrejection', (e) => crashed(e.reason));
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, games: game, charts: chartsPage, profile, creator: creatorPage, market: marketPage, search: searchPage, notifications: notificationsPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, stats: statsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy, donate: donatePage, credits: creditsPage };
+  const views = { home, game, games: game, charts: chartsPage, profile, creator: creatorPage, market: marketPage, item: itemPage, search: searchPage, notifications: notificationsPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, stats: statsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy, donate: donatePage, credits: creditsPage };
   // An account that signed in with an easy password sees nothing else until it sets a new one.
   loadFamily();
   const needsBirthday = session && familyInfo && !familyInfo.loading && !familyInfo.error && !familyInfo.has_birthday;
@@ -1026,7 +1026,7 @@ const DESCRIPTIONS = {
   privacy: 'What PlayLibre keeps about you, why, and how to have it removed.',
   donate: 'PlayLibre is free and open source. Donations are highly appreciated.',
   charts: 'The games people play most on PlayLibre, trending, top rated and new.',
-  market: 'Models and plugins creators share for the PlayLibre editor.',
+  market: 'Hats, clothes, models and plugins on PlayLibre.',
   search: 'Find players and games on PlayLibre.',
   'sign-in': 'Sign in to PlayLibre.',
   create: 'Make a PlayLibre account.',
@@ -2542,14 +2542,6 @@ function warningsBar() {
 // --- Avatar -----------------------------------------------------------------
 
 let draft = null;
-const catalog = { items: [], at: 0 };
-
-function loadCatalog() {
-  if (Date.now() - catalog.at < 5000) return;
-  catalog.at = Date.now();
-  api('/catalog').then((items) => { catalog.items = items; render(); }).catch(() => {});
-}
-
 let walletInfo = null;
 
 function walletTime() {
@@ -2577,7 +2569,7 @@ async function walletPost(path, body, message) {
     if (w) walletInfo = { for: session.playerId, ...w };
     return true;
   } catch (e) {
-    draft.message = { text: e.message, kind: 'error' };
+    flash = { text: e.message, kind: 'error' };
     return false;
   } finally {
     render();
@@ -2590,7 +2582,7 @@ const buyItem = (item) => walletPost('/shop/buy', { item_id: item.item_id, price
 async function priceItem(item, price) {
   const ok = await walletPost(`/catalog/${encodeURIComponent(item.item_id)}/price`, { price },
     (t) => `libroxel price\n${session.playerId}\n${item.item_id}\n${price}\n${t}`);
-  if (ok) { catalog.at = 0; loadCatalog(); }
+  if (ok) { shop.key = null; shop.item = null; walletInfo = null; }
 }
 
 const limitedText = (l) => [
@@ -2618,14 +2610,14 @@ function openSales(id) {
   trading.open = id;
   trading.sales = null;
   api(`/catalog/${encodeURIComponent(id)}/sales`).then((s) => { trading.sales = s; render(); })
-    .catch((e) => { draft.message = { text: e.message, kind: 'error' }; render(); });
-  render();
+    .catch((e) => { flash = { text: e.message, kind: 'error' }; render(); });
 }
 
 async function afterTrade(ok) {
   if (!ok) return;
-  catalog.at = 0;
-  loadCatalog();
+  shop.key = null;
+  shop.item = null;
+  walletInfo = null;
   loadLimited(true);
   if (trading.open) openSales(trading.open);
 }
@@ -2637,10 +2629,10 @@ async function makeLimited(item, stock, days) {
   const signature = signText(secretKey(), `libroxel limited\n${session.playerId}\n${item.item_id}\n${s ?? ''}\n${d ?? ''}\n${time}`);
   try {
     await api(`/catalog/${encodeURIComponent(item.item_id)}/limited`, { method: 'POST', body: { player_id: session.playerId, stock: s, days: d, time, signature } });
-    catalog.at = 0;
-    loadCatalog();
+    shop.key = null;
+    shop.item = null;
   } catch (e) {
-    draft.message = { text: e.message, kind: 'error' };
+    flash = { text: e.message, kind: 'error' };
     render();
   }
 }
@@ -2655,7 +2647,7 @@ async function tradePost(action, { trade_id = 0, to_id = '', give = [], get = []
     await api('/trades', { method: 'POST', body: { player_id: session.playerId, action, trade_id, to_id, give, get, time, signature } });
     return true;
   } catch (e) {
-    draft.message = { text: e.message, kind: 'error' };
+    flash = { text: e.message, kind: 'error' };
     return false;
   } finally {
     render();
@@ -2670,7 +2662,7 @@ async function findTrader() {
     const list = await api(`/accounts/${p.player_id}/limited`);
     trading.theirs = { player_id: p.player_id, name: p.name, list };
   } catch (e) {
-    draft.message = { text: e.message, kind: 'error' };
+    flash = { text: e.message, kind: 'error' };
   }
   render();
 }
@@ -2680,6 +2672,23 @@ async function sendOffer() {
   const ok = await tradePost('offer', { to_id: trading.theirs.player_id, give: pick(trading.give), get: pick(trading.get) });
   if (ok) { trading.give = new Set(); trading.get = new Set(); trading.theirs = null; trading.to = ''; }
   afterTrade(ok);
+}
+
+function salesPanel(id) {
+  if (trading.open !== id) openSales(id);
+  const s = trading.sales;
+  return [
+    el('h2', { class: 'section' }, 'Resale'),
+    !s ? el('p', { class: 'soft' }, 'Loading…') : [
+      el('p', { class: 'soft' }, `${limitedText(s.limited)} · ${s.owners} owners · ${s.fee_percent}% fee`),
+      s.listings.length ? s.listings.map((l) => el('div', { class: 'form-actions' }, `#${l.serial} by ${l.seller}`,
+        l.seller_id === session.playerId ? el('span', { class: 'soft' }, String(l.price))
+          : el('button', { class: 'chip go', onclick: () => resale('buy', s.item_id, l.serial, l.price) }, `Buy for ${l.price}`)))
+        : el('p', { class: 'soft' }, 'None for sale.'),
+      s.history.length > 0 && el('div', { class: 'caps' }, 'Price history'),
+      s.history.map((h) => el('div', { class: 'soft' }, `${h.price} · #${h.serial} · ${ago(h.secs_ago)}`)),
+    ],
+  ];
 }
 
 function limitedPanel() {
@@ -2698,20 +2707,6 @@ function limitedPanel() {
       box, el('button', { class: 'chip', onclick: () => resale('list', o.item_id, o.serial, Math.floor(Number(box.value) || 0)) }, 'Sell'),
       o.listed != null && el('button', { class: 'chip', onclick: () => resale('unlist', o.item_id, o.serial, 0) }, 'Unlist'));
   });
-  const s = trading.sales;
-  const sales = trading.open && [
-    el('h2', { class: 'section' }, 'Resale'),
-    !s ? el('p', { class: 'soft' }, 'Loading…') : [
-      el('p', { class: 'soft' }, `${limitedText(s.limited)} · ${s.owners} owners · ${s.fee_percent}% fee`),
-      s.listings.length ? s.listings.map((l) => el('div', { class: 'form-actions' }, `#${l.serial} by ${l.seller}`,
-        l.seller_id === session.playerId ? el('span', { class: 'soft' }, String(l.price))
-          : el('button', { class: 'chip go', onclick: () => resale('buy', s.item_id, l.serial, l.price) }, `Buy for ${l.price}`)))
-        : el('p', { class: 'soft' }, 'None for sale.'),
-      s.history.length > 0 && el('div', { class: 'caps' }, 'Price history'),
-      s.history.map((h) => el('div', { class: 'soft' }, `${h.price} · #${h.serial} · ${ago(h.secs_ago)}`)),
-    ],
-    el('button', { class: 'chip', onclick: () => { trading.open = null; render(); } }, 'Close'),
-  ];
   const act = (t, action) => el('button', { class: 'chip', onclick: () => tradePost(action, { trade_id: t.trade_id }).then(afterTrade) },
     { accept: 'Accept', decline: 'Decline', cancel: 'Cancel', confirm: 'Confirm' }[action]);
   const trades = (trading.trades || []).map((t) => {
@@ -2733,7 +2728,6 @@ function limitedPanel() {
   to.addEventListener('input', () => { trading.to = to.value; });
   const theirs = trading.theirs;
   return [
-    sales,
     el('h2', { class: 'section' }, 'Limited'),
     owned.length ? owned : el('p', { class: 'soft' }, 'No limited items yet.'),
     el('h2', { class: 'section' }, 'Trades'),
@@ -2788,11 +2782,56 @@ function startDraft() {
   }
 }
 
+const KIND_NAMES = { hat: 'Hat', shirt: 'Shirt', pants: 'Trousers' };
+const SLOTS = { shirt: 'shirt_item', pants: 'pants_item' };
+
+/** A picture of `look`, drawn by the Hub. */
+function lookPicture(look, shot, size) {
+  const json = encodeURIComponent(JSON.stringify(lookJson(look)));
+  return el('img', { class: 'item-pic', src: `${HUB}/avatar/${shot}.png?name=item&look=${json}`, alt: '', loading: 'lazy', width: size, height: size });
+}
+
+/** An item on the usual look. */
+function itemPicture(item, size = 120) {
+  const look = lookFor(0n);
+  if (item.kind === 'hat') {
+    const hat = readItem(item.data);
+    if (hat) look.item = hat;
+  } else {
+    const c = readClothing(item.data);
+    if (c) look[SLOTS[item.kind]] = c;
+  }
+  return lookPicture(look, item.kind === 'hat' ? 'head' : 'body', size);
+}
+
+const hasItem = (item) => Boolean(session && (item.creator_id === session.playerId || walletInfo?.owned?.includes(item.item_id)));
+
+function getButton(item) {
+  const label = item.price ? `Buy for ${item.price}` : 'Get';
+  if (!session) return el('a', { class: 'chip go', href: '/sign-in' }, label);
+  if (hasItem(item)) return el('a', { class: 'chip', href: '/avatar' }, icon(ICON.check), 'Owned');
+  if (item.limited && !item.limited.on_sale) return null;
+  return el('button', { class: 'chip go', disabled: shop.busy, onclick: () => getItem(item) }, label);
+}
+
+async function getItem(item) {
+  shop.busy = true;
+  if (await buyItem(item)) {
+    flash = { text: `${item.name} is in your inventory.` };
+    if (item.limited) afterTrade(true);
+  }
+  shop.busy = false;
+  render();
+}
+
+const AVATAR_TABS = [['body', 'Body'], ['hat', 'Hats'], ['shirt', 'Shirts'], ['pants', 'Trousers']];
+let avatarTab = 'body';
+
 function avatar() {
   if (!session) return needSignIn('Choosing how you look needs an account: sign in, or make one, and your avatar is the same in every game, here and in the app. Until then you play with the usual look.');
   if (!data.me) return [el('h1', { class: 'title' }, 'Your avatar'), el('p', { class: 'soft' }, data.loaded ? 'Your account could not be loaded.' : 'Loading…')];
   startDraft();
-  loadCatalog();
+  loadWallet();
   const look = draft.look;
   const changed = () => { draft.message = null; draft.touched = true; render(); };
   const swatches = (key, choices) => {
@@ -2803,60 +2842,47 @@ function avatar() {
       onclick: () => { look[key] = c; changed(); },
     })), pick);
   };
-  const row = (label, key, choices) => [el('div', { class: 'caps' }, label), swatches(key, choices)];
+  const tile = (on, picture, label, onclick) => el('button', { class: `own${on ? ' on' : ''}`, onclick }, picture, el('span', {}, label));
+  const owned = (walletInfo?.items || []).filter((i) => i.kind === avatarTab);
+  const wear = (item) => api(`/catalog/${encodeURIComponent(item.item_id)}/wear`, { method: 'POST' }).catch(() => {});
+  const none = el('p', { class: 'soft' }, 'Nothing here yet. ', el('a', { href: '/market' }, 'Marketplace'));
+  let panel;
+  if (avatarTab === 'body') {
+    panel = [el('div', { class: 'caps' }, 'Skin'), swatches('skin', AVATAR.skins)];
+  } else if (avatarTab === 'hat') {
+    const hats = owned.map((item) => [item, readItem(item.data)]).filter(([, hat]) => hat);
+    const same = (hat) => look.item && JSON.stringify(look.item.json) === JSON.stringify(hat.json);
+    panel = [
+      el('div', { class: 'owns' },
+        HATS.map((h) => tile(look.hat === h && !look.item, lookPicture({ ...lookFor(0n), hat: h }, 'head', 84), h, () => { look.hat = h; delete look.item; changed(); })),
+        hats.map(([item, hat]) => tile(same(hat), itemPicture(item, 84), item.name, () => { look.item = hat; wear(item); changed(); }))),
+      look.hat !== 'No hat' && !look.item && [el('div', { class: 'caps' }, 'Hat colour'), swatches('hat_color', AVATAR.clothes)],
+      !hats.length && none,
+    ];
+  } else {
+    const slot = SLOTS[avatarTab];
+    const clothes = owned.map((item) => [item, readClothing(item.data)]).filter(([, c]) => c);
+    const same = (c) => JSON.stringify(look[slot] || null) === JSON.stringify(c);
+    panel = [
+      el('div', { class: 'caps' }, 'Colour'), swatches(avatarTab, AVATAR.clothes),
+      el('div', { class: 'owns' },
+        tile(!look[slot], lookPicture({ ...look, [slot]: undefined, item: undefined, hat: 'No hat' }, 'body', 84), 'None', () => { delete look[slot]; changed(); }),
+        clothes.map(([item, c]) => tile(same(c), itemPicture(item, 84), item.name, () => { look[slot] = c; wear(item); changed(); }))),
+      !clothes.length && none,
+    ];
+  }
   const save = el('button', { class: 'btn go', onclick: () => saveAccount(save) }, icon(ICON.check), 'Save');
-  const hats = catalog.items.map((item) => [item, readItem(item.data)]).filter(([, hat]) => hat);
-  const same = (hat) => look.item && JSON.stringify(look.item.json) === JSON.stringify(hat.json);
-  const mine = (item) => item.creator_id === session.playerId;
-  const owned = (item) => !item.price || mine(item) || walletInfo?.owned?.includes(item.item_id);
-  const priceField = (item) => {
-    const hat = readItem(item.data);
-    const box = el('input', { type: 'number', min: 0, max: 100000, value: item.price || 0, style: 'width:80px' });
-    return el('span', { class: 'form-actions' },
-      el('button', { class: 'chip', disabled: same(hat), onclick: () => { look.item = hat; changed(); } }, same(hat) ? 'Wearing' : 'Wear'),
-      box, el('button', { class: 'chip', onclick: () => priceItem(item, Math.max(0, Math.min(100000, Math.floor(Number(box.value) || 0)))) }, 'Set price'),
-      !item.limited && item.price > 0 && limitedFields(item));
-  };
-  const limitedFields = (item) => {
-    const stock = el('input', { type: 'number', min: 1, max: 100000, placeholder: 'Stock', style: 'width:80px' });
-    const days = el('input', { type: 'number', min: 1, max: 90, placeholder: 'Days', style: 'width:70px' });
-    return [stock, days, el('button', { class: 'chip', onclick: () => makeLimited(item, Math.floor(Number(stock.value) || 0), Math.floor(Number(days.value) || 0)) }, 'Make limited')];
-  };
-  const forSale = (item) => !item.limited || item.limited.on_sale;
-  loadWallet();
   return [
     el('h1', { class: 'title' }, 'Your avatar'),
-    el('p', { class: 'note' }, 'How you look in every game you play or join. Other players see it too.'),
     el('div', { class: 'avatar-page' },
       el('div', { class: 'figure' }, figure(look, data.me.name)),
       el('div', { style: 'flex:1;min-width:280px' },
-        row('Skin', 'skin', AVATAR.skins),
-        row('Shirt', 'shirt', AVATAR.clothes),
-        row('Trousers', 'pants', AVATAR.clothes),
-        el('div', { class: 'caps' }, 'Hat'),
-        el('div', { class: 'hats' }, HATS.map((h) => el('button', { class: `chip${look.hat === h && !look.item ? ' on' : ''}`, onclick: () => { look.hat = h; delete look.item; changed(); } }, h))),
-        look.hat !== 'No hat' && swatches('hat_color', AVATAR.clothes),
+        el('div', { class: 'hats' }, AVATAR_TABS.map(([t, label]) => el('button', { class: `chip${avatarTab === t ? ' on' : ''}`, onclick: () => { avatarTab = t; render(); } }, label))),
+        walletInfo?.loading ? el('p', { class: 'soft' }, 'Loading…') : panel,
         el('div', { class: 'form-actions' },
-          el('button', { class: 'chip', onclick: () => { draft.look = lookFor(0n); changed(); } }, 'Back to the usual look')))),
-    el('h2', { class: 'section' }, 'Catalog'),
-    el('p', { class: 'note' }, mayMakeItems()
-      ? 'Hats in the catalog. To add one, build it from parts in the editor, select its model and use Model > Share as hat.'
-      : 'Hats in the catalog. For now only Hat-Makers make them.'),
-    walletBar(),
-    look.item && el('div', { class: 'form-actions' }, `Wearing ${look.item.name}`, el('button', { class: 'chip', onclick: () => { delete look.item; changed(); } }, 'Take it off')),
-    hats.length
-      ? el('div', { class: 'catalog' }, hats.map(([item, hat]) => el('div', { class: 'item' },
-        el('b', {}, item.name),
-        el('small', {}, `by ${item.creator} · worn ${item.wears}`),
-        item.limited && el('small', {}, limitedText(item.limited)),
-        mine(item) ? priceField(item) : !owned(item) ? (forSale(item) && el('button', { class: 'chip go', onclick: () => buyItem(item).then(() => afterTrade(true)) }, `Buy for ${item.price}`))
-          : el('button', { class: 'chip', disabled: same(hat), onclick: () => { look.item = hat; api(`/catalog/${encodeURIComponent(item.item_id)}/wear`, { method: 'POST' }).catch(() => {}); changed(); } }, same(hat) ? 'Wearing' : 'Wear'),
-        item.limited && el('button', { class: 'chip', onclick: () => openSales(item.item_id) }, 'Resale'))))
-      : el('p', { class: 'soft' }, 'Nothing in the catalog yet.'),
-    limitedPanel(),
-    clothesPanel(look, changed),
-    el('div', { class: 'form-actions' }, save),
-    draft.message && status(draft.message.text, draft.message.kind),
+          save,
+          el('button', { class: 'chip', onclick: () => { draft.look = lookFor(0n); changed(); } }, 'Back to the usual look')),
+        draft.message && status(draft.message.text, draft.message.kind))),
   ];
 }
 
@@ -2876,10 +2902,10 @@ async function shareClothes() {
   const signature = signText(secretKey(), `libroxel item\n${session.playerId}\n${name}\n${f.kind}\n${JSON.stringify(data)}\n${time}`);
   try {
     await api('/catalog', { method: 'POST', body: { creator_id: session.playerId, name, kind: f.kind, data, time, signature } });
-    flash = { text: `${name} is in the catalog.` };
+    flash = { text: `${name} is in the Marketplace.` };
     f.name = '';
-    catalog.at = 0;
-    loadCatalog();
+    shop.key = null;
+    walletInfo = null;
   } catch (e) {
     flash = { text: e.message, kind: 'error' };
   }
@@ -2887,11 +2913,7 @@ async function shareClothes() {
   render();
 }
 
-function clothesPanel(look, changed) {
-  const clothes = catalog.items.filter((i) => i.kind === 'shirt' || i.kind === 'pants').map((i) => [i, readClothing(i.data)]).filter(([, c]) => c);
-  const slot = (item) => (item.kind === 'shirt' ? 'shirt_item' : 'pants_item');
-  const same = (item, c) => JSON.stringify(look[slot(item)] || null) === JSON.stringify(c);
-  const owned = (item) => !item.price || item.creator_id === session.playerId || walletInfo?.owned?.includes(item.item_id);
+function clothesMaker() {
   const f = clothesForm;
   const kind = pickFrom({ shirt: 'Shirt', pants: 'Trousers' }, f.kind);
   kind.addEventListener('change', () => { f.kind = kind.value; render(); });
@@ -2899,24 +2921,13 @@ function clothesPanel(look, changed) {
   colour.addEventListener('change', () => { f.color = colour.value; });
   const sleeves = el('input', { type: 'checkbox', checked: f.sleeves });
   sleeves.addEventListener('change', () => { f.sleeves = sleeves.checked; });
-  return el('div', {},
-    el('h2', { class: 'section' }, 'Clothes'),
-    el('p', { class: 'note' }, 'Shirts and trousers in the catalog, worn over your colours.'),
-    [['shirt_item', 'shirt'], ['pants_item', 'trousers']].map(([key, label]) => look[key] && el('div', { class: 'form-actions' },
-      `Wearing ${look[key].name}`, el('button', { class: 'chip', onclick: () => { delete look[key]; changed(); } }, `Take off the ${label}`))),
-    clothes.length ? el('div', { class: 'catalog' }, clothes.map(([item, c]) => el('div', { class: 'item' },
-      el('b', {}, el('span', { class: 'swatch', style: `--c:${c.color.join(', ')};display:inline-block;width:14px;height:14px;vertical-align:middle;margin-right:6px` }), item.name),
-      el('small', {}, `${item.kind === 'shirt' ? (c.sleeves ? 'Long-sleeved shirt' : 'Shirt') : 'Trousers'} by ${item.creator} · worn ${item.wears}`),
-      !owned(item) ? el('button', { class: 'chip go', onclick: () => buyItem(item) }, `Buy for ${item.price}`)
-        : el('button', { class: 'chip', disabled: same(item, c), onclick: () => { look[slot(item)] = c; api(`/catalog/${encodeURIComponent(item.item_id)}/wear`, { method: 'POST' }).catch(() => {}); changed(); } }, same(item, c) ? 'Wearing' : 'Wear'))))
-      : el('p', { class: 'soft' }, 'No clothes in the catalog yet.'),
-    mayMakeItems() && el('div', { class: 'form manage' },
-      el('div', { class: 'caps' }, 'Make clothes'),
-      el('label', { class: 'field' }, el('span', {}, 'Name'), el('input', { type: 'text', maxlength: 40, value: f.name, oninput: (e) => { f.name = e.target.value; } })),
-      el('label', { class: 'field' }, el('span', {}, 'Kind'), kind),
-      el('label', { class: 'field' }, el('span', {}, 'Colour'), colour),
-      f.kind === 'shirt' && el('label', { class: 'field' }, el('span', {}, 'Long sleeves'), sleeves),
-      el('div', { class: 'form-actions' }, el('button', { class: 'btn go small', disabled: f.busy, onclick: shareClothes }, icon(ICON.check), 'Add to the catalog'))));
+  return el('div', { class: 'form manage' },
+    el('div', { class: 'caps' }, 'Make clothes'),
+    el('label', { class: 'field' }, el('span', {}, 'Name'), el('input', { type: 'text', maxlength: 40, value: f.name, oninput: (e) => { f.name = e.target.value; } })),
+    el('label', { class: 'field' }, el('span', {}, 'Kind'), kind),
+    el('label', { class: 'field' }, el('span', {}, 'Colour'), colour),
+    f.kind === 'shirt' && el('label', { class: 'field' }, el('span', {}, 'Long sleeves'), sleeves),
+    el('div', { class: 'form-actions' }, el('button', { class: 'btn go small', disabled: f.busy, onclick: shareClothes }, icon(ICON.check), 'Add to the Marketplace')));
 }
 
 function profile() {
@@ -3826,16 +3837,101 @@ function marketItemPage(id) {
   return out;
 }
 
-function marketPage() {
-  if (route.id) return marketItemPage(route.id);
-  loadMarket();
-  const box = el('input', { type: 'search', placeholder: 'Search models and plugins', value: market.q });
-  box.addEventListener('change', () => { market.q = box.value.trim(); render(); });
+const shop = { key: null, list: null, error: null, q: '', kind: '', price: '', sort: '', item: null, busy: false };
+
+function loadShop() {
+  const key = `${shop.kind}|${shop.price}|${shop.sort}|${shop.q}`;
+  if (shop.key === key) return;
+  shop.key = key;
+  const query = { q: shop.q };
+  for (const k of ['kind', 'price', 'sort']) if (shop[k]) query[k] = shop[k];
+  api('/catalog', { query })
+    .then((list) => { if (shop.key === key) { shop.list = list; shop.error = null; } })
+    .catch((e) => { shop.error = e.message; })
+    .finally(() => route.name === 'market' && render());
+}
+
+function loadShopItem(id) {
+  if (shop.item?.item_id === id || shop.item?.loading === id) return;
+  shop.item = { loading: id };
+  api(`/catalog/${encodeURIComponent(id)}`)
+    .then((item) => { shop.item = item; })
+    .catch((e) => { shop.item = { item_id: id, error: e.message }; })
+    .finally(() => route.name === 'item' && render());
+}
+
+const priceTag = (item) => el('div', { class: 'price' }, item.price ? [icon(BADGE_GLYPHS.coin), count(item.price)] : 'Free');
+const creatorLink = (item) => (item.creator_id === 'playlibre' ? item.creator : el('a', { href: `/user/${item.creator_id}` }, item.creator));
+
+function itemCard(item) {
+  return el('div', { class: 'shop-item' },
+    el('a', { href: href('item', item.item_id) }, itemPicture(item), el('b', {}, item.name)),
+    el('small', { class: 'soft' }, `${KIND_NAMES[item.kind] || item.kind} by ${item.creator}`),
+    priceTag(item),
+    getButton(item));
+}
+
+function limitedFields(item) {
+  const stock = el('input', { type: 'number', min: 1, max: 100000, placeholder: 'Stock', style: 'width:80px' });
+  const days = el('input', { type: 'number', min: 1, max: 90, placeholder: 'Days', style: 'width:70px' });
+  return [stock, days, el('button', { class: 'chip', onclick: () => makeLimited(item, Math.floor(Number(stock.value) || 0), Math.floor(Number(days.value) || 0)) }, 'Make limited')];
+}
+
+function itemPage() {
+  const id = route.id;
+  loadShopItem(id);
+  if (session) loadWallet();
+  const item = shop.item;
+  const out = [el('a', { class: 'back', href: '/market' }, icon(ICON.left), 'Marketplace')];
+  if (!item || item.loading) return [...out, el('p', { class: 'soft' }, 'Loading…')];
+  if (item.error) return [...out, el('div', { class: 'empty' }, item.error)];
+  const mine = session && session.playerId === item.creator_id;
+  const box = el('input', { type: 'number', min: 0, max: 100000, value: item.price || 0, style: 'width:90px' });
+  out.push(el('div', { class: 'avatar-page' },
+    el('div', { class: 'figure' }, itemPicture(item, 240)),
+    el('div', { style: 'flex:1;min-width:260px' },
+      el('h1', { class: 'title' }, item.name),
+      el('div', { class: 'soft' }, KIND_NAMES[item.kind] || item.kind, ' by ', creatorLink(item), ` · worn ${count(item.wears)}`),
+      priceTag(item),
+      item.limited && el('div', { class: 'soft' }, limitedText(item.limited)),
+      session && walletBar(),
+      el('div', { class: 'buttons' },
+        getButton(item),
+        session && !mine && el('button', { class: 'chip', onclick: () => startReport('item', item.item_id, item.name) }, icon(ICON.flag), 'Report')),
+      mine && el('div', { class: 'form-actions' }, box,
+        el('button', { class: 'chip', onclick: () => priceItem(item, Math.max(0, Math.min(100000, Math.floor(Number(box.value) || 0)))) }, 'Set price')),
+      mine && !item.limited && item.price > 0 && el('div', { class: 'form-actions' }, limitedFields(item)),
+      item.limited && session && salesPanel(item.item_id),
+      reportPanel('item', item.item_id))));
+  return out;
+}
+
+function itemList() {
+  loadShop();
+  if (session) loadWallet();
+  const box = el('input', { type: 'search', placeholder: 'Search', value: shop.q });
+  box.addEventListener('change', () => { shop.q = box.value.trim(); render(); });
   const chips = (list, key) => el('div', { class: 'hats' }, list.map(([value, label]) =>
-    el('button', { class: `chip${market[key] === value ? ' on' : ''}`, onclick: () => { market[key] = value; render(); } }, label)));
-  const out = [el('h1', { class: 'title' }, 'Marketplace'), box,
-    chips([['', 'All'], ['model', 'Models'], ['plugin', 'Plugins']], 'kind'),
-    chips([['', 'Most used'], ['new', 'New'], ['updated', 'Updated']], 'sort')];
+    el('button', { class: `chip${shop[key] === value ? ' on' : ''}`, onclick: () => { shop[key] = value; render(); } }, label)));
+  const out = [box,
+    chips([['', 'Any price'], ['free', 'Free'], ['paid', 'Paid']], 'price'),
+    chips([['', 'Popular'], ['new', 'New'], ['cheap', 'Lowest price'], ['dear', 'Highest price'], ['name', 'Name']], 'sort'),
+    session && walletBar()];
+  if (shop.error) out.push(status(shop.error, 'error'));
+  else if (!shop.list) out.push(el('p', { class: 'soft' }, 'Loading…'));
+  else if (!shop.list.length) out.push(el('div', { class: 'empty' }, 'Nothing here yet.'));
+  else out.push(el('div', { class: 'shop' }, shop.list.map(itemCard)));
+  if (session) out.push(limitedPanel());
+  if (mayMakeItems()) out.push(clothesMaker());
+  return out;
+}
+
+function assetList() {
+  loadMarket();
+  const box = el('input', { type: 'search', placeholder: 'Search', value: market.q });
+  box.addEventListener('change', () => { market.q = box.value.trim(); render(); });
+  const out = [box, el('div', { class: 'hats' }, [['', 'Most used'], ['new', 'New'], ['updated', 'Updated']].map(([value, label]) =>
+    el('button', { class: `chip${market.sort === value ? ' on' : ''}`, onclick: () => { market.sort = value; render(); } }, label)))];
   if (market.error) return [...out, status(market.error, 'error')];
   if (!market.list) return [...out, el('p', { class: 'soft' }, 'Loading…')];
   if (!market.list.length) return [...out, el('div', { class: 'empty' }, 'Nothing here yet.')];
@@ -3844,6 +3940,17 @@ function marketPage() {
     el('div', { class: 'soft' }, `${item.kind === 'plugin' ? 'Plugin' : 'Model'} by ${item.creator} · ${count(item.installs)} uses`),
     permissionsLine(item)))));
   return out;
+}
+
+const SHOP_KINDS = [['', 'All'], ['hat', 'Hats'], ['shirt', 'Shirts'], ['pants', 'Trousers'], ['model', 'Models'], ['plugin', 'Plugins']];
+
+function marketPage() {
+  if (route.id) return marketItemPage(route.id);
+  const assets = shop.kind === 'model' || shop.kind === 'plugin';
+  const out = [el('h1', { class: 'title' }, 'Marketplace'),
+    el('div', { class: 'hats' }, SHOP_KINDS.map(([value, label]) =>
+      el('button', { class: `chip${shop.kind === value ? ' on' : ''}`, onclick: () => { shop.kind = value; if (value === 'model' || value === 'plugin') market.kind = value; render(); } }, label)))];
+  return [...out, ...(assets ? assetList() : itemList())];
 }
 
 function creatorPage() {
@@ -4489,20 +4596,20 @@ function donatePage() {
 
 // --- Credits -----------------------------------------------------------------
 
-const shop = { packs: null, busy: false, error: '', paid: false };
+const buying = { packs: null, busy: false, error: '', paid: false };
 
 function loadPacks() {
-  if (shop.packs) return;
-  shop.packs = { loading: true };
+  if (buying.packs) return;
+  buying.packs = { loading: true };
   api('/credits/packs')
-    .then((p) => { shop.packs = p; })
-    .catch((e) => { shop.packs = { error: e.message }; })
+    .then((p) => { buying.packs = p; })
+    .catch((e) => { buying.packs = { error: e.message }; })
     .finally(() => render());
 }
 
 async function checkout(pack) {
-  shop.busy = true;
-  shop.error = '';
+  buying.busy = true;
+  buying.error = '';
   render();
   const time = walletTime();
   const signature = signText(secretKey(), `libroxel checkout\n${session.playerId}\n${pack.id}\n${time}`);
@@ -4510,8 +4617,8 @@ async function checkout(pack) {
     const { url } = await api('/credits/checkout', { method: 'POST', body: { player_id: session.playerId, pack: pack.id, time, signature } });
     location.href = url;
   } catch (e) {
-    shop.busy = false;
-    shop.error = e.message;
+    buying.busy = false;
+    buying.error = e.message;
     render();
   }
 }
@@ -4519,22 +4626,22 @@ async function checkout(pack) {
 function creditsPage() {
   if (!session) return needSignIn('Sign in to buy Credits.');
   loadPacks();
-  if (new URLSearchParams(location.search).has('paid') && !shop.paid) {
-    shop.paid = true;
+  if (new URLSearchParams(location.search).has('paid') && !buying.paid) {
+    buying.paid = true;
     history.replaceState(null, '', '/credits');
     [0, 3000, 10000].forEach((ms) => setTimeout(() => { walletInfo = null; render(); }, ms));
   }
-  const p = shop.packs;
+  const p = buying.packs;
   const money = (cents) => `$${(cents / 100).toFixed(2)}`;
   return el('div', { class: 'donate' },
     el('h1', { class: 'title' }, 'Buy Credits'),
     walletBar(),
-    shop.paid && status('Thanks! Your Credits are on the way.'),
-    shop.error && status(shop.error, 'error'),
+    buying.paid && status('Thanks! Your Credits are on the way.'),
+    buying.error && status(buying.error, 'error'),
     !p || p.loading ? el('p', { class: 'soft' }, 'Loading…')
       : p.error ? status(p.error, 'error')
         : !p.on ? el('p', { class: 'soft' }, 'Not available yet.')
-          : el('div', { class: 'amounts' }, p.packs.map((pack) => el('button', { class: 'amount pack', disabled: shop.busy, onclick: () => checkout(pack) },
+          : el('div', { class: 'amounts' }, p.packs.map((pack) => el('button', { class: 'amount pack', disabled: buying.busy, onclick: () => checkout(pack) },
             el('span', {}, icon(BADGE_GLYPHS.coin), ` ${pack.credits.toLocaleString()}`),
             el('small', {}, money(pack.cents))))),
   );

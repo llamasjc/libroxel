@@ -172,3 +172,34 @@ fn a_parent_can_turn_spending_off() {
     assert!(buy(&hub, &kid, &hat.item_id, 10).unwrap_err().contains("parent"));
     assert_eq!(wallet(&hub, &kid).balance, 25);
 }
+
+#[test]
+fn free_items_go_in_the_inventory() {
+    let path = hub_at("inventory");
+    let running = playlibre_hub::start("127.0.0.1:0".parse().unwrap(), Some(&path)).unwrap();
+    let hub = HubClient::new(&running.url());
+    let (maker, me) = ([94u8; 32], [95u8; 32]);
+    save_look(&hub, &maker, "hatmaker3", serde_json::json!({})).unwrap();
+    save_look(&hub, &me, "getter", serde_json::json!({})).unwrap();
+    hat_maker(&path, &maker);
+    let hat = share_hat(&hub, &maker);
+    assert!(wallet(&hub, &maker).items.iter().any(|i| i.item_id == hat.item_id));
+    assert!(wallet(&hub, &me).items.is_empty());
+
+    let w = buy(&hub, &me, &hat.item_id, 0).unwrap();
+    assert_eq!((w.balance, w.owned.clone()), (0, vec![hat.item_id.clone()]));
+    assert_eq!(w.items.iter().map(|i| i.item_id.as_str()).collect::<Vec<_>>(), [hat.item_id.as_str()]);
+    assert!(buy(&hub, &me, &hat.item_id, 0).unwrap_err().contains("already"));
+    assert!(buy(&hub, &maker, &hat.item_id, 0).unwrap_err().contains("already"));
+
+    assert_eq!(hub.item(&hat.item_id).unwrap().name, "Box");
+    assert!(hub.item("nothing").is_err());
+    let hats = hub.shop("", "hat", "cheap", "").unwrap();
+    assert_eq!(hats.first().map(|i| i.price), Some(0));
+    assert!(hats.windows(2).all(|w| w[0].price <= w[1].price));
+    assert!(hub.shop("", "shirt", "", "").unwrap().iter().all(|i| i.kind == "shirt"));
+    assert!(hub.shop("", "", "", "paid").unwrap().iter().all(|i| i.price > 0));
+    assert!(hub.shop("", "", "", "free").unwrap().iter().any(|i| i.item_id == hat.item_id));
+    let dear = hub.shop("", "", "dear", "").unwrap();
+    assert!(dear.windows(2).all(|w| w[0].price >= w[1].price));
+}

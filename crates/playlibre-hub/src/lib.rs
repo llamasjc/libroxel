@@ -183,7 +183,7 @@ pub use social::{
 pub use stats::{Crash, CrashGroup, PING_EVERY_SECS, Ping, Share, Usage, UsageDay, admin_message};
 pub use wallet::{
     Buy, CURRENCY, Entry, MAX_PRICE, Refused, Sale, SetPrice, Wallet, balance, buy, buy_message, credit,
-    debit, free_to_take, history, owns, price_message, spent, take_back_free, top_up, wallet_message,
+    debit, free_to_take, has, history, owns, price_message, spent, take_back_free, top_up, wallet_message,
 };
 
 /// The port a Hub listens on unless told otherwise.
@@ -1185,7 +1185,7 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/market/{id}", get(market::info).delete(market::remove))
         .route("/market/{id}/data", get(market::data))
         .route("/catalog", get(list_items).post(share_item))
-        .route("/catalog/{id}", delete(unlist_item))
+        .route("/catalog/{id}", get(item_info).delete(unlist_item))
         .route("/catalog/{id}/wear", post(wear_item))
         .route("/catalog/{id}/price", post(wallet::set_price))
         .route("/shop/buy", post(wallet::buy_item))
@@ -1809,47 +1809,93 @@ async fn share_item(
     }))
 }
 
-async fn list_items(State(db): State<Db>, Query(query): Query<ListQuery>) -> Json<Vec<Item>> {
-    let db = db.lock().unwrap();
-    let pattern = format!("%{}%", query.q.unwrap_or_default().trim().replace(['%', '_'], ""));
-    let mut statement = db
-        .prepare(&format!(
-            "SELECT i.item_id, i.name, i.kind,
-                    COALESCE(a.name, CASE i.creator_id WHEN 'playlibre' THEN 'PlayLibre' ELSE 'Someone' END),
-                    i.creator_id, i.data, i.wears, i.price
-             FROM items i LEFT JOIN accounts a ON a.player_id = i.creator_id
-             WHERE (i.name LIKE ?1 OR COALESCE(a.name, '') LIKE ?1) AND NOT {} AND NOT {}
-             ORDER BY i.wears DESC, i.created DESC LIMIT 200",
-            hidden_sql("item", "i.item_id"),
-            owner::banned_sql("i.creator_id")
-        ))
-        .expect("the catalog query is valid");
-    let rows = statement
-        .query_map(params![pattern], |r| {
-            let data: String = r.get(5)?;
-            Ok(Item {
-                item_id: r.get(0)?,
-                name: r.get(1)?,
-                kind: r.get(2)?,
-                creator: r.get(3)?,
-                creator_id: r.get(4)?,
-                data: serde_json::from_str(&data).unwrap_or(serde_json::Value::Null),
-                wears: r.get::<_, i64>(6)? as u32,
-                price: r.get::<_, i64>(7)? as u32,
-                limited: None,
-            })
-        })
-        .map(|rows| rows.filter_map(Result::ok).collect::<Vec<Item>>())
+#[derive(Debug, Default, Deserialize)]
+struct CatalogQuery {
+    q: Option<String>,
+    kind: Option<String>,
+    sort: Option<String>,
+    price: Option<String>,
+}
+
+const ITEM_COLUMNS: &str = "i.item_id, i.name, i.kind,
+    COALESCE(a.name, CASE i.creator_id WHEN 'playlibre' THEN 'PlayLibre' ELSE 'Someone' END),
+    i.creator_id, i.data, i.wears, i.price";
+
+fn item_row(r: &rusqlite::Row) -> rusqlite::Result<Item> {
+    let data: String = r.get(5)?;
+    Ok(Item {
+        item_id: r.get(0)?,
+        name: r.get(1)?,
+        kind: r.get(2)?,
+        creator: r.get(3)?,
+        creator_id: r.get(4)?,
+        data: serde_json::from_str(&data).unwrap_or(serde_json::Value::Null),
+        wears: r.get::<_, i64>(6)? as u32,
+        price: r.get::<_, i64>(7)? as u32,
+        limited: None,
+    })
+}
+
+pub(crate) fn items_where(
+    db: &Connection,
+    condition: &str,
+    args: impl rusqlite::Params,
+    order: &str,
+) -> Vec<Item> {
+    let sql = format!(
+        "SELECT {ITEM_COLUMNS} FROM items i LEFT JOIN accounts a ON a.player_id = i.creator_id
+         WHERE ({condition}) AND NOT {} AND NOT {} ORDER BY {order} LIMIT 200",
+        hidden_sql("item", "i.item_id"),
+        owner::banned_sql("i.creator_id")
+    );
+    let items: Vec<Item> = db
+        .prepare(&sql)
+        .and_then(|mut s| s.query_map(args, item_row).map(|rows| rows.filter_map(Result::ok).collect()))
         .unwrap_or_default();
-    drop(statement);
-    let rows = rows
+    items
         .into_iter()
         .map(|mut item| {
-            item.limited = limited::summary(&db, &item.item_id);
+            item.limited = limited::summary(db, &item.item_id);
             item
         })
-        .collect();
-    Json(rows)
+        .collect()
+}
+
+async fn list_items(State(db): State<Db>, Query(query): Query<CatalogQuery>) -> Json<Vec<Item>> {
+    let db = db.lock().unwrap();
+    let pattern = format!("%{}%", query.q.unwrap_or_default().trim().replace(['%', '_'], ""));
+    let kind = query.kind.filter(|k| ITEM_KINDS.contains(&k.as_str()));
+    let price = match query.price.as_deref() {
+        Some("free") => "i.price = 0",
+        Some("paid") => "i.price > 0",
+        _ => "1",
+    };
+    let order = match query.sort.as_deref() {
+        Some("new") => "i.created DESC",
+        Some("cheap") => "i.price ASC, i.wears DESC",
+        Some("dear") => "i.price DESC, i.wears DESC",
+        Some("name") => "i.name COLLATE NOCASE ASC",
+        _ => "i.wears DESC, i.created DESC",
+    };
+    Json(items_where(
+        &db,
+        &format!(
+            "(i.name LIKE ?1 OR COALESCE(a.name, '') LIKE ?1) AND (?2 IS NULL OR i.kind = ?2) AND {price}"
+        ),
+        params![pattern, kind],
+        order,
+    ))
+}
+
+async fn item_info(
+    State(db): State<Db>,
+    UrlPath(id): UrlPath<String>,
+) -> Result<Json<Item>, (StatusCode, String)> {
+    let db = db.lock().unwrap();
+    items_where(&db, "i.item_id = ?1", params![id], "i.item_id")
+        .pop()
+        .map(Json)
+        .ok_or((StatusCode::NOT_FOUND, "that isn't in the Marketplace".into()))
 }
 
 async fn wear_item(State(db): State<Db>, UrlPath(id): UrlPath<String>) -> StatusCode {
@@ -2991,12 +3037,34 @@ impl HubClient {
 
     /// The catalog, most worn first, matching `search` if given.
     pub fn catalog(&self, search: &str) -> Result<Vec<Item>, String> {
-        self.agent
-            .get(format!("{}/catalog", self.base))
-            .query("q", search)
+        self.shop(search, "", "", "")
+    }
+
+    /// The Marketplace's avatar items: `kind` "hat", "shirt" or "pants";
+    /// `sort` "new", "cheap", "dear" or "name"; `price` "free" or "paid".
+    /// Empty means any.
+    pub fn shop(&self, search: &str, kind: &str, sort: &str, price: &str) -> Result<Vec<Item>, String> {
+        let mut request = self.agent.get(format!("{}/catalog", self.base)).query("q", search);
+        for (key, value) in [("kind", kind), ("sort", sort), ("price", price)] {
+            if !value.is_empty() {
+                request = request.query(key, value);
+            }
+        }
+        request
             .call()
             .and_then(|mut r| r.body_mut().read_json())
             .map_err(|e| format!("could not reach the Hub: {e}"))
+    }
+
+    pub fn item(&self, item_id: &str) -> Result<Item, String> {
+        let request = self
+            .agent
+            .get(format!("{}/catalog/{}", self.base, assets::encode(item_id)))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call();
+        self.answer(request)
     }
 
     pub fn wallet(&self, player_id: &str, time: i64, signature: &str) -> Result<Wallet, String> {

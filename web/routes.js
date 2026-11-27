@@ -9,6 +9,7 @@ export const ROUTES = {
   user: { title: 'Player', params: ['id'] },
   creator: { title: 'Create', params: ['id', 'tab'] },
   market: { title: 'Marketplace', params: ['id'] },
+  item: { title: 'Item', params: ['id'] },
   messages: { title: 'Messages', params: ['id'] },
   group: { title: 'Group', params: ['id'] },
   charts: { title: 'Charts', params: [] },

@@ -310,6 +310,21 @@ pub fn owns(db: &Connection, player_id: &str, item_id: &str) -> bool {
     .is_some()
 }
 
+/// Whether `item_id` is in the player's inventory: bought, got for free,
+/// or made by them.
+pub fn has(db: &Connection, player_id: &str, item_id: &str) -> bool {
+    db.query_row(
+        "SELECT 1 FROM owned WHERE player_id = ?1 AND item_id = ?2
+         UNION SELECT 1 FROM items WHERE item_id = ?2 AND creator_id = ?1",
+        params![player_id, item_id],
+        |_| Ok(()),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .is_some()
+}
+
 pub(crate) fn may_wear(db: &Connection, player_id: &str, look: &serde_json::Value) -> bool {
     let Some(hat) = look.get("item").and_then(playlibre_avatar::CustomHat::from_json) else { return true };
     let Ok(mut statement) = db.prepare(
@@ -375,6 +390,9 @@ pub struct Wallet {
     #[serde(default)]
     pub daily_ready: bool,
     pub owned: Vec<String>,
+    /// Everything the player owns or made, to wear.
+    #[serde(default)]
+    pub items: Vec<crate::Item>,
     pub history: Vec<Entry>,
     pub may_spend: Option<i64>,
 }
@@ -402,6 +420,12 @@ pub fn wallet(db: &Connection, player_id: &str) -> Wallet {
         daily: 0,
         daily_ready: false,
         owned,
+        items: crate::items_where(
+            db,
+            "i.creator_id = ?1 OR i.item_id IN (SELECT item_id FROM owned WHERE player_id = ?1)",
+            params![player_id],
+            "i.kind, i.name COLLATE NOCASE",
+        ),
         history,
         may_spend: limit.map(|most| (i64::from(most) - spent(db, player_id)).max(0)),
     }
@@ -529,7 +553,7 @@ pub(crate) async fn buy_item(State(db): State<Db>, Json(b): Json<Buy>) -> Result
     if price != b.price {
         return Err((StatusCode::CONFLICT, "the price changed; look again".into()));
     }
-    if owns(&db, &b.player_id, &b.item_id) {
+    if has(&db, &b.player_id, &b.item_id) {
         return Err((StatusCode::CONFLICT, "you already have it".into()));
     }
     let sale = Sale {
@@ -544,7 +568,9 @@ pub(crate) async fn buy_item(State(db): State<Db>, Json(b): Json<Buy>) -> Result
         crate::limited::buy_first(&db, &sale)?;
         return Ok(Json(wallet(&db, &b.player_id)));
     }
-    buy(&db, &sale)?;
+    if price > 0 {
+        buy(&db, &sale)?;
+    }
     db.execute(
         "INSERT OR IGNORE INTO owned (player_id, item_id, time) VALUES (?1, ?2, ?3)",
         params![b.player_id, b.item_id, now()],

@@ -69,6 +69,7 @@ pub enum Tab {
     Groups,
     Create,
     Avatar,
+    Market,
     Messages,
     Charts,
     Profile,
@@ -97,6 +98,16 @@ pub struct Menu {
     my_games: crate::my_games::MyGames,
     shown: Option<(Tab, f64)>,
     donated: Option<f64>,
+    part: Part,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Part {
+    #[default]
+    Body,
+    Hats,
+    Shirts,
+    Trousers,
 }
 
 impl Default for Menu {
@@ -106,6 +117,7 @@ impl Default for Menu {
             tab: Tab::Home,
             shown: None,
             donated: None,
+            part: Part::Body,
             game: Game::Blank,
             games: Vec::new(),
             scanned: false,
@@ -459,6 +471,10 @@ impl Menu {
                             .show(ui, |ui| self.avatar_tab(ui, platform));
                         None
                     }
+                    Tab::Market => {
+                        platform.market_ui(ui);
+                        None
+                    }
                     Tab::Profile => {
                         theme::heading(ui, t("Profile"));
                         ui.add_space(8.0);
@@ -754,40 +770,123 @@ impl Menu {
         }
         let mut look = self.look();
         theme::heading(ui, t("Your avatar"));
-        ui.label(
-            RichText::new(t("How you look in every game you play or join. Other players see it too."))
-                .color(SOFT),
-        );
         ui.add_space(12.0);
+        let owned = platform.inventory();
         ui.horizontal_top(|ui| {
             theme::panel().show(ui, |ui| {
                 draw_avatar(ui, &look);
             });
             ui.add_space(20.0);
             ui.vertical(|ui| {
-                for (label, color) in [
-                    ("Skin", &mut look.colors.skin),
-                    ("Shirt", &mut look.colors.shirt),
-                    ("Trousers", &mut look.colors.pants),
-                ] {
-                    theme::label_caps(ui, t(label));
-                    swatches(ui, color, label);
-                    ui.add_space(8.0);
-                }
-                theme::label_caps(ui, t("Hat"));
                 ui.horizontal_wrapped(|ui| {
-                    for hat in Hat::ALL {
-                        let on = look.hat == hat && look.item.is_none();
-                        if ui.selectable_label(on, t(hat.name())).clicked() {
-                            look.hat = hat;
-                            // A hat from here replaces one from the catalog.
-                            look.item = None;
+                    for (part, label) in [
+                        (Part::Body, "Body"),
+                        (Part::Hats, "Hats"),
+                        (Part::Shirts, "Shirts"),
+                        (Part::Trousers, "Trousers"),
+                    ] {
+                        if ui.selectable_label(self.part == part, t(label)).clicked() {
+                            self.part = part;
                         }
                     }
                 });
-                if look.hat != Hat::None {
-                    ui.add_space(4.0);
-                    swatches(ui, &mut look.hat_color, "Hat");
+                ui.add_space(10.0);
+                let kind = match self.part {
+                    Part::Body => "",
+                    Part::Hats => "hat",
+                    Part::Shirts => "shirt",
+                    Part::Trousers => "pants",
+                };
+                let mine: Vec<_> = owned.iter().filter(|i| i.kind == kind).collect();
+                let mut worn = None;
+                match self.part {
+                    Part::Body => {
+                        theme::label_caps(ui, t("Skin"));
+                        swatches(ui, &mut look.colors.skin, "Skin");
+                    }
+                    Part::Hats => {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                            for hat in Hat::ALL {
+                                let shown = Look { hat, item: None, ..Look::for_player(0) };
+                                let on = look.hat == hat && look.item.is_none();
+                                if tile(ui, &shown, true, t(hat.name()), on).clicked() {
+                                    look.hat = hat;
+                                    look.item = None;
+                                }
+                            }
+                            for item in &mine {
+                                let Some(shown) = crate::browse::item_look(item) else { continue };
+                                let on = look.item.is_some() && look.item == shown.item;
+                                if tile(ui, &shown, true, &item.name, on).clicked() {
+                                    look.item = shown.item.clone();
+                                    worn = Some(item.item_id.clone());
+                                }
+                            }
+                        });
+                        if look.hat != Hat::None && look.item.is_none() {
+                            ui.add_space(8.0);
+                            theme::label_caps(ui, t("Hat colour"));
+                            swatches(ui, &mut look.hat_color, "Hat");
+                        }
+                    }
+                    Part::Shirts | Part::Trousers => {
+                        let shirts = self.part == Part::Shirts;
+                        theme::label_caps(ui, t("Colour"));
+                        swatches(
+                            ui,
+                            if shirts { &mut look.colors.shirt } else { &mut look.colors.pants },
+                            "Shirt",
+                        );
+                        ui.add_space(8.0);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                            let bare = Look {
+                                hat: Hat::None,
+                                item: None,
+                                shirt: if shirts { None } else { look.shirt.clone() },
+                                pants: if shirts { look.pants.clone() } else { None },
+                                ..look.clone()
+                            };
+                            let slot_empty = if shirts { look.shirt.is_none() } else { look.pants.is_none() };
+                            if tile(ui, &bare, false, t("None"), slot_empty).clicked() {
+                                if shirts {
+                                    look.shirt = None;
+                                } else {
+                                    look.pants = None;
+                                }
+                            }
+                            for item in &mine {
+                                let Some(shown) = crate::browse::item_look(item) else { continue };
+                                let (wearing, offered) = if shirts {
+                                    (&look.shirt, &shown.shirt)
+                                } else {
+                                    (&look.pants, &shown.pants)
+                                };
+                                let on = wearing.is_some() && wearing == offered;
+                                if tile(ui, &shown, false, &item.name, on).clicked() {
+                                    let offered = offered.clone();
+                                    if shirts {
+                                        look.shirt = offered;
+                                    } else {
+                                        look.pants = offered;
+                                    }
+                                    worn = Some(item.item_id.clone());
+                                }
+                            }
+                        });
+                    }
+                }
+                if self.part != Part::Body && mine.is_empty() {
+                    ui.add_space(6.0);
+                    if platform.inventory_loading() {
+                        ui.spinner();
+                    } else if ui.link(t("Get more in the Marketplace")).clicked() {
+                        self.go(Tab::Market);
+                    }
+                }
+                if let Some(id) = worn {
+                    platform.wore(&id);
                 }
                 ui.add_space(12.0);
                 if ui.button(t("Back to the usual look")).clicked() {
@@ -795,11 +894,6 @@ impl Menu {
                 }
             });
         });
-        ui.add_space(24.0);
-        if let Some(picked) = platform.catalog_ui(ui, look.item.as_deref()) {
-            look.item = picked.map(std::sync::Arc::new);
-        }
-        platform.clothes_ui(ui, &mut look);
         if let Some(why) = &platform.look_error {
             ui.add_space(8.0);
             crate::report::error(ui, &tf("Your avatar was not saved: {error}", &[("error", why)]));
@@ -905,10 +999,11 @@ impl Menu {
 }
 
 /// The tabs along the top bar, after the mark (which is Home).
-const TOP_TABS: [(Tab, &str, &str); 5] = [
+const TOP_TABS: [(Tab, &str, &str); 6] = [
     (Tab::Charts, theme::icon::CHART_BAR, "Charts"),
     (Tab::Groups, theme::icon::SHIELD, "Groups"),
     (Tab::Avatar, theme::icon::T_SHIRT, "Avatar"),
+    (Tab::Market, theme::icon::STOREFRONT, "Marketplace"),
     (Tab::Create, theme::icon::HAMMER, "Create"),
     (Tab::Profile, theme::icon::USER_CIRCLE, "Profile"),
 ];
@@ -979,6 +1074,28 @@ fn player_chip(ui: &mut egui::Ui, name: &str, signed_in: bool, phone: bool) -> e
         t("Make an account on the Profile tab to play as yourself.")
     };
     response.on_hover_text(hint).on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// An owned thing to put on, drawn on `look`.
+fn tile(ui: &mut egui::Ui, look: &Look, head: bool, name: &str, on: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(96.0, 116.0), egui::Sense::click());
+    let painter = ui.painter();
+    let fill = if response.hovered() { theme::WELL } else { theme::CARD };
+    painter.rect_filled(rect, 8.0, fill);
+    let stroke = if on { egui::Stroke::new(2.0, theme::ACCENT) } else { egui::Stroke::new(1.0, theme::LINE) };
+    painter.rect_stroke(rect, 8.0, stroke, egui::StrokeKind::Inside);
+    let picture = egui::Rect::from_min_size(rect.min + egui::vec2(6.0, 6.0), egui::vec2(84.0, 84.0));
+    crate::browse::look_picture(ui, picture, look, head);
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        name.to_owned(),
+        egui::FontId::proportional(12.0),
+        theme::TEXT,
+    );
+    job.wrap = egui::text::TextWrapping::truncate_at_width(86.0);
+    let galley = ui.painter().layout_job(job);
+    let at = egui::pos2(rect.center().x - galley.size().x / 2.0, rect.max.y - 20.0);
+    ui.painter().galley(at, galley, theme::TEXT);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Where the avatar is saved.

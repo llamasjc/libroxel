@@ -18,6 +18,51 @@ mod family;
 
 type Slot<T> = Arc<Mutex<Option<Result<T, String>>>>;
 
+#[derive(Default)]
+struct ShopQuery {
+    search: String,
+    kind: &'static str,
+    sort: &'static str,
+    price: &'static str,
+}
+
+/// An item on the usual look.
+pub fn item_look(item: &Item) -> Option<playlibre_engine::character::Look> {
+    use playlibre_engine::character::{Clothing, CustomHat, Look};
+    let mut look = Look::for_player(0);
+    match item.kind.as_str() {
+        "hat" => look.item = Some(Arc::new(CustomHat::from_json(&item.data)?)),
+        "shirt" => look.shirt = Some(Arc::new(Clothing::from_json(&item.data)?)),
+        _ => look.pants = Some(Arc::new(Clothing::from_json(&item.data)?)),
+    }
+    Some(look)
+}
+
+pub fn item_picture(ui: &mut egui::Ui, item: &Item, size: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 6.0, egui::Color32::from_rgb(190, 226, 250));
+    if let Some(look) = item_look(item) {
+        look_picture(ui, rect, &look, item.kind == "hat");
+    }
+}
+
+pub fn look_picture(ui: &egui::Ui, rect: egui::Rect, look: &playlibre_engine::character::Look, head: bool) {
+    let (shot, (w, h)) = if head {
+        (playlibre_avatar::Shot::Head, (192, 192))
+    } else {
+        (playlibre_avatar::Shot::Body, (192, 272))
+    };
+    let texture = crate::hub_home::avatar_texture(ui.ctx(), look, shot, (w, h));
+    let scale = (rect.width() / w as f32).min(rect.height() / h as f32);
+    let shown = egui::Rect::from_center_size(rect.center(), egui::vec2(w as f32, h as f32) * scale);
+    ui.painter().image(
+        texture.id(),
+        shown,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
+}
+
 enum WalletAction {
     Read,
     Buy(String, u32),
@@ -141,6 +186,12 @@ pub struct Platform {
     /// The catalog: things to wear that people made.
     pub items: Vec<Item>,
     fetched_items: Slot<Vec<Item>>,
+    shop_query: ShopQuery,
+    shop_key: Option<String>,
+    shop_fetched: Option<Instant>,
+    shop_list: Vec<Item>,
+    shop_found: Slot<Vec<Item>>,
+    shop_error: Option<String>,
     item_shared: Slot<String>,
     wallet: Option<playlibre_hub::Wallet>,
     wallet_found: Slot<playlibre_hub::Wallet>,
@@ -247,6 +298,12 @@ impl Default for Platform {
             moved_done: Arc::default(),
             items: Vec::new(),
             fetched_items: Arc::default(),
+            shop_query: ShopQuery::default(),
+            shop_key: None,
+            shop_fetched: None,
+            shop_list: Vec::new(),
+            shop_found: Arc::default(),
+            shop_error: None,
             item_shared: Arc::default(),
             wallet: None,
             shop: Default::default(),
@@ -652,7 +709,7 @@ impl Platform {
                 let signature = me.sign(&playlibre_hub::item_message(&creator_id, &name, "hat", &data, time));
                 let item = NewItem { creator_id, name, kind: "hat".into(), data, time, signature };
                 let shared = client.share_item(&item)?;
-                Ok(format!("{} is in the catalog. Anyone can wear it from the Avatar tab.", shared.name))
+                Ok(format!("{} is in the Marketplace.", shared.name))
             });
             *out.lock().unwrap() = Some(result);
         });
@@ -740,75 +797,137 @@ impl Platform {
         }
     }
 
-    /// The catalog part of the Avatar tab: hats to put on. Returns the one
-    /// picked, or `Some(None)` to take a catalog hat off.
-    #[allow(clippy::option_option)]
-    pub fn catalog_ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        wearing: Option<&playlibre_engine::character::CustomHat>,
-    ) -> Option<Option<playlibre_engine::character::CustomHat>> {
-        if self.last_fetch.is_none_or(|t| t.elapsed() > Duration::from_secs(5)) {
-            self.refresh();
+    /// What the signed-in account owns or made, to wear.
+    pub fn inventory(&mut self) -> Vec<Item> {
+        self.keep_wallet_fresh();
+        self.wallet.as_ref().map(|w| w.items.clone()).unwrap_or_default()
+    }
+
+    pub fn inventory_loading(&self) -> bool {
+        self.account.is_some() && self.wallet.is_none()
+    }
+
+    fn has_item(&self, item: &Item) -> bool {
+        self.account.as_ref().is_some_and(|a| a.player_id == item.creator_id)
+            || self.wallet.as_ref().is_some_and(|w| w.owned.contains(&item.item_id))
+    }
+
+    fn shop_refresh(&mut self) {
+        let q = &self.shop_query;
+        let key = format!("{}|{}|{}|{}", q.search.trim(), q.kind, q.sort, q.price);
+        if self.shop_key.as_ref() == Some(&key)
+            && self.shop_fetched.is_some_and(|t| t.elapsed() < Duration::from_secs(30))
+        {
+            return;
         }
-        let mut picked = None;
-        ui.label(RichText::new("Catalog").font(crate::theme::display(17.0)));
-        let note = if self.may_make_items() {
-            "Hats in the catalog. To add one, build it from parts in the editor, select its model and use \
-             Model > Share as hat."
-        } else {
-            "Hats in the catalog. For now only Hat-Makers make them."
-        };
-        ui.label(RichText::new(note).color(crate::theme::MUTED));
-        if let Some(hat) = wearing {
-            ui.horizontal(|ui| {
-                ui.label(format!("Wearing {}", hat.name));
-                if ui.button("Take it off").clicked() {
-                    picked = Some(None);
+        self.shop_key = Some(key);
+        self.shop_fetched = Some(Instant::now());
+        let (client, out) = (self.client(), self.shop_found.clone());
+        let (search, kind, sort, price) = (q.search.trim().to_owned(), q.kind, q.sort, q.price);
+        std::thread::spawn(move || {
+            *out.lock().unwrap() = Some(client.shop(&search, kind, sort, price));
+        });
+    }
+
+    /// The Marketplace tab: hats and clothes to buy or get.
+    pub fn market_ui(&mut self, ui: &mut egui::Ui) {
+        use crate::i18n::t;
+        if let Some(found) = self.shop_found.lock().unwrap().take() {
+            match found {
+                Ok(list) => {
+                    self.shop_list = list;
+                    self.shop_error = None;
+                }
+                Err(e) => self.shop_error = Some(e),
+            }
+        }
+        self.shop_refresh();
+        crate::theme::heading(ui, t("Marketplace"));
+        ui.horizontal(|ui| {
+            let typed = ui.add(
+                egui::TextEdit::singleline(&mut self.shop_query.search)
+                    .hint_text(t("Search"))
+                    .desired_width(260.0),
+            );
+            if typed.lost_focus() {
+                self.shop_key = None;
+            }
+        });
+        ui.add_space(6.0);
+        let q = &mut self.shop_query;
+        for (choices, chosen) in [
+            (&[("", "All"), ("hat", "Hats"), ("shirt", "Shirts"), ("pants", "Trousers")][..], &mut q.kind),
+            (&[("", "Any price"), ("free", "Free"), ("paid", "Paid")][..], &mut q.price),
+            (
+                &[
+                    ("", "Popular"),
+                    ("new", "New"),
+                    ("cheap", "Lowest price"),
+                    ("dear", "Highest price"),
+                    ("name", "Name"),
+                ][..],
+                &mut q.sort,
+            ),
+        ] {
+            ui.horizontal_wrapped(|ui| {
+                for (value, label) in choices {
+                    if ui.selectable_label(*chosen == *value, t(label)).clicked() {
+                        *chosen = *value;
+                    }
                 }
             });
         }
+        ui.add_space(6.0);
         self.wallet_row(ui);
-        if self.items.is_empty() {
-            ui.label("Nothing in the catalog yet.");
+        if let Some(e) = &self.shop_error {
+            crate::report::error(ui, e);
+        } else if self.shop_list.is_empty() {
+            ui.label(RichText::new(t("Nothing here yet.")).color(crate::theme::MUTED));
         }
-        let mut worn = None;
-        let mut reporting = None;
         let mut buying = None;
-        let me = self.account.as_ref().map(|a| a.player_id.clone());
-        let owned: Vec<String> = self.wallet.as_ref().map(|w| w.owned.clone()).unwrap_or_default();
+        let mut reporting = None;
+        let list = self.shop_list.clone();
         ui.horizontal_wrapped(|ui| {
-            for item in &self.items {
-                let has = item.price == 0
-                    || me.as_deref() == Some(item.creator_id.as_str())
-                    || owned.contains(&item.item_id);
-                let Some(hat) = playlibre_engine::character::CustomHat::from_json(&item.data) else {
-                    continue;
-                };
+            ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
+            for item in &list {
+                let has = self.has_item(item);
                 crate::theme::panel().inner_margin(10.0).show(ui, |ui| {
+                    ui.set_width(150.0);
                     ui.vertical(|ui| {
+                        item_picture(ui, item, 150.0);
                         ui.strong(&item.name);
-                        ui.label(RichText::new(format!("by {} · worn {}", item.creator, item.wears)).small());
-                        let on = wearing.is_some_and(|w| *w == hat);
+                        let kind = match item.kind.as_str() {
+                            "hat" => t("Hat"),
+                            "shirt" => t("Shirt"),
+                            _ => t("Trousers"),
+                        };
+                        ui.label(
+                            RichText::new(format!("{kind} · {}", item.creator))
+                                .small()
+                                .color(crate::theme::MUTED),
+                        );
+                        let price = if item.price == 0 {
+                            t("Free").to_owned()
+                        } else {
+                            format!("{} {}", crate::theme::icon::COIN, item.price)
+                        };
+                        ui.label(RichText::new(price).strong());
                         ui.horizontal(|ui| {
-                            if !has {
-                                if ui
-                                    .add_enabled(
-                                        !self.wallet_busy,
-                                        egui::Button::new(format!("Buy for {}", item.price)),
-                                    )
-                                    .clicked()
-                                {
+                            if self.account.is_none() {
+                                ui.add_enabled(false, egui::Button::new(t("Get")));
+                            } else if has {
+                                ui.add_enabled(false, egui::Button::new(t("Owned")));
+                            } else {
+                                let label = if item.price == 0 {
+                                    t("Get").to_owned()
+                                } else {
+                                    crate::i18n::tf("Buy for {price}", &[("price", &item.price)])
+                                };
+                                if ui.add_enabled(!self.wallet_busy, egui::Button::new(label)).clicked() {
                                     buying = Some((item.item_id.clone(), item.price));
                                 }
-                            } else if ui
-                                .add_enabled(!on, egui::Button::new(if on { "Wearing" } else { "Wear" }))
-                                .clicked()
-                            {
-                                worn = Some(item.item_id.clone());
-                                picked = Some(Some(hat));
                             }
-                            if report_button(ui, "hat") {
+                            if report_button(ui, "item") {
                                 reporting =
                                     Some(("item", item.item_id.clone(), item.name.clone(), String::new()));
                             }
@@ -825,102 +944,14 @@ impl Platform {
         if let Some((id, price)) = buying {
             self.wallet_send(WalletAction::Buy(id, price));
         }
-        if let Some(id) = worn {
-            let client = self.client();
-            std::thread::spawn(move || {
-                let _ = client.wore(&id);
-            });
-        }
-        picked
     }
 
-    /// Shirts and trousers in the catalog, to wear. Changes `look` when one
-    /// is put on or taken off.
-    pub fn clothes_ui(&mut self, ui: &mut egui::Ui, look: &mut playlibre_engine::character::Look) {
-        use playlibre_engine::character::Clothing;
-        use std::sync::Arc;
-        let clothes: Vec<_> = self
-            .items
-            .iter()
-            .filter(|i| i.kind == "shirt" || i.kind == "pants")
-            .filter_map(|i| Some((i.clone(), Clothing::from_json(&i.data)?)))
-            .collect();
-        if clothes.is_empty() && look.shirt.is_none() && look.pants.is_none() {
-            return;
-        }
-        ui.add_space(12.0);
-        ui.label(RichText::new("Clothes").font(crate::theme::display(17.0)));
-        ui.label(
-            RichText::new("Shirts and trousers in the catalog, worn over your colours.")
-                .color(crate::theme::MUTED),
-        );
-        for (label, worn) in [("shirt", &mut look.shirt), ("trousers", &mut look.pants)] {
-            if let Some(w) = worn.as_ref() {
-                let name = w.name.clone();
-                ui.horizontal(|ui| {
-                    ui.label(format!("Wearing {name}"));
-                    if ui.button(format!("Take off the {label}")).clicked() {
-                        *worn = None;
-                    }
-                });
-            }
-        }
-        let me = self.account.as_ref().map(|a| a.player_id.clone());
-        let owned: Vec<String> = self.wallet.as_ref().map(|w| w.owned.clone()).unwrap_or_default();
-        let mut buying = None;
-        let mut worn_id = None;
-        ui.horizontal_wrapped(|ui| {
-            for (item, clothing) in &clothes {
-                let has = item.price == 0
-                    || me.as_deref() == Some(item.creator_id.as_str())
-                    || owned.contains(&item.item_id);
-                let slot = if item.kind == "shirt" { &mut look.shirt } else { &mut look.pants };
-                let on = slot.as_deref() == Some(clothing);
-                crate::theme::panel().inner_margin(10.0).show(ui, |ui| {
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            let (rect, _) =
-                                ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                            let c = clothing.color;
-                            let rgb = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u8;
-                            ui.painter().rect_filled(
-                                rect,
-                                3.0,
-                                egui::Color32::from_rgb(rgb(c.r), rgb(c.g), rgb(c.b)),
-                            );
-                            ui.strong(&item.name);
-                        });
-                        ui.label(RichText::new(format!("by {} · worn {}", item.creator, item.wears)).small());
-                        if !has {
-                            if ui
-                                .add_enabled(
-                                    !self.wallet_busy,
-                                    egui::Button::new(format!("Buy for {}", item.price)),
-                                )
-                                .clicked()
-                            {
-                                buying = Some((item.item_id.clone(), item.price));
-                            }
-                        } else if ui
-                            .add_enabled(!on, egui::Button::new(if on { "Wearing" } else { "Wear" }))
-                            .clicked()
-                        {
-                            *slot = Some(Arc::new(clothing.clone()));
-                            worn_id = Some(item.item_id.clone());
-                        }
-                    });
-                });
-            }
+    /// Tells the Hub an item was put on, for its count.
+    pub fn wore(&self, item_id: &str) {
+        let (client, id) = (self.client(), item_id.to_owned());
+        std::thread::spawn(move || {
+            let _ = client.wore(&id);
         });
-        if let Some((id, price)) = buying {
-            self.wallet_send(WalletAction::Buy(id, price));
-        }
-        if let Some(id) = worn_id {
-            let client = self.client();
-            std::thread::spawn(move || {
-                let _ = client.wore(&id);
-            });
-        }
     }
 
     /// Asks why, when the ⚑ beside a game or hat was pressed, and shows
