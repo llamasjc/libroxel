@@ -79,7 +79,8 @@ pub fn job(text: &str, size: f32, colour: Color32, width: f32, scale: f32) -> La
             continue;
         }
         // Plain text up to the next tag.
-        let next = rest[1..].find('<').map_or(rest.len(), |i| i + 1);
+        let first = rest.chars().next().map_or(1, char::len_utf8);
+        let next = rest[first..].find('<').map_or(rest.len(), |i| i + first);
         push(&mut job, &unescape(&rest[..next]), style);
         rest = &rest[next..];
     }
@@ -196,7 +197,7 @@ fn apply(style: &mut Style, name: &str, attrs: &[(String, String)], base: Style,
 /// A colour written `#rrggbb`, `#rgb` or `rgb(r, g, b)`.
 fn colour(text: &str) -> Option<Color32> {
     let text = text.trim();
-    if let Some(hex) = text.strip_prefix('#') {
+    if let Some(hex) = text.strip_prefix('#').filter(|h| h.is_ascii()) {
         let n = |s: &str| u8::from_str_radix(s, 16).ok();
         return match hex.len() {
             6 => Some(Color32::from_rgb(n(&hex[0..2])?, n(&hex[2..4])?, n(&hex[4..6])?)),
@@ -299,5 +300,7 @@ mod tests {
         let red = j.sections.iter().find(|s| s.format.color == Color32::from_rgb(255, 0, 0)).unwrap();
         assert_eq!(red.format.font_id.size, 20.0);
         assert_eq!(plain("1 < 2 <!-- note -->ok <unknown>"), "1 < 2 ok <unknown>");
+        assert_eq!(plain("✦ Play <b>✦</b>✦"), "✦ Play ✦✦");
+        assert!(colour("#✦ab").is_none());
     }
 }
