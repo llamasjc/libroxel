@@ -1366,6 +1366,47 @@ impl PlaySession {
         }
     }
 
+    /// The game's developer products, from the Hub.
+    pub fn set_products(&mut self, info: Vec<playlibre_script::ProductInfo>) {
+        self.runtime.set_product_info(info);
+    }
+
+    /// Takes the `PromptProductPurchase` calls scripts made: player, product id.
+    pub fn take_product_prompts(&mut self) -> Vec<(InstanceId, i64)> {
+        self.runtime
+            .take_product_prompts()
+            .into_iter()
+            .filter_map(|(user, product)| Some((self.player_with_user_id(user)?, product)))
+            .collect()
+    }
+
+    /// A product's purchase prompt for `player` closed.
+    pub fn product_prompt_finished(&mut self, player: InstanceId, product: i64, bought: bool) {
+        if let Some(user) = self.user_id_of(player) {
+            let errors = self.runtime.product_prompt_finished(user, product, bought);
+            self.collect(errors);
+        }
+    }
+
+    /// Hands `player`'s purchase to `ProcessReceipt` (see
+    /// [`playlibre_script::ScriptRuntime::process_receipt`]).
+    pub fn process_receipt(&mut self, player: InstanceId, receipt: i64, product: i64, price: u32) {
+        if let Some(user_id) = self.user_id_of(player) {
+            let errors = self.runtime.process_receipt(&playlibre_script::ReceiptInfo {
+                id: receipt,
+                user_id,
+                product_id: product,
+                price,
+            });
+            self.collect(errors);
+        }
+    }
+
+    /// Takes what `ProcessReceipt` answered: receipt id, whether it granted it.
+    pub fn take_receipt_results(&mut self) -> Vec<(i64, bool)> {
+        self.runtime.take_receipt_results()
+    }
+
     /// Takes what the host asked the player on this computer to do, such as
     /// `{"kind": "pass", ...}` (buy a game pass) or `{"kind": "teleport", ...}`.
     pub fn take_host_asks(&mut self) -> Vec<playlibre_instance::serde_json::Value> {

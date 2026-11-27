@@ -52,7 +52,9 @@ pub use mlua;
 /// (`RunService:Set3dRenderingEnabled(false)`, as loading screens do).
 pub static RENDERING_3D: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 pub use net::{NetMessage, NetRole, decode as decode_net_value, encode as encode_net_value, map_instances};
-pub use world::{BadgeInfo, GameIdentity, JoinData, PassInfo, Teleport, VelocityRequest};
+pub use world::{
+    BadgeInfo, GameIdentity, JoinData, PassInfo, ProductInfo, ReceiptInfo, Teleport, VelocityRequest,
+};
 
 /// What data stores hold: store, then key, then value.
 pub type SavedData =
@@ -504,6 +506,89 @@ impl ScriptRuntime {
     /// Takes the teleports scripts asked for.
     pub fn take_teleports(&self) -> Vec<Teleport> {
         std::mem::take(&mut bindings::host(&self.lua).world.borrow_mut().teleports.queued)
+    }
+
+    /// The game's developer products, from the Hub. From now on purchase
+    /// prompts for them go to the host (see [`take_product_prompts`](Self::take_product_prompts)).
+    pub fn set_product_info(&self, info: Vec<ProductInfo>) {
+        let host = bindings::host(&self.lua);
+        let mut world = host.world.borrow_mut();
+        world.products.on = true;
+        world.products.info = info;
+    }
+
+    /// Takes the `PromptProductPurchase` calls waiting: user id, product id.
+    pub fn take_product_prompts(&self) -> Vec<(i64, i64)> {
+        std::mem::take(&mut bindings::host(&self.lua).world.borrow_mut().products.prompts)
+    }
+
+    /// A product's purchase prompt closed: fires `PromptProductPurchaseFinished`.
+    pub fn product_prompt_finished(&self, user_id: i64, product_id: i64, bought: bool) -> Vec<ScriptError> {
+        let source = format!(
+            "game:GetService(\"MarketplaceService\").PromptProductPurchaseFinished:Fire({user_id}, {product_id}, {bought})"
+        );
+        match self.run("MarketplaceService", &source) {
+            Ok(()) => bindings::take_errors(&self.lua),
+            Err(e) => vec![e],
+        }
+    }
+
+    /// Hands a purchase to `MarketplaceService.ProcessReceipt`, unless it is
+    /// already looking at it. Its answer comes back from
+    /// [`take_receipt_results`](Self::take_receipt_results); without a
+    /// callback the receipt isn't granted.
+    pub fn process_receipt(&self, receipt: &ReceiptInfo) -> Vec<ScriptError> {
+        if !bindings::host(&self.lua).world.borrow_mut().products.busy.insert(receipt.id) {
+            return Vec::new();
+        }
+        let start = || -> mlua::Result<()> {
+            let done = self.lua.create_function(|lua, (id, granted): (i64, bool)| {
+                let host = bindings::host(lua);
+                let mut world = host.world.borrow_mut();
+                if world.products.busy.remove(&id) {
+                    world.products.done.push((id, granted));
+                }
+                Ok(())
+            })?;
+            let func = self
+                .lua
+                .load(
+                    "local done, id, userId, productId, spent = ...
+                     local market = game:GetService(\"MarketplaceService\")
+                     local callback = rawget(market, \"ProcessReceipt\")
+                     if type(callback) ~= \"function\" then
+                         done(id, false)
+                         return
+                     end
+                     local ok, decision = pcall(callback, {
+                         PlayerId = userId,
+                         PlaceIdWherePurchased = game.PlaceId,
+                         PurchaseId = tostring(id),
+                         ProductId = productId,
+                         CurrencyType = Enum.CurrencyType.Robux,
+                         CurrencySpent = spent,
+                     })
+                     done(id, ok and decision == Enum.ProductPurchaseDecision.PurchaseGranted)
+                     if not ok then
+                         error(decision, 0)
+                     end",
+                )
+                .set_name("=MarketplaceService")
+                .into_function()?;
+            let args = (done, receipt.id, receipt.user_id, receipt.product_id, receipt.price);
+            let args = mlua::IntoLuaMulti::into_lua_multi(args, &self.lua)?;
+            bindings::spawn(&self.lua, func, args, "MarketplaceService", None)
+        };
+        if let Err(e) = start() {
+            bindings::host(&self.lua).world.borrow_mut().products.busy.remove(&receipt.id);
+            return vec![ScriptError { script: "MarketplaceService".into(), message: e.to_string() }];
+        }
+        bindings::take_errors(&self.lua)
+    }
+
+    /// Takes what `ProcessReceipt` answered: receipt id, whether it granted it.
+    pub fn take_receipt_results(&self) -> Vec<(i64, bool)> {
+        std::mem::take(&mut bindings::host(&self.lua).world.borrow_mut().products.done)
     }
 
     /// Takes the players `Kick` removed, with why.

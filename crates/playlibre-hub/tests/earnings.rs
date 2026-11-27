@@ -123,3 +123,53 @@ fn passes_sell_and_earnings_show_up() {
     assert!(hub.passes(&game, None).unwrap().is_empty());
     assert!(hub.owns_pass(vip, &fan_id).unwrap());
 }
+
+#[test]
+fn products_sell_again_and_receipts_are_granted_once() {
+    use playlibre_hub::{
+        BuyProduct, Granted, ProductChange, buy_product_message, granted_message, product_message,
+    };
+    let dir = std::env::temp_dir().join(format!("playlibre-products-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("hub.sqlite");
+    let running = playlibre_hub::start("127.0.0.1:0".parse().unwrap(), Some(&path)).unwrap();
+    let hub = HubClient::new(&running.url());
+    let (maker, fan, other) = ([80u8; 32], [81u8; 32], [82u8; 32]);
+    join(&hub, &maker, "maker");
+    join(&hub, &fan, "fan");
+    let game = publish(&hub, &maker);
+    let mut c = ProductChange {
+        player_id: player_id_of(&maker),
+        action: PassAction::Add,
+        product_id: 0,
+        name: "Coins".into(),
+        about: String::new(),
+        price: 10,
+        time: ms(),
+        signature: String::new(),
+    };
+    c.signature = sign(&maker, &product_message(&game, &c));
+    let coins = hub.change_product(&game, &c).unwrap()[0].product_id;
+    let fan_id = player_id_of(&fan);
+    assert!(top_up(&open_db(Some(&path)).unwrap(), &fan_id, 25, "pay_fan").unwrap());
+    let buy = |price| {
+        let time = ms();
+        let signature = sign(&fan, &buy_product_message(&fan_id, coins, price, time));
+        hub.buy_product(&BuyProduct { player_id: fan_id.clone(), product_id: coins, price, time, signature })
+    };
+    let first = buy(10).unwrap();
+    buy(10).unwrap();
+    assert!(buy(10).is_err());
+    assert_eq!(hub.waiting_receipts(&game, &fan_id).unwrap().len(), 2);
+    let grant = |key: &[u8; 32]| {
+        let server_id = player_id_of(key);
+        let signature = sign(key, &granted_message(&server_id, first.receipt_id));
+        hub.grant_receipt(first.receipt_id, &Granted { server_id, signature })
+    };
+    assert!(grant(&other).is_err());
+    grant(&maker).unwrap();
+    grant(&maker).unwrap();
+    assert_eq!(hub.waiting_receipts(&game, &fan_id).unwrap().len(), 1);
+    assert_eq!(hub.products(&game).unwrap()[0].sold, 2);
+    assert_eq!(earnings(&hub, &maker).sales[0].name, "Coins");
+}

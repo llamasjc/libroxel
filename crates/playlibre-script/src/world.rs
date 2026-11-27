@@ -66,6 +66,7 @@ pub(crate) struct WorldState {
     pub(crate) swings: Vec<InstanceId>,
     pub(crate) badges: Badges,
     pub(crate) passes: Passes,
+    pub(crate) products: Products,
     pub(crate) teleports: Teleports,
 }
 
@@ -116,6 +117,36 @@ pub struct PassInfo {
     pub name: String,
     pub description: String,
     pub price: u32,
+}
+
+/// A developer product the game sells, as the Hub describes it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProductInfo {
+    pub id: i64,
+    pub name: String,
+    pub description: String,
+    pub price: u32,
+}
+
+/// A purchase of a developer product, for `ProcessReceipt`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReceiptInfo {
+    pub id: i64,
+    pub user_id: i64,
+    pub product_id: i64,
+    pub price: u32,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct Products {
+    pub(crate) on: bool,
+    pub(crate) info: Vec<ProductInfo>,
+    /// `PromptProductPurchase` calls waiting for the host: user id, product id.
+    pub(crate) prompts: Vec<(i64, i64)>,
+    /// Receipts `ProcessReceipt` is looking at.
+    pub(crate) busy: std::collections::HashSet<i64>,
+    /// Receipts `ProcessReceipt` answered, and whether it granted them.
+    pub(crate) done: Vec<(i64, bool)>,
 }
 
 #[derive(Debug, Default)]

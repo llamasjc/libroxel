@@ -3701,6 +3701,59 @@ function passesTab(g) {
     el('h2', { class: 'section' }, 'New pass'), passForm(g.game_id, null));
 }
 
+const productList = { key: null, list: null };
+
+function loadProducts(key, again) {
+  if (!again && productList.key === key) return;
+  productList.key = key;
+  productList.list = null;
+  api(`/games/${encodeURIComponent(key)}/products`)
+    .then((list) => { if (productList.key === key) productList.list = list; })
+    .catch(() => { productList.list = []; })
+    .finally(() => render());
+}
+
+async function changeProduct(gameId, c, said) {
+  if (mine.busy) return;
+  mine.busy = true;
+  render();
+  const body = { player_id: session.playerId, action: c.action, product_id: c.product_id || 0, name: c.name || '', about: c.about || '', price: c.price || 0, time: walletTime() };
+  body.signature = signText(secretKey(), `playlibre product\n${body.player_id}\n${gameId}\n${body.action}\n${body.product_id}\n${body.name}\n${body.about}\n${body.price}\n${body.time}`);
+  try {
+    productList.list = await api(`/games/${encodeURIComponent(gameId)}/products`, { method: 'POST', body });
+    productList.key = gameId;
+    flash = { text: said };
+    earned.for = null;
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  mine.busy = false;
+  render();
+}
+
+function productForm(gameId, p) {
+  const name = el('input', { type: 'text', value: p?.name || '', maxlength: 50 });
+  const about = el('input', { type: 'text', value: p?.about || '', maxlength: 300 });
+  const price = el('input', { type: 'number', min: 1, max: 100000, value: p?.price || '' });
+  const read = () => ({ product_id: p?.product_id, name: name.value.trim(), about: about.value.trim(), price: Math.floor(Number(price.value) || 0) });
+  return el('div', { class: 'form manage' },
+    el('label', { class: 'field' }, el('span', {}, 'Name'), name),
+    el('label', { class: 'field' }, el('span', {}, 'Description'), about),
+    el('label', { class: 'field' }, el('span', {}, 'Price in Credits'), price),
+    el('div', { class: 'form-actions' },
+      el('button', { class: 'btn go small', disabled: mine.busy, onclick: () => changeProduct(gameId, { action: p ? 'edit' : 'add', ...read() }, p ? 'Saved.' : `Added ${name.value.trim()}.`) }, icon(ICON.check), p ? 'Save' : 'Add product'),
+      p && el('button', { class: 'chip', disabled: mine.busy, onclick: () => changeProduct(gameId, { action: 'remove', product_id: p.product_id }, `Removed ${p.name}.`) }, icon(ICON.trash), 'Remove')));
+}
+
+function productsTab(g) {
+  loadProducts(g.game_id);
+  const list = productList.key === g.game_id ? productList.list : null;
+  if (!list) return el('p', { class: 'soft' }, 'Loading…');
+  return el('div', {},
+    list.map((p) => el('div', {}, el('h2', { class: 'section' }, `${p.name} · #${p.product_id} · ${credits(p.price)} · ${count(p.sold)} sold`), productForm(g.game_id, p))),
+    el('h2', { class: 'section' }, 'New product'), productForm(g.game_id, null));
+}
+
 const earned = { result: null, loading: false, error: null, for: null, busy: false };
 
 function loadEarnings(again) {
@@ -3979,16 +4032,17 @@ function creatorPage() {
       return out;
     }
     const base = `/creator/${encodeURIComponent(info.game_id)}`;
-    const tab = ['settings', 'passes', 'versions', 'badges'].includes(route.tab) ? route.tab : '';
+    const tab = ['settings', 'passes', 'products', 'versions', 'badges'].includes(route.tab) ? route.tab : '';
     out.push(el('div', { class: 'manage-head' },
       el('div', { class: 'mini' }, gameIcon(64, 64, info.game_id, info)),
       el('div', {}, el('h1', { class: 'title' }, info.title),
         el('div', { class: 'soft' }, `${info.private ? 'Private' : 'Public'} · version ${info.version} · ${ago(info.updated_secs_ago)}`)),
       !info.private && el('a', { class: 'chip', href: gameHrefOf(info.game_id, info.number, info.title) }, icon(ICON.play), 'View')));
-    out.push(el('div', { class: 'hats' }, [['', 'Numbers'], ['settings', 'Settings'], ['passes', 'Passes'], ['versions', 'Versions'], ['badges', 'Badges']].map(([t, label]) =>
+    out.push(el('div', { class: 'hats' }, [['', 'Numbers'], ['settings', 'Settings'], ['passes', 'Passes'], ['products', 'Products'], ['versions', 'Versions'], ['badges', 'Badges']].map(([t, label]) =>
       el('a', { class: `chip${tab === t ? ' on' : ''}`, href: t ? `${base}/${t}` : base }, label))));
     if (tab === 'settings') { out.push(settingsTab(info)); return out; }
     if (tab === 'passes') { out.push(passesTab(info)); return out; }
+    if (tab === 'products') { out.push(productsTab(info)); return out; }
     if (tab === 'versions') { out.push(versionsTab(info)); return out; }
     if (tab === 'badges') { out.push(badgesTab(info)); return out; }
     out.push(range);

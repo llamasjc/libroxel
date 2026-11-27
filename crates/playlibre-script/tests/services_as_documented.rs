@@ -514,3 +514,58 @@ fn teleports_wait_for_the_host_and_places_know_who_they_are() {
     assert_eq!(sent[0].data, Some(serde_json::json!({ "level": 2 })));
     assert_eq!((sent[1].place_id, sent[1].access_code.clone()), (40, None));
 }
+
+#[test]
+fn products_prompt_the_host_and_receipts_go_to_process_receipt() {
+    use playlibre_instance::{Property, PropertyValue};
+    let rt = runtime();
+    {
+        let mut tree = rt.tree().borrow_mut();
+        let players = tree.service(ClassKind::Players).unwrap();
+        let player = tree.create(ClassKind::Player, "Sam").unwrap();
+        tree.set(player, Property::UserId, PropertyValue::Number(7.0)).unwrap();
+        tree.set_parent(player, Some(players)).unwrap();
+    }
+    rt.set_product_info(vec![playlibre_script::ProductInfo {
+        id: 5,
+        name: "Coins".into(),
+        description: "100 coins".into(),
+        price: 10,
+    }]);
+    let receipt = |id| playlibre_script::ReceiptInfo { id, user_id: 7, product_id: 5, price: 10 };
+    let errors = rt.process_receipt(&receipt(1));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(rt.take_receipt_results(), [(1, false)]);
+    run(
+        &rt,
+        r#"
+        local MarketplaceService = game:GetService("MarketplaceService")
+        local seen = {}
+        MarketplaceService.ProcessReceipt = function(info)
+            task.wait(0.1)
+            if seen[info.PurchaseId] then
+                return Enum.ProductPurchaseDecision.NotProcessedYet
+            end
+            seen[info.PurchaseId] = true
+            print("granted", info.PlayerId, info.ProductId, info.CurrencySpent, info.CurrencyType == Enum.CurrencyType.Robux)
+            return Enum.ProductPurchaseDecision.PurchaseGranted
+        end
+        MarketplaceService.PromptProductPurchaseFinished:Connect(function(userId, id, bought)
+            print("finished", userId, id, bought)
+        end)
+        local info = MarketplaceService:GetProductInfo(5, Enum.InfoType.Product)
+        print(info.Name, info.PriceInRobux)
+        MarketplaceService:PromptProductPurchase(game:GetService("Players"):GetPlayers()[1], 5)
+    "#,
+    );
+    assert_eq!(rt.take_product_prompts(), [(7, 5)]);
+    assert!(rt.product_prompt_finished(7, 5, true).is_empty());
+    assert!(rt.process_receipt(&receipt(2)).is_empty());
+    assert!(rt.process_receipt(&receipt(2)).is_empty());
+    play(&rt, 0.3);
+    assert_eq!(printed(&rt), ["Coins 10", "finished 7 5 true", "granted 7 5 10 true"]);
+    assert_eq!(rt.take_receipt_results(), [(2, true)]);
+    rt.process_receipt(&receipt(2));
+    play(&rt, 0.3);
+    assert_eq!(rt.take_receipt_results(), [(2, false)]);
+}

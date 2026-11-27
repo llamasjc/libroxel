@@ -324,7 +324,7 @@ pub enum PassAction {
 }
 
 impl PassAction {
-    fn word(self) -> &'static str {
+    pub(crate) fn word(self) -> &'static str {
         match self {
             PassAction::Add => "add",
             PassAction::Edit => "edit",
@@ -537,10 +537,11 @@ pub fn earnings(db: &Connection, player_id: &str, now: i64) -> rusqlite::Result<
 
     let sales = {
         let mut s = db.prepare(
-            "SELECT COALESCE(ps.name, i.name, p.item_id), p.kind, p.game_id, p.amount, s.earned, s.purchase_id IS NOT NULL, p.time
+            "SELECT COALESCE(ps.name, pr.name, i.name, p.item_id), p.kind, p.game_id, p.amount, s.earned, s.purchase_id IS NOT NULL, p.time
              FROM purchases p
              LEFT JOIN settled s ON s.purchase_id = p.purchase_id
              LEFT JOIN passes ps ON 'pass-' || ps.pass_id = p.item_id
+             LEFT JOIN products pr ON 'product-' || pr.product_id = p.item_id
              LEFT JOIN items i ON i.item_id = p.item_id
              WHERE p.seller_id = ?1 AND p.buyer_id <> ?1 ORDER BY p.purchase_id DESC LIMIT 30",
         )?;

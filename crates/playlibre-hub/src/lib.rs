@@ -147,6 +147,11 @@ mod payments;
 pub use payments::{Checkout, CheckoutUrl, PACKS, Pack, Packs, Stripe, checkout_message};
 mod pictures;
 mod places;
+mod products;
+pub use products::{
+    BuyProduct, Granted, MAX_PRODUCTS, Product, ProductChange, Receipt, buy_product_message, granted_message,
+    product_message,
+};
 mod ratings;
 mod recovery;
 pub use recovery::{
@@ -1043,6 +1048,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     limited::create_tables(&db)?;
     earnings::create_tables(&db)?;
     data::create_tables(&db)?;
+    products::create_tables(&db)?;
     media::create_tables(&db)?;
     follows::create_tables(&db)?;
     places::create_tables(&db)?;
@@ -1222,6 +1228,10 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/private-servers/{id}", get(places::list_private_servers))
         .route("/passes/buy", post(earnings::buy_pass))
         .route("/passes/{id}/owners/{player}", get(earnings::owns))
+        .route("/games/{id}/products", get(products::list_products).post(products::change_product))
+        .route("/games/{id}/receipts/{player}", get(products::list_waiting))
+        .route("/products/buy", post(products::buy_product))
+        .route("/receipts/{id}/granted", post(products::mark_granted))
         .route("/reports", post(report))
         .route("/moderation", post(moderate::moderate))
         .route("/moderation/{id}", get(moderate::get_dashboard))
@@ -3308,6 +3318,29 @@ impl HubClient {
 
     pub fn buy_pass(&self, buy: &BuyPass) -> Result<Pass, String> {
         self.post_signed("/passes/buy", buy)
+    }
+
+    pub fn products(&self, game_id: &str) -> Result<Vec<Product>, String> {
+        let request = self.agent.get(format!("{}/games/{game_id}/products", self.base));
+        self.answer(request.config().http_status_as_error(false).build().call())
+    }
+
+    pub fn change_product(&self, game_id: &str, change: &ProductChange) -> Result<Vec<Product>, String> {
+        self.post_signed(&format!("/games/{game_id}/products"), change)
+    }
+
+    pub fn buy_product(&self, buy: &BuyProduct) -> Result<Receipt, String> {
+        self.post_signed("/products/buy", buy)
+    }
+
+    /// The receipts of a player in a game that no server has granted yet.
+    pub fn waiting_receipts(&self, game_id: &str, player_id: &str) -> Result<Vec<Receipt>, String> {
+        let request = self.agent.get(format!("{}/games/{game_id}/receipts/{player_id}", self.base));
+        self.answer(request.config().http_status_as_error(false).build().call())
+    }
+
+    pub fn grant_receipt(&self, receipt_id: i64, granted: &Granted) -> Result<(), String> {
+        self.post_raw(&format!("/receipts/{receipt_id}/granted"), granted).map(|_| ())
     }
 
     pub fn owns_pass(&self, pass_id: i64, player_id: &str) -> Result<bool, String> {

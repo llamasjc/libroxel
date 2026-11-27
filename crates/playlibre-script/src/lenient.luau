@@ -204,6 +204,7 @@ local ENUMS = {
 	ProximityPromptInputType = { "Keyboard", "Gamepad", "Touch" },
 	InfoType = { { "Asset", 1 }, { "Product", 2 }, { "GamePass", 3 }, { "Subscription", 4 }, { "Bundle", 5 } },
 	ProductPurchaseDecision = { "NotProcessedYet", "PurchaseGranted" },
+	CurrencyType = { "Default", "Robux", "Tix" },
 	MembershipType = { "None", { "Premium", 4 } },
 	SortDirection = { "Ascending", "Descending" },
 	DevComputerMovementMode = { "UserChoice", "KeyboardMouse", "ClickToMove", "Scriptable" },

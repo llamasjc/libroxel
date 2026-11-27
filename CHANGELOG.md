@@ -20,6 +20,14 @@ its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 - **Brick body:** a second body to pick on the Avatar page, with a round
   head, hands, feet and hips. Animations, clothes and hats work on it.
 
+- **Developer products:** creators can sell things players buy again and
+  again, such as coins, on the Products tab of a game on the Create page.
+  `MarketplaceService:PromptProductPurchase` shows the product in the
+  player's app, and each purchase goes to `MarketplaceService.ProcessReceipt`
+  until it answers `PurchaseGranted`, so a purchase is granted once even if
+  the player leaves or the server stops first. Creators get their share as
+  with passes.
+
 ## 0.1.22 (2026-11-27)
 
 - **No free Credits:** badges no longer give Credits, and a creator's

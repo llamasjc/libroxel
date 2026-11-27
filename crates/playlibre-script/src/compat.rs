@@ -1222,6 +1222,33 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
                             }
                             return Ok(());
                         }
+                    } else if prompt == PROMPT_PRODUCT_PURCHASE && host(lua).world.borrow().products.on {
+                        let user = match &player {
+                            Value::UserData(ud) => {
+                                mlua::ObjectLike::get::<Option<f64>>(ud, "UserId").ok().flatten()
+                            }
+                            _ => None,
+                        };
+                        let product = match &id {
+                            Value::Integer(n) => Some(*n),
+                            Value::Number(n) if n.fract() == 0.0 => Some(*n as i64),
+                            _ => None,
+                        };
+                        let (Some(user), Some(product)) = (user, product) else {
+                            return Err(mlua::Error::runtime(
+                                "PromptProductPurchase needs a player and a product id",
+                            ));
+                        };
+                        let user = user as i64;
+                        let host = host(lua);
+                        let mut world = host.world.borrow_mut();
+                        let p = &mut world.products;
+                        if p.info.iter().any(|i| i.id == product) {
+                            if !p.prompts.contains(&(user, product)) {
+                                p.prompts.push((user, product));
+                            }
+                            return Ok(());
+                        }
                     } else {
                         warn(lua, format!("{MARKETPLACE_SERVICE}.{prompt} {NOT_AVAILABLE}"));
                     }
@@ -1618,6 +1645,14 @@ fn product_info(lua: &Lua, id: f64, kind: &Value) -> mlua::Result<Table> {
     } else if kind.ends_with(".Product") {
         info.set("ProductId", id)?;
         info.set("ProductType", "Developer Product")?;
+        let host = host(lua);
+        let world = host.world.borrow();
+        if let Some(product) = world.products.info.iter().find(|p| p.id as f64 == id) {
+            info.set("Name", product.name.as_str())?;
+            info.set("Description", product.description.as_str())?;
+            info.set("PriceInRobux", product.price)?;
+            info.set("IsForSale", true)?;
+        }
     } else {
         info.set("AssetId", id)?;
         info.set("AssetTypeId", 0)?;

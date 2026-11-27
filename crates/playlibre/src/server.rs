@@ -382,7 +382,8 @@ pub fn run(settings: ServerSettings, say: &mut dyn FnMut(String), stop: &AtomicB
     playlibre_engine::session::set_next_game_identity(game_identity);
     let mut session = PlaySession::host(Rc::new(RefCell::new(tree)), port, start_data.as_deref(), false)?;
     let mut passes = match (&hub, &game_id) {
-        (HubUse::At(address), Some(id)) => crate::game_passes::HostPasses::new(HubClient::new(address), id),
+        (HubUse::At(address), Some(id)) => crate::game_passes::HostPasses::new(HubClient::new(address), id)
+            .map(|p| p.with_identity(Some(identity.clone()))),
         _ => None,
     };
     // Port 0 picks a free one: the tunnel needs the one it got.
