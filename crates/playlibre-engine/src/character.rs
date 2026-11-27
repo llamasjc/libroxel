@@ -9,8 +9,9 @@ use playlibre_script::names::character as names;
 
 use crate::physics::Physics;
 pub use playlibre_avatar::{
-    ARM_SIZE, ARM_TOP, Avatar, BodyColors, Clothing, CustomHat, EYE_AT, EYE_SIZE, HEAD_AT, HEAD_SIZE, HIP,
-    Hat, HatPart, HatPiece, LEG_SIZE, Look, NECK, SHOULDER, TORSO_AT, TORSO_SIZE, Worn, avatar, color,
+    ARM_SIZE, ARM_TOP, Avatar, Body, BodyColors, Clothing, CustomHat, EYE_AT, EYE_SIZE, HEAD_AT, HEAD_SIZE,
+    HIP, Hat, HatPart, HatPiece, LEG_SIZE, Limb, Look, NECK, SHOULDER, TORSO_AT, TORSO_SIZE, Worn, avatar,
+    color,
 };
 
 /// The size of the character's collision box.
@@ -262,6 +263,16 @@ pub struct Pose {
 /// Adds a head and limbs to `model`, coloured `colors`. Returns the head
 /// and the limbs; place them with [`pose_rig`].
 pub fn build_rig(tree: &mut InstanceTree, model: InstanceId, colors: Worn) -> (InstanceId, Limbs) {
+    build_body(tree, model, colors, Body::Classic)
+}
+
+/// Like [`build_rig`], shaped as `body`.
+pub fn build_body(
+    tree: &mut InstanceTree,
+    model: InstanceId,
+    colors: Worn,
+    body: Body,
+) -> (InstanceId, Limbs) {
     use part_names::*;
     let mut make = |name: &str, size: Vec3, color: Color3| {
         let id = tree.create(ClassKind::Part, name).expect("parts can be created");
@@ -283,7 +294,130 @@ pub fn build_rig(tree: &mut InstanceTree, model: InstanceId, colors: Worn) -> (I
         left_eye: make(LEFT_EYE, EYE_SIZE, dark),
         right_eye: make(RIGHT_EYE, EYE_SIZE, dark),
     };
+    if body != Body::Classic {
+        shape_body(tree, head, &limbs, body);
+    }
     (head, limbs)
+}
+
+const LIMB_OFFSET: &str = "LimbOffset";
+const LIMB_ORIENTATION: &str = "LimbOrientation";
+const TINT: &str = "Tint";
+
+fn limb_part(head: InstanceId, limbs: &Limbs, limb: Limb) -> InstanceId {
+    match limb {
+        Limb::Head => head,
+        Limb::Torso => limbs.torso,
+        Limb::LeftArm => limbs.left_arm,
+        Limb::RightArm => limbs.right_arm,
+        Limb::LeftLeg => limbs.left_leg,
+        Limb::RightLeg => limbs.right_leg,
+    }
+}
+
+fn limb_name(limb: Limb) -> &'static str {
+    use part_names::*;
+    match limb {
+        Limb::Head => HEAD,
+        Limb::Torso => TORSO,
+        Limb::LeftArm => LEFT_ARM,
+        Limb::RightArm => RIGHT_ARM,
+        Limb::LeftLeg => LEFT_LEG,
+        Limb::RightLeg => RIGHT_LEG,
+    }
+}
+
+/// The parts on `part` that move with it.
+fn details_on(tree: &InstanceTree, part: InstanceId) -> Vec<InstanceId> {
+    let Ok(children) = tree.children(part) else { return Vec::new() };
+    children
+        .iter()
+        .copied()
+        .filter(|c| matches!(tree.get_attribute(*c, LIMB_OFFSET), Ok(Some(PropertyValue::Vec3(_)))))
+        .collect()
+}
+
+/// Which body a rig is shaped as.
+pub fn body_of(tree: &InstanceTree, limbs: &Limbs) -> Body {
+    if details_on(tree, limbs.torso).is_empty() { Body::Classic } else { Body::Brick }
+}
+
+/// Reshapes a rig as `body`: its parts' sizes, and the parts that ride on them.
+pub fn shape_body(tree: &mut InstanceTree, head: InstanceId, limbs: &Limbs, body: Body) {
+    let frame = body.frame();
+    for limb in Limb::ALL {
+        let part = limb_part(head, limbs, limb);
+        for old in details_on(tree, part) {
+            let _ = tree.destroy(old);
+        }
+    }
+    for (part, size) in [
+        (head, frame.head),
+        (limbs.torso, frame.torso),
+        (limbs.left_arm, frame.arm),
+        (limbs.right_arm, frame.arm),
+        (limbs.left_leg, frame.leg),
+        (limbs.right_leg, frame.leg),
+        (limbs.left_eye, frame.eye),
+        (limbs.right_eye, frame.eye),
+    ] {
+        set(tree, part, Property::Size, PropertyValue::Vec3(size));
+    }
+    let eye = (body != Body::Classic).then(|| frame.eye_at - HEAD_AT);
+    let flip = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
+    let _ = tree.set_attribute(limbs.right_eye, names::HEAD_OFFSET, eye.map(PropertyValue::Vec3));
+    let _ = tree.set_attribute(limbs.left_eye, names::HEAD_OFFSET, eye.map(|e| PropertyValue::Vec3(flip(e))));
+    for d in frame.details {
+        let on = limb_part(head, limbs, d.on);
+        let Ok(id) = tree.create(ClassKind::Part, d.name) else { continue };
+        set(tree, id, Property::Size, PropertyValue::Vec3(d.size));
+        set(tree, id, Property::Shape, PropertyValue::Enum(EnumValue::Shape(d.shape)));
+        if let Some(c) = tree.get_color(limb_part(head, limbs, d.tint), Property::Color) {
+            set(tree, id, Property::Color, PropertyValue::Color3(c));
+        }
+        set(tree, id, Property::Anchored, PropertyValue::Bool(true));
+        set(tree, id, Property::CanCollide, PropertyValue::Bool(false));
+        let _ = tree.set_attribute(id, LIMB_OFFSET, Some(PropertyValue::Vec3(d.at)));
+        if d.rot != Rotation::IDENTITY {
+            let turn = d.rot.to_orientation();
+            let _ = tree.set_attribute(id, LIMB_ORIENTATION, Some(PropertyValue::Vec3(turn)));
+        }
+        let _ = tree.set_attribute(id, TINT, Some(PropertyValue::String(limb_name(d.tint).into())));
+        let _ = tree.set_parent(id, Some(on));
+    }
+    place_details(tree, head, limbs);
+}
+
+/// Puts the parts that ride on the head and limbs in place, in their colours.
+fn place_details(tree: &mut InstanceTree, head: InstanceId, limbs: &Limbs) {
+    for limb in Limb::ALL {
+        let part = limb_part(head, limbs, limb);
+        let details = details_on(tree, part);
+        if details.is_empty() {
+            continue;
+        }
+        let Some(cf) = part_cframe(tree, part) else { continue };
+        for id in details {
+            let attribute = |name| match tree.get_attribute(id, name) {
+                Ok(Some(PropertyValue::Vec3(v))) => Some(v),
+                _ => None,
+            };
+            let at = attribute(LIMB_OFFSET).unwrap_or_default();
+            let turn = Rotation::from_orientation(attribute(LIMB_ORIENTATION).unwrap_or_default());
+            place_at(tree, id, cf * CFrame::new(at, turn));
+            let tint = match tree.get_attribute(id, TINT) {
+                Ok(Some(PropertyValue::String(name))) => {
+                    Limb::ALL.into_iter().find(|l| limb_name(*l) == name).map(|l| limb_part(head, limbs, l))
+                }
+                _ => None,
+            };
+            if let Some(color) = tint.and_then(|t| tree.get_color(t, Property::Color))
+                && tree.get_color(id, Property::Color) != Some(color)
+            {
+                let _ = tree.set(id, Property::Color, PropertyValue::Color3(color));
+            }
+        }
+    }
 }
 
 /// The joints that hold a body together, named as scripts expect (R6).
@@ -518,12 +652,18 @@ pub fn pose_rig(tree: &mut InstanceTree, root: InstanceId, head: InstanceId, lim
     if let Ok(Some(model)) = tree.parent(root) {
         dress(tree, model, head, limbs);
     }
+    place_details(tree, head, limbs);
 }
 
 fn place_eyes(tree: &mut InstanceTree, head_cf: CFrame, limbs: &Limbs) {
     let flip = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
-    place_at(tree, limbs.left_eye, head_cf * CFrame::new(flip(EYE_AT) - HEAD_AT, Rotation::IDENTITY));
-    place_at(tree, limbs.right_eye, head_cf * CFrame::new(EYE_AT - HEAD_AT, Rotation::IDENTITY));
+    for (eye, usual) in [(limbs.left_eye, flip(EYE_AT) - HEAD_AT), (limbs.right_eye, EYE_AT - HEAD_AT)] {
+        let at = match tree.get_attribute(eye, names::HEAD_OFFSET) {
+            Ok(Some(PropertyValue::Vec3(v))) => v,
+            _ => usual,
+        };
+        place_at(tree, eye, head_cf * CFrame::new(at, Rotation::IDENTITY));
+    }
 }
 
 pub fn stick_to_head(tree: &mut InstanceTree, model: InstanceId) {
@@ -531,6 +671,7 @@ pub fn stick_to_head(tree: &mut InstanceTree, model: InstanceId) {
     let Some(head_cf) = part_cframe(tree, head) else { return };
     place_eyes(tree, head_cf, &limbs);
     dress(tree, model, head, &limbs);
+    place_details(tree, head, &limbs);
 }
 
 /// Radians of stride per stud walked.
@@ -639,7 +780,7 @@ impl Character {
         set(tree, root, Property::Position, PropertyValue::Vec3(at));
         // The root is the collision box; the body drawn around it is the rig.
         set(tree, root, Property::Transparency, PropertyValue::Number(1.0));
-        let (head, limbs) = build_rig(tree, model, colors);
+        let (head, limbs) = build_body(tree, model, colors, look.body);
         add_joints(tree, root, head, &limbs);
         // The sounds a character makes by itself.
         for (name, sound, volume) in CHARACTER_SOUNDS {
@@ -679,6 +820,9 @@ impl Character {
             ) {
                 let _ = tree.destroy(child);
             }
+        }
+        if body_of(tree, &self.limbs) != look.body {
+            shape_body(tree, self.head, &self.limbs, look.body);
         }
         add_body_colors(tree, self.model, &look);
         wear(tree, self.model, &look);
@@ -1025,6 +1169,11 @@ pub fn fall_apart(
         }
     }
     let pieces = [head, limbs.torso, limbs.left_arm, limbs.right_arm, limbs.left_leg, limbs.right_leg];
+    let riding: Vec<(InstanceId, Vec<InstanceId>)> =
+        pieces.iter().map(|&p| (p, details_on(tree, p))).filter(|(_, d)| !d.is_empty()).collect();
+    for (piece, details) in &riding {
+        stick(tree, *piece, details);
+    }
     // It topples backwards: the higher a piece, the harder it goes back,
     // and everything spreads out a little and tumbles.
     let facing = tree.get_vec3(limbs.torso, Property::Orientation).unwrap_or_default();
@@ -1085,8 +1234,15 @@ mod tests {
 
     #[test]
     fn pictures_draw_the_parts_a_character_is_made_of() {
-        let mut look = Look::for_player(2);
-        look.hat = Hat::Crown;
+        for body in Body::ALL {
+            let mut look = Look::for_player(2);
+            look.hat = Hat::Crown;
+            look.body = body;
+            pictured(look);
+        }
+    }
+
+    fn pictured(look: Look) {
         let mut tree = InstanceTree::new();
         let c = Character::spawn_wearing(&mut tree, "P", None, look.clone());
         let hips = tree.get_vec3(c.root, Property::Position).unwrap();
@@ -1104,10 +1260,12 @@ mod tests {
             let found = parts.iter().any(|&id| {
                 near(tree.get_vec3(id, Property::Position).unwrap() - hips, piece.pos)
                     && near(tree.get_vec3(id, Property::Size).unwrap(), piece.size)
-                    && near(
-                        tree.get_vec3(id, Property::Orientation).unwrap_or_default(),
-                        piece.rot.to_orientation(),
-                    )
+                    && {
+                        let r = Rotation::from_orientation(
+                            tree.get_vec3(id, Property::Orientation).unwrap_or_default(),
+                        );
+                        near(r.x, piece.rot.x) && near(r.y, piece.rot.y) && near(r.z, piece.rot.z)
+                    }
                     && tree.get_color(id, Property::Color) == Some(piece.color)
             });
             assert!(found, "{piece:?}");

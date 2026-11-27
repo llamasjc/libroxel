@@ -287,7 +287,7 @@ fn a_join_says_where_its_time_went() {
 
 #[test]
 fn everyone_sees_how_a_joined_player_chose_to_look() {
-    use playlibre_engine::character::{BodyColors, Hat, Look};
+    use playlibre_engine::character::{Body, BodyColors, Hat, Look};
     use playlibre_instance::Color3;
     let tree = Rc::new(RefCell::new(game()));
     let mut host = PlaySession::host(tree, 0, None, true).unwrap();
@@ -297,6 +297,7 @@ fn everyone_sees_how_a_joined_player_chose_to_look() {
             .unwrap();
     let green = Color3::from_rgb8(40, 200, 90);
     let look = Look {
+        body: Body::Brick,
         colors: BodyColors { shirt: green, ..BodyColors::for_player(0) },
         hat: Hat::Crown,
         hat_color: Color3::from_rgb8(250, 210, 60),
@@ -315,6 +316,7 @@ fn everyone_sees_how_a_joined_player_chose_to_look() {
             && torso
                 .and_then(|t| tree.get_color(t, Property::Color))
                 .is_some_and(|c| (c.g - green.g).abs() < 0.01)
+            && torso.is_some_and(|t| tree.find_first_child(t, "Hips").ok().flatten().is_some())
     };
     until(&mut host, &mut guest, CharacterInput::default(), |h, g| dressed(h) && dressed(g));
 }

@@ -24,6 +24,209 @@ pub const EYE_AT: Vec3 = Vec3::new(0.35, 2.65, -0.71);
 /// How far below the top of an arm its shoulder joint is.
 pub const ARM_TOP: f32 = 0.1;
 
+/// The shape of a body. Every one has the same parts and joints, so
+/// scripts, animations, clothes and hats work on all of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Body {
+    #[default]
+    Classic,
+    Brick,
+}
+
+/// One of the parts a body is built on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Limb {
+    Head,
+    Torso,
+    LeftArm,
+    RightArm,
+    LeftLeg,
+    RightLeg,
+}
+
+impl Limb {
+    pub const ALL: [Limb; 6] =
+        [Limb::Head, Limb::Torso, Limb::LeftArm, Limb::RightArm, Limb::LeftLeg, Limb::RightLeg];
+
+    /// Where its middle is at rest, from the hips.
+    pub fn at(self) -> Vec3 {
+        let flip = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
+        let arm = SHOULDER - Vec3::new(0.0, ARM_SIZE.y * 0.5 - ARM_TOP, 0.0);
+        let leg = HIP - Vec3::new(0.0, LEG_SIZE.y * 0.5, 0.0);
+        match self {
+            Limb::Head => HEAD_AT,
+            Limb::Torso => TORSO_AT,
+            Limb::LeftArm => flip(arm),
+            Limb::RightArm => arm,
+            Limb::LeftLeg => flip(leg),
+            Limb::RightLeg => leg,
+        }
+    }
+
+    /// The colour it has with `worn` on.
+    pub fn color(self, worn: &Worn) -> Color3 {
+        match self {
+            Limb::Head => worn.skin,
+            Limb::Torso => worn.torso,
+            Limb::LeftArm | Limb::RightArm => worn.arms,
+            Limb::LeftLeg | Limb::RightLeg => worn.legs,
+        }
+    }
+}
+
+/// A part that moves with one of a body's limbs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Detail {
+    pub name: &'static str,
+    pub on: Limb,
+    /// From the middle of the limb.
+    pub at: Vec3,
+    pub rot: Rotation,
+    pub size: Vec3,
+    pub shape: PartShape,
+    /// Coloured as this limb is.
+    pub tint: Limb,
+}
+
+/// The sizes of a body's parts, and what it has on top of them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Frame {
+    pub head: Vec3,
+    pub torso: Vec3,
+    pub arm: Vec3,
+    pub leg: Vec3,
+    pub eye: Vec3,
+    /// The right eye, from the hips.
+    pub eye_at: Vec3,
+    pub details: &'static [Detail],
+}
+
+const UP: Rotation =
+    Rotation { x: Vec3::new(0.0, 1.0, 0.0), y: Vec3::new(-1.0, 0.0, 0.0), z: Vec3::new(0.0, 0.0, 1.0) };
+const TAPER_RIGHT: Rotation =
+    Rotation { x: Vec3::new(0.0, 0.0, -1.0), y: Vec3::new(0.0, -1.0, 0.0), z: Vec3::new(-1.0, 0.0, 0.0) };
+const TAPER_LEFT: Rotation =
+    Rotation { x: Vec3::new(0.0, 0.0, 1.0), y: Vec3::new(0.0, -1.0, 0.0), z: Vec3::new(1.0, 0.0, 0.0) };
+
+const fn detail(
+    name: &'static str,
+    on: Limb,
+    at: Vec3,
+    rot: Rotation,
+    size: Vec3,
+    shape: PartShape,
+    tint: Limb,
+) -> Detail {
+    Detail { name, on, at, rot, size, shape, tint }
+}
+
+const BRICK: &[Detail] = {
+    use Limb::*;
+    use PartShape::{Ball, Block, Cylinder, Wedge};
+    const I: Rotation = Rotation::IDENTITY;
+    &[
+        detail("Skull", Head, Vec3::new(0.0, -0.025, 0.0), UP, Vec3::new(1.2, 1.5, 1.5), Cylinder, Head),
+        detail("Top", Head, Vec3::new(0.0, 0.65, 0.0), UP, Vec3::new(0.1, 1.25, 1.25), Cylinder, Head),
+        detail("Collar", Torso, Vec3::new(0.0, 0.925, 0.0), UP, Vec3::new(0.25, 0.6, 0.6), Cylinder, Head),
+        detail(
+            "LeftSide",
+            Torso,
+            Vec3::new(-1.0, 0.0, 0.0),
+            TAPER_LEFT,
+            Vec3::new(1.0, 1.6, 0.3),
+            Wedge,
+            Torso,
+        ),
+        detail(
+            "RightSide",
+            Torso,
+            Vec3::new(1.0, 0.0, 0.0),
+            TAPER_RIGHT,
+            Vec3::new(1.0, 1.6, 0.3),
+            Wedge,
+            Torso,
+        ),
+        detail("Hips", Torso, Vec3::new(0.0, -0.9, 0.0), I, Vec3::new(1.8, 0.35, 0.95), Block, LeftLeg),
+        detail("LeftCap", LeftArm, Vec3::new(0.0, 0.6, 0.0), I, Vec3::new(0.7, 0.7, 0.7), Ball, LeftArm),
+        detail("RightCap", RightArm, Vec3::new(0.0, 0.6, 0.0), I, Vec3::new(0.7, 0.7, 0.7), Ball, RightArm),
+        detail(
+            "LeftHand",
+            LeftArm,
+            Vec3::new(0.0, -0.95, -0.05),
+            UP,
+            Vec3::new(0.35, 0.5, 0.5),
+            Cylinder,
+            Head,
+        ),
+        detail(
+            "RightHand",
+            RightArm,
+            Vec3::new(0.0, -0.95, -0.05),
+            UP,
+            Vec3::new(0.35, 0.5, 0.5),
+            Cylinder,
+            Head,
+        ),
+        detail(
+            "LeftFoot",
+            LeftLeg,
+            Vec3::new(0.0, -0.85, -0.12),
+            I,
+            Vec3::new(0.85, 0.3, 1.15),
+            Block,
+            LeftLeg,
+        ),
+        detail(
+            "RightFoot",
+            RightLeg,
+            Vec3::new(0.0, -0.85, -0.12),
+            I,
+            Vec3::new(0.85, 0.3, 1.15),
+            Block,
+            RightLeg,
+        ),
+    ]
+};
+
+impl Body {
+    pub const ALL: [Body; 2] = [Body::Classic, Body::Brick];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Body::Classic => "Classic",
+            Body::Brick => "Brick",
+        }
+    }
+
+    /// The body called `name`, as [`name`](Self::name) gives it.
+    pub fn named(name: &str) -> Body {
+        Body::ALL.into_iter().find(|b| b.name() == name).unwrap_or_default()
+    }
+
+    pub fn frame(self) -> Frame {
+        match self {
+            Body::Classic => Frame {
+                head: HEAD_SIZE,
+                torso: TORSO_SIZE,
+                arm: ARM_SIZE,
+                leg: LEG_SIZE,
+                eye: EYE_SIZE,
+                eye_at: EYE_AT,
+                details: &[],
+            },
+            Body::Brick => Frame {
+                head: Vec3::new(1.0, 1.15, 1.0),
+                torso: Vec3::new(1.7, 1.6, 1.0),
+                arm: Vec3::new(0.7, 1.6, 0.8),
+                leg: Vec3::new(0.85, 1.8, 0.9),
+                eye: Vec3::new(0.18, 0.3, 0.06),
+                eye_at: Vec3::new(0.28, 2.65, -0.715),
+                details: BRICK,
+            },
+        }
+    }
+}
+
 /// The colours a body is made in.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BodyColors {
@@ -398,6 +601,7 @@ impl From<BodyColors> for Worn {
 /// How a player looks: their body colours and what they wear.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Look {
+    pub body: Body,
     pub colors: BodyColors,
     pub hat: Hat,
     pub hat_color: Color3,
@@ -413,6 +617,7 @@ impl Look {
     /// The usual look for player number `n`: no hat.
     pub fn for_player(n: usize) -> Look {
         Look {
+            body: Body::Classic,
             colors: BodyColors::for_player(n),
             hat: Hat::None,
             hat_color: color(avatar().hat_color),
@@ -447,6 +652,9 @@ impl Look {
             "hat": self.hat.name(),
             "hat_color": rgb(self.hat_color),
         });
+        if self.body != Body::Classic {
+            json["body"] = self.body.name().into();
+        }
         if let Some(item) = &self.item {
             json["item"] = item.to_json();
         }
@@ -474,6 +682,7 @@ impl Look {
                 .unwrap_or(or)
         };
         Look {
+            body: value.get("body").and_then(|b| b.as_str()).map_or(fallback.body, Body::named),
             colors: BodyColors {
                 skin: rgb("skin", fallback.colors.skin),
                 shirt: rgb("shirt", fallback.colors.shirt),
@@ -522,20 +731,30 @@ pub fn pieces(look: &Look) -> Vec<Piece> {
         neon: false,
         on_head,
     };
-    let Worn { skin, torso: shirt, arms, legs: pants } = look.worn();
-    let arm = SHOULDER - Vec3::new(0.0, ARM_SIZE.y * 0.5 - ARM_TOP, 0.0);
-    let leg = HIP - Vec3::new(0.0, LEG_SIZE.y * 0.5, 0.0);
+    let worn = look.worn();
+    let frame = look.body.frame();
     let eye = color(EYE_COLOR);
-    let mut out = vec![
-        block(HEAD_AT, HEAD_SIZE, skin, true),
-        block(TORSO_AT, TORSO_SIZE, shirt, false),
-        block(flip(arm), ARM_SIZE, arms, false),
-        block(arm, ARM_SIZE, arms, false),
-        block(flip(leg), LEG_SIZE, pants, false),
-        block(leg, LEG_SIZE, pants, false),
-        block(flip(EYE_AT), EYE_SIZE, eye, true),
-        block(EYE_AT, EYE_SIZE, eye, true),
-    ];
+    let size = |limb| match limb {
+        Limb::Head => frame.head,
+        Limb::Torso => frame.torso,
+        Limb::LeftArm | Limb::RightArm => frame.arm,
+        Limb::LeftLeg | Limb::RightLeg => frame.leg,
+    };
+    let mut out: Vec<Piece> = Limb::ALL
+        .into_iter()
+        .map(|limb| block(limb.at(), size(limb), limb.color(&worn), limb == Limb::Head))
+        .collect();
+    out.push(block(flip(frame.eye_at), frame.eye, eye, true));
+    out.push(block(frame.eye_at, frame.eye, eye, true));
+    out.extend(frame.details.iter().map(|d| Piece {
+        pos: d.on.at() + d.at,
+        rot: d.rot,
+        size: d.size,
+        shape: d.shape,
+        color: d.tint.color(&worn),
+        neon: false,
+        on_head: d.on == Limb::Head,
+    }));
     let worn = |at: Vec3, turn: Vec3, size: Vec3, shape, color, neon| Piece {
         pos: HEAD_AT + at,
         rot: Rotation::from_orientation(turn),

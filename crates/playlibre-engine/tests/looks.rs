@@ -305,3 +305,70 @@ fn a_hat_made_from_parts_sits_on_the_head_and_survives_being_sent() {
     far.parts[1].offset = Vec3::new(0.0, 30.0, 0.0);
     assert!(far.check().is_err());
 }
+
+#[test]
+fn a_brick_body_keeps_its_parts_on_its_limbs() {
+    use playlibre_engine::character::{Body, Clothing};
+    use playlibre_instance::{Color3, Vec3};
+    let mut session = start_on(floored(), true).unwrap();
+    step(&mut session, 1);
+    let red = Color3::from_rgb8(200, 30, 30);
+    let shirt = Clothing { name: "Red".into(), color: red, sleeves: true };
+    session.set_local_look(Look {
+        body: Body::Brick,
+        hat: Hat::Cap,
+        shirt: Some(std::sync::Arc::new(shirt)),
+        ..Look::for_player(0)
+    });
+    step(&mut session, 5);
+    session
+        .runtime()
+        .run("wave", "workspace.Player1.Torso[\"Right Shoulder\"].C0 *= CFrame.Angles(0, 0, math.pi / 2)")
+        .unwrap();
+    step(&mut session, 2);
+    {
+        let tree = session.runtime().tree().borrow();
+        let model = tree.find_first_child(tree.workspace(), "Player1").unwrap().unwrap();
+        let find = |at, name: &str| tree.find_first_child(at, name).unwrap().unwrap();
+        let arm = find(model, "Right Arm");
+        let shoulder = find(arm, "RightCap");
+        let hand = find(arm, "RightHand");
+        assert_eq!(tree.get_color(shoulder, Property::Color), Some(red));
+        assert_eq!(
+            tree.get_color(hand, Property::Color),
+            tree.get_color(find(model, "Head"), Property::Color)
+        );
+        let at = |id| tree.get_vec3(id, Property::Position).unwrap();
+        let arm_down = playlibre_instance::Rotation::from_orientation(
+            tree.get_vec3(arm, Property::Orientation).unwrap(),
+        )
+        .apply(Vec3::new(0.0, -0.95, -0.05));
+        assert!((at(hand) - (at(arm) + arm_down)).length() < 1e-3);
+        // Lifted forward, the hand is out in front, not down by the hips.
+        assert!(at(hand).y > at(find(model, "Torso")).y - 0.5, "{:?}", at(hand));
+        assert!(tree.find_first_child(model, "Cap").unwrap().is_some());
+    }
+    session.set_local_look(Look::for_player(0));
+    step(&mut session, 5);
+    let tree = session.runtime().tree().borrow();
+    let model = tree.find_first_child(tree.workspace(), "Player1").unwrap().unwrap();
+    let torso = tree.find_first_child(model, "Torso").unwrap().unwrap();
+    assert!(tree.children(torso).unwrap().iter().all(|c| tree.class(*c) != Ok(ClassKind::Part)));
+}
+
+#[test]
+fn a_brick_body_falls_apart_with_its_hands_on() {
+    use playlibre_engine::character::Body;
+    let mut session = start_on(floored(), true).unwrap();
+    session.set_local_look(Look { body: Body::Brick, ..Look::for_player(0) });
+    step(&mut session, 30);
+    session.runtime().run("kill", "workspace.Player1.Humanoid.Health = 0").unwrap();
+    step(&mut session, 120);
+    let tree = session.runtime().tree().borrow();
+    let model = tree.find_first_child(tree.workspace(), "Player1").unwrap().unwrap();
+    let arm = tree.find_first_child(model, "Left Arm").unwrap().unwrap();
+    let hand = tree.find_first_child(arm, "LeftHand").unwrap().unwrap();
+    let gap =
+        tree.get_vec3(hand, Property::Position).unwrap() - tree.get_vec3(arm, Property::Position).unwrap();
+    assert!(gap.length() < 1.5, "{gap:?}");
+}

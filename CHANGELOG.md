@@ -17,6 +17,9 @@ its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
   and manage them. Sales and play time from group games go to the group's
   funds, which can pay members.
 
+- **Brick body:** a second body to pick on the Avatar page, with a round
+  head, hands, feet and hips. Animations, clothes and hats work on it.
+
 ## 0.1.22 (2026-11-27)
 
 - **No free Credits:** badges no longer give Credits, and a creator's

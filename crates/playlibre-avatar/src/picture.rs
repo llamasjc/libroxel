@@ -54,7 +54,7 @@ pub fn render(look: &Look, shot: Shot, width: u32, height: u32) -> Picture {
     }
     let framed: Vec<Vec3> = parts
         .iter()
-        .filter(|p| shot == Shot::Body || (p.on_head && p.pos == crate::HEAD_AT))
+        .filter(|p| shot == Shot::Body || (p.on_head && (p.pos - crate::HEAD_AT).length() < 0.1))
         .flat_map(corners)
         .collect();
     let target = match shot {

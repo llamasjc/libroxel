@@ -56,6 +56,7 @@ const C = {
 // The avatar, the same file the app is built with.
 const AVATAR = await fetch('/avatar.json').then((r) => r.json());
 const HATS = AVATAR.hats.map((h) => h.name);
+const BODIES = ['Classic', 'Brick'];
 
 // The bot check for new accounts, and password stretching, as the Hub asks.
 const WORK_BITS = 20;
@@ -748,7 +749,9 @@ function readLook(look, name, usual = usualLook(name)) {
     return Array.isArray(v) && v.length === 3 && v.every((n) => Number.isInteger(n) && n >= 0 && n <= 255) ? v : usual[key];
   };
   const hat = typeof look?.hat === 'string' ? (HATS.includes(look.hat) ? look.hat : 'No hat') : usual.hat;
+  const body = typeof look?.body === 'string' ? (BODIES.includes(look.body) ? look.body : 'Classic') : usual.body || 'Classic';
   return {
+    body,
     skin: colour('skin'), shirt: colour('shirt'), pants: colour('pants'), hat_color: colour('hat_color'),
     hat,
     item: look?.item === undefined ? usual.item : readItem(look.item) || undefined,
@@ -760,6 +763,7 @@ function readLook(look, name, usual = usualLook(name)) {
 /** A look to save, as `Look::to_json` makes it. */
 function lookJson(l) {
   const out = { skin: l.skin, shirt: l.shirt, pants: l.pants, hat: l.hat, hat_color: l.hat_color };
+  if (l.body && l.body !== 'Classic') out.body = l.body;
   if (l.item) out.item = l.item.json;
   if (l.shirt_item) out.shirt_item = l.shirt_item;
   if (l.pants_item) out.pants_item = l.pants_item;
@@ -2848,7 +2852,11 @@ function avatar() {
   const none = el('p', { class: 'soft' }, 'Nothing here yet. ', el('a', { href: '/market' }, 'Marketplace'));
   let panel;
   if (avatarTab === 'body') {
-    panel = [el('div', { class: 'caps' }, 'Skin'), swatches('skin', AVATAR.skins)];
+    panel = [
+      el('div', { class: 'caps' }, 'Body'),
+      el('div', { class: 'hats' }, BODIES.map((b) => el('button', { class: `chip${(look.body || 'Classic') === b ? ' on' : ''}`, onclick: () => { look.body = b; changed(); } }, b))),
+      el('div', { class: 'caps' }, 'Skin'), swatches('skin', AVATAR.skins),
+    ];
   } else if (avatarTab === 'hat') {
     const hats = owned.map((item) => [item, readItem(item.data)]).filter(([, hat]) => hat);
     const same = (hat) => look.item && JSON.stringify(look.item.json) === JSON.stringify(hat.json);

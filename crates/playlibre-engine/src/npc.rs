@@ -186,7 +186,8 @@ impl Npcs {
                 .unwrap_or_default();
             for part in tree.descendants_of_class(pose.model, ClassKind::Part) {
                 // Tools are placed by the tool code, not carried; the body is posed above.
-                if part == pose.root || in_tool(tree, part, pose.model) || posed.contains(&part) {
+                let riding = tree.parent(part).ok().flatten().is_some_and(|p| posed.contains(&p));
+                if part == pose.root || in_tool(tree, part, pose.model) || posed.contains(&part) || riding {
                     continue;
                 }
                 let Some(p) = tree.get_vec3(part, Property::Position) else { continue };

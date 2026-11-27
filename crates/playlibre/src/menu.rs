@@ -12,7 +12,7 @@ use crate::browse::Platform;
 use crate::i18n::{t, tf};
 use crate::server::data_dir;
 use crate::{games_dir, theme};
-use playlibre_engine::character::{Hat, Look};
+use playlibre_engine::character::{Body, Hat, Look};
 use playlibre_instance::Color3;
 
 /// Which game the menu's buttons use.
@@ -801,6 +801,15 @@ impl Menu {
                 let mut worn = None;
                 match self.part {
                     Part::Body => {
+                        theme::label_caps(ui, t("Body"));
+                        ui.horizontal_wrapped(|ui| {
+                            for body in Body::ALL {
+                                if ui.selectable_label(look.body == body, t(body.name())).clicked() {
+                                    look.body = body;
+                                }
+                            }
+                        });
+                        ui.add_space(8.0);
                         theme::label_caps(ui, t("Skin"));
                         swatches(ui, &mut look.colors.skin, "Skin");
                     }
