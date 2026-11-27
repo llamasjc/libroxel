@@ -95,6 +95,7 @@ pub struct Menu {
     pub home: crate::hub_home::HomeState,
     pub groups: crate::groups::Groups,
     my_games: crate::my_games::MyGames,
+    shown: Option<(Tab, f64)>,
 }
 
 impl Default for Menu {
@@ -102,6 +103,7 @@ impl Default for Menu {
         Self {
             open: false,
             tab: Tab::Home,
+            shown: None,
             game: Game::Blank,
             games: Vec::new(),
             scanned: false,
@@ -386,8 +388,25 @@ impl Menu {
             theme::MUTED,
         );
         let page = pane.shrink2(egui::vec2(22.0, 18.0));
+        let now = ui.input(|i| i.time);
+        let since = match self.shown {
+            Some((tab, since)) if tab == self.tab => since,
+            _ => {
+                self.shown = Some((self.tab, now));
+                now
+            }
+        };
+        let shown = ((now - since) as f32 / 0.24).clamp(0.0, 1.0);
+        if shown < 1.0 {
+            ui.ctx().request_repaint();
+        }
+        let shown = egui::emath::easing::cubic_out(shown);
         let mut pick = None;
         ui.scope_builder(egui::UiBuilder::new().max_rect(page), |ui| {
+            ui.multiply_opacity(shown);
+            if shown < 1.0 {
+                ui.add_space(16.0 * (1.0 - shown));
+            }
             egui::ScrollArea::vertical().id_salt("home-page").auto_shrink([false, false]).show(ui, |ui| {
                 let name = self.name.trim().to_owned();
                 if let Some(why) = platform.weak_password() {

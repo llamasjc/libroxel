@@ -106,16 +106,23 @@ fn fonts_for(language: crate::i18n::Language) -> FontDefinitions {
     // Each family falls back to the icons, then to egui's own fonts for
     // anything else (arrows, accents, other scripts).
     let fallback: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    let symbols = symbol_font().map(|data| fonts.font_data.insert("symbols".to_owned(), data)).is_some();
     let family = |first: &str| {
         let mut list = vec![first.to_owned(), "atkinson".to_owned(), "phosphor".to_owned()];
         if cjk {
             list.push("cjk".to_owned());
+        }
+        if symbols {
+            list.push("symbols".to_owned());
         }
         list.extend(fallback.iter().cloned());
         list
     };
     let proportional = family("selawik");
     let mut mono = vec!["plex-mono".to_owned(), "phosphor".to_owned()];
+    if symbols {
+        mono.push("symbols".to_owned());
+    }
     mono.extend(fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default());
     fonts.families.insert(FontFamily::Proportional, proportional);
     fonts.families.insert(FontFamily::Monospace, mono);
@@ -159,6 +166,27 @@ const CHINESE_FONTS: &[&str] = &[
 fn chinese_font() -> Option<std::sync::Arc<FontData>> {
     static FOUND: std::sync::LazyLock<Option<std::sync::Arc<FontData>>> = std::sync::LazyLock::new(|| {
         CHINESE_FONTS
+            .iter()
+            .find_map(|path| std::fs::read(path).ok())
+            .map(|bytes| std::sync::Arc::new(FontData::from_owned(bytes)))
+    });
+    FOUND.clone()
+}
+
+const SYMBOL_FONTS: &[&str] = &[
+    "C:\\Windows\\Fonts\\seguisym.ttf",
+    "/System/Library/Fonts/Apple Symbols.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+    "/system/fonts/NotoSansSymbols-Regular-Subsetted2.ttf",
+];
+
+fn symbol_font() -> Option<std::sync::Arc<FontData>> {
+    static FOUND: std::sync::LazyLock<Option<std::sync::Arc<FontData>>> = std::sync::LazyLock::new(|| {
+        SYMBOL_FONTS
             .iter()
             .find_map(|path| std::fs::read(path).ok())
             .map(|bytes| std::sync::Arc::new(FontData::from_owned(bytes)))
@@ -215,6 +243,7 @@ fn style(style: &mut egui::Style) {
     s.indent = 16.0;
     s.scroll.bar_width = 9.0;
     s.scroll.floating = true;
+    style.animation_time = 0.16;
 
     let v = &mut style.visuals;
     *v = egui::Visuals::light();
@@ -239,8 +268,14 @@ fn style(style: &mut egui::Style) {
         // A plain desktop button: pale grey with a grey rim, lighting up
         // sky blue under the pointer and a deeper blue while pressed.
         inactive: look(Color32::from_rgb(238, 240, 243), Color32::from_rgb(160, 168, 178), TEXT),
-        hovered: look(Color32::from_rgb(222, 241, 253), Color32::from_rgb(60, 127, 177), Color32::BLACK),
-        active: look(Color32::from_rgb(196, 229, 246), Color32::from_rgb(44, 98, 139), Color32::BLACK),
+        hovered: WidgetVisuals {
+            expansion: 1.0,
+            ..look(Color32::from_rgb(222, 241, 253), Color32::from_rgb(60, 127, 177), Color32::BLACK)
+        },
+        active: WidgetVisuals {
+            expansion: -0.5,
+            ..look(Color32::from_rgb(196, 229, 246), Color32::from_rgb(44, 98, 139), Color32::BLACK)
+        },
         open: look(Color32::from_rgb(222, 241, 253), Color32::from_rgb(60, 127, 177), Color32::BLACK),
     };
     v.selection =
@@ -652,8 +687,8 @@ pub fn glass(painter: &egui::Painter, rect: Rect, radius: f32, tint: Color32) {
             rect,
             radius,
             (lerp(tint, Color32::WHITE, 0.2), lerp(tint, Color32::BLACK, 0.12), rim),
-            false,
-            false,
+            0.0,
+            0.0,
         );
         return;
     }
@@ -814,6 +849,19 @@ impl Kind {
 /// Room left under a glossy button for its glow.
 const EDGE: f32 = 4.0;
 
+pub fn ease(ui: &egui::Ui, id: egui::Id, on: bool, seconds: f32) -> f32 {
+    ui.ctx().animate_bool_with_time_and_easing(id, on, seconds, egui::emath::easing::cubic_out)
+}
+
+fn hover_press(ui: &egui::Ui, response: &Response, enabled: bool) -> (f32, f32) {
+    let hovered = response.hovered() && enabled;
+    let pressed = response.is_pointer_button_down_on() && enabled;
+    (
+        ease(ui, response.id.with("hover"), hovered || pressed, 0.16),
+        ease(ui, response.id.with("press"), pressed, 0.07),
+    )
+}
+
 /// Paints a glossy face over `rect`: `top` fading to `bottom`, a gloss
 /// over the upper half and a rim. `lit` brightens it (pointer over it);
 /// `pressed` darkens it and dims the gloss.
@@ -822,22 +870,20 @@ fn glossy(
     rect: Rect,
     radius: f32,
     colours: (Color32, Color32, Color32),
-    lit: bool,
-    pressed: bool,
+    lit: f32,
+    pressed: f32,
 ) {
     let (mut top, mut bottom, rim) = colours;
-    if lit {
-        top = lerp(top, Color32::WHITE, 0.18);
-        bottom = lerp(bottom, Color32::WHITE, 0.12);
-    }
-    if pressed {
-        top = lerp(top, bottom, 0.6).gamma_multiply(0.92).to_opaque();
-        bottom = bottom.gamma_multiply(0.88).to_opaque();
+    top = lerp(top, Color32::WHITE, 0.18 * lit);
+    bottom = lerp(bottom, Color32::WHITE, 0.12 * lit);
+    if pressed > 0.0 {
+        top = lerp(top, lerp(top, bottom, 0.6).gamma_multiply(0.92).to_opaque(), pressed);
+        bottom = lerp(bottom, bottom.gamma_multiply(0.88).to_opaque(), pressed);
     }
     // The gloss is folded into the face's own colours, all solid: a bright
     // upper half that ends in a sharp line, then the deeper colour, which
     // lightens again at the very bottom as light pools in a glass bead.
-    let (shine, pool) = if pressed { (0.18, 0.05) } else { (0.62, 0.22) };
+    let (shine, pool) = (0.62 - 0.44 * pressed, 0.22 - 0.17 * pressed);
     let mid = lerp(top, bottom, 0.5);
     gradient(
         painter,
@@ -855,7 +901,7 @@ fn glossy(
     painter.rect_stroke(
         rect.shrink(1.0),
         CornerRadius::same((radius - 1.0).max(0.0) as u8),
-        Stroke::new(1.0, see_through(255, 255, 255, if pressed { 40 } else { 110 })),
+        Stroke::new(1.0, see_through(255, 255, 255, (110.0 - 70.0 * pressed) as u8)),
         egui::StrokeKind::Inside,
     );
     painter.rect_stroke(rect, corner, Stroke::new(1.0, rim), egui::StrokeKind::Inside);
@@ -883,26 +929,40 @@ pub fn block_button(ui: &mut egui::Ui, kind: Kind, glyph: &str, label: &str, hei
             Color32::from_rgb(150, 156, 166),
         )
     };
-    let pressed = response.is_pointer_button_down_on() && enabled;
-    let hovered = response.hovered() && enabled;
-    let face = Rect::from_min_size(rect.min + Vec2::new(0.0, 1.0), Vec2::new(width, height));
+    let (lit, down) = hover_press(ui, &response, enabled);
+    let face = Rect::from_min_size(rect.min + Vec2::new(0.0, 1.0), Vec2::new(width, height))
+        .translate(Vec2::new(0.0, (1.5 * down - 1.0 * lit).min(EDGE - 1.0)))
+        .shrink(0.6 * down);
     let radius = (height * 0.22).clamp(4.0, 11.0);
     let painter = ui.painter();
-    // A soft shadow under it, and a blue glow while the pointer is over it.
-    soft_shadow(painter, face.translate(Vec2::new(0.0, -2.0)), radius, if pressed { 20 } else { 45 });
-    if hovered {
+    soft_shadow(
+        painter,
+        face.translate(Vec2::new(0.0, -2.0 + lit * 1.5)),
+        radius,
+        (45.0 + 25.0 * lit - 40.0 * down).clamp(10.0, 90.0) as u8,
+    );
+    if lit > 0.01 {
         let glow = if kind == Kind::Plain { Color32::from_rgb(90, 180, 255) } else { top };
-        let shadow = egui::Shadow { offset: [0, 0], blur: 14, spread: 1, color: glow.gamma_multiply(0.75) };
+        let shadow = egui::Shadow {
+            offset: [0, 0],
+            blur: (8.0 + 8.0 * lit) as u8,
+            spread: 1,
+            color: glow.gamma_multiply(0.75 * lit),
+        };
         painter.add(shadow.as_shape(face, CornerRadius::same(radius as u8)));
     }
-    let (top, bottom, rim) = if hovered && kind == Kind::Plain {
-        (Color32::from_rgb(234, 246, 253), Color32::from_rgb(178, 224, 250), Color32::from_rgb(60, 127, 177))
+    let (top, bottom, rim) = if kind == Kind::Plain {
+        (
+            lerp(top, Color32::from_rgb(234, 246, 253), lit),
+            lerp(bottom, Color32::from_rgb(178, 224, 250), lit),
+            lerp(rim, Color32::from_rgb(60, 127, 177), lit),
+        )
     } else {
         (top, bottom, rim)
     };
-    glossy(painter, face, radius, (top, bottom, rim), hovered, pressed);
+    glossy(painter, face, radius, (top, bottom, rim), lit, down);
     let galley = painter.layout_no_wrap(text, font, ink);
-    let at = face.center() - galley.size() / 2.0 + Vec2::new(0.0, if pressed { 1.0 } else { 0.0 });
+    let at = face.center() - galley.size() / 2.0;
     if ink == Color32::WHITE {
         // A faint dark shadow keeps white letters crisp on the shine.
         painter.galley_with_override_text_color(
@@ -928,12 +988,14 @@ pub fn tool_button(ui: &mut egui::Ui, glyph: &str, label: &str, on: bool) -> Res
     let spoken_name = if label.is_empty() { icon_name(glyph) } else { label };
     name_for_screen_readers(ui, &response, egui::WidgetType::Button, spoken_name, on.then_some(true));
     if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        let hovered = response.hovered() && ui.is_enabled();
-        let pressed = response.is_pointer_button_down_on();
-        if on || hovered || pressed {
-            hot_track(painter, rect, on || pressed);
+        let (lit, down) = hover_press(ui, &response, ui.is_enabled());
+        let shown = ease(ui, response.id.with("on"), on, 0.18).max(lit);
+        if shown > 0.01 {
+            let mut painter = ui.painter().clone();
+            painter.multiply_opacity(shown);
+            hot_track(&painter, rect.shrink(0.8 * down), on || down > 0.5);
         }
+        let painter = ui.painter();
         let colour = if !ui.is_enabled() {
             MUTED.gamma_multiply(0.7)
         } else if on {
@@ -1001,12 +1063,23 @@ fn tab_with(ui: &mut egui::Ui, text: &str, on: bool, icon_only: bool) -> Respons
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let painter = ui.painter();
     let pill = rect.shrink2(Vec2::new(1.0, 3.0));
-    if on {
+    let picked = ease(ui, response.id.with("on"), on, 0.22);
+    let (lit, down) = hover_press(ui, &response, true);
+    let pill = pill.shrink(0.8 * down);
+    if lit > 0.01 && picked < 0.99 {
+        let mut glass_painter = painter.clone();
+        glass_painter.multiply_opacity(lit * (1.0 - picked));
+        glass(&glass_painter, pill, 7.0, Color32::from_rgba_unmultiplied(220, 240, 255, 110));
+    }
+    if picked > 0.01 {
+        let mut painter = painter.clone();
+        painter.multiply_opacity(picked);
+        let pill = pill.shrink2(Vec2::new(6.0 * (1.0 - picked), 2.0 * (1.0 - picked)));
         let shadow =
             egui::Shadow { offset: [0, 0], blur: 16, spread: 0, color: see_through(160, 220, 255, 200) };
         painter.add(shadow.as_shape(pill, CornerRadius::same(7)));
         glossy(
-            painter,
+            &painter,
             pill,
             7.0,
             (
@@ -1014,14 +1087,12 @@ fn tab_with(ui: &mut egui::Ui, text: &str, on: bool, icon_only: bool) -> Respons
                 Color32::from_rgb(196, 228, 250),
                 Color32::from_rgb(70, 130, 190),
             ),
-            false,
-            false,
+            0.0,
+            0.0,
         );
-    } else if response.hovered() {
-        glass(painter, pill, 7.0, Color32::from_rgba_unmultiplied(220, 240, 255, 110));
     }
-    let colour = if on { HEADING } else { Color32::from_rgb(12, 34, 62) };
-    glow_text(painter, rect.center() - galley.size() / 2.0, galley, colour);
+    let colour = lerp(Color32::from_rgb(12, 34, 62), HEADING, picked);
+    glow_text(painter, rect.center() - galley.size() / 2.0 + Vec2::new(0.0, down), galley, colour);
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -1127,13 +1198,18 @@ pub fn logo_button(ui: &mut egui::Ui, on: bool) -> Response {
                 Color32::from_rgb(196, 228, 250),
                 Color32::from_rgb(70, 130, 190),
             ),
-            false,
-            false,
+            0.0,
+            0.0,
         );
-    } else if response.hovered() {
-        glass(painter, pill, 9.0, Color32::from_rgba_unmultiplied(220, 240, 255, 110));
+    } else {
+        let lit = ease(ui, response.id.with("hover"), response.hovered(), 0.16);
+        if lit > 0.01 {
+            let mut painter = painter.clone();
+            painter.multiply_opacity(lit);
+            glass(&painter, pill, 9.0, Color32::from_rgba_unmultiplied(220, 240, 255, 110));
+        }
     }
-    let size = 32.0;
+    let size = 32.0 + 2.0 * ease(ui, response.id.with("grow"), response.hovered(), 0.16);
     paint_logo(painter, rect.center() - Vec2::splat(size / 2.0), size);
     response.on_hover_text("Home").on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -1404,11 +1480,15 @@ pub fn ribbon_button(ui: &mut egui::Ui, glyph: &str, label: &str, on: bool) -> R
     let width = name.size().x.max(30.0) + 14.0;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, RIBBON_HEIGHT), Sense::click());
     name_for_screen_readers(ui, &response, egui::WidgetType::Button, label, on.then_some(true));
-    let painter = ui.painter();
-    let hovered = response.hovered() && enabled;
-    if on || hovered || (response.is_pointer_button_down_on() && enabled) {
-        hot_track(painter, rect, on || response.is_pointer_button_down_on());
+    let (lit, down) = hover_press(ui, &response, enabled);
+    let shown = ease(ui, response.id.with("on"), on, 0.18).max(lit);
+    if shown > 0.01 {
+        let mut painter = ui.painter().clone();
+        painter.multiply_opacity(shown);
+        hot_track(&painter, rect.shrink(0.8 * down), on || down > 0.5);
     }
+    let painter = ui.painter();
+    let bob = 1.5 * down - 1.0 * lit;
     let ink = if !enabled { MUTED.gamma_multiply(0.6) } else { TEXT };
     let glyph_colour = if !enabled {
         ink
@@ -1418,10 +1498,10 @@ pub fn ribbon_button(ui: &mut egui::Ui, glyph: &str, label: &str, on: bool) -> R
         ACCENT
     };
     painter.text(
-        Pos2::new(rect.center().x, rect.min.y + 17.0),
+        Pos2::new(rect.center().x, rect.min.y + 17.0 + bob),
         egui::Align2::CENTER_CENTER,
         glyph,
-        FontId::proportional(22.0),
+        FontId::proportional(22.0 + 1.5 * lit),
         glyph_colour,
     );
     painter.text(
@@ -1496,8 +1576,13 @@ pub fn ribbon_tab(ui: &mut egui::Ui, label: &str, on: bool) -> Response {
             Stroke::new(1.0, Color32::from_rgb(150, 182, 220)),
             egui::StrokeKind::Inside,
         );
-    } else if response.hovered() {
-        hot_track(painter, rect.shrink2(Vec2::new(0.0, 2.0)), false);
+    } else {
+        let lit = ease(ui, response.id.with("hover"), response.hovered(), 0.16);
+        if lit > 0.01 {
+            let mut painter = painter.clone();
+            painter.multiply_opacity(lit);
+            hot_track(&painter, rect.shrink2(Vec2::new(0.0, 2.0)), false);
+        }
     }
     let colour = if on { HEADING } else { TEXT };
     painter.galley(rect.center() - galley.size() / 2.0, galley, colour);
@@ -1511,18 +1596,24 @@ pub fn toolbox_tile(ui: &mut egui::Ui, glyph: &str, colour: Color32, label: &str
     let size = Vec2::new(74.0, 66.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     name_for_screen_readers(ui, &response, egui::WidgetType::Button, label, None);
+    let (lit, down) = hover_press(ui, &response, ui.is_enabled());
+    let rect = rect.shrink(1.0 * down);
     let painter = ui.painter();
-    if response.hovered() && ui.is_enabled() {
-        hot_track(painter, rect, false);
-    } else {
-        gradient(painter, rect, 4.0, &[(0.0, Color32::WHITE), (1.0, Color32::from_rgb(240, 245, 251))]);
-        painter.rect_stroke(rect, CornerRadius::same(4), Stroke::new(1.0, LINE), egui::StrokeKind::Inside);
+    if lit > 0.01 {
+        soft_shadow(painter, rect.shrink(4.0), 4.0, (40.0 * lit) as u8);
+    }
+    gradient(painter, rect, 4.0, &[(0.0, Color32::WHITE), (1.0, Color32::from_rgb(240, 245, 251))]);
+    painter.rect_stroke(rect, CornerRadius::same(4), Stroke::new(1.0, LINE), egui::StrokeKind::Inside);
+    if lit > 0.01 {
+        let mut painter = painter.clone();
+        painter.multiply_opacity(lit);
+        hot_track(&painter, rect, down > 0.5);
     }
     painter.text(
-        Pos2::new(rect.center().x, rect.min.y + 23.0),
+        Pos2::new(rect.center().x, rect.min.y + 23.0 - 1.5 * lit + 1.0 * down),
         egui::Align2::CENTER_CENTER,
         glyph,
-        FontId::proportional(24.0),
+        FontId::proportional(24.0 + 2.0 * lit),
         if ui.is_enabled() { colour } else { MUTED },
     );
     text_line(
