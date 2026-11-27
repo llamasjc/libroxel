@@ -42,6 +42,9 @@ pub const HUB_HELP: &str = "\
                                give or take away a PlayLibre badge (such as
                                supporter)
   rename <name> <new name>     rename an account
+  credits <name>               where an account's Credits came from
+  credits free [take]          free Credits from daily rewards, badges and
+                               sales paid with them; take takes them back
   earnings                     show the engagement pool and cash out settings
   earnings pool <credits>       Credits shared each day between creators by
                                playtime (0: off)
@@ -242,6 +245,35 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
             let id = crate::ban(&db, who, &reason)?;
             crate::moderate::log(&db, "", crate::ModAction::Ban, "", "", &id, &reason, "", None, 0);
             println!("{who} is banned.");
+            Ok(())
+        }
+        ["credits", "free", how @ ..] if how.is_empty() || how == ["take"] => {
+            let db = crate::open_db(Some(&data))?;
+            let list = if how.is_empty() { crate::free_to_take(&db) } else { crate::take_back_free(&db) }
+                .map_err(|e| e.to_string())?;
+            if list.is_empty() {
+                println!("No free Credits left.");
+            }
+            let mut total = 0;
+            for (id, credits) in &list {
+                let name: String = db
+                    .query_row("SELECT name FROM accounts WHERE player_id = ?1", [id], |r| r.get(0))
+                    .unwrap_or_else(|_| id.clone());
+                println!("{name:<20} {credits}");
+                total += credits;
+            }
+            if !list.is_empty() {
+                println!("{} Credits {}.", total, if how.is_empty() { "to take back" } else { "taken back" });
+            }
+            Ok(())
+        }
+        ["credits", who] => {
+            let db = crate::open_db(Some(&data))?;
+            let id = crate::owner::resolve(&db, who)?;
+            for (amount, reason, reference, time) in crate::history(&db, &id) {
+                println!("{amount:>7}  {reason:<12} {reference:<24} {} days ago", (crate::now() - time) / 86_400);
+            }
+            println!("{who} has {} Credits.", crate::balance(&db, &id));
             Ok(())
         }
         ["earnings"] => {

@@ -179,6 +179,48 @@ pub fn top_up(db: &Connection, player_id: &str, amount: u32, payment_id: &str) -
     credit(db, player_id, amount, "bought", payment_id)
 }
 
+const FREE_REASONS: &str = "'daily', 'badge'";
+
+pub fn history(db: &Connection, player_id: &str) -> Vec<(i64, String, String, i64)> {
+    db.prepare("SELECT amount, reason, reference, time FROM ledger WHERE player_id = ?1 ORDER BY entry_id")
+        .and_then(|mut s| {
+            s.query_map(params![player_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                .map(|rows| rows.filter_map(Result::ok).collect())
+        })
+        .unwrap_or_default()
+}
+
+pub fn free_to_take(db: &Connection) -> rusqlite::Result<Vec<(String, i64)>> {
+    let mut s = db.prepare(&format!(
+        "SELECT player_id, SUM(owed) FROM (
+            SELECT player_id, amount AS owed FROM ledger WHERE reason IN ({FREE_REASONS})
+            UNION ALL SELECT seller_id, earned - cashable FROM settled
+            UNION ALL SELECT player_id, amount FROM ledger WHERE reason = 'taken-back')
+         GROUP BY player_id ORDER BY player_id"
+    ))?;
+    let owed: Vec<(String, i64)> =
+        s.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    Ok(owed
+        .into_iter()
+        .map(|(id, owed)| {
+            let have = balance(db, &id);
+            (id, owed.min(have))
+        })
+        .filter(|(_, take)| *take > 0)
+        .collect())
+}
+
+pub fn take_back_free(db: &Connection) -> rusqlite::Result<Vec<(String, i64)>> {
+    let tx = db.unchecked_transaction()?;
+    let list = free_to_take(&tx)?;
+    let reference = now_ms().to_string();
+    for (id, take) in &list {
+        entry(&tx, id, -take, "taken-back", &reference)?;
+    }
+    tx.commit()?;
+    Ok(list)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sale {
     pub buyer_id: String,

@@ -61,9 +61,8 @@ pub use charts::{
 mod badges;
 mod cli;
 pub use badges::{
-    Awarded, BADGE_COLORS, BADGE_CREDITS, BADGE_ICONS, Badge, BadgeAction, BadgeAward, BadgeChange,
-    MAX_BADGE_ABOUT, MAX_BADGE_NAME, MAX_BADGES, PLATFORM_BADGES, PlatformBadge, award_message,
-    badge_message, platform_badge,
+    Awarded, BADGE_COLORS, BADGE_ICONS, Badge, BadgeAction, BadgeAward, BadgeChange, MAX_BADGE_ABOUT,
+    MAX_BADGE_NAME, MAX_BADGES, PLATFORM_BADGES, PlatformBadge, award_message, badge_message, platform_badge,
 };
 mod copies;
 mod data;
@@ -174,7 +173,7 @@ pub use social::{
 pub use stats::{Crash, CrashGroup, PING_EVERY_SECS, Ping, Share, Usage, UsageDay, admin_message};
 pub use wallet::{
     Buy, CURRENCY, Entry, MAX_PRICE, Refused, Sale, SetPrice, Wallet, balance, buy, buy_message, credit,
-    debit, owns, price_message, spent, top_up, wallet_message,
+    debit, free_to_take, history, owns, price_message, spent, take_back_free, top_up, wallet_message,
 };
 
 /// The port a Hub listens on unless told otherwise.

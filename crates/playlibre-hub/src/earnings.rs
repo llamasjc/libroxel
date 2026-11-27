@@ -158,7 +158,8 @@ fn settle_sales(db: &Connection, now: i64) -> rusqlite::Result<()> {
             |r| r.get(0),
         )?;
         let paid = amount.min((bought - used).max(0));
-        let (earned, cashable) = if to_creator { (share(amount), share(paid)) } else { (0, 0) };
+        let earned = if to_creator { share(paid) } else { 0 };
+        let cashable = earned;
         if earned > 0 {
             wallet::credit(db, &seller, earned as u32, "earned", &format!("sale-{id}"))?;
         }
@@ -898,10 +899,24 @@ mod tests {
         assert_eq!(earnings(&db, "maker", now()).unwrap().pending, 140);
         settle(&db, now() + HOLD_DAYS * DAY + 1).unwrap();
         settle(&db, now() + HOLD_DAYS * DAY + 1).unwrap();
-        assert_eq!(wallet::balance(&db, "maker"), 140);
+        assert_eq!(wallet::balance(&db, "maker"), 70);
         assert_eq!(payable(&db, "maker"), 70);
         let e = earnings(&db, "maker", now()).unwrap();
-        assert_eq!((e.total, e.pending, e.games[0].passes), (140, 0, 140));
+        assert_eq!((e.total, e.pending, e.games[0].passes), (70, 0, 70));
+    }
+
+    #[test]
+    fn free_credits_are_taken_back_once() {
+        let db = crate::open_db(None).unwrap();
+        wallet::top_up(&db, "fan", 100, "pay_1").unwrap();
+        wallet::credit(&db, "fan", 25, "daily", "1").unwrap();
+        wallet::credit(&db, "fan", 100, "badge", "explorer").unwrap();
+        wallet::credit(&db, "bo", 100, "badge", "explorer").unwrap();
+        wallet::debit(&db, "bo", 60, "buy", "1").unwrap();
+        assert_eq!(wallet::free_to_take(&db).unwrap(), vec![("bo".into(), 40), ("fan".into(), 125)]);
+        wallet::take_back_free(&db).unwrap();
+        assert_eq!((wallet::balance(&db, "fan"), wallet::balance(&db, "bo")), (100, 0));
+        assert!(wallet::take_back_free(&db).unwrap().is_empty());
     }
 
     #[test]

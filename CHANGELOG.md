@@ -5,6 +5,11 @@ its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 
 ## Unreleased
 
+- **No free Credits:** badges no longer give Credits, and a creator's
+  share of a sale only counts what the buyer paid for. On the Hub,
+  `playlibre-admin credits <name>` shows where an account's Credits came
+  from, and `playlibre-admin credits free take` takes back the free ones.
+
 - **Phones:** the home screen has a compact top bar on small screens, with
   Donate and Language in a menu. In games, a menu button and a player list
   button sit at the top left, the player list starts hidden, the pause menu

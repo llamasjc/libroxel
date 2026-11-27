@@ -156,7 +156,7 @@ fn chess_master_comes_from_chess() {
     assert!(ada.award(&hub, "starter:Chess", "supporter").is_err());
     let t = ada.tick();
     let wallet = hub.wallet(&ada.id, t, &sign(&ada.key, &playlibre_hub::wallet_message(&ada.id, t))).unwrap();
-    assert_eq!(wallet.balance, 3 * playlibre_hub::BADGE_CREDITS as i64);
+    assert_eq!(wallet.balance, 0);
 }
 
 #[test]
