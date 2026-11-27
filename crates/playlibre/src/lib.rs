@@ -511,7 +511,12 @@ pub fn run() {
     .insert_resource(graphics::error_handler())
     .add_systems(Startup, setup_ui_camera)
     .init_resource::<render_scale::RenderScale>()
-    .add_systems(PostUpdate, render_scale::apply)
+    .add_systems(
+        PostUpdate,
+        render_scale::apply
+            .after(bevy_egui::EguiPostUpdateSet::EndPass)
+            .before(bevy::camera::CameraUpdateSystems),
+    )
     .add_systems(EguiPrimaryContextPass, ui::editor_ui)
     .add_systems(Update, (viewport::draw_selection, viewport::draw_grid).after(EngineSet::Sync))
     .add_systems(Update, (update_title, toggle_fullscreen));

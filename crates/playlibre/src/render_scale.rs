@@ -35,13 +35,14 @@ pub fn share(density: Option<f32>, scale_factor: f32) -> f32 {
 }
 
 /// Picks how the 3D view is drawn, and points the 3D camera there.
+#[allow(clippy::type_complexity)]
 pub fn apply(
     mut commands: Commands,
     mut scale: ResMut<RenderScale>,
     quality: Option<Res<GraphicsQuality>>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut images: ResMut<Assets<Image>>,
-    world_cameras: Query<Entity, With<CameraRig>>,
+    mut world_cameras: Query<(Entity, &mut Camera), (With<CameraRig>, Without<PrimaryEguiContext>)>,
     mut ui_cameras: Query<&mut Camera, With<PrimaryEguiContext>>,
 ) {
     let Ok(window) = window.single() else { return };
@@ -81,6 +82,18 @@ pub fn apply(
         // The picture's points are the window's points.
         scale.pixels_per_point = ppp * share;
     }
+    let target_size =
+        if scaled { size } else { UVec2::new(window.physical_width(), window.physical_height()) };
+    for (_, mut camera) in &mut world_cameras {
+        if let Some(viewport) = camera.viewport.as_mut() {
+            let at = viewport.physical_position.min(target_size.saturating_sub(UVec2::ONE));
+            let fit = viewport.physical_size.min(target_size - at).max(UVec2::ONE);
+            if viewport.physical_position != at || viewport.physical_size != fit {
+                viewport.physical_position = at;
+                viewport.physical_size = fit;
+            }
+        }
+    }
     if !changed {
         return;
     }
@@ -90,7 +103,7 @@ pub fn apply(
         }
         None => RenderTarget::Window(bevy::window::WindowRef::Primary),
     };
-    for camera in &world_cameras {
+    for (camera, _) in &world_cameras {
         commands.entity(camera).insert(target.clone());
     }
     // The 3D camera no longer paints the window, so the UI's camera clears it.
