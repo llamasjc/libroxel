@@ -162,6 +162,11 @@ pub(crate) fn extra_from_lua(
 
 /// Every enumeration in the class database: name to a list of
 /// `{item name, number}`, numbers in order.
+/// The number the reference platform gives item `item` of enumeration `name`.
+pub(crate) fn enum_number(name: &str, item: &str) -> Option<u32> {
+    db().enums.get(name)?.items.get(item).copied()
+}
+
 pub(crate) fn enums(lua: &Lua) -> mlua::Result<Table> {
     let out = lua.create_table()?;
     for (name, e) in &db().enums {

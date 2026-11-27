@@ -65,6 +65,31 @@ pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> m
                 };
             return Ok(Some(crate::bindings::vector_value(world)));
         }
+        "WorldCFrame" | "WorldOrientation" if class == ClassKind::Attachment => {
+            let (part, local) = {
+                let host = host(lua);
+                let tree = host.tree.borrow();
+                let part = tree
+                    .parent(id)
+                    .map_err(tree_err)?
+                    .filter(|p| tree.class(*p).is_ok_and(|c| c.is_physical()));
+                let local = playlibre_instance::CFrame::new(
+                    tree.get_vec3(id, Property::Position).unwrap_or_default(),
+                    playlibre_instance::Rotation::from_orientation(
+                        tree.get_vec3(id, Property::Orientation).unwrap_or_default(),
+                    ),
+                );
+                (part, local)
+            };
+            let world = match part {
+                Some(part) => crate::bindings::part_cframe(lua, part)? * local,
+                None => local,
+            };
+            if key == "WorldOrientation" {
+                return Ok(Some(crate::bindings::vector_value(world.rot.to_orientation())));
+            }
+            return Ok(Some(Value::UserData(lua.create_userdata(crate::types::LuaCFrame(world))?)));
+        }
         game_info::JOB_ID | "PrivateServerId" if class == ClassKind::DataModel => {
             let host = host(lua);
             let world = host.world.borrow();
@@ -305,8 +330,16 @@ fn find_ancestor_by(
 
 pub(crate) fn add_instance_methods<M: UserDataMethods<crate::bindings::LuaInstance>>(m: &mut M) {
     use names::instance::*;
-    m.add_method(FIND_FIRST_CHILD_WHICH_IS_A, |lua, this, class: String| {
-        let children = host(lua).tree.borrow().children(this.0).map_err(tree_err)?.to_vec();
+    m.add_method(FIND_FIRST_CHILD_WHICH_IS_A, |lua, this, (class, recursive): (String, Option<bool>)| {
+        let children = {
+            let host = host(lua);
+            let tree = host.tree.borrow();
+            if recursive == Some(true) {
+                tree.descendants(this.0).map_err(tree_err)?
+            } else {
+                tree.children(this.0).map_err(tree_err)?.to_vec()
+            }
+        };
         for child in children {
             if crate::bindings::is_a(lua, child, &class)? {
                 return push_instance(lua, child).map(Some);

@@ -217,6 +217,8 @@ fn current_camera(lua: &Lua) -> mlua::Result<InstanceId> {
 }
 
 /// Members beyond the saved properties: `Some` when `key` is one of them.
+const TEAM_COLOR: &str = "TeamColor";
+
 pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> mlua::Result<Option<Value>> {
     Ok(Some(match key {
         extras::CURRENT_CAMERA if class == ClassKind::Workspace => {
@@ -243,6 +245,25 @@ pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> m
                 host(lua).world.borrow_mut().sits.push((seat, humanoid));
                 Ok(())
             })?)
+        }
+        // The team's colour, or the last one set.
+        TEAM_COLOR if class == ClassKind::Player => {
+            let colour = {
+                let host = host(lua);
+                let tree = host.tree.borrow();
+                let team = tree.get_ref(id, Property::Team).filter(|t| tree.class(*t) == Ok(ClassKind::Team));
+                match team.map(|t| tree.get(t, Property::TeamColor)) {
+                    Some(Ok(PropertyValue::Color3(c))) => Some(c),
+                    _ => match tree.get_extra(id, TEAM_COLOR) {
+                        Ok(Some(PropertyValue::Color3(c))) => Some(c),
+                        _ => None,
+                    },
+                }
+            };
+            crate::compat::brick_for(
+                lua,
+                colour.unwrap_or(playlibre_instance::Color3::from_rgb8(242, 243, 243)),
+            )?
         }
         extras::VIEWPORT_SIZE if class == ClassKind::Camera => {
             let size = host(lua).world.borrow().viewport;
@@ -297,8 +318,47 @@ pub(crate) fn new_index(
             tree.set(id, Property::Neutral, PropertyValue::Bool(team.is_none())).map_err(tree_err)?;
             Ok(true)
         }
+        // A team colour puts the player on that colour's team.
+        TEAM_COLOR if class == ClassKind::Player => {
+            let Some(PropertyValue::Color3(colour)) =
+                crate::bindings::property_from_lua(Property::TeamColor, value)
+            else {
+                return Err(runtime_err("TeamColor expects a BrickColor"));
+            };
+            let host = host(lua);
+            let mut tree = host.tree.borrow_mut();
+            let team = tree.service(ClassKind::Teams).and_then(|teams| {
+                tree.children(teams).ok()?.iter().copied().find(|t| {
+                    tree.class(*t) == Ok(ClassKind::Team)
+                        && tree.get(*t, Property::TeamColor).ok() == Some(PropertyValue::Color3(colour))
+                })
+            });
+            tree.set_extra(id, TEAM_COLOR, Some(PropertyValue::Color3(colour))).map_err(tree_err)?;
+            if let Some(team) = team {
+                tree.set(id, Property::Team, PropertyValue::Ref(Some(team))).map_err(tree_err)?;
+                tree.set(id, Property::Neutral, PropertyValue::Bool(false)).map_err(tree_err)?;
+            }
+            Ok(true)
+        }
         _ => Ok(false),
     }
+}
+
+/// What follows from a property a script set: health stays between 0 and
+/// the most.
+pub(crate) fn after_set(lua: &Lua, id: InstanceId, class: ClassKind, property: Property) -> mlua::Result<()> {
+    if class != ClassKind::Humanoid || !matches!(property, Property::Health | Property::MaxHealth) {
+        return Ok(());
+    }
+    let host = host(lua);
+    let mut tree = host.tree.borrow_mut();
+    let most = tree.get_number(id, Property::MaxHealth).unwrap_or(100.0).max(0.0);
+    let health = tree.get_number(id, Property::Health).unwrap_or(0.0);
+    let kept = health.clamp(0.0, most);
+    if kept != health {
+        tree.set(id, Property::Health, PropertyValue::Number(kept)).map_err(tree_err)?;
+    }
+    Ok(())
 }
 
 /// Where `point` shows on a view of `size` pixels through the camera:

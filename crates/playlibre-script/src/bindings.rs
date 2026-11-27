@@ -822,7 +822,7 @@ impl UserData for LuaEnumItem {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         use names::enum_item::*;
         fields.add_field_method_get(NAME, |_, this| Ok(names::enum_item_name(this.0)));
-        fields.add_field_method_get(VALUE, |_, this| Ok(this.0.index() as i64));
+        fields.add_field_method_get(VALUE, |_, this| Ok(enum_number(this.0)));
         // The enumeration itself, so `item.EnumType == Enum.Material` holds.
         fields.add_field_method_get(ENUM_TYPE, |lua, this| {
             let name = names::enum_name(this.0.kind());
@@ -857,13 +857,22 @@ impl UserData for LuaEnumItem {
     }
 }
 
+/// An item's number: the reference platform's, or its place in the list
+/// for items only playlibre has.
+pub(crate) fn enum_number(item: EnumValue) -> i64 {
+    crate::reflection::enum_number(names::enum_name(item.kind()), names::enum_item_name(item))
+        .map_or(item.index() as i64, i64::from)
+}
+
 /// Reads an enum value of `kind` from a script value: an item, its name, or its number.
 pub(crate) fn as_enum(kind: EnumKind, value: &Value) -> Option<EnumValue> {
     match value {
         Value::UserData(ud) => ud.borrow::<LuaEnumItem>().ok().map(|e| e.0).filter(|e| e.kind() == kind),
         Value::String(s) => names::enum_item_from_name(kind, &s.to_string_lossy()),
-        Value::Integer(n) => usize::try_from(*n).ok().and_then(|i| kind.items().get(i).copied()),
-        Value::Number(n) if n.fract() == 0.0 && *n >= 0.0 => kind.items().get(*n as usize).copied(),
+        Value::Integer(n) => kind.items().iter().copied().find(|i| enum_number(*i) == *n),
+        Value::Number(n) if n.fract() == 0.0 => {
+            kind.items().iter().copied().find(|i| enum_number(*i) as f64 == *n)
+        }
         // An item of this enumeration that playlibre doesn't draw differently
         // (such as ScaleType.Slice): the closest it has, its first.
         Value::Table(t) => {
@@ -976,7 +985,7 @@ pub(crate) fn property_to_lua(lua: &Lua, value: PropertyValue) -> mlua::Result<V
 }
 
 /// Converts a script value into a value for `property`, if it fits.
-fn property_from_lua(property: Property, value: &Value) -> Option<PropertyValue> {
+pub(crate) fn property_from_lua(property: Property, value: &Value) -> Option<PropertyValue> {
     if let Some(special) = crate::effects::from_lua(property, value) {
         return Some(special);
     }
@@ -1221,8 +1230,20 @@ impl UserData for LuaInstance {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         use names::instance::*;
 
-        methods.add_method(FIND_FIRST_CHILD, |lua, this, name: String| {
-            let found = host(lua).tree.borrow().find_first_child(this.0, &name).map_err(tree_err)?;
+        methods.add_method(FIND_FIRST_CHILD, |lua, this, (name, recursive): (String, Option<bool>)| {
+            let found = {
+                let host = host(lua);
+                let tree = host.tree.borrow();
+                match tree.find_first_child(this.0, &name).map_err(tree_err)? {
+                    Some(id) => Some(id),
+                    None if recursive == Some(true) => tree
+                        .descendants(this.0)
+                        .map_err(tree_err)?
+                        .into_iter()
+                        .find(|d| tree.name(*d) == Ok(name.as_str())),
+                    None => None,
+                }
+            };
             found.map(|id| push_instance(lua, id)).transpose()
         });
         methods.add_method(FIND_FIRST_CHILD_OF_CLASS, |lua, this, class: String| {
@@ -1280,12 +1301,15 @@ impl UserData for LuaInstance {
         methods.add_method(CLONE, |lua, this, ()| {
             let host = host(lua);
             let mut tree = host.tree.borrow_mut();
+            if !tree.archivable(this.0) {
+                return Ok(None);
+            }
             if tree.held() >= playlibre_instance::MOST_INSTANCES {
                 return Err(tree_err(TreeError::TooMany));
             }
             let copy = tree.clone_subtree(this.0).map_err(tree_err)?;
             drop(tree);
-            push_instance(lua, copy)
+            push_instance(lua, copy).map(Some)
         });
         methods.add_method(GET_SERVICE, |lua, this, name: String| {
             require_class(lua, this.0, ClassKind::DataModel, GET_SERVICE)?;
@@ -1596,6 +1620,7 @@ impl UserData for LuaInstance {
                 ))
             })?;
             set_heard_now(lua, id, class, property, value)?;
+            crate::world::after_set(lua, id, class, property)?;
             if property == Property::Disabled && is_script_class(class) {
                 script_toggled(lua, id);
             }
@@ -2201,6 +2226,10 @@ fn step_tweens(lua: &Lua, dt: f64) {
 pub(crate) struct Signal(pub(crate) SignalKind);
 
 impl UserData for Signal {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        fields.add_meta_field(MetaMethod::Type, "RBXScriptSignal");
+    }
+
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         for name in [names::signal::CONNECT, names::signal::CONNECT_PARALLEL, names::signal::OLD_CONNECT] {
             methods.add_method(name, |lua, this, handler: Function| {
@@ -2250,6 +2279,7 @@ struct ConnectionHandle(u64);
 
 impl UserData for ConnectionHandle {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        fields.add_meta_field(MetaMethod::Type, "RBXScriptConnection");
         for name in [names::signal::CONNECTED, names::signal::OLD_CONNECTED] {
             fields
                 .add_field_method_get(name, |lua, this| Ok(host(lua).connections.borrow().contains(this.0)));

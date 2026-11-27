@@ -1069,6 +1069,12 @@ impl InstanceTree {
         Ok(new_id)
     }
 
+    /// Whether `id` is copied by [`Self::clone_subtree`] (a script can set
+    /// `Archivable` off).
+    pub fn archivable(&self, id: InstanceId) -> bool {
+        !matches!(self.get_extra(id, "Archivable"), Ok(Some(PropertyValue::Bool(false))))
+    }
+
     fn clone_inner(
         &mut self,
         id: InstanceId,
@@ -1087,7 +1093,7 @@ impl InstanceTree {
         copies.insert(id, new_id);
         self.changes.push(Change::Created(new_id));
         for child in children {
-            if self.data(child)?.destroyed {
+            if self.data(child)?.destroyed || !self.archivable(child) {
                 continue;
             }
             let child_copy = self.clone_inner(child, copies)?;

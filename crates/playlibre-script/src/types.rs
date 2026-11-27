@@ -1,7 +1,7 @@
 //! Value types that don't need the host: CFrame, Vector2 and UDim2.
 //! Every script-visible name comes from [`crate::names`].
 
-use mlua::{Lua, MetaMethod, Table, UserData, UserDataFields, UserDataMethods, Value};
+use mlua::{Lua, MetaMethod, Table, UserData, UserDataFields, UserDataMethods, Value, Variadic};
 use playlibre_instance::{CFrame, Rotation, UDim, UDim2, Vec2, Vec3};
 
 use crate::bindings::{LuaVector3, as_number, as_vector3};
@@ -79,25 +79,45 @@ impl UserData for LuaCFrame {
             });
         }
         for name in [TO_WORLD_SPACE, "toWorldSpace"] {
-            methods.add_method(name, move |_, this, other: Value| {
-                Ok(LuaCFrame(this.0 * cf_arg(&other, TO_WORLD_SPACE)?))
+            methods.add_method(name, move |_, this, list: Variadic<Value>| {
+                if list.is_empty() {
+                    return Ok(Variadic::from_iter([LuaCFrame(this.0)]));
+                }
+                list.iter()
+                    .map(|v| Ok(LuaCFrame(this.0 * cf_arg(v, TO_WORLD_SPACE)?)))
+                    .collect::<mlua::Result<Variadic<_>>>()
             });
         }
         for name in [TO_OBJECT_SPACE, "toObjectSpace"] {
-            methods.add_method(name, move |_, this, other: Value| {
-                Ok(LuaCFrame(this.0.inverse() * cf_arg(&other, TO_OBJECT_SPACE)?))
+            methods.add_method(name, move |_, this, list: Variadic<Value>| {
+                let inverse = this.0.inverse();
+                if list.is_empty() {
+                    return Ok(Variadic::from_iter([LuaCFrame(inverse)]));
+                }
+                list.iter()
+                    .map(|v| Ok(LuaCFrame(inverse * cf_arg(v, TO_OBJECT_SPACE)?)))
+                    .collect::<mlua::Result<Variadic<_>>>()
             });
         }
         for name in [POINT_TO_WORLD_SPACE, "pointToWorldSpace"] {
-            methods.add_method(name, |_, this, p: Value| {
-                let p = as_vector3(&p).ok_or_else(|| err("PointToWorldSpace expects a Vector3"))?;
-                Ok(LuaVector3(this.0.point_to_world(p)))
+            methods.add_method(name, |_, this, list: Variadic<Value>| {
+                list.iter()
+                    .map(|p| {
+                        let p = as_vector3(p).ok_or_else(|| err("PointToWorldSpace expects a Vector3"))?;
+                        Ok(LuaVector3(this.0.point_to_world(p)))
+                    })
+                    .collect::<mlua::Result<Variadic<_>>>()
             });
         }
         for name in [POINT_TO_OBJECT_SPACE, "pointToObjectSpace"] {
-            methods.add_method(name, |_, this, p: Value| {
-                let p = as_vector3(&p).ok_or_else(|| err("PointToObjectSpace expects a Vector3"))?;
-                Ok(LuaVector3(this.0.inverse().point_to_world(p)))
+            methods.add_method(name, |_, this, list: Variadic<Value>| {
+                let inverse = this.0.inverse();
+                list.iter()
+                    .map(|p| {
+                        let p = as_vector3(p).ok_or_else(|| err("PointToObjectSpace expects a Vector3"))?;
+                        Ok(LuaVector3(inverse.point_to_world(p)))
+                    })
+                    .collect::<mlua::Result<Variadic<_>>>()
             });
         }
         methods.add_method(TO_ORIENTATION, |_, this, ()| {
@@ -122,15 +142,24 @@ impl UserData for LuaCFrame {
             });
         }
         for name in ["VectorToWorldSpace", "vectorToWorldSpace"] {
-            methods.add_method(name, |_, this, v: Value| {
-                let v = as_vector3(&v).ok_or_else(|| err("VectorToWorldSpace expects a Vector3"))?;
-                Ok(LuaVector3(this.0.rot.apply(v)))
+            methods.add_method(name, |_, this, list: Variadic<Value>| {
+                list.iter()
+                    .map(|v| {
+                        let v = as_vector3(v).ok_or_else(|| err("VectorToWorldSpace expects a Vector3"))?;
+                        Ok(LuaVector3(this.0.rot.apply(v)))
+                    })
+                    .collect::<mlua::Result<Variadic<_>>>()
             });
         }
         for name in ["VectorToObjectSpace", "vectorToObjectSpace"] {
-            methods.add_method(name, |_, this, v: Value| {
-                let v = as_vector3(&v).ok_or_else(|| err("VectorToObjectSpace expects a Vector3"))?;
-                Ok(LuaVector3(this.0.rot.transpose().apply(v)))
+            methods.add_method(name, |_, this, list: Variadic<Value>| {
+                let back = this.0.rot.transpose();
+                list.iter()
+                    .map(|v| {
+                        let v = as_vector3(v).ok_or_else(|| err("VectorToObjectSpace expects a Vector3"))?;
+                        Ok(LuaVector3(back.apply(v)))
+                    })
+                    .collect::<mlua::Result<Variadic<_>>>()
             });
         }
         methods.add_method("Orthonormalize", |_, this, ()| {

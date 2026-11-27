@@ -281,6 +281,24 @@ function L.add_enums(lib, database)
 					rawset(existing, pair[1], setmetatable({ Name = pair[1], Value = pair[2], EnumType = stand_for }, ItemMeta))
 				end
 			end
+			local own = rawget(existing, "GetEnumItems")
+			if type(own) == "function" then
+				rawset(existing, "GetEnumItems", function(self)
+					local list, seen = own(self), {}
+					for _, it in ipairs(list) do
+						seen[it.Name] = true
+					end
+					for _, pair in ipairs(items) do
+						if not seen[pair[1]] then
+							table.insert(list, rawget(existing, pair[1]))
+						end
+					end
+					table.sort(list, function(a, b)
+						return a.Value < b.Value
+					end)
+					return list
+				end)
+			end
 		end
 	end
 	-- Every enumeration, as a list (`Enum:GetEnums()`).
@@ -1354,7 +1372,7 @@ add(props, "ProximityPrompt", {
 	ClickablePrompt = true,
 	AutoLocalize = true,
 	UIOffset = Vector2.zero,
-	GamepadKeyCode = NIL,
+	GamepadKeyCode = "KeyCode.ButtonX",
 	RootLocalizationTable = NIL,
 })
 add(methods, "ProximityPrompt", {
@@ -1363,6 +1381,16 @@ add(methods, "ProximityPrompt", {
 })
 plain_signals("ProximityPrompt", { "PromptShown", "PromptHidden", "PromptButtonHoldBegan", "PromptButtonHoldEnded" })
 add(props, "ClickDetector", { CursorIcon = "" })
+for _, class in { "ImageLabel", "ImageButton" } do
+	add(getters, class, {
+		SliceCenter = function(_, s)
+			return s.values.SliceCenter or Rect.new(0, 0, 0, 0)
+		end,
+		TileSize = function(_, s)
+			return s.values.TileSize or UDim2.fromScale(1, 1)
+		end,
+	})
+end
 plain_signals("ClickDetector", { "MouseHoverEnter", "MouseHoverLeave", "RightMouseClick" })
 add(props, "Tool", {
 	RequiresHandle = true,
@@ -2455,6 +2483,14 @@ local function editable_mesh()
 end
 
 local SERVICES = {
+	MaterialService = {
+		props = { Use2022Materials = true },
+		methods = {
+			GetMaterialVariant = returns(nil),
+			GetBaseMaterialOverride = returns(""),
+			SetBaseMaterialOverride = NOOP,
+		},
+	},
 	GamepadService = {
 		props = { GamepadCursorEnabled = false },
 		signals = { "GamepadThumbstick1Changed" },
@@ -2908,6 +2944,12 @@ local SERVICE_EXTRAS = {
 				return L.key_pages({})
 			end,
 			GetSubscriptionProductInfoAsync = function()
+				return {}
+			end,
+			GetUserSubscriptionStatusAsync = function()
+				return { IsSubscribed = false, IsRenewing = false }
+			end,
+			GetUserSubscriptionPaymentHistoryAsync = function()
 				return {}
 			end,
 		},
