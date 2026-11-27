@@ -3,7 +3,7 @@
 What changed in each release. The full list of commits for each one is on
 its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 
-## Unreleased
+## 0.1.23 (2026-11-27)
 
 - **Limited items:** creators can make a priced item limited, with a stock,
   a number of days on sale, or both. Each copy has a serial number. Owners
