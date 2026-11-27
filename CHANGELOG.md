@@ -3,6 +3,10 @@
 What changed in each release. The full list of commits for each one is on
 its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 
+## 0.1.24 (2026-11-27)
+
+- **Android:** 32-bit phones get the app again; 0.1.23 didn't build for them.
+
 ## 0.1.23 (2026-11-27)
 
 - **Limited items:** creators can make a priced item limited, with a stock,
