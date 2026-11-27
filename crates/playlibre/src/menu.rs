@@ -918,13 +918,7 @@ const DONATE: &str = "https://playlibre.net/donate";
 
 fn languages(ui: &mut egui::Ui) {
     for language in crate::i18n::Language::ALL {
-        let missing_font = language == crate::i18n::Language::Chinese && !theme::has_chinese_font();
-        let item = ui
-            .add_enabled(
-                !missing_font,
-                egui::Button::selectable(crate::i18n::current() == language, language.name()),
-            )
-            .on_disabled_hover_text(t("This computer has no font with Chinese characters."));
+        let item = ui.add(egui::Button::selectable(crate::i18n::current() == language, language.name()));
         if item.clicked() {
             crate::i18n::set(language, true);
             theme::reload_fonts(ui.ctx());

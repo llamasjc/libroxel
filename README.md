@@ -917,8 +917,8 @@ included with the program:
 
 - [Selawik](https://github.com/microsoft/Selawik) for headings and text, with
   [Atkinson Hyperlegible](https://fonts.google.com/specimen/Atkinson+Hyperlegible)
-  filling in characters it lacks, and [IBM Plex Mono](https://github.com/IBM/plex)
-  for code, all under the SIL Open Font License 1.1 (see
+  filling in characters it lacks, [Noto Sans SC](https://github.com/notofonts/noto-cjk)
+  for Chinese, and [IBM Plex Mono](https://github.com/IBM/plex) for code, all under the SIL Open Font License 1.1 (see
   `crates/playlibre/assets/fonts/` and `web/fonts/`).
 - [Phosphor](https://phosphoricons.com) icons, under the MIT License, through the
   `egui-phosphor` crate.

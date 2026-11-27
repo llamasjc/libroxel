@@ -371,7 +371,6 @@
  "The older spinner: put one inside a loose part to spin it at AngularVelocity, with up to MaxTorque about each axis.": "O girador antigo: coloque dentro de uma peça solta para girá-la a AngularVelocity, com até MaxTorque em cada eixo.",
  "The player's view. Scripts reach it as `workspace.CurrentCamera`; set CameraType to Scriptable and move its CFrame to take over the view.": "A visão do jogador. Os scripts a acessam como `workspace.CurrentCamera`; defina CameraType como Scriptable e mova o CFrame para assumir a visão.",
  "They will see and can change everything, scripts too": "A pessoa verá e poderá mudar tudo, inclusive os scripts",
- "This computer has no font with Chinese characters.": "Este computador não tem nenhuma fonte com caracteres chineses.",
  "Throw it away": "Descartar",
  "Title": "Título",
  "Tool": "Ferramenta",

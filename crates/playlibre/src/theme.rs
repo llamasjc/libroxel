@@ -96,8 +96,7 @@ fn fonts_for(language: crate::i18n::Language) -> FontDefinitions {
     add("atkinson", include_bytes!("../assets/fonts/AtkinsonHyperlegible-Regular.ttf"));
     add("plex-mono", include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf"));
     add("phosphor", egui_phosphor::variants::bytes::bold::FONT);
-    // Chinese needs a font with its characters: the computer's own, rather
-    // than adding megabytes to every download.
+    add("noto-sc", include_bytes!("../assets/fonts/NotoSansSC-Regular.otf"));
     let cjk = (language == crate::i18n::Language::Chinese)
         .then(chinese_font)
         .flatten()
@@ -108,7 +107,8 @@ fn fonts_for(language: crate::i18n::Language) -> FontDefinitions {
     let fallback: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let symbols = symbol_font().map(|data| fonts.font_data.insert("symbols".to_owned(), data)).is_some();
     let family = |first: &str| {
-        let mut list = vec![first.to_owned(), "atkinson".to_owned(), "phosphor".to_owned()];
+        let mut list =
+            vec![first.to_owned(), "atkinson".to_owned(), "phosphor".to_owned(), "noto-sc".to_owned()];
         if cjk {
             list.push("cjk".to_owned());
         }
@@ -119,7 +119,7 @@ fn fonts_for(language: crate::i18n::Language) -> FontDefinitions {
         list
     };
     let proportional = family("selawik");
-    let mut mono = vec!["plex-mono".to_owned(), "phosphor".to_owned()];
+    let mut mono = vec!["plex-mono".to_owned(), "phosphor".to_owned(), "noto-sc".to_owned()];
     if symbols {
         mono.push("symbols".to_owned());
     }
@@ -192,11 +192,6 @@ fn symbol_font() -> Option<std::sync::Arc<FontData>> {
             .map(|bytes| std::sync::Arc::new(FontData::from_owned(bytes)))
     });
     FOUND.clone()
-}
-
-/// Whether Chinese text can be drawn on this computer.
-pub fn has_chinese_font() -> bool {
-    chinese_font().is_some()
 }
 
 const INSTALLED: &str = "libroxel theme installed";
@@ -1781,26 +1776,41 @@ mod screen_reader_tests {
         assert_eq!(spoken("Kart race"), "Kart race");
     }
 
-    /// In Chinese, the computer's Chinese font is used, so the app's
-    /// translated text draws as characters, not boxes.
     #[test]
-    fn chinese_text_draws_with_the_computers_font() {
-        if !has_chinese_font() {
-            eprintln!("no Chinese font on this computer; nothing to check");
-            return;
-        }
-        let ctx = egui::Context::default();
-        ctx.set_fonts(fonts_for(crate::i18n::Language::Chinese));
-        let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+    fn chinese_text_draws_in_every_language() {
         let home = crate::i18n::t_in(crate::i18n::Language::Chinese, "Home");
         assert_eq!(home, "首页");
-        let drawn = ctx.fonts_mut(|f| f.has_glyphs(&display(15.0), home));
-        assert!(drawn, "{home} has its characters");
-        // In English the Chinese font isn't loaded at all.
+        for language in crate::i18n::Language::ALL {
+            let ctx = egui::Context::default();
+            ctx.set_fonts(fonts_for(language));
+            let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+            for font in [display(15.0), FontId::proportional(15.0), FontId::monospace(15.0)] {
+                assert!(ctx.fonts_mut(|f| f.has_glyphs(&font, home)), "{language:?}");
+                assert!(ctx.fonts_mut(|f| f.has_glyphs(&font, "简体中文，你好！こんにちは")), "{language:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_translation_draws() {
         let ctx = egui::Context::default();
         ctx.set_fonts(fonts_for(crate::i18n::Language::English));
         let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
-        assert!(!ctx.fonts_mut(|f| f.has_glyphs(&display(15.0), "首页")));
+        for language in crate::i18n::Language::ALL {
+            let text = std::fs::read_to_string(format!(
+                "{}/assets/lang/{}.json",
+                env!("CARGO_MANIFEST_DIR"),
+                language.code()
+            ))
+            .unwrap_or_default();
+            let missing: String = text
+                .chars()
+                .filter(|c| {
+                    !c.is_whitespace() && !ctx.fonts_mut(|f| f.has_glyphs(&display(15.0), &c.to_string()))
+                })
+                .collect();
+            assert!(missing.is_empty(), "{language:?}: {missing}");
+        }
     }
 
     #[test]

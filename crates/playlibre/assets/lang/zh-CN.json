@@ -371,7 +371,6 @@
  "The older spinner: put one inside a loose part to spin it at AngularVelocity, with up to MaxTorque about each axis.": "旧式旋转器：把它放进松散的零件里，以每个轴最多 MaxTorque 让它以 AngularVelocity 旋转。",
  "The player's view. Scripts reach it as `workspace.CurrentCamera`; set CameraType to Scriptable and move its CFrame to take over the view.": "玩家的视角。脚本通过 `workspace.CurrentCamera` 访问它；把 CameraType 设为 Scriptable 并移动它的 CFrame 即可接管视角。",
  "They will see and can change everything, scripts too": "对方将能看到并修改所有内容，包括脚本",
- "This computer has no font with Chinese characters.": "这台电脑没有包含中文字符的字体。",
  "Throw it away": "丢弃",
  "Title": "标题",
  "Tool": "工具",
