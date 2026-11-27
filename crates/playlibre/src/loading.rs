@@ -3,9 +3,9 @@ use bevy_egui::egui::{self, Color32, Pos2, Rect, Shape, Stroke, Vec2, pos2, vec2
 use crate::i18n::{t, tf};
 use crate::theme::{self, icon};
 
-const FADE: f64 = 0.4;
-const SHORTEST: f64 = 0.9;
-const LONGEST_FILL: f64 = 10.0;
+const FADE: f64 = 0.25;
+const SHORTEST: f64 = 0.3;
+const LONGEST_FILL: f64 = 5.0;
 /// How long a join may go without anything new from the host before the
 /// screen gives up and shows what came, rather than spinning forever.
 const LONGEST_STALL: f64 = 30.0;

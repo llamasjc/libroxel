@@ -520,6 +520,9 @@ pub fn run() {
     .add_systems(EguiPrimaryContextPass, ui::editor_ui)
     .add_systems(Update, (viewport::draw_selection, viewport::draw_grid).after(EngineSet::Sync))
     .add_systems(Update, (update_title, toggle_fullscreen));
+    if !MOBILE {
+        app.add_systems(Last, pace_menus);
+    }
     if MOBILE {
         app.insert_resource(bevy::winit::WinitSettings {
             focused_mode: bevy::winit::UpdateMode::Continuous,
@@ -641,6 +644,25 @@ fn toggle_fullscreen(
             }
             _ => bevy::window::WindowMode::Windowed,
         };
+    }
+}
+
+/// Draws the menus only when something changes, instead of every frame.
+fn pace_menus(engine: NonSend<EngineState>, mut winit: ResMut<bevy::winit::WinitSettings>) {
+    use bevy::winit::UpdateMode;
+    let idle = engine.session.is_none()
+        && playlibre_engine::view::MENU_SCREEN.load(std::sync::atomic::Ordering::Relaxed);
+    let (focused, unfocused) = if idle {
+        (
+            UpdateMode::reactive(std::time::Duration::from_millis(100)),
+            UpdateMode::reactive_low_power(std::time::Duration::from_millis(500)),
+        )
+    } else {
+        (UpdateMode::Continuous, bevy::winit::WinitSettings::game().unfocused_mode)
+    };
+    if winit.focused_mode != focused {
+        winit.focused_mode = focused;
+        winit.unfocused_mode = unfocused;
     }
 }
 

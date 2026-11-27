@@ -385,22 +385,6 @@ impl Conn {
         self.seal();
     }
 
-    /// A message already written out as a line (ending in a newline), as
-    /// a newcomer's world is: compressed like any other, then encrypted.
-    fn send_line(&mut self, line: &[u8]) {
-        if self.closed {
-            return;
-        }
-        let body = line.strip_suffix(b"\n").unwrap_or(line);
-        match (body.len() > COMPRESS_OVER).then(|| pack(body)).flatten() {
-            Some(packed) => self.plain_out.extend_from_slice(&packed),
-            None => self.plain_out.extend_from_slice(body),
-        }
-        self.plain_out.push(b'\n');
-        self.said = Instant::now();
-        self.seal();
-    }
-
     /// Lets go of messages already acted on, on the parser's thread if
     /// there is one: freeing a world's worth takes a while.
     pub(crate) fn discard(&self, messages: Vec<Json>) {
@@ -687,7 +671,7 @@ fn worlds_for(
     tree: InstanceTree,
     count: usize,
     primed: Option<Sender<Replicator>>,
-) -> Vec<Receiver<Vec<Vec<u8>>>> {
+) -> Vec<Receiver<Vec<std::sync::Arc<[u8]>>>> {
     let (senders, receivers): (Vec<_>, Vec<_>) = (0..count).map(|_| channel()).unzip();
     std::thread::spawn(move || {
         let mut replicator = Replicator::default();
@@ -858,7 +842,7 @@ struct Peer {
     from: Option<SocketAddr>,
     account: Option<String>,
     queue: VecDeque<Out>,
-    world: Option<Receiver<Vec<Vec<u8>>>>,
+    world: Option<Receiver<Vec<std::sync::Arc<[u8]>>>>,
     /// When they connected.
     since: Instant,
     /// How many more messages, and script-running actions, they may send.
@@ -877,7 +861,6 @@ struct Peer {
 
 enum Out {
     Message(Json),
-    Line(Vec<u8>),
     /// A message [`encode`]d once for everyone.
     Encoded(std::sync::Arc<[u8]>),
     World,
@@ -928,7 +911,7 @@ impl Peer {
     }
 
     /// Queues the whole world, as [`worlds_for`] writes it out.
-    fn send_world(&mut self, world: Receiver<Vec<Vec<u8>>>) {
+    fn send_world(&mut self, world: Receiver<Vec<std::sync::Arc<[u8]>>>) {
         self.world = Some(world);
         self.queue.push_back(Out::World);
     }
@@ -948,7 +931,7 @@ impl Peer {
                                 self.world = None;
                                 self.queue.pop_front();
                                 for line in lines.into_iter().rev() {
-                                    self.queue.push_front(Out::Line(line));
+                                    self.queue.push_front(Out::Encoded(line));
                                 }
                             }
                             Err(TryRecvError::Empty) => break,
@@ -961,7 +944,6 @@ impl Peer {
                     }
                     Some(_) => match self.queue.pop_front() {
                         Some(Out::Message(message)) => self.conn.send(&message),
-                        Some(Out::Line(line)) => self.conn.send_line(&line),
                         Some(Out::Encoded(body)) => self.conn.send_encoded(&body),
                         _ => {}
                     },
@@ -1165,14 +1147,20 @@ fn snapshot(tree: &InstanceTree, id: InstanceId) -> Option<Sent> {
     })
 }
 
-fn world_lines(ops: &[Json]) -> Vec<Vec<u8>> {
-    ops.chunks(CHUNK)
-        .filter_map(|ops| {
-            let mut line = serde_json::to_vec(&json!({ "t": "rep", "ops": ops })).ok()?;
-            line.push(b'\n');
-            Some(line)
-        })
-        .collect()
+fn world_lines(ops: &[Json]) -> Vec<std::sync::Arc<[u8]>> {
+    let line = |ops: &[Json]| encode(&json!({ "t": "rep", "ops": ops }));
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(8);
+    let share = ops.len().div_ceil(threads).div_ceil(CHUNK).max(1) * CHUNK;
+    if threads < 2 || ops.len() <= share {
+        return ops.chunks(CHUNK).filter_map(line).collect();
+    }
+    std::thread::scope(|scope| {
+        let parts: Vec<_> = ops
+            .chunks(share)
+            .map(|part| scope.spawn(move || part.chunks(CHUNK).filter_map(line).collect::<Vec<_>>()))
+            .collect();
+        parts.into_iter().flat_map(|part| part.join().unwrap_or_default()).collect()
+    })
 }
 
 pub(crate) fn bits(id: InstanceId) -> Json {
@@ -2874,7 +2862,7 @@ impl PlaySession {
                     .collect();
                 peer.send(json!({ "t": "welcome", "services": services, "total": ops.len(), "ka": true }));
                 for line in world_lines(&ops) {
-                    peer.queue.push_back(Out::Line(line));
+                    peer.queue.push_back(Out::Encoded(line));
                 }
                 peer.send(json!({ "t": "you", "player": bits(player) }));
                 peer.fresh = false;

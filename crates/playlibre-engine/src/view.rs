@@ -305,7 +305,9 @@ fn sync_parts(
     // Nothing of the 3D view shows behind a loading screen: keep up only now
     // and then (so the world is there when it goes), leaving the frames to
     // the loading itself.
-    if engine.is_playing() && view_hidden() {
+    let loading = LOADING_SCREEN.load(std::sync::atomic::Ordering::Relaxed);
+    let arriving = engine.session.as_ref().is_some_and(|s| s.joining().is_some());
+    if engine.is_playing() && view_hidden() && (arriving || !loading) {
         sync.hidden_frames += 1;
         if !sync.hidden_frames.is_multiple_of(10) {
             return;
@@ -325,6 +327,7 @@ fn sync_parts(
         f32::INFINITY
     };
     let limited = detail || radius.is_finite();
+    let budget = if loading { SPAWN_BUDGET * 4 } else { SPAWN_BUDGET };
     let small = quality.as_ref().map_or(1.0, |q| q.small_part_reach());
     let tree_ptr = std::rc::Rc::as_ptr(&engine.tree) as usize;
     let (epoch, _) = tree.touched_since(0);
@@ -425,7 +428,7 @@ fn sync_parts(
         // Parts that just came in range all spawn, however many (the view
         // keeps up with the world as it arrives); what's left of the budget
         // goes to the nearest of the parts still waiting.
-        let room = SPAWN_BUDGET.saturating_sub(fresh.len());
+        let room = budget.saturating_sub(fresh.len());
         let arrived: FastSet<InstanceId> = fresh.iter().map(|(_, id)| *id).collect();
         work.extend(fresh.into_iter().map(|(_, id)| id));
         let mut taken = 0;
@@ -485,12 +488,12 @@ fn sync_parts(
                 sync.far.insert(id);
             }
         }
-        sync.pending = fresh.len() > SPAWN_BUDGET;
+        sync.pending = fresh.len() > budget;
         sync.backlog.clear();
         if sync.pending {
             // Farthest first: the nearest come off the end, a budget a frame.
             fresh.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
-            let now = fresh.split_off(fresh.len() - SPAWN_BUDGET);
+            let now = fresh.split_off(fresh.len() - budget);
             sync.backlog = fresh.into_iter().map(|(_, id)| id).collect();
             fresh = now;
         }
@@ -690,6 +693,9 @@ pub static VIEW_FILLING: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 /// in bigger pieces a frame.
 pub static LOADING_SCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Set by the app while its menus cover the whole window.
+pub static MENU_SCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Whether the 3D view isn't being drawn: a loading screen covers it, or
 /// the game turned 3D rendering off.
 pub fn view_hidden() -> bool {
@@ -700,7 +706,8 @@ pub fn view_hidden() -> bool {
 fn cover_view(mut cameras: Query<&mut Camera, With<CameraRig>>) {
     let covered = VIEW_COVERED.load(std::sync::atomic::Ordering::Relaxed)
         || !playlibre_script::RENDERING_3D.load(std::sync::atomic::Ordering::Relaxed)
-        || LOADING_SCREEN.load(std::sync::atomic::Ordering::Relaxed);
+        || LOADING_SCREEN.load(std::sync::atomic::Ordering::Relaxed)
+        || MENU_SCREEN.load(std::sync::atomic::Ordering::Relaxed);
     for mut camera in &mut cameras {
         if camera.is_active == covered {
             camera.is_active = !covered;
@@ -1042,6 +1049,11 @@ pub struct GraphicsQuality {
     applied: Option<u8>,
     /// A phone or tablet: see [`GraphicsQuality::phone`].
     phone: bool,
+    /// Drawing on the processor, without a graphics driver.
+    software: bool,
+    /// At level 1, the share of the pixels still drawn once frames are
+    /// slow even there.
+    squeeze: f32,
 }
 
 impl Default for GraphicsQuality {
@@ -1070,6 +1082,18 @@ impl GraphicsQuality {
             smoothing_dropped: false,
             applied: None,
             phone: false,
+            software: false,
+            squeeze: 1.0,
+        }
+    }
+
+    /// For drawing without a graphics driver: automatic starts at the
+    /// lowest level and stays there.
+    pub fn software(&mut self) {
+        self.software = true;
+        if self.auto {
+            self.level = 1;
+            self.ceiling = 1;
         }
     }
 
@@ -1091,7 +1115,13 @@ impl GraphicsQuality {
 
     /// The highest level automatic climbs back to.
     fn top(&self) -> u8 {
-        if self.phone { Self::PHONE_TOP } else { Self::MAX }
+        if self.software {
+            1
+        } else if self.phone {
+            Self::PHONE_TOP
+        } else {
+            Self::MAX
+        }
     }
 
     /// Switches to automatic, or to a fixed level.
@@ -1099,8 +1129,14 @@ impl GraphicsQuality {
         let target = self.target;
         let average = self.average;
         let phone = self.phone;
+        let software = self.software;
         *self = Self::new(auto, level);
         self.phone = phone;
+        self.software = software;
+        if software && auto {
+            self.level = 1;
+            self.ceiling = 1;
+        }
         if phone && auto {
             self.ceiling = Self::PHONE_TOP.max(self.level);
         }
@@ -1127,6 +1163,17 @@ impl GraphicsQuality {
         if self.since_drop > 60.0 && self.ceiling < self.top() {
             self.ceiling += 1;
             self.since_drop = 0.0;
+        }
+        if self.slow_for > 1.5 && self.level == 1 && self.squeeze > 0.6 {
+            self.squeeze = (self.squeeze - 0.15).max(0.6);
+            self.slow_for = 0.0;
+            self.fast_for = 0.0;
+            return false;
+        }
+        if self.fast_for > 4.0 && self.level == 1 && self.squeeze < 1.0 {
+            self.squeeze = (self.squeeze + 0.15).min(1.0);
+            self.fast_for = 0.0;
+            return false;
         }
         if self.slow_for > 1.5 && self.level > 1 {
             let step = match self.average / goal {
@@ -1243,9 +1290,9 @@ impl GraphicsQuality {
             return 1.0;
         }
         match self.level {
-            1 => 0.6,
-            2 => 0.7,
-            3 => 0.85,
+            1 => 0.5 * self.squeeze,
+            2 => 0.65,
+            3 => 0.8,
             _ => 1.0,
         }
     }
@@ -3055,6 +3102,27 @@ mod tests {
         // outside the world is followed at all.
         assert!(subject_followed(&tree, humanoid, Some(humanoid)).is_none());
         assert!(subject_followed(&tree, stored, None).is_none());
+    }
+
+    #[test]
+    fn slow_frames_at_the_lowest_level_draw_fewer_pixels() {
+        let mut q = GraphicsQuality::new(true, 1);
+        let full = q.render_share();
+        for _ in 0..600 {
+            q.frame(0.2);
+        }
+        assert_eq!(q.level, 1);
+        assert!(q.render_share() < full * 0.7);
+        for _ in 0..3000 {
+            q.frame(1.0 / 120.0);
+        }
+        assert!(q.level > 1);
+        let mut cpu = GraphicsQuality::default();
+        cpu.software();
+        for _ in 0..30_000 {
+            cpu.frame(1.0 / 120.0);
+        }
+        assert_eq!(cpu.level, 1);
     }
 
     #[test]

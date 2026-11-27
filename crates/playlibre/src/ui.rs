@@ -269,6 +269,18 @@ pub fn editor_ui(
         && let Some(info) = adapter
     {
         editor.graphics_adapter = format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type);
+        log(engine, LogLevel::Info, format!("Graphics: {}", editor.graphics_adapter));
+        if format!("{:?}", info.device_type) == "Cpu" {
+            if let Some(q) = quality.as_mut() {
+                q.software();
+            }
+            log(
+                engine,
+                LogLevel::Warn,
+                "No graphics driver is in use, so the processor draws everything and it is slow. \
+                 Install the driver for your graphics card.",
+            );
+        }
     }
     let mut actions: Vec<Action> = Vec::new();
     // Everything in the Output also goes to a log file.
@@ -389,6 +401,7 @@ pub fn editor_ui(
         editor.menu.open = true;
         editor.menu.scanned = false;
     }
+    playlibre_engine::view::MENU_SCREEN.store(editor.menu.open, std::sync::atomic::Ordering::Relaxed);
     if editor.menu.open {
         if engine.session.is_none() && !editor.dirty {
             let _ = crate::update::apply(false);
