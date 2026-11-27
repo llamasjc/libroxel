@@ -865,11 +865,12 @@ pub(crate) fn enum_number(item: EnumValue) -> i64 {
 }
 
 /// Reads an enum value of `kind` from a script value: an item, its name, or its number.
+#[allow(clippy::useless_conversion)]
 pub(crate) fn as_enum(kind: EnumKind, value: &Value) -> Option<EnumValue> {
     match value {
         Value::UserData(ud) => ud.borrow::<LuaEnumItem>().ok().map(|e| e.0).filter(|e| e.kind() == kind),
         Value::String(s) => names::enum_item_from_name(kind, &s.to_string_lossy()),
-        Value::Integer(n) => kind.items().iter().copied().find(|i| enum_number(*i) == *n),
+        Value::Integer(n) => kind.items().iter().copied().find(|i| enum_number(*i) == i64::from(*n)),
         Value::Number(n) if n.fract() == 0.0 => {
             kind.items().iter().copied().find(|i| enum_number(*i) as f64 == *n)
         }

@@ -103,11 +103,11 @@ pub(crate) fn index(lua: &Lua, id: InstanceId, class: ClassKind, key: &str) -> m
             let host = host(lua);
             let world = host.world.borrow();
             let who = &world.teleports.identity;
-            return Ok(Some(Value::Integer(match key {
+            return Ok(Some(Value::Number(match key {
                 game_info::PLACE_ID => who.place_id,
                 game_info::GAME_ID => who.game_id,
                 _ => who.private_server_owner_id,
-            })));
+            } as f64)));
         }
         game_info::CREATOR_ID if class == ClassKind::DataModel => {
             return Ok(Some(Value::Integer(0)));

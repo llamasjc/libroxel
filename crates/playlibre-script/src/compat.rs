@@ -1001,7 +1001,7 @@ fn badge_id(value: &Value) -> Option<String> {
 
 // A Luau integer is an i32 on 32-bit processors and an i64 elsewhere.
 #[allow(clippy::useless_conversion)]
-fn user_id(value: &Value) -> Option<i64> {
+fn whole_id(value: &Value) -> Option<i64> {
     match value {
         Value::Integer(n) => Some(i64::from(*n)),
         Value::Number(n) if n.fract() == 0.0 => Some(*n as i64),
@@ -1013,19 +1013,19 @@ fn user_id(value: &Value) -> Option<i64> {
 fn badge_service(lua: &Lua, t: &Table) -> mlua::Result<()> {
     for award in [AWARD_BADGE, "AwardBadgeAsync"] {
         method(lua, t, award, |lua, (user, badge): (Value, Value)| {
-            let (Some(user), Some(badge)) = (user_id(&user), badge_id(&badge)) else { return Ok(false) };
+            let (Some(user), Some(badge)) = (whole_id(&user), badge_id(&badge)) else { return Ok(false) };
             Ok(award_badge(lua, user, &badge))
         })?;
     }
     for has in [USER_HAS_BADGE_ASYNC, "UserHasBadge"] {
         method(lua, t, has, |lua, (user, badge): (Value, Value)| {
-            let (Some(user), Some(badge)) = (user_id(&user), badge_id(&badge)) else { return Ok(false) };
+            let (Some(user), Some(badge)) = (whole_id(&user), badge_id(&badge)) else { return Ok(false) };
             Ok(has_badge(lua, user, &badge))
         })?;
     }
     method(lua, t, CHECK_USER_BADGES_ASYNC, |lua, (user, badges): (Value, Option<Table>)| {
         let out = lua.create_table()?;
-        let (Some(user), Some(badges)) = (user_id(&user), badges) else { return Ok(out) };
+        let (Some(user), Some(badges)) = (whole_id(&user), badges) else { return Ok(out) };
         for badge in badges.sequence_values::<Value>() {
             let badge = badge?;
             if badge_id(&badge).is_some_and(|id| has_badge(lua, user, &id)) {
@@ -1201,11 +1201,7 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
                             }
                             _ => None,
                         };
-                        let pass = match &id {
-                            Value::Integer(n) => Some(*n),
-                            Value::Number(n) if n.fract() == 0.0 => Some(*n as i64),
-                            _ => None,
-                        };
+                        let pass = whole_id(&id);
                         let (Some(user), Some(pass)) = (user, pass) else {
                             return Err(mlua::Error::runtime(
                                 "PromptGamePassPurchase needs a player and a game pass id",
@@ -1229,11 +1225,7 @@ fn make_service(lua: &Lua, name: &'static str) -> mlua::Result<Table> {
                             }
                             _ => None,
                         };
-                        let product = match &id {
-                            Value::Integer(n) => Some(*n),
-                            Value::Number(n) if n.fract() == 0.0 => Some(*n as i64),
-                            _ => None,
-                        };
+                        let product = whole_id(&id);
                         let (Some(user), Some(product)) = (user, product) else {
                             return Err(mlua::Error::runtime(
                                 "PromptProductPurchase needs a player and a product id",
