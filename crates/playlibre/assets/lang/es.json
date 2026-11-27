@@ -477,5 +477,9 @@
  "Make an account or sign in to choose how you look. Until then you play with the usual look.": "Crea una cuenta o inicia sesión para elegir tu aspecto. Hasta entonces juegas con el aspecto de siempre.",
  "Make an account or sign in": "Crear una cuenta o iniciar sesión",
  "Looking up your account…": "Buscando tu cuenta…",
- "Your avatar was not saved: {error}": "Tu avatar no se guardó: {error}"
+ "Your avatar was not saved: {error}": "Tu avatar no se guardó: {error}",
+ "Leave the game?": "¿Salir del juego?",
+ "Reset your character?": "¿Reiniciar tu personaje?",
+ "You": "Tú",
+ "The donate page opened in your browser": "La página de donaciones se abrió en tu navegador"
 }

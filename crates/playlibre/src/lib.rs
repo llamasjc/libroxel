@@ -193,6 +193,8 @@ pub struct Editor {
     pub loading: loading::Loading,
     /// Esc pressed while playing: the game menu is open.
     pub paused: bool,
+    pub menu_tab: ui::MenuTab,
+    pub confirm: Option<ui::Confirm>,
     /// Fingers on a touch screen, for the on-screen controls.
     pub touch: touch::TouchPad,
     /// Which tab of the ribbon along the top is open.
@@ -290,6 +292,8 @@ impl Default for Editor {
             joined_from_editor: false,
             loading: Default::default(),
             paused: false,
+            menu_tab: ui::MenuTab::Players,
+            confirm: None,
             touch: Default::default(),
             ribbon: ui::RibbonTab::Home,
             show_explorer: true,

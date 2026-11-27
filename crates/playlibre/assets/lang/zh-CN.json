@@ -477,5 +477,9 @@
  "Make an account or sign in to choose how you look. Until then you play with the usual look.": "创建账号或登录后即可选择你的外观。在此之前你将使用默认外观。",
  "Make an account or sign in": "创建账号或登录",
  "Looking up your account…": "正在查找你的账号…",
- "Your avatar was not saved: {error}": "你的形象未保存：{error}"
+ "Your avatar was not saved: {error}": "你的形象未保存：{error}",
+ "Leave the game?": "离开游戏？",
+ "Reset your character?": "重置你的角色？",
+ "You": "你",
+ "The donate page opened in your browser": "捐赠页面已在你的浏览器中打开"
 }

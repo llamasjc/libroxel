@@ -1,6 +1,6 @@
 use bevy_egui::egui::{self, Color32, Pos2, Rect, Shape, Stroke, Vec2, pos2, vec2};
 
-use crate::i18n::t;
+use crate::i18n::{t, tf};
 use crate::theme::{self, icon};
 
 const FADE: f64 = 0.4;
@@ -19,11 +19,13 @@ pub struct Loading {
     done: Option<f64>,
     /// What the loading screen waited on, once it is done, for the Output.
     finished: Option<String>,
+    title: Option<String>,
+    by: Option<String>,
 }
 
 impl Loading {
-    pub fn start(&mut self, now: f64) {
-        *self = Self { began: Some(now), ..Self::default() };
+    pub fn start(&mut self, now: f64, title: Option<String>, by: Option<String>) {
+        *self = Self { began: Some(now), title, by, ..Self::default() };
     }
 
     pub fn stop(&mut self) {
@@ -115,7 +117,7 @@ impl Loading {
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 let (rect, _) = ui.allocate_exact_size(view.size(), egui::Sense::click_and_drag());
-                draw(ui.painter(), rect, t, shown, alpha);
+                draw(ui.painter(), rect, t, shown, alpha, self.title.as_deref(), self.by.as_deref());
                 // Only while it is still loading, not as it fades away.
                 self.done.is_none() && close_button(ui, rect)
             })
@@ -141,7 +143,15 @@ fn fade_color(c: Color32, a: f32) -> Color32 {
     c.gamma_multiply(a)
 }
 
-fn draw(painter: &egui::Painter, rect: Rect, t: f32, progress: f32, alpha: f32) {
+fn draw(
+    painter: &egui::Painter,
+    rect: Rect,
+    t: f32,
+    progress: f32,
+    alpha: f32,
+    title: Option<&str>,
+    by: Option<&str>,
+) {
     let top = Color32::from_rgb(14, 30, 58);
     let bottom = Color32::from_rgb(6, 12, 26);
     let mut back = egui::Mesh::default();
@@ -201,12 +211,26 @@ fn draw(painter: &egui::Painter, rect: Rect, t: f32, progress: f32, alpha: f32) 
     cube.faces(painter, center - vec2(0.0, lift), alpha);
     orbit(false);
 
-    let mark =
-        painter.layout_no_wrap("PlayLibre".to_owned(), theme::light(30.0), fade_color(Color32::WHITE, alpha));
+    let mark = painter.layout(
+        title.unwrap_or("PlayLibre").to_owned(),
+        theme::light(30.0),
+        fade_color(Color32::WHITE, alpha),
+        rect.width() - 40.0,
+    );
     let mark_at = pos2(rect.center().x - mark.size().x / 2.0, center.y + unit * 2.5);
+    let mut below = mark_at.y + mark.size().y;
     painter.galley(mark_at, mark, Color32::WHITE);
+    if let Some(by) = by {
+        let line = painter.layout_no_wrap(
+            tf("By {author}", &[("author", &by)]),
+            theme::display(15.0),
+            fade_color(Color32::from_white_alpha(170), alpha),
+        );
+        painter.galley(pos2(rect.center().x - line.size().x / 2.0, below + 4.0), line, Color32::WHITE);
+        below += 24.0;
+    }
 
-    let bar = Rect::from_center_size(pos2(rect.center().x, mark_at.y + 58.0), vec2(220.0, 4.0));
+    let bar = Rect::from_center_size(pos2(rect.center().x, below + 22.0), vec2(220.0, 4.0));
     painter.rect_filled(bar, 2.0, fade_color(Color32::from_white_alpha(28), alpha));
     let shown = if progress > 0.0 {
         Rect::from_min_size(bar.min, vec2(bar.width() * progress.clamp(0.0, 1.0), bar.height()))
@@ -330,7 +354,7 @@ mod tests {
     #[test]
     fn a_join_that_stops_coming_lets_the_screen_go() {
         let mut loading = Loading::default();
-        loading.start(0.0);
+        loading.start(0.0, None, None);
         for i in 0..100 {
             frame(&mut loading, f64::from(i) * 0.5, Some(0.4));
         }
@@ -368,7 +392,7 @@ mod tests {
     #[test]
     fn a_join_that_keeps_coming_keeps_the_screen() {
         let mut loading = Loading::default();
-        loading.start(0.0);
+        loading.start(0.0, None, None);
         for i in 0..100 {
             frame(&mut loading, f64::from(i) * 0.5, Some(i as f32 / 200.0));
         }

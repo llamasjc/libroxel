@@ -606,7 +606,9 @@ pub fn editor_ui(
                 hotbar_hit = gui::hotbar(ui, &tree_rc.borrow(), &session.hotbar());
             }
             editor.voice.ui(ui, &tree_rc.borrow());
-            if let Some(name) = editor.text_chat.ui(ui, engine.session.as_mut()) {
+            let chat_on = engine.session.as_ref().is_none_or(|s| s.runtime().core_gui_enabled("Chat"));
+            let under = editor.player_mode.then(|| under_top_bar(ui.max_rect(), editor.touch.seen));
+            if chat_on && let Some(name) = editor.text_chat.ui(ui, engine.session.as_mut(), under) {
                 let evidence = editor.text_chat.evidence(&game_name(editor), &name);
                 editor.platform.report_player(&name, evidence);
             }
@@ -670,9 +672,10 @@ pub fn editor_ui(
                 ui.painter().galley(rect.min + egui::vec2(5.0, 5.0), galley, Color32::WHITE);
             }
             let list_on = engine.session.as_ref().is_none_or(|s| s.runtime().core_gui_enabled("PlayerList"));
-            if playing && list_on && (editor.players_shown || !editor.touch.seen) {
+            if playing && list_on && editor.players_shown {
                 let game = game_name(editor);
-                leaderboard(ui, &tree_rc.borrow(), &mut editor.platform, &editor.text_chat, &game);
+                let me = engine.session.as_ref().and_then(PlaySession::local_player);
+                leaderboard(ui, &tree_rc.borrow(), me, &mut editor.platform, &mut editor.text_chat, &game);
             } else if playing && editor.platform.reporting_player() {
                 let rect = ui.max_rect();
                 egui::Area::new(egui::Id::new("report-player"))
@@ -1137,15 +1140,19 @@ fn shortcuts(ctx: &egui::Context, editor: &mut Editor, playing: bool, actions: &
         if i.consume_key(Modifiers::NONE, Key::F5) {
             actions.push(if playing { Action::Stop } else { Action::Play });
         }
-        if playing && i.consume_key(Modifiers::NONE, Key::Escape) {
-            if editor.player_mode {
-                editor.paused = !editor.paused;
-            } else {
+        if playing && !typing && i.consume_key(Modifiers::NONE, Key::Escape) {
+            if !editor.player_mode {
                 actions.push(Action::Stop);
+            } else if editor.confirm.take().is_none() {
+                editor.paused = !editor.paused;
+                editor.menu_tab = MenuTab::Players;
             }
         }
         if typing {
             return;
+        }
+        if playing && !editor.paused && i.consume_key(Modifiers::NONE, Key::Tab) {
+            editor.players_shown = !editor.players_shown;
         }
         for (key, tool) in [
             (Key::Num1, Tool::Select),
@@ -1344,6 +1351,69 @@ fn insert_menu(ui: &mut egui::Ui, actions: &mut Vec<Action>) {
 }
 
 /// The menu Esc opens while playing a game from the main menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MenuTab {
+    #[default]
+    Players,
+    Settings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Confirm {
+    Leave,
+    Reset,
+}
+
+fn top_bar_size(view: egui::Rect, touch: bool) -> f32 {
+    if touch { theme::hud_size(view) } else { 36.0 }
+}
+
+fn under_top_bar(view: egui::Rect, touch: bool) -> f32 {
+    10.0 + top_bar_size(view, touch) + 8.0 + 6.0
+}
+
+fn top_bar(
+    ctx: &egui::Context,
+    editor: &mut Editor,
+    session: Option<&PlaySession>,
+    view: egui::Rect,
+    list_on: bool,
+) {
+    let touch = editor.touch.seen;
+    let size = top_bar_size(view, touch);
+    let chat =
+        editor.text_chat.available(session) && session.is_none_or(|s| s.runtime().core_gui_enabled("Chat"));
+    let players = touch && list_on;
+    let count = 1.0 + f32::from(u8::from(chat)) + f32::from(u8::from(players));
+    let bar = egui::Rect::from_min_size(
+        view.min + egui::vec2(10.0, 10.0),
+        egui::vec2(size * count + 8.0, size + 8.0),
+    );
+    egui::Area::new("game-menu-button".into()).fixed_pos(bar.min).show(ctx, |ui| {
+        theme::hud_back(ui.painter(), bar);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(bar.shrink(4.0)), |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.horizontal(|ui| {
+                if theme::hud_button(ui, icon::LIST, t("Menu"), false, size).clicked() {
+                    editor.paused = true;
+                    editor.menu_tab = MenuTab::Players;
+                }
+                if chat
+                    && theme::hud_button(ui, icon::CHAT_CIRCLE, t("Chat"), editor.text_chat.is_open(), size)
+                        .clicked()
+                {
+                    editor.text_chat.toggle();
+                }
+                if players
+                    && theme::hud_button(ui, icon::USERS, t("Players"), editor.players_shown, size).clicked()
+                {
+                    editor.players_shown = !editor.players_shown;
+                }
+            });
+        });
+    });
+}
+
 fn game_menu(
     ctx: &egui::Context,
     editor: &mut Editor,
@@ -1354,119 +1424,225 @@ fn game_menu(
 ) {
     let phone = theme::is_phone(view);
     let touch = editor.touch.seen;
+    let list_on = session.is_none_or(|s| s.runtime().core_gui_enabled("PlayerList"));
     if !editor.paused {
-        if touch {
-            let size = theme::hud_size(view);
-            let list_on = session.is_none_or(|s| s.runtime().core_gui_enabled("PlayerList"));
-            let count = if list_on { 2.0 } else { 1.0 };
-            let bar = egui::Rect::from_min_size(
-                view.min + egui::vec2(10.0, 10.0),
-                egui::vec2(size * count + 8.0, size + 8.0),
-            );
-            egui::Area::new("game-menu-button".into()).fixed_pos(bar.min).show(ctx, |ui| {
-                theme::hud_back(ui.painter(), bar);
-                ui.scope_builder(egui::UiBuilder::new().max_rect(bar.shrink(4.0)), |ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    ui.horizontal(|ui| {
-                        if theme::hud_button(ui, icon::LIST, t("Menu"), false, size).clicked() {
-                            editor.paused = true;
-                        }
-                        if list_on
-                            && theme::hud_button(ui, icon::USERS, t("Players"), editor.players_shown, size)
-                                .clicked()
-                        {
-                            editor.players_shown = !editor.players_shown;
-                        }
-                    });
-                });
-            });
-        }
+        editor.confirm = None;
+        top_bar(ctx, editor, session, view, list_on);
         return;
+    }
+    let can_reset = session.is_some_and(PlaySession::can_reset);
+    let mut confirmed = false;
+    if !ctx.egui_wants_keyboard_input() {
+        ctx.input_mut(|i| {
+            if editor.confirm.is_some() {
+                confirmed = i.consume_key(Modifiers::NONE, Key::Enter);
+            } else if can_reset && i.consume_key(Modifiers::NONE, Key::R) {
+                editor.confirm = Some(Confirm::Reset);
+            } else if i.consume_key(Modifiers::NONE, Key::L) {
+                editor.confirm = Some(Confirm::Leave);
+            }
+        });
     }
     egui::Area::new("game-menu-shade".into()).fixed_pos(view.min).order(egui::Order::Middle).show(
         ctx,
         |ui| {
             let (rect, response) = ui.allocate_exact_size(view.size(), egui::Sense::click());
             ui.painter().rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(10, 40, 80, 110));
-            if response.clicked() {
+            if response.clicked() && editor.confirm.take().is_none() {
                 editor.paused = false;
             }
         },
     );
     let height = if touch { 46.0 } else { 40.0 };
-    let wide = phone && view.width() > 600.0;
-    let width = if wide {
-        (view.width() - 60.0).min(600.0)
-    } else {
-        (view.width() - 40.0).clamp(220.0, if phone { 340.0 } else { 280.0 })
-    };
-    let margin = if phone { 14 } else { 22 };
+    let margin = if phone { 12 } else { 20 };
+    let width =
+        (view.width() - 24.0 - 2.0 * margin as f32).min(if editor.confirm.is_some() { 380.0 } else { 560.0 });
     egui::Area::new("game-menu".into())
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
             theme::panel().inner_margin(egui::Margin::same(margin)).show(ui, |ui| {
                 ui.set_width(width);
-                egui::ScrollArea::vertical().max_height(view.height() - 40.0 - 2.0 * margin as f32).show(
-                    ui,
-                    |ui| {
-                        ui.vertical_centered(|ui| {
-                            let title = if phone { 20.0 } else { 26.0 };
-                            ui.label(
-                                RichText::new(t("Paused")).font(theme::light(title)).color(theme::HEADING),
-                            );
-                        });
-                        ui.add_space(if phone { 8.0 } else { 14.0 });
-                        if wide {
-                            ui.columns(2, |columns| {
-                                let (left, right) = columns.split_at_mut(1);
-                                pause_buttons(&mut left[0], editor, session, actions, touch, height);
-                                pause_settings(&mut right[0], editor, session, actions, quality);
-                            });
-                        } else {
-                            ui.vertical_centered(|ui| {
-                                pause_buttons(ui, editor, session, actions, touch, height);
-                                ui.add_space(14.0);
-                                pause_settings(ui, editor, session, actions, quality);
-                            });
+                if let Some(ask) = editor.confirm {
+                    let (question, yes, kind, glyph) = match ask {
+                        Confirm::Leave => {
+                            (t("Leave the game?"), t("Leave"), theme::Kind::Danger, icon::SIGN_OUT)
                         }
-                    },
-                );
+                        Confirm::Reset => (
+                            t("Reset your character?"),
+                            t("Reset character"),
+                            theme::Kind::Primary,
+                            icon::ARROW_CLOCKWISE,
+                        ),
+                    };
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            RichText::new(question)
+                                .font(theme::light(if phone { 20.0 } else { 24.0 }))
+                                .color(theme::HEADING),
+                        );
+                    });
+                    ui.add_space(14.0);
+                    ui.columns(2, |c| {
+                        if theme::wide_button(&mut c[0], theme::Kind::Plain, "", t("Cancel"), height)
+                            .clicked()
+                        {
+                            editor.confirm = None;
+                        }
+                        if theme::wide_button(&mut c[1], kind, glyph, yes, height).clicked() {
+                            confirmed = true;
+                        }
+                    });
+                    return;
+                }
+                ui.horizontal(|ui| {
+                    for (tab, glyph, label) in [
+                        (MenuTab::Players, icon::USERS, t("Players")),
+                        (MenuTab::Settings, icon::GEAR, t("Settings")),
+                    ] {
+                        if theme::tab(ui, glyph, label, editor.menu_tab == tab).clicked() {
+                            editor.menu_tab = tab;
+                        }
+                    }
+                });
+                ui.separator();
+                let chrome =
+                    height + 4.0 + 2.0 * margin as f32 + 40.0 + 60.0 + if touch { 0.0 } else { 16.0 };
+                let room = (view.height() - chrome).clamp(60.0, 340.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("game-menu-page")
+                    .max_height(room)
+                    .min_scrolled_height(room)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| match editor.menu_tab {
+                        MenuTab::Players => menu_players(ui, editor, session),
+                        MenuTab::Settings => pause_settings(ui, editor, session, actions, quality),
+                    });
+                ui.separator();
+                let mut buttons = Vec::new();
+                if can_reset {
+                    buttons.push((
+                        theme::Kind::Plain,
+                        icon::ARROW_CLOCKWISE,
+                        t("Reset character"),
+                        "R",
+                        Some(Confirm::Reset),
+                    ));
+                }
+                buttons.push((theme::Kind::Danger, icon::SIGN_OUT, t("Leave"), "L", Some(Confirm::Leave)));
+                buttons.push((theme::Kind::Primary, icon::PLAY, t("Resume"), "Esc", None));
+                let narrow = phone && width < 420.0;
+                let mut press = |ui: &mut egui::Ui,
+                                 (kind, glyph, label, key, ask): (
+                    theme::Kind,
+                    &str,
+                    &str,
+                    &str,
+                    Option<Confirm>,
+                )| {
+                    let glyph = if narrow { "" } else { glyph };
+                    if theme::wide_button(ui, kind, glyph, label, height).clicked() {
+                        match ask {
+                            Some(ask) => editor.confirm = Some(ask),
+                            None => editor.paused = false,
+                        }
+                    }
+                    if !touch {
+                        ui.vertical_centered(|ui| ui.label(RichText::new(key).small().color(theme::MUTED)));
+                    }
+                };
+                if narrow {
+                    for b in buttons {
+                        press(ui, b);
+                    }
+                } else {
+                    ui.columns(buttons.len(), |c| {
+                        for (ui, b) in c.iter_mut().zip(buttons) {
+                            press(ui, b);
+                        }
+                    });
+                }
             });
         });
+    if confirmed {
+        match editor.confirm.take() {
+            Some(Confirm::Reset) => actions.push(Action::ResetCharacter),
+            Some(Confirm::Leave) => actions.push(Action::Stop),
+            None => {}
+        }
+        editor.paused = false;
+    }
 }
 
-fn pause_buttons(
-    ui: &mut egui::Ui,
-    editor: &mut Editor,
-    session: Option<&PlaySession>,
-    actions: &mut Vec<Action>,
-    touch: bool,
-    height: f32,
-) {
-    let button = |ui: &mut egui::Ui, kind, glyph, label| {
-        if touch {
-            theme::wide_button(ui, kind, glyph, label, height)
-        } else {
-            theme::block_button(ui, kind, glyph, label, height)
-        }
-    };
-    if button(ui, theme::Kind::Primary, icon::PLAY, "Resume").clicked() {
-        editor.paused = false;
+fn menu_players(ui: &mut egui::Ui, editor: &mut Editor, session: Option<&PlaySession>) {
+    let Some(session) = session else { return };
+    let tree = session.runtime().tree().clone();
+    let tree = tree.borrow();
+    let me = session.local_player().and_then(|p| tree.name(p).ok()).map(str::to_owned);
+    let (rows, _) = player_rows(&tree);
+    let game = game_name(editor);
+    for (name, _, team) in &rows {
+        let mine = me.as_deref() == Some(name.as_str());
+        ui.horizontal(|ui| {
+            ui.set_min_height(34.0);
+            let (dot, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
+            let colour = team
+                .and_then(|t| team_colour(&tree, t))
+                .unwrap_or_else(|| crate::text_chat::name_colour(name));
+            ui.painter().circle_filled(dot.center(), 12.0, colour);
+            let initial = name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
+            ui.painter().text(
+                dot.center(),
+                egui::Align2::CENTER_CENTER,
+                initial,
+                theme::display_bold(13.0),
+                Color32::WHITE,
+            );
+            let address = editor.platform.hub_address.clone();
+            if let Some(badge) = editor.platform.badges.of(|| playlibre_hub::HubClient::new(&address), name) {
+                crate::groups::badge(ui, &badge);
+            }
+            let text = RichText::new(name).color(theme::TEXT);
+            ui.label(if mine { text.strong() } else { text });
+            if mine {
+                ui.label(RichText::new(t("You")).small().color(theme::MUTED));
+                return;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if theme::block_button(ui, theme::Kind::Plain, icon::FLAG, "", 26.0)
+                    .on_hover_text(t("Report"))
+                    .clicked()
+                {
+                    let evidence = editor.text_chat.evidence(&game, name);
+                    editor.platform.report_player(name, evidence);
+                }
+                if editor.text_chat.has_lines() {
+                    let muted = editor.text_chat.is_muted(name);
+                    let (glyph, label) = if muted {
+                        (icon::SPEAKER_SLASH, t("Unmute"))
+                    } else {
+                        (icon::SPEAKER_HIGH, t("Mute"))
+                    };
+                    if theme::block_button(ui, theme::Kind::Plain, glyph, "", 26.0)
+                        .on_hover_text(label)
+                        .clicked()
+                    {
+                        editor.text_chat.toggle_mute(name);
+                    }
+                }
+            });
+        });
     }
-    if session.is_some_and(PlaySession::can_reset) {
-        ui.add_space(8.0);
-        let reset = button(ui, theme::Kind::Plain, icon::ARROW_CLOCKWISE, "Reset character");
-        if reset.clicked() || ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::R)) {
-            editor.paused = false;
-            actions.push(Action::ResetCharacter);
-        }
+    if editor.platform.reporting_player() {
+        ui.add_space(6.0);
+        editor.platform.report_row(ui);
     }
-    ui.add_space(8.0);
-    if button(ui, theme::Kind::Danger, icon::X, "Leave game").clicked() {
-        editor.paused = false;
-        actions.push(Action::Stop);
-    }
+}
+
+fn team_colour(tree: &InstanceTree, team: InstanceId) -> Option<Color32> {
+    let c = tree.get_color(team, Property::TeamColor)?;
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Some(Color32::from_rgb(byte(c.r), byte(c.g), byte(c.b)))
 }
 
 fn pause_settings(
@@ -2375,16 +2551,10 @@ fn property_editor(
 }
 
 /// While playing: everyone's `leaderstats` values in the top-right corner.
-fn leaderboard(
-    ui: &mut egui::Ui,
-    tree: &InstanceTree,
-    platform: &mut crate::browse::Platform,
-    chat: &crate::text_chat::TextChat,
-    game: &str,
-) {
-    let Some(players) = tree.service(ClassKind::Players) else { return };
-    // Each player: their name, their stats (name and value), and their team.
-    type Row = (String, Vec<(String, String)>, Option<InstanceId>);
+type Row = (String, Vec<(String, String)>, Option<InstanceId>);
+
+fn player_rows(tree: &InstanceTree) -> (Vec<Row>, Vec<String>) {
+    let Some(players) = tree.service(ClassKind::Players) else { return (Vec::new(), Vec::new()) };
     let mut rows: Vec<Row> = tree
         .children(players)
         .unwrap_or_default()
@@ -2427,18 +2597,6 @@ fn leaderboard(
             (tree.name(player).unwrap_or("?").to_owned(), stats, team)
         })
         .collect();
-    // Players on teams are listed under their team, in the order of the Teams service.
-    let team_order = |t: Option<InstanceId>| {
-        t.and_then(|t| {
-            let teams = tree.service(ClassKind::Teams)?;
-            tree.children(teams).ok()?.iter().position(|c| *c == t)
-        })
-        .unwrap_or(usize::MAX)
-    };
-    rows.sort_by_key(|(_, _, team)| team_order(*team));
-    if rows.is_empty() {
-        return;
-    }
     let columns: Vec<String> =
         rows.iter().flat_map(|(_, s, _)| s.iter().map(|(n, _)| n.clone())).fold(Vec::new(), |mut acc, n| {
             if !acc.contains(&n) {
@@ -2446,64 +2604,134 @@ fn leaderboard(
             }
             acc
         });
+    let team_order = |t: Option<InstanceId>| {
+        t.and_then(|t| {
+            let teams = tree.service(ClassKind::Teams)?;
+            tree.children(teams).ok()?.iter().position(|c| *c == t)
+        })
+        .unwrap_or(usize::MAX)
+    };
+    let first = |stats: &[(String, String)]| {
+        columns
+            .first()
+            .and_then(|c| stats.iter().find(|(n, _)| n == c))
+            .and_then(|(_, v)| v.parse::<f64>().ok())
+            .unwrap_or(f64::NEG_INFINITY)
+    };
+    sort_rows(&mut rows, team_order, first);
+    (rows, columns)
+}
+
+fn sort_rows(
+    rows: &mut [Row],
+    team_order: impl Fn(Option<InstanceId>) -> usize,
+    first: impl Fn(&[(String, String)]) -> f64,
+) {
+    rows.sort_by(|a, b| {
+        team_order(a.2)
+            .cmp(&team_order(b.2))
+            .then(first(&b.1).total_cmp(&first(&a.1)))
+            .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
+    });
+}
+
+fn leaderboard(
+    ui: &mut egui::Ui,
+    tree: &InstanceTree,
+    me: Option<InstanceId>,
+    platform: &mut crate::browse::Platform,
+    chat: &mut crate::text_chat::TextChat,
+    game: &str,
+) {
+    let (rows, columns) = player_rows(tree);
+    if rows.is_empty() {
+        return;
+    }
+    let me = me.and_then(|p| tree.name(p).ok());
     let rect = ui.max_rect();
     egui::Area::new(egui::Id::new("leaderboard"))
         .fixed_pos(egui::pos2(rect.right() - 12.0, rect.top() + 12.0))
         .pivot(egui::Align2::RIGHT_TOP)
         .show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).fill(theme::see_through(248, 252, 255, 230)).show(ui, |ui| {
-                egui::ScrollArea::vertical().max_height(rect.height() * 0.6).show(ui, |ui| {
-                    egui::Grid::new("leaderboard-grid").spacing([16.0, 4.0]).show(ui, |ui| {
-                        ui.label(RichText::new(t("Player")).strong().color(theme::HEADING));
-                        for c in &columns {
-                            ui.label(RichText::new(c).strong().color(theme::HEADING));
-                        }
-                        ui.end_row();
-                        let mut last_team = None;
-                        for (name, stats, team) in &rows {
-                            if *team != last_team {
-                                last_team = *team;
-                                let (label, color) = match team {
-                                    Some(t) => {
-                                        let c = tree
-                                            .get_color(*t, Property::TeamColor)
-                                            .unwrap_or(playlibre_instance::Color3::WHITE);
-                                        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-                                        (
-                                            tree.name(*t).unwrap_or("?").to_owned(),
-                                            Color32::from_rgb(byte(c.r), byte(c.g), byte(c.b)),
-                                        )
-                                    }
-                                    None => (t("Neutral").to_owned(), theme::MUTED),
-                                };
-                                ui.label(RichText::new(label).strong().color(color));
+                egui::ScrollArea::vertical()
+                    .max_height(rect.height() * 0.6)
+                    .min_scrolled_height(rect.height() * 0.6)
+                    .show(ui, |ui| {
+                        egui::Grid::new("leaderboard-grid").spacing([16.0, 4.0]).show(ui, |ui| {
+                            if !columns.is_empty() {
+                                ui.label("");
+                                for c in &columns {
+                                    ui.label(RichText::new(c).strong().color(theme::HEADING));
+                                }
                                 ui.end_row();
                             }
-                            let address = platform.hub_address.clone();
-                            let badge = platform.badges.of(|| playlibre_hub::HubClient::new(&address), name);
-                            ui.horizontal(|ui| {
-                                if let Some(badge) = badge {
-                                    crate::groups::badge(ui, &badge);
+                            let mut last_team = None;
+                            for (name, stats, team) in &rows {
+                                if *team != last_team {
+                                    last_team = *team;
+                                    let (label, color) = match team {
+                                        Some(t) => (
+                                            tree.name(*t).unwrap_or("?").to_owned(),
+                                            team_colour(tree, *t).unwrap_or(Color32::WHITE),
+                                        ),
+                                        None => (t("Neutral").to_owned(), theme::MUTED),
+                                    };
+                                    ui.label(RichText::new(label).strong().color(color));
+                                    ui.end_row();
                                 }
-                                ui.label(RichText::new(name).color(theme::TEXT)).context_menu(|ui| {
-                                    if ui.button(format!("{} {}", theme::icon::FLAG, t("Report"))).clicked() {
-                                        platform.report_player(name, chat.evidence(game, name));
-                                        ui.close();
+                                let address = platform.hub_address.clone();
+                                let badge =
+                                    platform.badges.of(|| playlibre_hub::HubClient::new(&address), name);
+                                ui.horizontal(|ui| {
+                                    if let Some(badge) = badge {
+                                        crate::groups::badge(ui, &badge);
                                     }
+                                    let mine = me == Some(name.as_str());
+                                    let text = RichText::new(name).color(if mine {
+                                        theme::ACCENT_DEEP
+                                    } else {
+                                        theme::TEXT
+                                    });
+                                    let label = ui.add(
+                                        egui::Label::new(if mine { text.strong() } else { text })
+                                            .sense(egui::Sense::click()),
+                                    );
+                                    if mine {
+                                        return;
+                                    }
+                                    let label = label.on_hover_cursor(egui::CursorIcon::PointingHand);
+                                    let mut options = |ui: &mut egui::Ui| {
+                                        let muted = chat.is_muted(name);
+                                        let mute = if muted {
+                                            format!("{} {}", icon::SPEAKER_HIGH, t("Unmute"))
+                                        } else {
+                                            format!("{} {}", icon::SPEAKER_SLASH, t("Mute"))
+                                        };
+                                        if chat.has_lines() && ui.button(mute).clicked() {
+                                            chat.toggle_mute(name);
+                                            ui.close();
+                                        }
+                                        if ui.button(format!("{} {}", icon::FLAG, t("Report"))).clicked() {
+                                            platform.report_player(name, chat.evidence(game, name));
+                                            ui.close();
+                                        }
+                                    };
+                                    egui::Popup::menu(&label).show(|ui| options(ui));
+                                    egui::Popup::context_menu(&label).show(|ui| options(ui));
                                 });
-                            });
-                            for c in &columns {
-                                let v = stats
-                                    .iter()
-                                    .find(|(n, _)| n == c)
-                                    .map(|(_, v)| v.as_str())
-                                    .unwrap_or("-");
-                                ui.label(RichText::new(v).color(theme::AMBER));
+                                for c in &columns {
+                                    let v = stats
+                                        .iter()
+                                        .find(|(n, _)| n == c)
+                                        .map(|(_, v)| v.as_str())
+                                        .unwrap_or("-");
+                                    ui.label(RichText::new(v).color(theme::AMBER));
+                                }
+                                ui.end_row();
                             }
-                            ui.end_row();
-                        }
+                        });
                     });
-                });
                 if platform.reporting_player() {
                     platform.report_row(ui);
                 }
@@ -3761,7 +3989,27 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                         log(engine, LogLevel::Info, what);
                     }
                     if editor.player_mode || session.is_joined() {
-                        editor.loading.start(now);
+                        let next = editor.platform.social.next_game.clone();
+                        let title = next.as_ref().map(|g| g.title.clone()).filter(|t| !t.is_empty());
+                        let by = next
+                            .and_then(|g| g.game_id)
+                            .and_then(|id| {
+                                editor
+                                    .platform
+                                    .games()
+                                    .iter()
+                                    .find(|g| g.game_id == id)
+                                    .map(|g| g.author.clone())
+                            })
+                            .filter(|a| !a.is_empty());
+                        let title = title.or_else(|| {
+                            editor
+                                .file
+                                .as_ref()
+                                .and_then(|f| f.file_stem())
+                                .map(|s| s.to_string_lossy().into_owned())
+                        });
+                        editor.loading.start(now, title, by);
                     }
                     // Someone else's game is seen only the way players see
                     // it: no explorer, properties or script editor over it.
@@ -5314,5 +5562,25 @@ impl Stats {
         }
         let _ = std::fs::write(path, &out);
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn players_are_listed_by_team_then_best_first() {
+        let red = Some(InstanceId::from_bits(7));
+        let row = |name: &str, score: &str, team| {
+            (name.to_owned(), vec![("Wins".to_owned(), score.to_owned())], team)
+        };
+        let mut rows =
+            vec![row("bo", "3", None), row("Ana", "3", None), row("Cy", "9", None), row("Di", "1", red)];
+        let team_order = |t: Option<InstanceId>| if t == red { 0 } else { 1 };
+        let first = |stats: &[(String, String)]| stats[0].1.parse::<f64>().unwrap();
+        sort_rows(&mut rows, team_order, first);
+        let names: Vec<&str> = rows.iter().map(|r| r.0.as_str()).collect();
+        assert_eq!(names, ["Di", "Cy", "Ana", "bo"]);
     }
 }

@@ -36,7 +36,49 @@ pub struct TextChat {
     asked: Option<Instant>,
 }
 
+pub fn name_colour(name: &str) -> egui::Color32 {
+    const COLOURS: [egui::Color32; 8] = [
+        egui::Color32::from_rgb(86, 170, 255),
+        egui::Color32::from_rgb(110, 214, 92),
+        egui::Color32::from_rgb(255, 168, 64),
+        egui::Color32::from_rgb(255, 112, 160),
+        egui::Color32::from_rgb(178, 132, 255),
+        egui::Color32::from_rgb(64, 210, 200),
+        egui::Color32::from_rgb(244, 208, 70),
+        egui::Color32::from_rgb(255, 104, 92),
+    ];
+    let hash = name.bytes().fold(2_166_136_261u32, |h, b| (h ^ u32::from(b)).wrapping_mul(16_777_619));
+    COLOURS[hash as usize % COLOURS.len()]
+}
+
 impl TextChat {
+    pub fn available(&self, session: Option<&PlaySession>) -> bool {
+        session.is_some_and(PlaySession::online) && self.level().is_some_and(|l| l != Chat::Off)
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+        self.focus = self.open;
+    }
+
+    pub fn has_lines(&self) -> bool {
+        self.level().is_some_and(|l| l != Chat::Off)
+    }
+
+    pub fn is_muted(&self, name: &str) -> bool {
+        self.muted.contains(name)
+    }
+
+    pub fn toggle_mute(&mut self, name: &str) {
+        if !self.muted.remove(name) {
+            self.muted.insert(name.to_owned());
+        }
+    }
+
     fn rule(&self) -> Option<(ChatRule, Instant)> {
         *self.rule.lock().unwrap()
     }
@@ -105,7 +147,12 @@ impl TextChat {
         lines.join("\n")
     }
 
-    pub fn ui(&mut self, ui: &egui::Ui, session: Option<&mut PlaySession>) -> Option<String> {
+    pub fn ui(
+        &mut self,
+        ui: &egui::Ui,
+        session: Option<&mut PlaySession>,
+        under: Option<f32>,
+    ) -> Option<String> {
         let session = session.filter(|s| s.online())?;
         let level = self.level().filter(|l| *l != Chat::Off)?;
         let muted_by_hub = self.muted_by_hub();
@@ -119,90 +166,90 @@ impl TextChat {
         let mut report = None;
         let mut toggle = None;
         let rect = ui.max_rect();
-        egui::Area::new("text-chat".into()).fixed_pos(rect.left_top() + egui::vec2(54.0, 10.0)).show(
-            ui.ctx(),
-            |ui| {
-                ui.set_max_width(340.0);
-                ui.horizontal(|ui| {
-                    if theme::block_button(ui, theme::Kind::Plain, icon::CHAT_CIRCLE, "", 30.0).clicked() {
-                        self.open = !self.open;
-                        self.focus = self.open;
-                    }
-                    if !self.open {
-                        return;
-                    }
-                    let hint = if muted_by_hub { t("You are muted") } else { t("Chat") };
-                    let field = egui::TextEdit::singleline(&mut self.draft)
-                        .char_limit(MAX_CHAT)
-                        .hint_text(hint)
-                        .desired_width(280.0);
-                    let response = ui.add_enabled(!muted_by_hub, field);
-                    if std::mem::take(&mut self.focus) {
-                        response.request_focus();
-                    }
-                    if response.lost_focus() {
-                        if ui.input(|i| i.key_pressed(Key::Enter)) {
-                            let typed = std::mem::take(&mut self.draft);
-                            let typed = if level == Chat::Strict { strict_filter(&typed) } else { typed };
-                            if let (Some(said), Some(me)) = (session.say(&typed), self.me) {
-                                let name =
-                                    session.runtime().tree().borrow().name(me).unwrap_or("?").to_owned();
-                                self.lines.push_back(Line { from: me, name, text: said, at: now });
-                            }
-                        }
-                        self.open = false;
-                    }
-                });
-                let recent: Vec<&Line> = self
-                    .lines
-                    .iter()
-                    .rev()
-                    .filter(|l| !self.muted.contains(&l.name))
-                    .filter(|l| self.open || now.duration_since(l.at) < FADE)
-                    .take(if self.open { SHOWN_OPEN } else { SHOWN_CLOSED })
-                    .collect();
-                if !recent.is_empty() {
-                    egui::Frame::popup(ui.style()).fill(theme::see_through(20, 24, 30, 170)).show(ui, |ui| {
-                        for l in recent.into_iter().rev() {
-                            ui.horizontal_wrapped(|ui| {
-                                let name = ui.label(
-                                    RichText::new(format!("{}:", l.name)).strong().color(theme::AMBER),
-                                );
-                                if Some(l.from) != self.me {
-                                    name.context_menu(|ui| {
-                                        if ui
-                                            .button(format!("{} {}", icon::SPEAKER_SLASH, t("Mute")))
-                                            .clicked()
-                                        {
-                                            toggle = Some(l.name.clone());
-                                            ui.close();
-                                        }
-                                        if ui.button(format!("{} {}", icon::FLAG, t("Report"))).clicked() {
-                                            report = Some(l.name.clone());
-                                            ui.close();
-                                        }
-                                    });
+        let at = match under {
+            Some(y) => rect.left_top() + egui::vec2(10.0, y),
+            None => rect.left_top() + egui::vec2(54.0, 10.0),
+        };
+        let width = (rect.width() - 20.0).clamp(200.0, 360.0);
+        egui::Area::new("text-chat".into()).fixed_pos(at).show(ui.ctx(), |ui| {
+            ui.set_max_width(width);
+            if under.is_none()
+                && theme::block_button(ui, theme::Kind::Plain, icon::CHAT_CIRCLE, "", 30.0).clicked()
+            {
+                self.toggle();
+            }
+            let recent: Vec<(InstanceId, String, String)> = self
+                .lines
+                .iter()
+                .rev()
+                .filter(|l| !self.muted.contains(&l.name))
+                .filter(|l| self.open || now.duration_since(l.at) < FADE)
+                .take(if self.open { SHOWN_OPEN } else { SHOWN_CLOSED })
+                .map(|l| (l.from, l.name.clone(), l.text.clone()))
+                .collect();
+            if !self.open && recent.is_empty() {
+                return;
+            }
+            let fill = theme::see_through(20, 24, 30, if self.open { 190 } else { 140 });
+            egui::Frame::popup(ui.style()).fill(fill).show(ui, |ui| {
+                ui.set_width(width - 16.0);
+                for (from, who, text) in recent.into_iter().rev() {
+                    ui.horizontal_wrapped(|ui| {
+                        let name =
+                            ui.label(RichText::new(format!("{who}:")).strong().color(name_colour(&who)));
+                        if Some(from) != self.me {
+                            name.context_menu(|ui| {
+                                if ui.button(format!("{} {}", icon::SPEAKER_SLASH, t("Mute"))).clicked() {
+                                    toggle = Some(who.clone());
+                                    ui.close();
                                 }
-                                ui.label(RichText::new(shown(&l.text)).color(egui::Color32::WHITE));
+                                if ui.button(format!("{} {}", icon::FLAG, t("Report"))).clicked() {
+                                    report = Some(who.clone());
+                                    ui.close();
+                                }
                             });
                         }
+                        ui.label(RichText::new(shown(&text)).color(egui::Color32::WHITE));
                     });
                 }
-                if !self.muted.is_empty() && self.open {
-                    ui.horizontal_wrapped(|ui| {
-                        for name in &self.muted {
-                            if ui
-                                .small_button(format!("{} {name}", icon::SPEAKER_SLASH))
-                                .on_hover_text(t("Unmute"))
-                                .clicked()
-                            {
-                                toggle = Some(name.clone());
-                            }
+                if !self.open {
+                    return;
+                }
+                let hint = if muted_by_hub { t("You are muted") } else { t("Chat") };
+                let field = egui::TextEdit::singleline(&mut self.draft)
+                    .char_limit(MAX_CHAT)
+                    .hint_text(hint)
+                    .desired_width(f32::INFINITY);
+                let response = ui.add_enabled(!muted_by_hub, field);
+                if std::mem::take(&mut self.focus) {
+                    response.request_focus();
+                }
+                if response.lost_focus() {
+                    if ui.input(|i| i.key_pressed(Key::Enter)) {
+                        let typed = std::mem::take(&mut self.draft);
+                        let typed = if level == Chat::Strict { strict_filter(&typed) } else { typed };
+                        if let (Some(said), Some(me)) = (session.say(&typed), self.me) {
+                            let name = session.runtime().tree().borrow().name(me).unwrap_or("?").to_owned();
+                            self.lines.push_back(Line { from: me, name, text: said, at: now });
                         }
-                    });
+                    }
+                    self.open = false;
                 }
-            },
-        );
+            });
+            if !self.muted.is_empty() && self.open {
+                ui.horizontal_wrapped(|ui| {
+                    for name in &self.muted {
+                        if ui
+                            .small_button(format!("{} {name}", icon::SPEAKER_SLASH))
+                            .on_hover_text(t("Unmute"))
+                            .clicked()
+                        {
+                            toggle = Some(name.clone());
+                        }
+                    }
+                });
+            }
+        });
         if let Some(name) = toggle
             && !self.muted.remove(&name)
         {
