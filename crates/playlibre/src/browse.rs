@@ -1575,10 +1575,10 @@ impl Platform {
                 ui.end_row();
             }
             ui.label("New password");
-            ui.add(egui::TextEdit::singleline(&mut self.reset_password).password(true).char_limit(256));
+            password_box(ui, &mut self.reset_password, None);
             ui.end_row();
             ui.label("Again");
-            ui.add(egui::TextEdit::singleline(&mut self.reset_again).password(true).char_limit(256));
+            password_box(ui, &mut self.reset_again, None);
             ui.end_row();
         });
         let problem = playlibre_hub::password_problem(&self.reset_password, self.sign_in_name.trim())
@@ -1705,12 +1705,7 @@ impl Platform {
         if security.has_password {
             ui.horizontal(|ui| {
                 ui.label("Password");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.out_password)
-                        .password(true)
-                        .char_limit(256)
-                        .desired_width(140.0),
-                );
+                password_box(ui, &mut self.out_password, Some(140.0));
                 if security.two_step {
                     ui.label("Code");
                     ui.add(egui::TextEdit::singleline(&mut self.out_code).char_limit(12).desired_width(90.0));
@@ -1753,10 +1748,10 @@ impl Platform {
             .unwrap_or_else(|| self.account_name.trim().to_owned());
         egui::Grid::new("new-password").num_columns(2).show(ui, |ui| {
             ui.label("New password");
-            ui.add(egui::TextEdit::singleline(&mut self.password).password(true).char_limit(256));
+            password_box(ui, &mut self.password, None);
             ui.end_row();
             ui.label("Again");
-            ui.add(egui::TextEdit::singleline(&mut self.password_again).password(true).char_limit(256));
+            password_box(ui, &mut self.password_again, None);
             ui.end_row();
         });
         let problem = playlibre_hub::password_problem(&self.password, &name)
@@ -1794,10 +1789,10 @@ impl Platform {
             );
             egui::Grid::new("account-password").num_columns(2).show(ui, |ui| {
                 ui.label("New password");
-                ui.add(egui::TextEdit::singleline(&mut self.password).password(true).char_limit(256));
+                password_box(ui, &mut self.password, None);
                 ui.end_row();
                 ui.label("Again");
-                ui.add(egui::TextEdit::singleline(&mut self.password_again).password(true).char_limit(256));
+                password_box(ui, &mut self.password_again, None);
                 ui.end_row();
             });
             let problem = playlibre_hub::password_problem(&self.password, self.account_name.trim())
@@ -1837,7 +1832,7 @@ impl Platform {
                     ui.add(egui::TextEdit::singleline(&mut self.sign_in_name).char_limit(20));
                     ui.end_row();
                     ui.label("Password");
-                    ui.add(egui::TextEdit::singleline(&mut self.sign_in_password).password(true).char_limit(256));
+                    password_box(ui, &mut self.sign_in_password, None);
                     ui.end_row();
                     if self.needs_code {
                         ui.label("Code from your app");
@@ -2473,6 +2468,12 @@ const REPORT_REASONS: [&str; 4] = [
 /// A small ⚑ button to report a `what` ("game" or "hat").
 fn report_button(ui: &mut egui::Ui, what: &str) -> bool {
     ui.small_button(crate::theme::icon::FLAG).on_hover_text(format!("Report this {what}")).clicked()
+}
+
+fn password_box(ui: &mut egui::Ui, text: &mut String, width: Option<f32>) {
+    let width = width.unwrap_or(ui.spacing().text_edit_width);
+    ui.add(egui::TextEdit::singleline(text).password(true).char_limit(256).desired_width(width));
+    text.retain(|c| !matches!(c, '\r' | '\n'));
 }
 
 fn device_name() -> String {
