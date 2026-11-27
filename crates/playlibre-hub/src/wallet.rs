@@ -175,6 +175,19 @@ pub fn debit(
     Ok(taken)
 }
 
+pub(crate) fn move_credits(
+    db: &Connection,
+    from: &str,
+    to: &str,
+    amount: u32,
+    reason: &str,
+    reference: &str,
+) -> rusqlite::Result<()> {
+    entry(db, from, -i64::from(amount), reason, reference)?;
+    entry(db, to, i64::from(amount), reason, reference)?;
+    Ok(())
+}
+
 pub fn top_up(db: &Connection, player_id: &str, amount: u32, payment_id: &str) -> rusqlite::Result<bool> {
     credit(db, player_id, amount, "bought", payment_id)
 }

@@ -1,6 +1,7 @@
 use playlibre_hub::{
-    AccountUpdate, GroupAction, GroupChange, GroupJoin, GroupRole, HubClient, Publish, account_message,
-    group_message, new_secret, player_id_of, publish_message, sign, start,
+    AccountUpdate, DownloadProof, GroupAction, GroupChange, GroupJoin, GroupPermission, GroupRole, HubClient,
+    Publish, account_message, creator_message, group_message, group_wallet, new_secret, player_id_of,
+    publish_message, sign, start,
 };
 
 struct Player {
@@ -210,4 +211,104 @@ fn tags_and_colours_are_claimed_and_groups_can_be_closed() {
     assert_eq!(invites.len(), 1);
     guest.change(&hub, GroupAction::Join, &id, |_| {}).unwrap();
     assert_eq!(hub.group(&id).unwrap().members.len(), 3);
+}
+
+#[test]
+fn group_games_are_shared_and_funds_pay_members() {
+    let dir = std::env::temp_dir().join(format!("playlibre-group-funds-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("hub.sqlite");
+    let running = start("127.0.0.1:0".parse().unwrap(), Some(&path)).unwrap();
+    let hub = HubClient::new(&running.url());
+    let (alice, bo) = (Player::new(11), Player::new(12));
+    alice.claim(&hub, "Alicia");
+    bo.claim(&hub, "Bobo");
+    let id = alice
+        .change(&hub, GroupAction::Create, "", |c| {
+            c.name = "Studio".into();
+            c.tag = "STU".into();
+        })
+        .unwrap();
+    bo.change(&hub, GroupAction::Join, &id, |_| {}).unwrap();
+
+    let publish = |who: &Player, game_id: Option<String>, title: &str| {
+        let secret = new_secret();
+        hub.publish(&Publish {
+            game_id,
+            secret: secret.clone(),
+            title: title.into(),
+            author: String::new(),
+            description: String::new(),
+            place: "{}".into(),
+            author_id: Some(who.id.clone()),
+            author_signature: Some(sign(&who.key, &publish_message(&secret))),
+        })
+    };
+    let game = publish(&alice, None, "Obby").unwrap().game_id;
+    alice.change(&hub, GroupAction::AddGame, &id, |c| c.other_id = game.clone()).unwrap();
+    let download = |who: &Player| {
+        hub.download(&game, Some(&DownloadProof::new(&game, who.id.clone(), |m| sign(&who.key, m))))
+    };
+    let mine = |who: &Player| {
+        let time = who.tick();
+        hub.my_games(&who.id, time, &sign(&who.key, &creator_message(&who.id, time))).unwrap()
+    };
+
+    assert!(publish(&bo, Some(game.clone()), "Mine").unwrap_err().contains("someone else"));
+    assert!(download(&bo).is_err());
+    assert!(mine(&bo).is_empty());
+    assert!(bo.change(&hub, GroupAction::Permissions, &id, |c| c.other_id = bo.id.clone()).is_err());
+    alice
+        .change(&hub, GroupAction::Permissions, &id, |c| {
+            c.other_id = bo.id.clone();
+            c.text = "games".into();
+        })
+        .unwrap();
+    let page = bo.view(&hub, &id);
+    assert_eq!(page.can, vec![GroupPermission::Games]);
+    assert!(page.funds.is_none());
+    assert!(download(&bo).is_ok());
+    assert_eq!(mine(&bo).len(), 1);
+    assert_eq!(publish(&bo, Some(game.clone()), "Obby 2").unwrap().version, 2);
+    let info = hub.game(&game).unwrap();
+    assert_eq!((info.title.as_str(), info.author_id.as_deref()), ("Obby 2", Some(alice.id.as_str())));
+    assert!(bo.change(&hub, GroupAction::RemoveGame, &id, |c| c.other_id = game.clone()).is_err());
+
+    let pay = |who: &Player, amount: &str| {
+        who.change(&hub, GroupAction::Pay, &id, |c| {
+            c.other_id = bo.id.clone();
+            c.text = amount.into();
+        })
+    };
+    assert!(pay(&bo, "5").is_err());
+    assert!(pay(&alice, "5").unwrap_err().contains("doesn't have"));
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute(
+        "INSERT INTO ledger (player_id, amount, reason, reference, time) VALUES (?1, 100, 'earned', 'sale-1', 0)",
+        [group_wallet(&id)],
+    )
+    .unwrap();
+    db.execute("INSERT INTO wallets (player_id, balance) VALUES (?1, 100)", [group_wallet(&id)]).unwrap();
+    drop(db);
+    assert_eq!(alice.view(&hub, &id).funds.unwrap().balance, 100);
+    pay(&alice, "30").unwrap();
+    assert!(pay(&alice, "0").is_err());
+    let funds = alice.view(&hub, &id).funds.unwrap();
+    assert_eq!(funds.balance, 70);
+    assert_eq!((funds.history[0].amount, funds.history[0].to.as_str()), (-30, "Bobo"));
+    let time = bo.tick();
+    let wallet =
+        hub.wallet(&bo.id, time, &sign(&bo.key, &playlibre_hub::wallet_message(&bo.id, time))).unwrap();
+    assert_eq!(wallet.balance, 30);
+
+    alice
+        .change(&hub, GroupAction::Role, &id, |c| {
+            c.other_id = bo.id.clone();
+            c.role = Some(GroupRole::Owner);
+        })
+        .unwrap();
+    bo.change(&hub, GroupAction::Kick, &id, |c| c.other_id = alice.id.clone()).unwrap();
+    assert!(bo.change(&hub, GroupAction::Leave, &id, |_| {}).unwrap_err().contains("funds"));
+    drop(running);
+    let _ = std::fs::remove_dir_all(&dir);
 }

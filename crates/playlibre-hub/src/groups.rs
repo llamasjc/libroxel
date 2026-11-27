@@ -90,6 +90,8 @@ pub enum GroupAction {
     Invite,
     Accept,
     Decline,
+    Permissions,
+    Pay,
 }
 
 impl GroupAction {
@@ -109,6 +111,8 @@ impl GroupAction {
             GroupAction::Invite => "invite",
             GroupAction::Accept => "accept",
             GroupAction::Decline => "decline",
+            GroupAction::Permissions => "permissions",
+            GroupAction::Pay => "pay",
         }
     }
 }
@@ -145,6 +149,63 @@ impl GroupRole {
             _ => GroupRole::Member,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GroupPermission {
+    Games,
+    Funds,
+    Wall,
+    Members,
+}
+
+impl GroupPermission {
+    pub const ALL: [GroupPermission; 4] =
+        [GroupPermission::Games, GroupPermission::Funds, GroupPermission::Wall, GroupPermission::Members];
+
+    pub fn word(self) -> &'static str {
+        match self {
+            GroupPermission::Games => "games",
+            GroupPermission::Funds => "funds",
+            GroupPermission::Wall => "wall",
+            GroupPermission::Members => "members",
+        }
+    }
+
+    fn bit(self) -> i64 {
+        match self {
+            GroupPermission::Games => 1,
+            GroupPermission::Funds => 2,
+            GroupPermission::Wall => 4,
+            GroupPermission::Members => 8,
+        }
+    }
+
+    fn from_word(word: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.word() == word)
+    }
+}
+
+pub fn permission_words(can: &[GroupPermission]) -> String {
+    GroupPermission::ALL.iter().filter(|p| can.contains(p)).map(|p| p.word()).collect::<Vec<_>>().join(" ")
+}
+
+fn bits_of(can: &[GroupPermission]) -> i64 {
+    can.iter().fold(0, |bits, p| bits | p.bit())
+}
+
+fn granted(role: GroupRole, bits: i64) -> Vec<GroupPermission> {
+    let bits = match role {
+        GroupRole::Owner => 15,
+        GroupRole::Admin => bits | 13,
+        GroupRole::Member => bits,
+    };
+    GroupPermission::ALL.into_iter().filter(|p| bits & p.bit() != 0).collect()
+}
+
+pub fn group_wallet(group_id: &str) -> String {
+    format!("group:{group_id}")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -253,6 +314,25 @@ pub struct GroupMember {
     pub number: u64,
     pub name: String,
     pub role: GroupRole,
+    #[serde(default)]
+    pub can: Vec<GroupPermission>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GroupFundEntry {
+    pub amount: i64,
+    pub reason: String,
+    #[serde(default)]
+    pub by: String,
+    #[serde(default)]
+    pub to: String,
+    pub secs_ago: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GroupFunds {
+    pub balance: i64,
+    pub history: Vec<GroupFundEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -278,6 +358,10 @@ pub struct GroupPage {
     pub invited: bool,
     #[serde(default)]
     pub requested: bool,
+    #[serde(default)]
+    pub can: Vec<GroupPermission>,
+    #[serde(default)]
+    pub funds: Option<GroupFunds>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -351,6 +435,18 @@ pub(crate) fn create_tables(db: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("could not update the Hub's groups: {e}"))?;
     }
+    let _ = db.execute("ALTER TABLE group_members ADD COLUMN perms INTEGER NOT NULL DEFAULT 0", []);
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS group_payouts (
+            payout_id   INTEGER PRIMARY KEY,
+            group_id    TEXT NOT NULL,
+            payer_id    TEXT NOT NULL,
+            payee_id    TEXT NOT NULL,
+            amount      INTEGER NOT NULL,
+            time        INTEGER NOT NULL
+        );",
+    )
+    .map_err(|e| format!("could not set up the Hub database: {e}"))?;
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS groups_tag_color ON groups(tag COLLATE NOCASE, color)", [])
         .map(|_| ())
         .map_err(|e| format!("could not set up the Hub database: {e}"))
@@ -392,6 +488,61 @@ fn role_of(db: &Connection, group_id: &str, player_id: &str) -> Result<Option<Gr
     .optional()
     .map(|r| r.map(GroupRole::from_rank))
     .map_err(internal)
+}
+
+fn permissions(db: &Connection, group_id: &str, player_id: &str) -> Result<Vec<GroupPermission>, Failure> {
+    db.query_row(
+        "SELECT role, perms FROM group_members WHERE group_id = ?1 AND player_id = ?2",
+        params![group_id, player_id],
+        |r| Ok(granted(GroupRole::from_rank(r.get(0)?), r.get(1)?)),
+    )
+    .optional()
+    .map(Option::unwrap_or_default)
+    .map_err(internal)
+}
+
+pub(crate) fn group_of(db: &Connection, game_id: &str) -> Option<String> {
+    db.query_row("SELECT group_id FROM group_games WHERE game_id = ?1", params![game_id], |r| r.get(0))
+        .optional()
+        .ok()
+        .flatten()
+}
+
+pub(crate) fn may_edit(db: &Connection, game_id: &str, player_id: &str) -> bool {
+    group_of(db, game_id).is_some_and(|group_id| {
+        !crate::owner::is_banned(db, player_id)
+            && permissions(db, &group_id, player_id).is_ok_and(|can| can.contains(&GroupPermission::Games))
+    })
+}
+
+pub(crate) fn earner(db: &Connection, game_id: &str, author_id: &str) -> String {
+    group_of(db, game_id).map_or_else(|| author_id.to_owned(), |g| group_wallet(&g))
+}
+
+fn funds(db: &Connection, group_id: &str, now: i64) -> GroupFunds {
+    let wallet = group_wallet(group_id);
+    let history = db
+        .prepare(
+            "SELECT l.amount, l.reason, COALESCE(pa.name, ''), COALESCE(pb.name, ''), l.time FROM ledger l
+             LEFT JOIN group_payouts p ON l.reference = 'payout-' || p.payout_id
+             LEFT JOIN accounts pa ON pa.player_id = p.payer_id
+             LEFT JOIN accounts pb ON pb.player_id = p.payee_id
+             WHERE l.player_id = ?1 ORDER BY l.entry_id DESC LIMIT 50",
+        )
+        .and_then(|mut s| {
+            s.query_map(params![wallet], |r| {
+                Ok(GroupFundEntry {
+                    amount: r.get(0)?,
+                    reason: r.get(1)?,
+                    by: r.get(2)?,
+                    to: r.get(3)?,
+                    secs_ago: now - r.get::<_, i64>(4)?,
+                })
+            })
+            .map(|rows| rows.filter_map(Result::ok).collect())
+        })
+        .unwrap_or_default();
+    GroupFunds { balance: crate::wallet::balance(db, &wallet), history }
 }
 
 fn pending(db: &Connection, group_id: &str, player_id: &str) -> Result<Option<bool>, Failure> {
@@ -585,6 +736,15 @@ pub(crate) async fn change_group(
             None => Err((StatusCode::FORBIDDEN, "join the group first".into())),
         }
     };
+    let can = permissions(&db, &group_id, me)?;
+    let allowed = |what: GroupPermission| -> Result<GroupRole, Failure> {
+        let role = need(GroupRole::Member)?;
+        if can.contains(&what) {
+            Ok(role)
+        } else {
+            Err((StatusCode::FORBIDDEN, "you can't do that in this group".into()))
+        }
+    };
     match c.action {
         GroupAction::Create => unreachable!(),
         GroupAction::Edit => {
@@ -630,7 +790,7 @@ pub(crate) async fn change_group(
             add_member(&db, &group_id, me, now)?;
         }
         GroupAction::Invite => {
-            need(GroupRole::Admin)?;
+            allowed(GroupPermission::Members)?;
             let them = c.other_id.trim();
             let named: Option<i64> = db
                 .query_row("SELECT 1 FROM accounts WHERE player_id = ?1", params![them], |r| r.get(0))
@@ -668,7 +828,7 @@ pub(crate) async fn change_group(
             );
         }
         GroupAction::Accept => {
-            need(GroupRole::Admin)?;
+            allowed(GroupPermission::Members)?;
             let them = c.other_id.trim();
             if pending(&db, &group_id, them)? != Some(false) {
                 return Err((StatusCode::NOT_FOUND, "they haven't asked to join".into()));
@@ -679,7 +839,7 @@ pub(crate) async fn change_group(
             add_member(&db, &group_id, them, now)?;
         }
         GroupAction::Decline => {
-            need(GroupRole::Admin)?;
+            allowed(GroupPermission::Members)?;
             db.execute(
                 "DELETE FROM group_pending WHERE group_id = ?1 AND player_id = ?2",
                 params![group_id, c.other_id.trim()],
@@ -701,6 +861,9 @@ pub(crate) async fn change_group(
                 return Err(bad("make someone else the owner first"));
             }
             if role == GroupRole::Owner {
+                if crate::wallet::balance(&db, &group_wallet(&group_id)) > 0 {
+                    return Err(bad("pay out the group's funds first"));
+                }
                 delete_group(&db, &group_id).map_err(internal)?;
                 return done("");
             }
@@ -734,7 +897,7 @@ pub(crate) async fn change_group(
             .map_err(internal)?;
         }
         GroupAction::Kick => {
-            let role = need(GroupRole::Admin)?;
+            let role = allowed(GroupPermission::Members)?;
             let them = c.other_id.as_str();
             match role_of(&db, &group_id, them)? {
                 None => return Err((StatusCode::NOT_FOUND, "they are not in this group".into())),
@@ -784,7 +947,7 @@ pub(crate) async fn change_group(
             .map_err(internal)?;
         }
         GroupAction::Unpost => {
-            let role = need(GroupRole::Member)?;
+            need(GroupRole::Member)?;
             let post_id: i64 = c.other_id.trim().parse().map_err(|_| bad("there is no such post"))?;
             let author: Option<String> = db
                 .query_row(
@@ -797,13 +960,13 @@ pub(crate) async fn change_group(
             let Some(author) = author else {
                 return Err((StatusCode::NOT_FOUND, "there is no such post".into()));
             };
-            if author != me && role < GroupRole::Admin {
+            if author != me && !can.contains(&GroupPermission::Wall) {
                 return Err((StatusCode::FORBIDDEN, "you can't remove that post".into()));
             }
             db.execute("DELETE FROM group_posts WHERE post_id = ?1", params![post_id]).map_err(internal)?;
         }
         GroupAction::AddGame => {
-            need(GroupRole::Admin)?;
+            allowed(GroupPermission::Games)?;
             let game_id = c.other_id.trim();
             let author: Option<Option<String>> = db
                 .query_row("SELECT author_id FROM games WHERE game_id = ?1", params![game_id], |r| r.get(0))
@@ -826,12 +989,68 @@ pub(crate) async fn change_group(
             .map_err(internal)?;
         }
         GroupAction::RemoveGame => {
-            need(GroupRole::Admin)?;
+            need(GroupRole::Owner)?;
             db.execute(
                 "DELETE FROM group_games WHERE game_id = ?1 AND group_id = ?2",
                 params![c.other_id.trim(), group_id],
             )
             .map_err(internal)?;
+        }
+        GroupAction::Permissions => {
+            need(GroupRole::Owner)?;
+            let them = c.other_id.trim();
+            if role_of(&db, &group_id, them)?.is_none() {
+                return Err((StatusCode::NOT_FOUND, "they are not in this group".into()));
+            }
+            let mut picked = Vec::new();
+            for word in c.text.split_whitespace() {
+                picked.push(
+                    GroupPermission::from_word(word)
+                        .ok_or_else(|| bad("pick from games, funds, wall and members"))?,
+                );
+            }
+            db.execute(
+                "UPDATE group_members SET perms = ?3 WHERE group_id = ?1 AND player_id = ?2",
+                params![group_id, them, bits_of(&picked)],
+            )
+            .map_err(internal)?;
+        }
+        GroupAction::Pay => {
+            allowed(GroupPermission::Funds)?;
+            let them = c.other_id.trim();
+            if role_of(&db, &group_id, them)?.is_none() {
+                return Err((StatusCode::NOT_FOUND, "they are not in this group".into()));
+            }
+            if crate::owner::is_banned(&db, them) {
+                return Err((StatusCode::FORBIDDEN, "that account is banned".into()));
+            }
+            let amount: u32 =
+                c.text.trim().parse().ok().filter(|&n| n > 0).ok_or_else(|| bad("pay at least 1"))?;
+            let wallet = group_wallet(&group_id);
+            if crate::wallet::balance(&db, &wallet) < i64::from(amount) {
+                return Err(bad("the group doesn't have that much"));
+            }
+            let tx = db.unchecked_transaction().map_err(internal)?;
+            tx.execute(
+                "INSERT INTO group_payouts (group_id, payer_id, payee_id, amount, time) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![group_id, me, them, amount, now],
+            )
+            .map_err(internal)?;
+            let id = tx.last_insert_rowid();
+            crate::wallet::move_credits(&tx, &wallet, them, amount, "group pay", &format!("payout-{id}"))
+                .map_err(internal)?;
+            tx.commit().map_err(internal)?;
+            let group: String = db
+                .query_row("SELECT name FROM groups WHERE group_id = ?1", params![group_id], |r| r.get(0))
+                .unwrap_or_default();
+            crate::follows::notify(
+                &db,
+                them,
+                "group",
+                &group_id,
+                &format!("{group} paid you {amount} {}", crate::wallet::CURRENCY),
+                &format!("/group/{group_id}"),
+            );
         }
         GroupAction::Show => {
             need(GroupRole::Member)?;
@@ -911,18 +1130,20 @@ pub(crate) async fn group_page(
     let banned = crate::owner::banned_sql("a.player_id");
     let members = db
         .prepare(&format!(
-            "SELECT a.player_id, a.number, a.name, m.role FROM group_members m
+            "SELECT a.player_id, a.number, a.name, m.role, m.perms FROM group_members m
              JOIN accounts a ON a.player_id = m.player_id
              WHERE m.group_id = ?1 AND NOT {banned}
              ORDER BY m.role DESC, a.name COLLATE NOCASE LIMIT 500"
         ))
         .and_then(|mut s| {
             s.query_map(params![id], |r| {
+                let role = GroupRole::from_rank(r.get(3)?);
                 Ok(GroupMember {
                     player_id: r.get(0)?,
                     number: r.get::<_, i64>(1)? as u64,
                     name: r.get(2)?,
-                    role: GroupRole::from_rank(r.get(3)?),
+                    role,
+                    can: granted(role, r.get(4)?),
                 })
             })
             .map(|rows| rows.filter_map(Result::ok).collect())
@@ -967,6 +1188,8 @@ pub(crate) async fn group_page(
         invites: Vec::new(),
         invited: false,
         requested: false,
+        can: Vec::new(),
+        funds: None,
     };
     let seen = match (viewer.viewer, viewer.time, viewer.signature) {
         (Some(who), Some(time), Some(signature))
@@ -983,8 +1206,11 @@ pub(crate) async fn group_page(
             Some(false) => page.requested = true,
             None => {}
         }
-        let admin = role_of(&db, &id, &who).ok().flatten().is_some_and(|r| r >= GroupRole::Admin);
-        if admin {
+        page.can = permissions(&db, &id, &who).unwrap_or_default();
+        if page.can.contains(&GroupPermission::Funds) {
+            page.funds = Some(funds(&db, &id, now));
+        }
+        if page.can.contains(&GroupPermission::Members) {
             let waiting = |invited: bool| -> Vec<GroupMember> {
                 db.prepare(
                     "SELECT a.player_id, a.number, a.name FROM group_pending p
@@ -998,6 +1224,7 @@ pub(crate) async fn group_page(
                             number: r.get::<_, i64>(1)? as u64,
                             name: r.get(2)?,
                             role: GroupRole::Member,
+                            can: Vec::new(),
                         })
                     })
                     .map(|rows| rows.filter_map(Result::ok).collect())

@@ -266,7 +266,9 @@ pub(crate) async fn download_place(
         return Err((StatusCode::NOT_FOUND, "there is no place with that number".into()));
     };
     let trusted = crate::download_signer(&headers, &place_download_id(place_id)).is_some_and(|signer| {
-        author_id.as_deref() == Some(signer.as_str()) || fleet::runs(&db, &signer, &game_id)
+        author_id.as_deref() == Some(signer.as_str())
+            || fleet::runs(&db, &signer, &game_id)
+            || crate::groups::may_edit(&db, &game_id, &signer)
     });
     if !trusted {
         if !limits.take_logged(Limit::Download, &caller.0) {

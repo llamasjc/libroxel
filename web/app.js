@@ -2075,6 +2075,8 @@ function groupsPage() {
 }
 
 const ROLE_NAMES = { owner: 'Owner', admin: 'Admin', member: 'Member' };
+const PERMISSIONS = [['games', 'Games'], ['funds', 'Funds'], ['wall', 'Wall'], ['members', 'Members']];
+const FUND_REASONS = { earned: 'Sale', engagement: 'Play time' };
 
 function groupPage() {
   const id = route.id;
@@ -2097,7 +2099,7 @@ function groupPage() {
   const { group, members, posts, games, requests = [], invites = [] } = known;
   const me = session && members.find((m) => m.player_id === session.playerId);
   const role = me?.role;
-  const admin = role === 'owner' || role === 'admin';
+  const can = new Set(known.can || []);
   const shown = data.me?.badge?.group_id === id;
   const actions = [];
   if (session && !me) {
@@ -2143,7 +2145,7 @@ function groupPage() {
     out.push(el('details', {}, el('summary', {}, 'Edit'), el('div', { class: 'form' }, name, el('div', { class: 'search' }, tag, color), join, about,
       el('div', { class: 'form-actions' }, el('button', { class: 'btn go small', onclick: () => changeGroup('edit', id, { name: name.value.trim(), tag: tag.value.trim().toUpperCase(), color: color.value, join: join.value, about: about.value.trim() }, 'Saved.') }, icon(ICON.check), 'Save')))));
   }
-  if (admin) {
+  if (can.has('members')) {
     const who = el('input', { placeholder: 'Their name' });
     const invite = async () => {
       const found = await api(`/accounts/${encodeURIComponent(who.value.trim())}`).catch(() => null);
@@ -2176,7 +2178,7 @@ function groupPage() {
     const mine = session?.playerId === post.player_id;
     wall.push(el('div', { class: 'post' },
       el('div', {}, el('a', { href: `/user/${post.player_id}` }, el('b', {}, post.name)), el('span', { class: 'soft' }, ` · ${ago(post.secs_ago)}`),
-        (mine || admin) && el('button', { class: 'link', title: 'Remove', onclick: () => changeGroup('unpost', id, { other_id: String(post.post_id) }) }, icon(ICON.x)),
+        (mine || can.has('wall')) && el('button', { class: 'link', title: 'Remove', onclick: () => changeGroup('unpost', id, { other_id: String(post.post_id) }) }, icon(ICON.x)),
         session && !mine && el('button', { class: 'link', title: 'Report', onclick: () => reportPost(post) }, icon(ICON.flag))),
       el('div', {}, post.text)));
   }
@@ -2188,9 +2190,16 @@ function groupPage() {
       const pick = el('select', {}, ['member', 'admin', 'owner'].map((r) => el('option', { value: r, selected: r === m.role }, ROLE_NAMES[r])));
       pick.addEventListener('change', () => changeGroup('role', id, { other_id: m.player_id, role: pick.value }, `${m.name} is ${ROLE_NAMES[pick.value].toLowerCase()} now.`));
       controls.push(pick);
+      const boxes = PERMISSIONS.map(([p, label]) => {
+        const box = el('input', { type: 'checkbox', checked: (m.can || []).includes(p), disabled: m.role === 'admin' && p !== 'funds' });
+        box.dataset.p = p;
+        return el('label', {}, box, ` ${label}`);
+      });
+      const save = () => changeGroup('permissions', id, { other_id: m.player_id, text: boxes.map((b) => b.firstChild).filter((b) => b.checked && !b.disabled).map((b) => b.dataset.p).join(' ') }, 'Saved.');
+      controls.push(el('details', {}, el('summary', {}, 'Permissions'), el('div', { class: 'form' }, boxes, el('button', { class: 'chip', onclick: save }, icon(ICON.check), 'Save'))));
     }
     const rank = { owner: 2, admin: 1, member: 0 };
-    if (admin && rank[m.role] < rank[role]) controls.push(el('button', { class: 'chip iconbtn', title: `Remove ${m.name}`, onclick: () => changeGroup('kick', id, { other_id: m.player_id }, `Removed ${m.name}.`) }, icon(ICON.userMinus)));
+    if (can.has('members') && rank[m.role] < rank[role]) controls.push(el('button', { class: 'chip iconbtn', title: `Remove ${m.name}`, onclick: () => changeGroup('kick', id, { other_id: m.player_id }, `Removed ${m.name}.`) }, icon(ICON.userMinus)));
     side.push(el('div', { class: 'person' },
       portrait(m.player_id, 36),
       el('div', { class: 'what' }, el('a', { href: `/user/${m.number ?? m.player_id}` }, el('b', {}, m.name)),
@@ -2202,18 +2211,35 @@ function groupPage() {
   gameList.push(games.length
     ? el('div', { class: 'games' }, games.map((g) => gameCard(entries().find((e) => e.key === g.game_id) || { key: g.game_id, number: g.number, title: g.title, by: group.name, servers: [], playing: 0, symbol: ICON.globe })))
     : el('p', { class: 'soft' }, 'No games yet.'));
-  if (admin) {
-    const theirs = (data.me?.games || []).filter((g) => !games.some((x) => x.game_id === g.game_id));
+  if (can.has('games')) {
+    const theirs = (data.me?.games || []).filter((g) => g.author_id === session.playerId && !games.some((x) => x.game_id === g.game_id));
     if (theirs.length) {
       const pick = el('select', {}, theirs.map((g) => el('option', { value: g.game_id }, g.title)));
       gameList.push(el('div', { class: 'search' }, pick, el('button', { class: 'chip', onclick: () => changeGroup('add_game', id, { other_id: pick.value }, 'Added.') }, 'Add game')));
     }
-    if (games.length) {
+    if (games.length && role === 'owner') {
       const pick = el('select', {}, games.map((g) => el('option', { value: g.game_id }, g.title)));
       gameList.push(el('div', { class: 'search' }, pick, el('button', { class: 'chip', onclick: () => changeGroup('remove_game', id, { other_id: pick.value }, 'Removed.') }, 'Remove game')));
     }
   }
-  return [...out, ...gameList, el('div', { class: 'columns' }, el('div', {}, wall), el('div', {}, side))];
+  const funds = [];
+  if (known.funds) {
+    const f = known.funds;
+    funds.push(el('h2', { class: 'section' }, `Funds · ${credits(f.balance)}`));
+    const who = el('select', {}, members.map((m) => el('option', { value: m.player_id }, m.name)));
+    const amount = el('input', { type: 'number', min: 1, max: f.balance, placeholder: 'Credits', style: 'width:100px' });
+    funds.push(el('div', { class: 'search' }, who, amount, el('button', { class: 'chip', onclick: () => {
+      const m = members.find((x) => x.player_id === who.value);
+      changeGroup('pay', id, { other_id: who.value, text: String(Number(amount.value) || 0) }, `Paid ${m?.name}.`);
+    } }, 'Pay')));
+    const said = (h) => h.reason === 'group pay' ? `Paid ${h.to}` : FUND_REASONS[h.reason] || h.reason;
+    for (const h of f.history) {
+      funds.push(el('div', { class: 'person' },
+        el('div', { class: 'what' }, el('b', {}, said(h)), el('small', { class: 'soft' }, [h.by && `${h.by} · `, ago(h.secs_ago)])),
+        el('div', {}, `${h.amount > 0 ? '+' : ''}${count(h.amount)}`)));
+    }
+  }
+  return [...out, ...gameList, ...funds, el('div', { class: 'columns' }, el('div', {}, wall), el('div', {}, side))];
 }
 
 async function reportGroup(group) {

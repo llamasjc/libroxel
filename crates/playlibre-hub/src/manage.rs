@@ -164,6 +164,7 @@ pub(crate) fn owned(db: &Connection, game_id: &str, player_id: &str) -> Result<(
     match author {
         None => Err((StatusCode::NOT_FOUND, "there is no published game with that id".into())),
         Some(Some(a)) if a == player_id => Ok(()),
+        Some(_) if crate::groups::may_edit(db, game_id, player_id) => Ok(()),
         Some(_) => Err((StatusCode::FORBIDDEN, "that isn't your game".into())),
     }
 }
@@ -188,7 +189,10 @@ pub(crate) async fn my_games(
     let now = now();
     let mut statement = db
         .prepare(&format!(
-            "SELECT {GAME_COLUMNS} FROM {GAMES} WHERE g.author_id = ?1 ORDER BY g.updated DESC"
+            "SELECT {GAME_COLUMNS} FROM {GAMES} WHERE g.author_id = ?1 OR g.game_id IN (
+                 SELECT x.game_id FROM group_games x JOIN group_members m ON m.group_id = x.group_id
+                 WHERE m.player_id = ?1 AND (m.role >= 1 OR m.perms & 1 != 0))
+             ORDER BY g.updated DESC"
         ))
         .map_err(internal)?;
     let games = statement

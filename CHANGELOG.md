@@ -11,6 +11,12 @@ its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
   them: one player offers, the other accepts or declines, and both confirm
   before the items move.
 
+- **Group games and funds:** a group's owner picks what each member can
+  do: edit the group's games, pay from its funds, clear the wall, or manage
+  members. Members who can edit a group's games can download, publish,
+  and manage them. Sales and play time from group games go to the group's
+  funds, which can pay members.
+
 ## 0.1.22 (2026-11-27)
 
 - **No free Credits:** badges no longer give Credits, and a creator's

@@ -98,9 +98,10 @@ pub use places::{
 };
 mod groups;
 pub use groups::{
-    GROUP_COLORS, GroupAction, GroupBadge, GroupChange, GroupChanged, GroupInfo, GroupJoin, GroupMember,
-    GroupPage, GroupPost, GroupRole, MAX_TAG, group_color, group_invites_message, group_message,
-    group_view_message, valid_group_name, valid_group_tag,
+    GROUP_COLORS, GroupAction, GroupBadge, GroupChange, GroupChanged, GroupFundEntry, GroupFunds, GroupInfo,
+    GroupJoin, GroupMember, GroupPage, GroupPermission, GroupPost, GroupRole, MAX_TAG, group_color,
+    group_invites_message, group_message, group_view_message, group_wallet, permission_words,
+    valid_group_name, valid_group_tag,
 };
 mod limited;
 pub use limited::{
@@ -1464,7 +1465,9 @@ async fn download(
     let (place, author_id) =
         game.ok_or((StatusCode::NOT_FOUND, "there is no published game with that id".to_owned()))?;
     let trusted = download_signer(&headers, &id).is_some_and(|signer| {
-        author_id.as_deref() == Some(signer.as_str()) || fleet::runs(&db, &signer, &id)
+        author_id.as_deref() == Some(signer.as_str())
+            || fleet::runs(&db, &signer, &id)
+            || groups::may_edit(&db, &id, &signer)
     });
     // A place holds the game's server scripts and storage, which players'
     // computers never get, so only its creator and the Hub's own servers
@@ -1528,18 +1531,24 @@ async fn publish(
     let internal = |e: rusqlite::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     match game.game_id.as_deref().map(str::trim).filter(|id| !id.is_empty()) {
         Some(id) => {
-            let owner: Option<(String, i64)> = db
-                .query_row("SELECT secret, version FROM games WHERE game_id = ?1", params![id], |r| {
-                    Ok((r.get(0)?, r.get(1)?))
-                })
+            let owner: Option<(String, i64, Option<String>)> = db
+                .query_row(
+                    "SELECT secret, version, author_id FROM games WHERE game_id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
                 .optional()
                 .map_err(internal)?;
-            let Some((secret, version)) = owner else {
+            let Some((secret, version, made_by)) = owner else {
                 return Err((StatusCode::NOT_FOUND, "there is no published game with that id".into()));
             };
-            if secret != seal::pepper(&db, &game.secret) {
+            let author_id = if secret == seal::pepper(&db, &game.secret) {
+                author_id
+            } else if author_id.as_deref().is_some_and(|me| groups::may_edit(&db, id, me)) {
+                made_by
+            } else {
                 return Err((StatusCode::FORBIDDEN, "someone else published that game".into()));
-            }
+            };
             let owner = author_id.clone().unwrap_or_else(|| id.to_owned());
             not_copied(&db, id, &owner, &prints)?;
             db.execute(

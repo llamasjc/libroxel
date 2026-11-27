@@ -199,8 +199,9 @@ fn pay_engagement(db: &Connection, day: i64, pool: i64) -> rusqlite::Result<()> 
         s.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
     };
     let mut counted = Vec::new();
-    for (game, creator) in games {
-        let own = crate::analytics::player_code(db, &game, &creator)?;
+    for (game, author) in games {
+        let own = crate::analytics::player_code(db, &game, &author)?;
+        let creator = crate::groups::earner(db, &game, &author);
         let secs: i64 = db.query_row(
             "SELECT COALESCE(SUM(MIN(secs, ?4)), 0) FROM (
                 SELECT player, SUM(last_seen - started) AS secs FROM play_sessions
@@ -230,7 +231,8 @@ fn pay_engagement(db: &Connection, day: i64, pool: i64) -> rusqlite::Result<()> 
 pub fn payable(db: &Connection, player_id: &str) -> i64 {
     let sum = |sql: &str| db.query_row(sql, params![player_id], |r| r.get::<_, i64>(0)).unwrap_or(0);
     let earned = sum("SELECT COALESCE(SUM(cashable), 0) FROM settled WHERE seller_id = ?1")
-        + sum("SELECT COALESCE(SUM(earned), 0) FROM engagement WHERE creator_id = ?1");
+        + sum("SELECT COALESCE(SUM(earned), 0) FROM engagement WHERE creator_id = ?1")
+        + sum("SELECT COALESCE(SUM(amount), 0) FROM ledger WHERE player_id = ?1 AND reason = 'group pay'");
     let out =
         sum("SELECT COALESCE(SUM(credits), 0) FROM payouts WHERE player_id = ?1 AND state <> 'refused'");
     (earned - out).clamp(0, wallet::balance(db, player_id).max(0))
@@ -748,7 +750,9 @@ pub(crate) async fn change_pass(
         .query_row("SELECT author_id FROM games WHERE game_id = ?1", params![game_id], |r| r.get(0))
         .optional()
         .map_err(internal)?;
-    if author.flatten().as_deref() != Some(c.player_id.as_str()) {
+    if author.flatten().as_deref() != Some(c.player_id.as_str())
+        && !crate::groups::may_edit(&db, &game_id, &c.player_id)
+    {
         return Err((StatusCode::FORBIDDEN, "only the game's creator can sell passes for it".into()));
     }
     if c.action != PassAction::Remove {
@@ -828,13 +832,13 @@ pub(crate) async fn buy_pass(State(db): State<Db>, Json(b): Json<BuyPass>) -> Re
     let item_id = format!("pass-{}", b.pass_id);
     let sale = Sale {
         buyer_id: b.player_id.clone(),
-        seller_id,
+        seller_id: crate::groups::earner(&db, &game_id, &seller_id),
         game_id: Some(game_id.clone()),
         item_id: item_id.clone(),
         kind: "pass".into(),
         amount: price,
     };
-    let seller = sale.seller_id.clone();
+    let seller = seller_id;
     wallet::buy(&db, &sale)?;
     if let Ok(name) = db.query_row("SELECT name FROM passes WHERE pass_id = ?1", params![b.pass_id], |r| {
         r.get::<_, String>(0)

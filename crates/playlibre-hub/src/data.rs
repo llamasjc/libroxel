@@ -112,6 +112,9 @@ pub(crate) fn trusted(db: &Connection, server_id: &str, game_id: &str) -> bool {
     if game_id.starts_with("starter:") {
         return false;
     }
+    if crate::groups::may_edit(db, game_id, server_id) {
+        return true;
+    }
     db.query_row(
         "SELECT 1 FROM games WHERE game_id = ?1 AND author_id = ?2",
         params![game_id, server_id],
