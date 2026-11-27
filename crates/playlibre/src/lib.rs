@@ -64,6 +64,7 @@ mod url_handler;
 mod viewport;
 mod viewport_frame;
 mod voice;
+mod wine;
 
 use std::path::PathBuf;
 
@@ -537,6 +538,7 @@ pub fn run() {
                 .after(bevy_egui::EguiPreUpdateSet::ProcessInput)
                 .before(bevy_egui::EguiPreUpdateSet::BeginPass),
         );
+    wine::add(&mut app);
     smoke::add(&mut app);
     report::run(&mut app);
 }
