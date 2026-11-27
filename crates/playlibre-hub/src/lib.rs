@@ -67,8 +67,9 @@ pub use badges::{
 mod copies;
 mod data;
 pub use data::{
-    DataChange, DataTrade, DataTraded, MAX_GAME_DATA, MAX_TRADE, MAX_VALUE as MAX_DATA_VALUE, changes_hash,
-    data_message,
+    DataChange, DataEdit, DataEntry, DataQuery, DataStoreInfo, DataTrade, DataTraded, DataView,
+    KEYS_PER_PAGE, MAX_GAME_DATA, MAX_SHOWN_VALUE, MAX_TRADE, MAX_VALUE as MAX_DATA_VALUE, changes_hash,
+    data_edit_message, data_message,
 };
 mod earnings;
 pub use earnings::{
@@ -1213,7 +1214,8 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/earnings/{id}", get(earnings::get_earnings))
         .route("/earnings/cash-out", post(earnings::cash_out))
         .route("/games/{id}/passes", get(earnings::list_passes).post(earnings::change_pass))
-        .route("/games/{id}/data", post(data::trade_data).layer(saved))
+        .route("/games/{id}/data", get(data::view_data).post(data::trade_data).layer(saved.clone()))
+        .route("/games/{id}/data/edit", post(data::edit_data).layer(saved.clone()))
         .route("/games/{id}/media", post(media::change_media).layer(pictures))
         .route("/games/{id}/media/{file}", get(media::get_media))
         .route("/follows", post(follows::change_follow))
@@ -3936,6 +3938,40 @@ impl HubClient {
             .build()
             .call();
         self.answer(request)
+    }
+
+    pub fn data(&self, game_id: &str, q: &DataQuery) -> Result<DataView, String> {
+        let mut request = self
+            .agent
+            .get(format!("{}/games/{}/data", self.base, assets::encode(game_id)))
+            .query("player_id", &q.player_id)
+            .query("time", q.time.to_string())
+            .query("signature", &q.signature);
+        for (name, value) in
+            [("store", &q.store), ("prefix", &q.prefix), ("after", &q.after), ("key", &q.key)]
+        {
+            if let Some(v) = value {
+                request = request.query(name, v);
+            }
+        }
+        let request = request.config().http_status_as_error(false).build().call();
+        self.answer(request)
+    }
+
+    pub fn edit_data(&self, game_id: &str, edit: &DataEdit) -> Result<(), String> {
+        let mut r = self
+            .agent
+            .post(format!("{}/games/{}/data/edit", self.base, assets::encode(game_id)))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send_json(edit)
+            .map_err(|e| format!("could not reach the Hub: {e}"))?;
+        if r.status().is_success() {
+            Ok(())
+        } else {
+            Err(r.body_mut().read_to_string().unwrap_or_else(|_| r.status().to_string()))
+        }
     }
 
     pub fn manage(&self, game_id: &str, ask: &ManageGame) -> Result<(), String> {

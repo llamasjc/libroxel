@@ -137,6 +137,16 @@ fn groups_have_roles_a_wall_games_and_badges() {
     alice.change(&hub, GroupAction::AddGame, &id, |c| c.other_id = game.clone()).unwrap();
     assert_eq!(hub.group(&id).unwrap().games.len(), 1);
     assert_eq!(hub.game(&game).unwrap().group.map(|g| g.name), Some("Builders".into()));
+    let data = |p: &Player| {
+        let time = p.tick();
+        let signature = sign(&p.key, &playlibre_hub::creator_message(&p.id, time));
+        hub.data(
+            &game,
+            &playlibre_hub::DataQuery { player_id: p.id.clone(), time, signature, ..Default::default() },
+        )
+    };
+    assert!(data(&bo).is_ok());
+    assert!(data(&cy).is_err());
 
     assert!(alice.change(&hub, GroupAction::Leave, &id, |_| {}).unwrap_err().contains("owner"));
     alice

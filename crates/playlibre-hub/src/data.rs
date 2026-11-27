@@ -13,7 +13,7 @@
 //! hosting a game keeps its data on their own computer, as before.
 
 use axum::Json;
-use axum::extract::{Path as UrlPath, State};
+use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::StatusCode;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -222,4 +222,224 @@ pub(crate) async fn trade_data(
     }
     fresh(&db, &t.server_id, &format!("data {game_id}"), t.time)?;
     trade(&db, &game_id, t.since, &t.changes).map(Json)
+}
+
+/// Values bigger than this are left out of a key list; ask for the key on its own.
+pub const MAX_SHOWN_VALUE: usize = 16 * 1024;
+/// A key list holds at most this many keys.
+pub const KEYS_PER_PAGE: usize = 100;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DataStoreInfo {
+    pub name: String,
+    pub keys: i64,
+    pub size: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DataEntry {
+    pub key: String,
+    pub size: i64,
+    #[serde(default)]
+    pub value: Option<serde_json::Value>,
+}
+
+/// What `GET /games/{id}/data` answers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct DataView {
+    /// The number of the game's last change: nothing changed while it stays the same.
+    pub seq: i64,
+    pub used: i64,
+    pub limit: i64,
+    pub stores: Vec<DataStoreInfo>,
+    pub keys: Vec<DataEntry>,
+    #[serde(default)]
+    pub more: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DataQuery {
+    pub player_id: String,
+    pub time: i64,
+    pub signature: String,
+    #[serde(default)]
+    pub store: Option<String>,
+    #[serde(default)]
+    pub prefix: Option<String>,
+    #[serde(default)]
+    pub after: Option<String>,
+    #[serde(default)]
+    pub key: Option<String>,
+}
+
+/// A creator setting or removing one key: `value` is JSON text, `None` to remove it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DataEdit {
+    pub player_id: String,
+    pub time: i64,
+    pub store: String,
+    pub key: String,
+    #[serde(default)]
+    pub value: Option<String>,
+    pub signature: String,
+}
+
+pub fn data_edit_message(
+    player_id: &str,
+    game_id: &str,
+    time: i64,
+    store: &str,
+    key: &str,
+    value: Option<&str>,
+) -> Vec<u8> {
+    let what = value.map_or_else(|| "remove".to_owned(), |v| format!("set\n{v}"));
+    format!("libroxel data\n{player_id}\n{game_id}\n{time}\n{store}\n{key}\n{what}").into_bytes()
+}
+
+/// Whether `player_id` may see and change `game_id`'s saved data: its
+/// creator, or an admin of the group it is in.
+pub(crate) fn may_edit(db: &Connection, game_id: &str, player_id: &str) -> Result<(), Failure> {
+    let author: Option<Option<String>> = db
+        .query_row("SELECT author_id FROM games WHERE game_id = ?1", params![game_id], |r| r.get(0))
+        .optional()
+        .map_err(internal)?;
+    let Some(author) = author else {
+        return Err((StatusCode::NOT_FOUND, "there is no published game with that id".into()));
+    };
+    if author.as_deref() == Some(player_id) {
+        return Ok(());
+    }
+    let admin = db
+        .query_row(
+            "SELECT 1 FROM group_games g JOIN group_members m ON m.group_id = g.group_id
+             WHERE g.game_id = ?1 AND m.player_id = ?2 AND m.role >= 1",
+            params![game_id, player_id],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(internal)?
+        .is_some();
+    if admin { Ok(()) } else { Err((StatusCode::FORBIDDEN, "that isn't your game".into())) }
+}
+
+pub fn view(db: &Connection, game_id: &str, q: &DataQuery) -> Result<DataView, Failure> {
+    let (seq, used): (i64, i64) = db
+        .query_row(
+            "SELECT COALESCE(MAX(seq), 0), COALESCE(SUM(size), 0) FROM game_data WHERE game_id = ?1",
+            params![game_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(internal)?;
+    let mut statement = db
+        .prepare(
+            "SELECT store, COUNT(*), SUM(size) FROM game_data WHERE game_id = ?1 AND value IS NOT NULL
+             GROUP BY store ORDER BY store",
+        )
+        .map_err(internal)?;
+    let stores = statement
+        .query_map(params![game_id], |r| {
+            Ok(DataStoreInfo { name: r.get(0)?, keys: r.get(1)?, size: r.get(2)? })
+        })
+        .map_err(internal)?
+        .filter_map(Result::ok)
+        .collect();
+    let mut keys = Vec::new();
+    let mut more = false;
+    if let Some(store) = q.store.as_deref() {
+        let entry = |r: &rusqlite::Row, whole: bool| -> rusqlite::Result<DataEntry> {
+            let size: i64 = r.get(1)?;
+            let value: Option<String> = r.get(2)?;
+            let value = value
+                .filter(|_| whole || size as usize <= MAX_SHOWN_VALUE)
+                .and_then(|v| serde_json::from_str(&v).ok());
+            Ok(DataEntry { key: r.get(0)?, size, value })
+        };
+        if let Some(key) = q.key.as_deref() {
+            keys = db
+                .query_row(
+                    "SELECT key, size, value FROM game_data
+                     WHERE game_id = ?1 AND store = ?2 AND key = ?3 AND value IS NOT NULL",
+                    params![game_id, store, key],
+                    |r| entry(r, true),
+                )
+                .optional()
+                .map_err(internal)?
+                .into_iter()
+                .collect();
+        } else {
+            let prefix = q.prefix.as_deref().unwrap_or("");
+            let after = q.after.as_deref().unwrap_or("");
+            let mut statement = db
+                .prepare(
+                    "SELECT key, size, value FROM game_data
+                     WHERE game_id = ?1 AND store = ?2 AND value IS NOT NULL
+                       AND substr(key, 1, length(?3)) = ?3 AND key > ?4
+                     ORDER BY key LIMIT ?5",
+                )
+                .map_err(internal)?;
+            keys = statement
+                .query_map(params![game_id, store, prefix, after, KEYS_PER_PAGE as i64 + 1], |r| {
+                    entry(r, false)
+                })
+                .map_err(internal)?
+                .filter_map(Result::ok)
+                .collect();
+            more = keys.len() > KEYS_PER_PAGE;
+            keys.truncate(KEYS_PER_PAGE);
+        }
+    }
+    Ok(DataView { seq, used, limit: MAX_GAME_DATA, stores, keys, more })
+}
+
+pub(crate) async fn view_data(
+    State(db): State<Db>,
+    UrlPath(game_id): UrlPath<String>,
+    Query(q): Query<DataQuery>,
+) -> Result<Json<DataView>, Failure> {
+    if !verify(&q.player_id, &crate::creator_message(&q.player_id, q.time), &q.signature) {
+        return Err((StatusCode::FORBIDDEN, "the signature does not match".into()));
+    }
+    if (q.time - crate::social::now_ms()).abs() > 10 * 60 * 1000 {
+        return Err((StatusCode::BAD_REQUEST, "this computer's clock is too far off".into()));
+    }
+    let db = db.lock().unwrap();
+    may_edit(&db, &game_id, &q.player_id)?;
+    view(&db, &game_id, &q).map(Json)
+}
+
+pub(crate) async fn edit_data(
+    State(db): State<Db>,
+    UrlPath(game_id): UrlPath<String>,
+    Json(e): Json<DataEdit>,
+) -> Result<StatusCode, Failure> {
+    let message = data_edit_message(&e.player_id, &game_id, e.time, &e.store, &e.key, e.value.as_deref());
+    if !verify(&e.player_id, &message, &e.signature) {
+        return Err((StatusCode::FORBIDDEN, "the signature does not match".into()));
+    }
+    let value = match e.value.as_deref() {
+        Some(text) => match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(serde_json::Value::Null) => return Err(bad("a key can't be null; remove it instead")),
+            Ok(v) => Some(v),
+            Err(_) => return Err(bad("that isn't valid JSON")),
+        },
+        None => None,
+    };
+    let db = db.lock().unwrap();
+    may_edit(&db, &game_id, &e.player_id)?;
+    fresh(&db, &e.player_id, &format!("data edit {game_id}"), e.time)?;
+    if value.is_none() {
+        let there = db
+            .query_row(
+                "SELECT 1 FROM game_data WHERE game_id = ?1 AND store = ?2 AND key = ?3 AND value IS NOT NULL",
+                params![game_id, e.store, e.key],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(internal)?;
+        if there.is_none() {
+            return Err((StatusCode::NOT_FOUND, "there is no such key".into()));
+        }
+    }
+    trade(&db, &game_id, i64::MAX, &[DataChange { store: e.store, key: e.key, value }])?;
+    Ok(StatusCode::NO_CONTENT)
 }

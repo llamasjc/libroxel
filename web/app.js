@@ -205,7 +205,7 @@ async function api(path, { method = 'GET', body, query } = {}) {
 
 const SESSION_KEY = 'playlibre.session';
 let session = loadSession();
-let lastSigned = { friends: 0, party: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0, wallet: 0, badge: 0, media: 0, follow: 0, server: 0, notes: 0, place: 0, privateServer: 0, block: 0, read: 0 };
+let lastSigned = { friends: 0, party: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0, wallet: 0, badge: 0, media: 0, follow: 0, server: 0, notes: 0, place: 0, privateServer: 0, block: 0, read: 0, data: 0 };
 
 function loadSession() {
   for (const store of [sessionStorage, localStorage]) {
@@ -2223,7 +2223,9 @@ function groupPage() {
     }
     if (games.length && role === 'owner') {
       const pick = el('select', {}, games.map((g) => el('option', { value: g.game_id }, g.title)));
-      gameList.push(el('div', { class: 'search' }, pick, el('button', { class: 'chip', onclick: () => changeGroup('remove_game', id, { other_id: pick.value }, 'Removed.') }, 'Remove game')));
+      gameList.push(el('div', { class: 'search' }, pick,
+        el('button', { class: 'chip', onclick: () => goTo(`/creator/${encodeURIComponent(pick.value)}/data`) }, 'Data'),
+        el('button', { class: 'chip', onclick: () => changeGroup('remove_game', id, { other_id: pick.value }, 'Removed.') }, 'Remove game')));
     }
   }
   const funds = [];
@@ -3429,6 +3431,100 @@ function versionsTab(g) {
       : el('button', { class: 'chip', disabled: mine.busy, onclick: () => manageGame(g.game_id, { do: 'restore', version: x.version }, `Version ${x.version} is live again.`) }, icon(ICON.refresh), 'Restore')))));
 }
 
+const saved = { game: null, store: '', prefix: '', view: null, error: null, loading: false, editing: null, text: '', adding: false, busy: false };
+
+function loadSaved(id, again) {
+  if (saved.loading || (!again && saved.game === id && saved.view)) return;
+  if (saved.game !== id) Object.assign(saved, { game: id, store: '', prefix: '', view: null, error: null, editing: null, adding: false });
+  saved.loading = true;
+  const time = Date.now();
+  const signature = signText(secretKey(), `libroxel creator\n${session.playerId}\n${time}`);
+  const query = { player_id: session.playerId, time, signature };
+  if (saved.store) query.store = saved.store;
+  if (saved.store && saved.prefix) query.prefix = saved.prefix;
+  api(`/games/${encodeURIComponent(id)}/data`, { query })
+    .then((v) => {
+      const text = JSON.stringify(v);
+      const changed = text !== saved.shown || saved.error;
+      saved.shown = text;
+      saved.view = v;
+      saved.error = null;
+      if (changed && route.name === 'creator' && route.tab === 'data') render();
+    })
+    .catch((e) => { saved.error = e.message; if (route.name === 'creator') render(); })
+    .finally(() => { saved.loading = false; });
+}
+
+async function editSaved(id, store, key, value, said) {
+  if (saved.busy) return;
+  saved.busy = true;
+  render();
+  const time = Math.max(Date.now(), lastSigned.data + 1);
+  lastSigned.data = time;
+  const what = value === null ? 'remove' : `set\n${value}`;
+  const signature = signText(secretKey(), `libroxel data\n${session.playerId}\n${id}\n${time}\n${store}\n${key}\n${what}`);
+  try {
+    await api(`/games/${encodeURIComponent(id)}/data/edit`, { method: 'POST', body: { player_id: session.playerId, time, store, key, value, signature } });
+    flash = { text: said };
+    Object.assign(saved, { editing: null, adding: false });
+    loadSaved(id, true);
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  } finally {
+    saved.busy = false;
+    render();
+  }
+}
+
+function dataTab(id) {
+  loadSaved(id);
+  if (saved.error && !saved.view) return status(saved.error, 'error');
+  const v = saved.view;
+  if (!v) return el('p', { class: 'soft' }, 'Loading…');
+  const out = [el('p', { class: 'soft' }, `${size(v.used)} of ${size(v.limit)} used`)];
+  if (!v.stores.length && !saved.store) return [...out, el('div', { class: 'empty' }, 'No saved data yet.')];
+  const pickStore = (name) => { Object.assign(saved, { store: name, prefix: '', editing: null, adding: false }); loadSaved(id, true); render(); };
+  out.push(el('div', { class: 'hats' }, v.stores.map((st) =>
+    el('button', { class: `chip${saved.store === st.name ? ' on' : ''}`, onclick: () => pickStore(st.name) }, `${st.name} (${count(st.keys)})`))));
+  if (!saved.store) return out;
+  const find = el('input', { type: 'search', placeholder: 'Key starts with', value: saved.prefix });
+  find.addEventListener('keydown', (e) => { if (e.key === 'Enter') { saved.prefix = find.value; loadSaved(id, true); } });
+  out.push(el('div', { class: 'search' }, find,
+    el('button', { class: 'chip', onclick: () => { saved.prefix = find.value; loadSaved(id, true); } }, icon(ICON.search), 'Find'),
+    el('button', { class: 'chip', onclick: () => { Object.assign(saved, { adding: true, editing: null, text: '' }); render(); } }, 'Add key')));
+  const editor = (key, isNew) => {
+    const name = isNew && el('input', { type: 'text', placeholder: 'Key', maxlength: 200 });
+    const box = el('textarea', { rows: 6, class: 'mono', oninput: (e) => { saved.text = e.target.value; } }, saved.text);
+    const save = () => {
+      const k = isNew ? name.value.trim() : key;
+      if (!k) return;
+      try { JSON.parse(box.value); } catch { flash = { text: "That isn't valid JSON.", kind: 'error' }; render(); return; }
+      editSaved(id, saved.store, k, box.value, 'Saved.');
+    };
+    return el('div', { class: 'form manage' }, name, box,
+      el('div', { class: 'form-actions' },
+        el('button', { class: 'btn go small', disabled: saved.busy, onclick: save }, icon(ICON.check), 'Save'),
+        el('button', { class: 'chip', onclick: () => { Object.assign(saved, { editing: null, adding: false }); render(); } }, 'Cancel')));
+  };
+  if (saved.adding) out.push(editor('', true));
+  const rows = v.keys.map((k) => {
+    const shown = k.value === null || k.value === undefined ? `Too big to show (${size(k.size)})` : JSON.stringify(k.value);
+    const row = el('div', { class: 'person' },
+      el('div', { class: 'what' }, el('b', {}, k.key), el('small', { class: 'soft mono' }, shown)),
+      el('div', { class: 'buttons' },
+        k.value !== null && k.value !== undefined && el('button', { class: 'chip', disabled: saved.busy, onclick: () => { Object.assign(saved, { editing: k.key, adding: false, text: JSON.stringify(k.value, null, 2) }); render(); } }, 'Edit'),
+        el('button', { class: 'chip', disabled: saved.busy, onclick: (e) => {
+          const btn = e.currentTarget;
+          if (btn.dataset.sure) editSaved(id, saved.store, k.key, null, `Removed ${k.key}.`);
+          else { btn.dataset.sure = '1'; btn.replaceChildren(icon(ICON.trash), ' Remove?'); }
+        } }, icon(ICON.trash), 'Remove')));
+    return saved.editing === k.key ? [row, editor(k.key, false)] : row;
+  });
+  out.push(rows.length ? el('div', { class: 'versions' }, rows) : el('p', { class: 'soft' }, 'No keys.'));
+  if (v.more) out.push(el('p', { class: 'soft' }, `Showing the first ${v.keys.length}. Narrow it down with a key.`));
+  return out;
+}
+
 const badgeForm = { name: '', description: '', icon: 'star', color: 'yellow', editing: null };
 
 async function changeBadge(gameId, action, b, said) {
@@ -4027,24 +4123,29 @@ function creatorPage() {
     const g = games.find((x) => x.game_id === route.id);
     const info = mine.list?.find((x) => x.game_id === route.id);
     out.push(el('a', { class: 'back', href: '/creator' }, icon(ICON.left), 'Create'));
+    if (!info && route.tab === 'data') {
+      out.push(el('h1', { class: 'title' }, 'Saved data'), dataTab(route.id));
+      return out;
+    }
     if (!info) {
       out.push(mine.list ? el('div', { class: 'empty' }, "That isn't one of your games.") : el('p', { class: 'soft' }, 'Loading…'));
       return out;
     }
     const base = `/creator/${encodeURIComponent(info.game_id)}`;
-    const tab = ['settings', 'passes', 'products', 'versions', 'badges'].includes(route.tab) ? route.tab : '';
+    const tab = ['settings', 'passes', 'products', 'versions', 'badges', 'data'].includes(route.tab) ? route.tab : '';
     out.push(el('div', { class: 'manage-head' },
       el('div', { class: 'mini' }, gameIcon(64, 64, info.game_id, info)),
       el('div', {}, el('h1', { class: 'title' }, info.title),
         el('div', { class: 'soft' }, `${info.private ? 'Private' : 'Public'} · version ${info.version} · ${ago(info.updated_secs_ago)}`)),
       !info.private && el('a', { class: 'chip', href: gameHrefOf(info.game_id, info.number, info.title) }, icon(ICON.play), 'View')));
-    out.push(el('div', { class: 'hats' }, [['', 'Numbers'], ['settings', 'Settings'], ['passes', 'Passes'], ['products', 'Products'], ['versions', 'Versions'], ['badges', 'Badges']].map(([t, label]) =>
+    out.push(el('div', { class: 'hats' }, [['', 'Numbers'], ['settings', 'Settings'], ['passes', 'Passes'], ['products', 'Products'], ['versions', 'Versions'], ['badges', 'Badges'], ['data', 'Data']].map(([t, label]) =>
       el('a', { class: `chip${tab === t ? ' on' : ''}`, href: t ? `${base}/${t}` : base }, label))));
     if (tab === 'settings') { out.push(settingsTab(info)); return out; }
     if (tab === 'passes') { out.push(passesTab(info)); return out; }
     if (tab === 'products') { out.push(productsTab(info)); return out; }
     if (tab === 'versions') { out.push(versionsTab(info)); return out; }
     if (tab === 'badges') { out.push(badgesTab(info)); return out; }
+    if (tab === 'data') { out.push(dataTab(info.game_id)); return out; }
     out.push(range);
     if (!g) {
       out.push(creator.error ? status(creator.error, 'error') : el('p', { class: 'soft' }, 'Loading…'));
@@ -4783,6 +4884,12 @@ setInterval(() => {
 }, 4000);
 sayOnline();
 setInterval(sayOnline, 15000);
+setInterval(() => {
+  if (document.hidden || !session || route.name !== 'creator' || route.tab !== 'data' || !saved.game) return;
+  if (saved.editing !== null || saved.adding || saved.busy) return;
+  if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+  loadSaved(saved.game, true);
+}, 3000);
 document.addEventListener('visibilitychange', sayOnline);
 setInterval(() => {
   // Keep lists fresh while someone looks, but don't redraw under their typing.
