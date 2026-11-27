@@ -72,7 +72,8 @@ push the tag again.
   that the app is from an unknown publisher, because it isn't code-signed:
   choose **More info → Run anyway**.
 - **macOS:** unzip and open `PlayLibre.app`. It is not notarized by Apple, so
-  the first time, right-click it and choose **Open**, or run
+  the first time, open it and click **Open Anyway** in **System Settings →
+  Privacy & Security**, or run
   `xattr -dr com.apple.quarantine PlayLibre.app`.
 - **Linux:** `tar xzf playlibre-*.tar.gz` and run `./playlibre`. It needs a
   Vulkan driver, plus Wayland or X11, which desktop installs already have.

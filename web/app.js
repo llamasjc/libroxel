@@ -4152,7 +4152,7 @@ function download() {
   loadRelease();
   const builds = [
     { id: 'windows', name: 'Windows', file: 'playlibre-windows-x86_64-setup.exe', ends: '-windows-x86_64-setup.exe', about: 'Windows 10 or 11. Open the setup wizard and press Next until it\'s done. PlayLibre then sits in the Start menu. If SmartScreen warns you, choose More info, then Run anyway.' },
-    { id: 'macos', name: 'macOS', file: 'playlibre-macos-universal.dmg', ends: '-macos-universal.dmg', about: 'macOS 11 or newer. Open it and drag PlayLibre onto the Applications folder. The first time, right-click PlayLibre in Applications and choose Open.' },
+    { id: 'macos', name: 'macOS', file: 'playlibre-macos-universal.dmg', ends: '-macos-universal.dmg', about: 'macOS 11 or newer. Open it and drag PlayLibre onto the Applications folder. The first time, open it, then click Open Anyway in System Settings, Privacy & Security.' },
     { id: 'linux', name: 'Linux', file: 'playlibre-linux-x86_64.AppImage', ends: '-linux-x86_64.AppImage', about: 'Any x86-64 Linux with Vulkan. Make the file executable (right-click, Properties, Allow running as a program) and open it. It adds itself to your app menu.',
       alt: { label: '.deb for Debian and Ubuntu', file: 'playlibre-linux-x86_64.deb', ends: '-linux-x86_64.deb' } },
   ].sort((a, b) => (b.id === mine) - (a.id === mine));
