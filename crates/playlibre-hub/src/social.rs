@@ -265,6 +265,9 @@ pub(crate) async fn change_friend(
             if account_name(&db, them)?.is_none() {
                 return Err((StatusCode::NOT_FOUND, "there is nobody with that id".into()));
             }
+            if crate::messages::blocked(&db, me, them) {
+                return Err((StatusCode::FORBIDDEN, "you can't add this player".into()));
+            }
             if !crate::family::may_friend(&db, me) {
                 return Err((StatusCode::FORBIDDEN, "a parent turned off friend requests".into()));
             }

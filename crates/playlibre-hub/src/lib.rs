@@ -121,7 +121,8 @@ mod messages;
 mod moderate;
 pub use cli::{HUB_HELP, cli};
 pub use messages::{
-    Conversation, MAX_MESSAGE, Message, Moderation, NewMessage, message_message, read_messages_message,
+    BlockChange, Conversation, MAX_MESSAGE, Message, Moderation, NewMessage, ReadAll, block_message,
+    message_message, read_all_message, read_messages_message,
 };
 pub use moderate::{
     Appeal, AppealAsk, ChatLine, Dashboard, HatMaker, LogEntry, MAX_APPEAL, ModAction, ModChange, OpenAppeal,
@@ -1225,6 +1226,9 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/stats/crash", post(stats::crash))
         .route("/admin/{id}", get(stats::admin))
         .route("/messages", post(messages::send_message))
+        .route("/messages/read", post(messages::read_all))
+        .route("/blocks", post(messages::change_block))
+        .route("/blocks/{id}", get(messages::blocks))
         .route("/messages/{id}", get(messages::conversations))
         .route("/messages/{id}/{other}", get(messages::conversation))
         .fallback(|| async { (StatusCode::NOT_FOUND, NO_ROUTE) })
@@ -3662,6 +3666,26 @@ impl HubClient {
             .call()
             .and_then(|mut r| r.body_mut().read_json())
             .map_err(|e| format!("could not get your messages from the Hub: {e}"))
+    }
+
+    pub fn read_all_messages(&self, r: &ReadAll) -> Result<(), String> {
+        self.post_raw("/messages/read", r).map(|_| ())
+    }
+
+    /// Blocks or unblocks a player, giving who is blocked after.
+    pub fn change_block(&self, c: &BlockChange) -> Result<Vec<Person>, String> {
+        self.post_signed("/blocks", c)
+    }
+
+    /// Who a player blocked, with [`read_messages_message`] signed.
+    pub fn blocks(&self, player_id: &str, time: i64, signature: &str) -> Result<Vec<Person>, String> {
+        self.agent
+            .get(format!("{}/blocks/{player_id}", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not get who you blocked from the Hub: {e}"))
     }
 
     pub fn web_presence(&self, update: &WebPresence) -> Result<(), String> {

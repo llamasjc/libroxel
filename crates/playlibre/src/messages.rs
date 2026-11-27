@@ -4,14 +4,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bevy_egui::egui::{self, RichText};
-use playlibre_hub::{Conversation, Message, NewMessage, Report};
+use playlibre_hub::{BlockChange, Conversation, Message, NewMessage, Person, ReadAll, Report};
 use playlibre_instance::serde_json::Value as Json;
 
 use crate::browse::Platform;
 use crate::theme::{self, icon};
 
 type Slot<T> = Arc<Mutex<Option<Result<T, String>>>>;
-type Loaded = (Vec<Conversation>, Option<(String, Vec<Message>)>);
+type Loaded = (Vec<Conversation>, Option<(String, Vec<Message>)>, Option<Vec<Person>>);
 
 const OPEN_EVERY: Duration = Duration::from_secs(4);
 const CLOSED_EVERY: Duration = Duration::from_secs(20);
@@ -25,6 +25,8 @@ pub struct Chats {
     pub draft: String,
     pub error: Option<String>,
     pub status: Option<String>,
+    pub blocked: Vec<Person>,
+    unread_only: bool,
     reporting: Option<String>,
     sending: bool,
     busy: bool,
@@ -32,6 +34,7 @@ pub struct Chats {
     loaded: Slot<Loaded>,
     sent: Slot<()>,
     reported: Slot<()>,
+    changed: Slot<Option<Vec<Person>>>,
     clock: i64,
 }
 
@@ -56,8 +59,11 @@ impl Platform {
         if let Some(result) = chats.loaded.lock().unwrap().take() {
             chats.busy = false;
             match result {
-                Ok((list, talk)) => {
+                Ok((list, talk, blocked)) => {
                     chats.list = list;
+                    if let Some(blocked) = blocked {
+                        chats.blocked = blocked;
+                    }
                     if let Some((with, talk)) = talk
                         && chats.with.as_ref().is_some_and(|(id, _)| *id == with)
                     {
@@ -82,14 +88,26 @@ impl Platform {
                 Err(e) => e,
             });
         }
+        if let Some(result) = chats.changed.lock().unwrap().take() {
+            match result {
+                Ok(blocked) => {
+                    if let Some(blocked) = blocked {
+                        chats.blocked = blocked;
+                    }
+                    chats.error = None;
+                }
+                Err(e) => chats.error = Some(e),
+            }
+            chats.at = None;
+        }
         let every = if open { OPEN_EVERY } else { CLOSED_EVERY };
         if self.account.is_some() && !self.chats.busy && self.chats.at.is_none_or(|at| at.elapsed() > every) {
-            self.refresh_chats();
+            self.refresh_chats(open);
         }
     }
 
-    pub fn refresh_chats(&mut self) {
-        let times = (self.chats.stamp(), self.chats.stamp());
+    pub fn refresh_chats(&mut self, open: bool) {
+        let times = (self.chats.stamp(), self.chats.stamp(), self.chats.stamp());
         self.chats.busy = true;
         self.chats.at = Some(Instant::now());
         let with = self.chats.with.as_ref().map(|(id, _)| id.clone());
@@ -106,7 +124,8 @@ impl Platform {
                     }
                     None => None,
                 };
-                Ok((list, talk))
+                let blocked = if open { Some(client.blocks(&id, times.2, &signed(times.2))?) } else { None };
+                Ok((list, talk, blocked))
             });
             *out.lock().unwrap() = Some(result);
         });
@@ -141,6 +160,38 @@ impl Platform {
                 let from_id = me.player_id();
                 let signature = me.sign(&playlibre_hub::message_message(&from_id, &to, &text, time));
                 client.send_message(&NewMessage { from_id, to_id: to, text, time, signature }).map(|_| ())
+            });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    fn read_all(&mut self) {
+        let time = self.chats.stamp();
+        let client = self.client();
+        let out = self.chats.changed.clone();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| {
+                let player_id = me.player_id();
+                let signature = me.sign(&playlibre_hub::read_all_message(&player_id, time));
+                client.read_all_messages(&ReadAll { player_id, time, signature }).map(|()| None)
+            });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    fn change_block(&mut self, other_id: String, block: bool) {
+        if block && self.chats.with.as_ref().is_some_and(|(id, _)| *id == other_id) {
+            self.chats.with = None;
+            self.chats.talk.clear();
+        }
+        let time = self.chats.stamp();
+        let client = self.client();
+        let out = self.chats.changed.clone();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| {
+                let player_id = me.player_id();
+                let signature = me.sign(&playlibre_hub::block_message(&player_id, &other_id, block, time));
+                client.change_block(&BlockChange { player_id, other_id, block, time, signature }).map(Some)
             });
             *out.lock().unwrap() = Some(result);
         });
@@ -200,6 +251,10 @@ pub fn messages_tab(ui: &mut egui::Ui, platform: &mut Platform) {
     let mut open = None;
     let mut send = false;
     let mut report = None;
+    let mut block = None;
+    let mut read_all = false;
+    let unread: u32 = list.iter().map(|c| c.unread).sum();
+    let blocked = platform.chats.blocked.clone();
     let now =
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
     ui.columns(2, |columns| {
@@ -233,14 +288,32 @@ pub fn messages_tab(ui: &mut egui::Ui, platform: &mut Platform) {
             ui.add_space(4.0);
             response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
         };
+        ui.horizontal(|ui| {
+            let only = &mut platform.chats.unread_only;
+            if ui.selectable_label(*only, format!("Unread ({unread})")).clicked() {
+                *only = !*only;
+            }
+            if unread > 0 && ui.small_button("Mark all read").clicked() {
+                read_all = true;
+            }
+        });
+        ui.add_space(4.0);
+        let unread_only = platform.chats.unread_only;
         for c in &list {
+            if unread_only && c.unread == 0 && with.as_ref().is_none_or(|(w, _)| *w != c.with.player_id) {
+                continue;
+            }
             let line =
                 if c.last.from_id == me { format!("You: {}", c.last.text) } else { c.last.text.clone() };
             if row(ui, &c.with.player_id, &c.with.name, &c.look, &line, c.unread) {
                 open = Some((c.with.player_id.clone(), c.with.name.clone()));
             }
         }
-        for f in friends.iter().filter(|f| !list.iter().any(|c| c.with.player_id == f.player_id)) {
+        for f in friends
+            .iter()
+            .filter(|_| !unread_only)
+            .filter(|f| !list.iter().any(|c| c.with.player_id == f.player_id))
+        {
             let line = if f.online { "Online" } else { "Offline" };
             if row(ui, &f.player_id, &f.name, &f.look, line, 0) {
                 open = Some((f.player_id.clone(), f.name.clone()));
@@ -249,13 +322,30 @@ pub fn messages_tab(ui: &mut egui::Ui, platform: &mut Platform) {
         if list.is_empty() && friends.is_empty() {
             ui.label(RichText::new("Add friends to message them.").color(theme::MUTED));
         }
+        if !blocked.is_empty() {
+            ui.add_space(8.0);
+            ui.label(RichText::new("Blocked").strong().color(theme::TEXT));
+            for b in &blocked {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&b.name).color(theme::MUTED));
+                    if ui.small_button("Unblock").clicked() {
+                        block = Some((b.player_id.clone(), false));
+                    }
+                });
+            }
+        }
 
         let ui = &mut columns[1];
-        let Some((_, name)) = &with else {
+        let Some((other, name)) = &with else {
             ui.label(RichText::new("Pick a friend.").color(theme::MUTED));
             return;
         };
-        ui.label(RichText::new(name).font(theme::display(18.0)).color(theme::TEXT));
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(name).font(theme::display(18.0)).color(theme::TEXT));
+            if ui.small_button("Block").clicked() {
+                block = Some((other.clone(), true));
+            }
+        });
         ui.add_space(4.0);
         theme::panel().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -334,6 +424,12 @@ pub fn messages_tab(ui: &mut egui::Ui, platform: &mut Platform) {
     }
     if send {
         platform.send_chat();
+    }
+    if read_all {
+        platform.read_all();
+    }
+    if let Some((id, on)) = block {
+        platform.change_block(id, on);
     }
     if let Some(id) = report {
         platform.chats.reporting = None;

@@ -204,7 +204,7 @@ async function api(path, { method = 'GET', body, query } = {}) {
 
 const SESSION_KEY = 'playlibre.session';
 let session = loadSession();
-let lastSigned = { friends: 0, party: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0, wallet: 0, badge: 0, media: 0, follow: 0, server: 0, notes: 0, place: 0, privateServer: 0 };
+let lastSigned = { friends: 0, party: 0, account: 0, rate: 0, message: 0, group: 0, moderate: 0, wallet: 0, badge: 0, media: 0, follow: 0, server: 0, notes: 0, place: 0, privateServer: 0, block: 0, read: 0 };
 
 function loadSession() {
   for (const store of [sessionStorage, localStorage]) {
@@ -1699,7 +1699,7 @@ function friendsPage() {
 // --- Messages ---------------------------------------------------------------
 
 const MAX_MESSAGE = 500;
-const chats = { list: null, with: null, talk: [], draft: '', busy: false, error: null, reporting: null, at: 0 };
+const chats = { list: null, with: null, talk: [], draft: '', busy: false, error: null, reporting: null, at: 0, blocked: [], unread: false };
 
 function readSigned() {
   const time = Date.now();
@@ -1711,6 +1711,7 @@ async function loadChats() {
   chats.at = Date.now();
   try {
     chats.list = await api(`/messages/${session.playerId}`, { query: readSigned() });
+    if (route.name === 'messages') chats.blocked = await api(`/blocks/${session.playerId}`, { query: readSigned() });
     if (chats.with) chats.talk = await api(`/messages/${session.playerId}/${chats.with}`, { query: readSigned() });
     chats.error = null;
   } catch (e) {
@@ -1769,6 +1770,34 @@ async function reportChat(message) {
   redrawChats();
 }
 
+async function readAllChats() {
+  const time = Math.max(Date.now(), lastSigned.read + 1);
+  lastSigned.read = time;
+  const signature = signText(secretKey(), `libroxel messages read\n${session.playerId}\n${time}`);
+  try {
+    await api('/messages/read', { method: 'POST', body: { player_id: session.playerId, time, signature } });
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  await Promise.all([loadChats(), refresh()]);
+  redrawChats();
+}
+
+async function changeBlock(otherId, block, name) {
+  const time = Math.max(Date.now(), lastSigned.block + 1);
+  lastSigned.block = time;
+  const signature = signText(secretKey(), `libroxel block\n${session.playerId}\n${otherId}\n${block ? 1 : 0}\n${time}`);
+  try {
+    chats.blocked = await api('/blocks', { method: 'POST', body: { player_id: session.playerId, other_id: otherId, block, time, signature } });
+    flash = { text: block ? `Blocked ${name}.` : `Unblocked ${name}.` };
+    if (block && chats.with === otherId) history.pushState(null, '', '/messages');
+  } catch (e) {
+    flash = { text: e.message, kind: 'error' };
+  }
+  await Promise.all([loadChats(), refresh()]);
+  render();
+}
+
 function messagesPage() {
   if (!session) return needSignIn('Sign in to message your friends.');
   if (chats.with !== (route.id || null)) {
@@ -1781,8 +1810,12 @@ function messagesPage() {
   }
   const list = chats.list || [];
   const talked = new Set(list.map((c) => c.with.player_id));
-  const left = [];
+  const unread = list.reduce((n, c) => n + c.unread, 0);
+  const left = [el('div', { class: 'form-actions' },
+    el('button', { class: `chip${chats.unread ? ' on' : ''}`, onclick: () => { chats.unread = !chats.unread; render(); } }, `Unread (${unread})`),
+    unread > 0 && el('button', { class: 'chip', onclick: readAllChats }, icon(ICON.check), 'Mark all read'))];
   for (const c of list) {
+    if (chats.unread && !c.unread && c.with.player_id !== chats.with) continue;
     const mine = c.last.from_id === session.playerId;
     left.push(el('a', { class: `person chat${c.with.player_id === chats.with ? ' on' : ''}`, href: `/messages/${c.with.player_id}` },
       portrait(c.with.player_id, 40, c.look),
@@ -1791,18 +1824,27 @@ function messagesPage() {
         el('small', { class: 'soft' }, mine ? `You: ${c.last.text}` : c.last.text)),
       c.unread > 0 && el('span', { class: 'badge' }, c.unread)));
   }
-  for (const f of friends().filter((x) => !talked.has(x.player_id))) {
+  for (const f of chats.unread ? [] : friends().filter((x) => !talked.has(x.player_id))) {
     left.push(el('a', { class: `person chat${f.player_id === chats.with ? ' on' : ''}`, href: `/messages/${f.player_id}` },
       portrait(f.player_id, 40, f.look),
       el('div', { class: 'what' }, el('b', {}, f.name), el('small', { class: 'soft' }, whereabouts(f)[0]))));
   }
-  if (!left.length) left.push(el('div', { class: 'empty' }, chats.list ? 'Add friends to message them.' : 'Loading…'));
+  if (left.length === 1) left.push(el('div', { class: 'empty' }, !chats.list ? 'Loading…' : chats.unread ? 'Nothing unread.' : 'Add friends to message them.'));
+  if (chats.blocked.length) {
+    left.push(el('h2', { class: 'subhead' }, 'Blocked'));
+    for (const b of chats.blocked) {
+      left.push(el('div', { class: 'person' },
+        el('div', { class: 'what' }, el('b', {}, b.name)),
+        el('button', { class: 'chip', onclick: () => changeBlock(b.player_id, false, b.name) }, 'Unblock')));
+    }
+  }
 
   const right = [];
   const other = chats.with && (list.find((c) => c.with.player_id === chats.with)?.with || friends().find((f) => f.player_id === chats.with));
   if (!chats.with) right.push(el('div', { class: 'empty' }, 'Pick a friend.'));
   else {
-    right.push(el('h2', { class: 'subhead' }, other?.name || ''));
+    right.push(el('h2', { class: 'subhead' }, other?.name || '', ' ',
+      el('button', { class: 'chip', onclick: () => changeBlock(chats.with, true, other?.name || '') }, 'Block')));
     const log = el('div', { class: 'chat-log', id: 'chat-log' });
     if (!chats.talk.length) log.append(el('p', { class: 'soft' }, 'No messages yet.'));
     for (const m of chats.talk) {

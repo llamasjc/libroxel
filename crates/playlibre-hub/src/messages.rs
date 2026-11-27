@@ -51,6 +51,35 @@ pub fn read_messages_message(player_id: &str, time: i64) -> Vec<u8> {
     format!("libroxel messages\n{player_id}\n{time}").into_bytes()
 }
 
+/// Blocking or unblocking a player.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BlockChange {
+    pub player_id: String,
+    pub other_id: String,
+    /// `false` unblocks.
+    pub block: bool,
+    pub time: i64,
+    /// [`block_message`] signed by `player_id`.
+    pub signature: String,
+}
+
+pub fn block_message(player_id: &str, other_id: &str, block: bool, time: i64) -> Vec<u8> {
+    format!("libroxel block\n{player_id}\n{other_id}\n{}\n{time}", u8::from(block)).into_bytes()
+}
+
+/// Marks every message to a player read.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ReadAll {
+    pub player_id: String,
+    pub time: i64,
+    /// [`read_all_message`] signed by `player_id`.
+    pub signature: String,
+}
+
+pub fn read_all_message(player_id: &str, time: i64) -> Vec<u8> {
+    format!("libroxel messages read\n{player_id}\n{time}").into_bytes()
+}
+
 /// One message, as the Hub keeps it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Message {
@@ -121,7 +150,14 @@ pub(crate) fn create_tables(db: &Connection) -> Result<(), String> {
             read        INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS messages_from ON messages(from_id, to_id, sent);
-        CREATE INDEX IF NOT EXISTS messages_to ON messages(to_id, from_id, sent);",
+        CREATE INDEX IF NOT EXISTS messages_to ON messages(to_id, from_id, sent);
+        CREATE TABLE IF NOT EXISTS blocks (
+            player_id   TEXT NOT NULL,
+            blocked_id  TEXT NOT NULL,
+            time        INTEGER NOT NULL,
+            PRIMARY KEY (player_id, blocked_id)
+        );
+        CREATE INDEX IF NOT EXISTS blocks_blocked ON blocks(blocked_id);",
     )
     .map_err(|e| format!("could not set up the Hub database: {e}"))
 }
@@ -140,6 +176,17 @@ fn friends(db: &Connection, a: &str, b: &str) -> Result<bool, Failure> {
         |r| r.get(0),
     )
     .map_err(internal)
+}
+
+/// Whether either player blocked the other.
+pub(crate) fn blocked(db: &Connection, a: &str, b: &str) -> bool {
+    db.query_row(
+        "SELECT EXISTS (SELECT 1 FROM blocks
+             WHERE (player_id = ?1 AND blocked_id = ?2) OR (player_id = ?2 AND blocked_id = ?1))",
+        params![a, b],
+        |r| r.get(0),
+    )
+    .unwrap_or(false)
 }
 
 fn new_id() -> String {
@@ -191,6 +238,9 @@ pub(crate) async fn send_message(
             return Err((StatusCode::FORBIDDEN, "this account is banned from PlayLibre".into()));
         }
         crate::moderate::not_muted(&db, &message.from_id)?;
+        if blocked(&db, &message.from_id, &message.to_id) {
+            return Err((StatusCode::FORBIDDEN, "you can't message this player".into()));
+        }
         if !friends(&db, &message.from_id, &message.to_id)? {
             return Err((StatusCode::FORBIDDEN, "you can only message your friends".into()));
         }
@@ -277,6 +327,7 @@ pub(crate) async fn conversations(
                  SELECT MAX(rowid) FROM messages WHERE from_id = ?1 OR to_id = ?1
                  GROUP BY CASE WHEN from_id = ?1 THEN to_id ELSE from_id END)
              AND NOT {}
+             AND a.player_id NOT IN (SELECT blocked_id FROM blocks WHERE player_id = ?1)
              ORDER BY m.sent DESC, m.rowid DESC LIMIT 200",
             crate::owner::banned_sql("a.player_id")
         ))
@@ -325,5 +376,109 @@ pub(crate) async fn conversation(
         params![id, other],
     )
     .map_err(internal)?;
+    db.execute(
+        "UPDATE notifications SET seen = 1 WHERE player_id = ?1 AND kind = 'message' AND about = ?2",
+        params![id, other],
+    )
+    .map_err(internal)?;
     Ok(Json(list))
+}
+
+pub(crate) async fn read_all(State(db): State<Db>, Json(r): Json<ReadAll>) -> Result<StatusCode, Failure> {
+    if !verify(&r.player_id, &read_all_message(&r.player_id, r.time), &r.signature) {
+        return Err((StatusCode::FORBIDDEN, "the signature does not match that player".into()));
+    }
+    let db = db.lock().unwrap();
+    fresh(&db, &r.player_id, "messages read", r.time)?;
+    db.execute("UPDATE messages SET read = 1 WHERE to_id = ?1 AND read = 0", params![r.player_id])
+        .map_err(internal)?;
+    db.execute(
+        "UPDATE notifications SET seen = 1 WHERE player_id = ?1 AND kind = 'message'",
+        params![r.player_id],
+    )
+    .map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn blocked_list(db: &Connection, id: &str) -> Result<Vec<Person>, Failure> {
+    let mut statement = db
+        .prepare(
+            "SELECT a.player_id, a.number, a.name, a.about FROM blocks b
+             JOIN accounts a ON a.player_id = b.blocked_id
+             WHERE b.player_id = ?1 ORDER BY b.time DESC",
+        )
+        .map_err(internal)?;
+    statement
+        .query_map(params![id], |r| {
+            Ok(Person {
+                player_id: r.get(0)?,
+                number: r.get::<_, i64>(1)? as u64,
+                name: r.get(2)?,
+                about: r.get(3)?,
+            })
+        })
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .map_err(internal)
+}
+
+pub(crate) async fn change_block(
+    State(db): State<Db>,
+    Json(c): Json<BlockChange>,
+) -> Result<Json<Vec<Person>>, Failure> {
+    if !verify(&c.player_id, &block_message(&c.player_id, &c.other_id, c.block, c.time), &c.signature) {
+        return Err((StatusCode::FORBIDDEN, "the signature does not match that player".into()));
+    }
+    if c.player_id == c.other_id {
+        return Err((StatusCode::BAD_REQUEST, "you can't block yourself".into()));
+    }
+    let db = db.lock().unwrap();
+    fresh(&db, &c.player_id, "block", c.time)?;
+    if c.block {
+        let exists: bool = db
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM accounts WHERE player_id = ?1)",
+                params![c.other_id],
+                |r| r.get(0),
+            )
+            .map_err(internal)?;
+        if !exists {
+            return Err((StatusCode::NOT_FOUND, "there is nobody with that id".into()));
+        }
+        db.execute(
+            "INSERT OR IGNORE INTO blocks (player_id, blocked_id, time) VALUES (?1, ?2, ?3)",
+            params![c.player_id, c.other_id, now()],
+        )
+        .map_err(internal)?;
+        db.execute(
+            "DELETE FROM friends WHERE (from_id = ?1 AND to_id = ?2) OR (from_id = ?2 AND to_id = ?1)",
+            params![c.player_id, c.other_id],
+        )
+        .map_err(internal)?;
+        db.execute(
+            "UPDATE messages SET read = 1 WHERE from_id = ?2 AND to_id = ?1",
+            params![c.player_id, c.other_id],
+        )
+        .map_err(internal)?;
+        db.execute(
+            "DELETE FROM notifications WHERE player_id = ?1 AND about = ?2 AND kind IN ('message', 'friend')",
+            params![c.player_id, c.other_id],
+        )
+        .map_err(internal)?;
+    } else {
+        db.execute(
+            "DELETE FROM blocks WHERE player_id = ?1 AND blocked_id = ?2",
+            params![c.player_id, c.other_id],
+        )
+        .map_err(internal)?;
+    }
+    Ok(Json(blocked_list(&db, &c.player_id)?))
+}
+
+pub(crate) async fn blocks(
+    State(db): State<Db>,
+    UrlPath(id): UrlPath<String>,
+    Query(signed): Query<ReadSigned>,
+) -> Result<Json<Vec<Person>>, Failure> {
+    check_read(&id, &signed)?;
+    Ok(Json(blocked_list(&db.lock().unwrap(), &id)?))
 }

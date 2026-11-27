@@ -1,8 +1,9 @@
 //! Messages between friends on a Hub on this computer.
 
 use playlibre_hub::{
-    AccountUpdate, FriendAction, FriendChange, HubClient, Message, NewMessage, Report, account_message,
-    friend_message, message_message, player_id_of, read_messages_message, report_message, sign, start,
+    AccountUpdate, BlockChange, FriendAction, FriendChange, HubClient, Message, NewMessage, ReadAll, Report,
+    account_message, block_message, friend_message, message_message, player_id_of, read_all_message,
+    read_messages_message, report_message, sign, start,
 };
 
 struct Player {
@@ -59,6 +60,22 @@ impl Player {
             text: text.into(),
             time,
             signature: sign(&self.key, &message_message(&self.id, &to.id, text, time)),
+        })
+    }
+
+    fn block(
+        &self,
+        hub: &HubClient,
+        other: &Player,
+        block: bool,
+    ) -> Result<Vec<playlibre_hub::Person>, String> {
+        let time = self.tick();
+        hub.change_block(&BlockChange {
+            player_id: self.id.clone(),
+            other_id: other.id.clone(),
+            block,
+            time,
+            signature: sign(&self.key, &block_message(&self.id, &other.id, block, time)),
         })
     }
 
@@ -145,6 +162,73 @@ fn friends_message_each_other_and_bad_words_are_masked() {
     playlibre_hub::take_down(&db, "message", &rude.message_id).unwrap();
     let (time, signature) = alice.read_signature();
     assert_eq!(hub.conversation(&alice.id, &ana.id, time, &signature).unwrap().len(), 1);
+    drop(running);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn blocking_stops_messages_and_friend_requests() {
+    let dir = std::env::temp_dir().join(format!("playlibre-blocks-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let running = start("127.0.0.1:0".parse().unwrap(), Some(&dir.join("hub.sqlite"))).unwrap();
+    let hub = HubClient::new(&running.url());
+    let (alice, bo) = (Player::new(21), Player::new(22));
+    alice.claim(&hub, "Alice");
+    bo.claim(&hub, "Bobby");
+    alice.add(&hub, &bo);
+    bo.add(&hub, &alice);
+    bo.send(&hub, &alice, "one").unwrap();
+    bo.send(&hub, &alice, "two").unwrap();
+
+    let (time, signature) = alice.read_signature();
+    assert_eq!(hub.conversations(&alice.id, time, &signature).unwrap()[0].unread, 2);
+    let time = alice.tick();
+    hub.read_all_messages(&ReadAll {
+        player_id: alice.id.clone(),
+        time,
+        signature: sign(&alice.key, &read_all_message(&alice.id, time)),
+    })
+    .unwrap();
+    let (time, signature) = alice.read_signature();
+    assert_eq!(hub.conversations(&alice.id, time, &signature).unwrap()[0].unread, 0);
+    let time = alice.tick();
+    let unseen = hub
+        .notifications(
+            &alice.id,
+            time,
+            &sign(&alice.key, &playlibre_hub::notifications_message(&alice.id, time)),
+        )
+        .unwrap()
+        .unseen;
+    assert_eq!(unseen, 0);
+
+    let blocked = alice.block(&hub, &bo, true).unwrap();
+    assert_eq!(blocked.len(), 1);
+    assert_eq!(blocked[0].name, "Bobby");
+    assert!(bo.send(&hub, &alice, "hey").unwrap_err().contains("can't message"));
+    assert!(alice.send(&hub, &bo, "hey").is_err());
+    let time = bo.tick();
+    assert!(
+        hub.change_friend(&FriendChange {
+            player_id: bo.id.clone(),
+            other_id: alice.id.clone(),
+            action: FriendAction::Add,
+            time,
+            signature: sign(&bo.key, &friend_message(&bo.id, &alice.id, FriendAction::Add, time)),
+        })
+        .is_err()
+    );
+    let (time, signature) = alice.read_signature();
+    assert!(hub.conversations(&alice.id, time, &signature).unwrap().is_empty());
+    let (time, signature) = alice.read_signature();
+    assert_eq!(hub.blocks(&alice.id, time, &signature).unwrap().len(), 1);
+    let (time, signature) = bo.read_signature();
+    assert!(hub.blocks(&alice.id, time, &signature).is_err());
+
+    assert!(alice.block(&hub, &bo, false).unwrap().is_empty());
+    alice.add(&hub, &bo);
+    bo.add(&hub, &alice);
+    bo.send(&hub, &alice, "back").unwrap();
     drop(running);
     let _ = std::fs::remove_dir_all(&dir);
 }
