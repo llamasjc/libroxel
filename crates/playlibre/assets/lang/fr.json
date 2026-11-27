@@ -493,5 +493,9 @@
  "Leave the game?": "Quitter le jeu ?",
  "Reset your character?": "Réinitialiser ton personnage ?",
  "You": "Toi",
- "The donate page opened in your browser": "La page de dons s'est ouverte dans ton navigateur"
+ "The donate page opened in your browser": "La page de dons s'est ouverte dans ton navigateur",
+ "Game": "Jeu",
+ "New game": "Nouveau jeu",
+ "Open recent": "Ouvrir un récent",
+ "Publish over {game}?": "Publier par-dessus {game} ?"
 }

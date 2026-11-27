@@ -146,7 +146,9 @@ fn games_are_published_found_downloaded_and_updated() {
 
 #[test]
 fn players_claim_names_and_their_signed_games_show_them() {
-    use playlibre_hub::{AccountUpdate, Publish, account_message, player_id_of, publish_message, sign};
+    use playlibre_hub::{
+        AccountUpdate, Publish, account_message, player_id_of, publish_into_message, publish_message, sign,
+    };
     let hub = start("127.0.0.1:0".parse().unwrap(), None).unwrap();
     let client = HubClient::new(&hub.url());
     let (alice_key, ana_key) = ([7u8; 32], [9u8; 32]);
@@ -204,9 +206,32 @@ fn players_claim_names_and_their_signed_games_show_them() {
     let fake = Publish {
         secret: other.clone(),
         author_signature: Some(sign(&ana_key, &publish_message(&other))),
-        ..game
+        ..game.clone()
     };
     assert!(client.publish(&fake).is_err());
+
+    // From another computer, without the secret, Alice can still publish into his game.
+    let id = client.games("AliceBuilds").unwrap()[0].game_id.clone();
+    let fresh = new_secret();
+    let into = |secret: &str, key: &[u8; 32]| Publish {
+        game_id: Some(id.clone()),
+        secret: secret.into(),
+        author_signature: Some(sign(key, &publish_into_message(&id, secret))),
+        ..game.clone()
+    };
+    let other = new_secret();
+    assert!(client.publish(&into(&other, &ana_key)).is_err());
+    let plain = Publish {
+        game_id: Some(id.clone()),
+        secret: fresh.clone(),
+        author_signature: Some(sign(&alice_key, &publish_message(&fresh))),
+        ..game.clone()
+    };
+    assert!(client.publish(&plain).is_err());
+    assert_eq!(client.publish(&into(&fresh, &alice_key)).unwrap().version, 2);
+    assert_eq!(client.publish(&plain).unwrap().version, 3);
+    let old = Publish { game_id: Some(id.clone()), ..game };
+    assert!(client.publish(&old).is_err());
 }
 
 #[test]

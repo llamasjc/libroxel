@@ -112,6 +112,7 @@ enum Action {
     Publish {
         title: String,
         description: String,
+        target: Option<String>,
     },
 }
 
@@ -425,6 +426,7 @@ pub fn editor_ui(
         return Ok(());
     }
 
+    editor.keep_prefs();
     shortcuts(&ctx, editor, playing, &mut actions);
 
     let mut root = egui::Ui::new(
@@ -443,65 +445,85 @@ pub fn editor_ui(
         });
         let side_panels = !playing || editor.panels_in_play;
         if editor.show_toolbox && side_panels {
-            egui::Panel::left("toolbox").resizable(true).default_size(190.0).show(&mut root, |ui| {
-                toolbox(ui, editor, playing, &mut actions);
-            });
+            let shown = egui::Panel::left("toolbox")
+                .resizable(true)
+                .default_size(editor.prefs.toolbox_size)
+                .show(&mut root, |ui| {
+                    toolbox(ui, editor, playing, &mut actions);
+                });
+            editor.prefs.toolbox_size = shown.response.rect.width().round();
         }
         if (editor.show_explorer || editor.show_properties) && side_panels {
-            egui::Panel::right("side").resizable(true).default_size(300.0).show(&mut root, |ui| {
-                if editor.show_explorer {
-                    let explorer = |ui: &mut egui::Ui, editor: &mut Editor, actions: &mut Vec<Action>| {
-                        theme::panel_title(ui, icon::TREE_STRUCTURE, "Explorer");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut editor.explorer_filter)
-                                .hint_text(format!(
-                                    "{} Filter workspace (Ctrl+Shift+X)",
-                                    icon::MAGNIFYING_GLASS
-                                ))
-                                .id(egui::Id::new("explorer-filter"))
-                                .desired_width(f32::INFINITY),
-                        );
-                        egui::ScrollArea::vertical().id_salt("explorer").auto_shrink([false, false]).show(
+            let side_size = editor.prefs.side_size;
+            let shown =
+                egui::Panel::right("side").resizable(true).default_size(side_size).show(&mut root, |ui| {
+                    if editor.show_explorer {
+                        let explorer = |ui: &mut egui::Ui, editor: &mut Editor, actions: &mut Vec<Action>| {
+                            theme::panel_title(ui, icon::TREE_STRUCTURE, "Explorer");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut editor.explorer_filter)
+                                    .hint_text(format!(
+                                        "{} Filter workspace (Ctrl+Shift+X)",
+                                        icon::MAGNIFYING_GLASS
+                                    ))
+                                    .id(egui::Id::new("explorer-filter"))
+                                    .desired_width(f32::INFINITY),
+                            );
+                            egui::ScrollArea::vertical()
+                                .id_salt("explorer")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    // A tree reads best packed close.
+                                    ui.spacing_mut().item_spacing.y = 0.0;
+                                    ui.spacing_mut().interact_size.y = 22.0;
+                                    let tree = tree_rc.borrow();
+                                    let filter = ExplorerFilter::new(&tree, &editor.explorer_filter);
+                                    if filter.as_ref().is_some_and(|f| f.shown.is_empty()) {
+                                        ui.label(RichText::new(t("Nothing matches the filter.")).weak());
+                                    }
+                                    explorer_node(
+                                        ui,
+                                        &tree,
+                                        tree.root(),
+                                        editor,
+                                        actions,
+                                        0,
+                                        filter.as_ref(),
+                                    );
+                                    editor.reveal_selection = false;
+                                });
+                        };
+                        if editor.show_properties {
+                            let half = editor.prefs.explorer_size.unwrap_or(ui.available_height() * 0.45);
+                            let top = egui::Panel::top("explorer")
+                                .resizable(true)
+                                .default_size(half)
+                                .show(ui, |ui| explorer(ui, editor, &mut actions));
+                            editor.prefs.explorer_size = Some(top.response.rect.height().round());
+                        } else {
+                            explorer(ui, editor, &mut actions);
+                        }
+                    }
+                    if editor.show_properties {
+                        theme::panel_title(ui, icon::SLIDERS_HORIZONTAL, "Properties");
+                        egui::ScrollArea::vertical().id_salt("properties").auto_shrink([false, false]).show(
                             ui,
                             |ui| {
-                                // A tree reads best packed close.
-                                ui.spacing_mut().item_spacing.y = 0.0;
-                                ui.spacing_mut().interact_size.y = 22.0;
-                                let tree = tree_rc.borrow();
-                                let filter = ExplorerFilter::new(&tree, &editor.explorer_filter);
-                                if filter.as_ref().is_some_and(|f| f.shown.is_empty()) {
-                                    ui.label(RichText::new(t("Nothing matches the filter.")).weak());
-                                }
-                                explorer_node(ui, &tree, tree.root(), editor, actions, 0, filter.as_ref());
-                                editor.reveal_selection = false;
+                                properties(ui, editor, &mut tree_rc.borrow_mut(), now, playing, &mut actions);
                             },
                         );
-                    };
-                    if editor.show_properties {
-                        let half = ui.available_height() * 0.45;
-                        egui::Panel::top("explorer")
-                            .resizable(true)
-                            .default_size(half)
-                            .show(ui, |ui| explorer(ui, editor, &mut actions));
-                    } else {
-                        explorer(ui, editor, &mut actions);
                     }
-                }
-                if editor.show_properties {
-                    theme::panel_title(ui, icon::SLIDERS_HORIZONTAL, "Properties");
-                    egui::ScrollArea::vertical().id_salt("properties").auto_shrink([false, false]).show(
-                        ui,
-                        |ui| {
-                            properties(ui, editor, &mut tree_rc.borrow_mut(), now, playing, &mut actions);
-                        },
-                    );
-                }
-            });
+                });
+            editor.prefs.side_size = shown.response.rect.width().round();
         }
         if editor.show_output {
-            egui::Panel::bottom("output").resizable(true).default_size(170.0).show(&mut root, |ui| {
-                output(ui, engine, editor, playing, &mut actions);
-            });
+            let shown = egui::Panel::bottom("output")
+                .resizable(true)
+                .default_size(editor.prefs.output_size)
+                .show(&mut root, |ui| {
+                    output(ui, engine, editor, playing, &mut actions);
+                });
+            editor.prefs.output_size = shown.response.rect.height().round();
         }
     }
 
@@ -1124,8 +1146,19 @@ fn shortcuts(ctx: &egui::Context, editor: &mut Editor, playing: bool, actions: &
     let typing = ctx.egui_wants_keyboard_input();
     ctx.input_mut(|i| {
         let cmd = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
+        if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::S))
+            && !playing
+        {
+            open_save_as(editor);
+        }
         if i.consume_shortcut(&cmd(Key::S)) {
             actions.push(Action::Save);
+        }
+        if i.consume_shortcut(&cmd(Key::N)) {
+            actions.push(Action::New);
+        }
+        if i.consume_shortcut(&KeyboardShortcut::new(Modifiers::ALT, Key::P)) && !playing {
+            open_publish(editor);
         }
         if i.consume_shortcut(&cmd(Key::O)) {
             editor.picker.open(&games_dir());
@@ -1290,7 +1323,7 @@ fn file_menu(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mu
         editor.menu.scanned = false;
     }
     ui.separator();
-    if ui.button(t("New")).clicked() {
+    if ui.add(egui::Button::new(t("New")).shortcut_text("Ctrl+N")).clicked() {
         actions.push(Action::New);
     }
     ui.menu_button(t("Open a starter game"), |ui| {
@@ -1314,32 +1347,77 @@ fn file_menu(ui: &mut egui::Ui, editor: &mut Editor, playing: bool, actions: &mu
         let path = games_dir().join("untitled.lrx").display().to_string();
         editor.dialog = Some(Dialog::Open { path });
     }
+    ui.add_enabled_ui(!editor.prefs.recent.is_empty(), |ui| {
+        ui.menu_button(t("Open recent"), |ui| {
+            let mut gone = None;
+            for path in &editor.prefs.recent {
+                let name = path
+                    .file_name()
+                    .map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+                if ui.button(name).on_hover_text(path.display().to_string()).clicked() {
+                    if path.exists() {
+                        actions.push(Action::Open(path.clone()));
+                    } else {
+                        gone = Some(path.clone());
+                    }
+                    ui.close();
+                }
+            }
+            if let Some(path) = gone {
+                editor.prefs.forget(&path);
+            }
+        });
+    });
     ui.separator();
     if ui.add_enabled(!playing, egui::Button::new(t("Save        Ctrl+S"))).clicked() {
         actions.push(Action::Save);
     }
-    if ui.add_enabled(!playing, egui::Button::new(t("Save as…"))).clicked() {
-        let path =
-            editor.file.clone().unwrap_or_else(|| games_dir().join("untitled.lrx")).display().to_string();
-        editor.dialog = Some(Dialog::SaveAs { path });
+    if ui.add_enabled(!playing, egui::Button::new(t("Save as…")).shortcut_text("Ctrl+Shift+S")).clicked() {
+        open_save_as(editor);
     }
     ui.separator();
     if ui
         .add_enabled(
             !playing,
-            egui::Button::new(format!("{}  {}", icon::GLOBE_HEMISPHERE_WEST, t("Publish…"))),
+            egui::Button::new(format!("{}  {}", icon::GLOBE_HEMISPHERE_WEST, t("Publish…")))
+                .shortcut_text("Alt+P"),
         )
         .on_hover_text(t("Put this game on the Hub, so anyone can find it Online and play it"))
         .clicked()
     {
-        let title = editor
-            .file
-            .as_ref()
-            .and_then(|f| f.file_stem())
-            .map_or_else(|| t("My game").to_owned(), |s| s.to_string_lossy().into_owned());
-        editor.platform.publish_status = None;
-        editor.dialog = Some(Dialog::Publish { title, description: String::new() });
+        open_publish(editor);
     }
+}
+
+fn open_save_as(editor: &mut Editor) {
+    let path = editor.file.clone().unwrap_or_else(|| games_dir().join("untitled.lrx")).display().to_string();
+    editor.dialog = Some(Dialog::SaveAs { path });
+}
+
+fn publish_key(editor: &Editor, title: &str) -> String {
+    editor.file.as_ref().map_or_else(|| format!("untitled:{title}"), |f| f.display().to_string())
+}
+
+fn open_publish(editor: &mut Editor) {
+    let title = editor
+        .file
+        .as_ref()
+        .and_then(|f| f.file_stem())
+        .map_or_else(|| t("My game").to_owned(), |s| s.to_string_lossy().into_owned());
+    let linked = crate::browse::published_game(editor.platform.client().url(), &publish_key(editor, &title));
+    let target = linked.clone().or_else(|| editor.prefs.last_game.clone());
+    editor.platform.publish_status = None;
+    editor.platform.publish_games = None;
+    editor.platform.load_publish_games();
+    editor.dialog = Some(Dialog::Publish {
+        title,
+        description: String::new(),
+        target,
+        linked,
+        search: String::new(),
+        filled: false,
+        confirm: false,
+    });
 }
 
 /// Every class the editor can insert, with the ready-made part shapes and models.
@@ -3233,9 +3311,30 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
         }
         return;
     }
-    if let Dialog::Publish { title, description } = dialog {
+    if let Dialog::Publish { title, description, target, linked, search, filled, confirm } = dialog {
         let mut close = false;
         let busy = editor.platform.is_publishing();
+        if let Some(id) = editor.platform.published_game.take() {
+            editor.prefs.last_game = Some(id.clone());
+            *target = Some(id.clone());
+            *linked = Some(id);
+            *filled = true;
+        }
+        let games = editor.platform.publish_games.as_deref();
+        if let Some(games) = games
+            && !*filled
+        {
+            *filled = true;
+            match target.as_deref().and_then(|id| games.iter().find(|g| g.game_id == id)) {
+                Some(game) => {
+                    *title = game.title.clone();
+                    *description = game.description.clone();
+                }
+                None => *target = linked.clone().filter(|_| target == linked),
+            }
+        }
+        let chosen = target.as_deref().and_then(|id| games?.iter().find(|g| g.game_id == id));
+        let chosen_title = chosen.map(|g| g.title.clone());
         egui::Window::new(t("Publish")).collapsible(false).resizable(false).default_width(400.0).show(
             ctx,
             |ui| {
@@ -3244,6 +3343,47 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
                      you're away. Publishing again puts out a new version.",
                 );
                 egui::Grid::new("publish").num_columns(2).show(ui, |ui| {
+                    ui.label(t("Game"));
+                    let shown = match (&target, &chosen_title) {
+                        (None, _) => t("New game").to_owned(),
+                        (Some(_), Some(name)) => name.clone(),
+                        (Some(_), None) => "…".to_owned(),
+                    };
+                    egui::ComboBox::from_id_salt("publish-into").selected_text(shown).width(260.0).show_ui(
+                        ui,
+                        |ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(search)
+                                    .hint_text(format!("{} {}", icon::MAGNIFYING_GLASS, t("Search")))
+                                    .desired_width(f32::INFINITY),
+                            )
+                            .request_focus();
+                            if ui.selectable_label(target.is_none(), t("New game")).clicked() {
+                                *target = None;
+                                *confirm = false;
+                            }
+                            match games {
+                                Some(games) => {
+                                    let find = search.trim().to_lowercase();
+                                    for game in
+                                        games.iter().filter(|g| g.title.to_lowercase().contains(&find))
+                                    {
+                                        let on = target.as_deref() == Some(game.game_id.as_str());
+                                        if ui.selectable_label(on, &game.title).clicked() {
+                                            *target = Some(game.game_id.clone());
+                                            *title = game.title.clone();
+                                            *description = game.description.clone();
+                                            *confirm = false;
+                                        }
+                                    }
+                                }
+                                None => {
+                                    theme::status(ui, theme::AMBER, "Loading…");
+                                }
+                            }
+                        },
+                    );
+                    ui.end_row();
                     ui.label(t("Title"));
                     ui.add(egui::TextEdit::singleline(title).char_limit(60));
                     ui.end_row();
@@ -3266,26 +3406,44 @@ fn dialogs(ctx: &egui::Context, editor: &mut Editor, actions: &mut Vec<Action>) 
                     }
                     None => {}
                 }
+                if *confirm {
+                    ui.colored_label(
+                        theme::AMBER,
+                        tf("Publish over {game}?", &[("game", &chosen_title.as_deref().unwrap_or(title))]),
+                    );
+                }
                 ui.horizontal(|ui| {
-                    if ui
+                    let ready = !busy && !title.trim().is_empty();
+                    let send = ui
                         .add_enabled(
-                            !busy && !title.trim().is_empty(),
+                            ready,
                             egui::Button::new(format!("{}  {}", icon::GLOBE_HEMISPHERE_WEST, t("Publish"))),
                         )
                         .clicked()
-                    {
-                        actions.push(Action::Publish {
-                            title: title.trim().to_owned(),
-                            description: description.trim().to_owned(),
-                        });
+                        || (ready && ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter)));
+                    if send {
+                        if target.is_some() && *target != *linked && !*confirm {
+                            *confirm = true;
+                        } else {
+                            *confirm = false;
+                            actions.push(Action::Publish {
+                                title: title.trim().to_owned(),
+                                description: description.trim().to_owned(),
+                                target: target.clone(),
+                            });
+                        }
                     }
-                    if ui.button(t("Close")).clicked() {
-                        close = true;
+                    if ui.button(t(if *confirm { "Back" } else { "Close" })).clicked() {
+                        if *confirm {
+                            *confirm = false;
+                        } else {
+                            close = true;
+                        }
                     }
                 });
             },
         );
-        if close {
+        if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             editor.dialog = None;
         }
         return;
@@ -4192,18 +4350,17 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                 Err(why) => log(engine, LogLevel::Error, format!("That can't be a hat: {why}")),
             }
         }
-        Action::Publish { title, description } => {
+        Action::Publish { title, description, target } => {
             if playing {
                 return;
             }
             match place::save(&engine.tree.borrow()) {
                 Ok(text) => {
-                    // Publishing the same file again puts out a new version of it.
-                    let key = editor
-                        .file
-                        .as_ref()
-                        .map_or_else(|| format!("untitled:{title}"), |f| f.display().to_string());
-                    editor.platform.publish(key, title, description, text);
+                    let key = publish_key(editor, &title);
+                    if target.is_some() {
+                        editor.prefs.last_game = target.clone();
+                    }
+                    editor.platform.publish(key, target, title, description, text);
                 }
                 Err(e) => editor.platform.publish_status = Some(Err(format!("Could not save the game: {e}"))),
             }

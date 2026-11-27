@@ -493,5 +493,9 @@
  "Leave the game?": "离开游戏？",
  "Reset your character?": "重置你的角色？",
  "You": "你",
- "The donate page opened in your browser": "捐赠页面已在你的浏览器中打开"
+ "The donate page opened in your browser": "捐赠页面已在你的浏览器中打开",
+ "Game": "游戏",
+ "New game": "新游戏",
+ "Open recent": "打开最近",
+ "Publish over {game}?": "覆盖发布到 {game}？"
 }

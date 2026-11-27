@@ -43,6 +43,7 @@ mod my_games;
 mod open;
 mod party_games;
 mod plugins;
+mod prefs;
 mod render_scale;
 mod report;
 mod rich_text;
@@ -108,6 +109,11 @@ pub enum Dialog {
     Publish {
         title: String,
         description: String,
+        target: Option<String>,
+        linked: Option<String>,
+        search: String,
+        filled: bool,
+        confirm: bool,
     },
     /// Editing a game together: share this one, or join someone's.
     EditTogether {
@@ -246,6 +252,43 @@ pub struct Editor {
     pub autosave: autosave::Autosave,
     /// Unsaved work from last time, while the player is asked about it.
     pub recovered: Option<autosave::Recovered>,
+    pub prefs: prefs::Prefs,
+    pub prefs_saver: prefs::Saver,
+}
+
+impl Editor {
+    fn use_prefs(&mut self, prefs: prefs::Prefs) {
+        self.show_explorer = prefs.explorer;
+        self.show_properties = prefs.properties;
+        self.show_output = prefs.output;
+        self.show_toolbox = prefs.toolbox;
+        self.panels_in_play = prefs.in_play;
+        self.show_grid = prefs.grid;
+        self.snap = prefs.snap;
+        self.angle_snap = prefs.angle_snap;
+        self.platform.set_sign_in_name(&prefs.sign_in);
+        self.prefs_saver = prefs::Saver::new(&prefs);
+        self.prefs = prefs;
+    }
+
+    pub(crate) fn keep_prefs(&mut self) {
+        let p = &mut self.prefs;
+        p.explorer = self.show_explorer;
+        p.properties = self.show_properties;
+        p.output = self.show_output;
+        p.toolbox = self.show_toolbox;
+        p.in_play = self.panels_in_play;
+        p.grid = self.show_grid;
+        p.snap = self.snap;
+        p.angle_snap = self.angle_snap;
+        if let Some(file) = &self.file {
+            p.touch(file);
+        }
+        if let Some(name) = self.platform.signed_in_as.take() {
+            p.sign_in = name;
+        }
+        self.prefs_saver.tick(&prefs::path(), &self.prefs);
+    }
 }
 
 /// A game carried over the internet with a join code.
@@ -330,6 +373,8 @@ impl Default for Editor {
             crash: None,
             autosave: autosave::Autosave::default(),
             recovered: None,
+            prefs: prefs::Prefs::default(),
+            prefs_saver: prefs::Saver::default(),
         }
     }
 }
@@ -427,6 +472,9 @@ pub fn run() {
         recovered: autosave::read(&autosave::dir()),
         ..Editor::default()
     };
+    if !smoke {
+        editor.use_prefs(prefs::read(&prefs::path()));
+    }
     editor.touch.seen = MOBILE;
     editor.players_shown = !MOBILE;
     if !smoke {
@@ -473,7 +521,7 @@ pub fn run() {
                     // The window's app id (WM_CLASS), so Linux docks match it to
                     // the menu entry and show the PlayLibre icon.
                     name: Some("playlibre".into()),
-                    resolution: (1440, 900).into(),
+                    resolution: editor.prefs.window.map_or((1440, 900).into(), Into::into),
                     mode: if MOBILE {
                         bevy::window::WindowMode::BorderlessFullscreen(
                             bevy::window::MonitorSelection::Primary,
@@ -525,7 +573,7 @@ pub fn run() {
     )
     .add_systems(EguiPrimaryContextPass, ui::editor_ui)
     .add_systems(Update, (viewport::draw_selection, viewport::draw_grid).after(EngineSet::Sync))
-    .add_systems(Update, (update_title, toggle_fullscreen));
+    .add_systems(Update, (update_title, toggle_fullscreen, remember_window));
     if !MOBILE {
         app.add_systems(Last, pace_menus);
     }
@@ -669,6 +717,23 @@ fn pace_menus(engine: NonSend<EngineState>, mut winit: ResMut<bevy::winit::Winit
     if winit.focused_mode != focused {
         winit.focused_mode = focused;
         winit.unfocused_mode = unfocused;
+    }
+}
+
+fn remember_window(
+    mut editor: NonSendMut<Editor>,
+    windows: Query<&Window, (With<bevy::window::PrimaryWindow>, Changed<Window>)>,
+) {
+    if MOBILE {
+        return;
+    }
+    for window in &windows {
+        if window.mode == bevy::window::WindowMode::Windowed {
+            let size = (window.resolution.width().round() as u32, window.resolution.height().round() as u32);
+            if size.0 >= 320 && size.1 >= 240 && editor.prefs.window != Some(size) {
+                editor.prefs.window = Some(size);
+            }
+        }
     }
 }
 

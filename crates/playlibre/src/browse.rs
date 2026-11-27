@@ -116,7 +116,11 @@ pub struct Platform {
     pub find_error: Option<String>,
     /// Publishing this editor's game: what the Hub said, once it has.
     publishing: bool,
-    published: Slot<String>,
+    published: Slot<(String, String)>,
+    pub published_game: Option<String>,
+    pub publish_games: Option<Vec<PublishGame>>,
+    publish_games_slot: Slot<Vec<GameInfo>>,
+    publish_games_loading: bool,
     pub publish_status: Option<Result<String, String>>,
     /// This player's account on the Hub: the name and words to claim, and
     /// what the Hub last said.
@@ -147,6 +151,8 @@ pub struct Platform {
     password_again: String,
     /// Signing in to an account with its name and password.
     sign_in_name: String,
+    signing_in: Option<String>,
+    pub signed_in_as: Option<String>,
     sign_in_password: String,
     password_busy: bool,
     password_done: Slot<String>,
@@ -245,6 +251,10 @@ impl Default for Platform {
             find_error: None,
             publishing: false,
             published: Arc::default(),
+            published_game: None,
+            publish_games: None,
+            publish_games_slot: Arc::default(),
+            publish_games_loading: false,
             publish_status: None,
             account_name: String::new(),
             account_about: String::new(),
@@ -266,6 +276,8 @@ impl Default for Platform {
             password: String::new(),
             password_again: String::new(),
             sign_in_name: String::new(),
+            signing_in: None,
+            signed_in_as: None,
             sign_in_password: String::new(),
             password_busy: false,
             password_done: Arc::default(),
@@ -538,7 +550,9 @@ impl Platform {
         if let Some(result) = self.password_done.lock().unwrap().take() {
             self.password_busy = false;
             self.needs_code = matches!(&result, Err(e) if e == playlibre_hub::NEEDS_CODE);
+            let signing_in = self.signing_in.take();
             if result.is_ok() {
+                self.signed_in_as = signing_in;
                 self.password.clear();
                 self.password_again.clear();
                 self.sign_in_password.clear();
@@ -555,9 +569,19 @@ impl Platform {
             self.weak_password = None;
             self.password_status = Some(result);
         }
-        if let Some(result) = self.published.lock().unwrap().take() {
+        let published = self.published.lock().unwrap().take();
+        if let Some(result) = published {
             self.publishing = false;
-            self.publish_status = Some(result);
+            self.publish_status = Some(result.map(|(said, id)| {
+                self.published_game = Some(id);
+                said
+            }));
+            self.publish_games = None;
+            self.load_publish_games();
+        }
+        if let Some(result) = self.publish_games_slot.lock().unwrap().take() {
+            self.publish_games_loading = false;
+            self.publish_games = Some(publish_games(self.client().url(), result.unwrap_or_default()));
         }
         if let Some(result) = self.fetched.lock().unwrap().take() {
             self.fetching = false;
@@ -600,7 +624,37 @@ impl Platform {
 
     /// Publishes `place` (a saved game) to the Hub as `title`, or puts out
     /// a new version if this computer published it before under `key`.
-    pub fn publish(&mut self, key: String, title: String, description: String, place: String) {
+    pub(crate) fn set_sign_in_name(&mut self, name: &str) {
+        self.sign_in_name = name.to_owned();
+    }
+
+    pub fn load_publish_games(&mut self) {
+        if self.publish_games_loading {
+            return;
+        }
+        self.publish_games_loading = true;
+        let client = self.client();
+        let out = self.publish_games_slot.clone();
+        std::thread::spawn(move || {
+            let result = crate::identity().and_then(|me| {
+                let id = me.player_id();
+                let time = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis() as i64);
+                client.my_games(&id, time, &me.sign(&playlibre_hub::creator_message(&id, time)))
+            });
+            *out.lock().unwrap() = Some(result);
+        });
+    }
+
+    pub fn publish(
+        &mut self,
+        key: String,
+        target: Option<String>,
+        title: String,
+        description: String,
+        place: String,
+    ) {
         if self.publishing {
             return;
         }
@@ -619,45 +673,66 @@ impl Platform {
             };
             let hub = client.url().to_owned();
             let mut known = read_published();
-            let mine = known.get(&key).filter(|m| m["hub"] == hub.as_str());
+            let secret = target.as_deref().and_then(|id| {
+                known
+                    .values()
+                    .find(|m| m["hub"] == hub.as_str() && m["game_id"] == id)
+                    .and_then(|m| m["secret"].as_str())
+                    .map(str::to_owned)
+            });
             let me = crate::identity().ok();
-            let signed = |game: &mut Publish| {
-                // Signed, so the list shows our account name as the author.
+            let signed = |game: &mut Publish, into: bool| {
                 if let Some(me) = &me {
                     game.author_id = Some(me.player_id());
-                    game.author_signature = Some(me.sign(&playlibre_hub::publish_message(&game.secret)));
+                    let message = match &game.game_id {
+                        Some(id) if into => playlibre_hub::publish_into_message(id, &game.secret),
+                        _ => playlibre_hub::publish_message(&game.secret),
+                    };
+                    game.author_signature = Some(me.sign(&message));
                 }
             };
             let mut game = Publish {
-                game_id: mine.and_then(|m| m["game_id"].as_str()).map(str::to_owned),
-                secret: mine
-                    .and_then(|m| m["secret"].as_str())
-                    .map_or_else(playlibre_hub::new_secret, str::to_owned),
-                title,
+                game_id: target.clone(),
+                secret: secret.clone().unwrap_or_else(playlibre_hub::new_secret),
+                title: title.clone(),
                 author,
                 description,
                 place,
                 author_id: None,
                 author_signature: None,
             };
-            signed(&mut game);
+            signed(&mut game, secret.is_none());
             let mut result = client.publish(&game);
+            if game.game_id.is_some() && result.as_ref().is_err_and(|e| e.contains("someone else published"))
+            {
+                game.secret = playlibre_hub::new_secret();
+                signed(&mut game, true);
+                result = client.publish(&game);
+            }
             if result.as_ref().is_err_and(|e| e.contains("no published game")) {
-                // Taken down on the Hub since: publish it afresh.
                 game.game_id = None;
                 game.secret = playlibre_hub::new_secret();
-                signed(&mut game);
+                signed(&mut game, false);
                 result = client.publish(&game);
             }
             let said = result.map(|done| {
-                known.insert(key, json!({ "hub": hub, "game_id": done.game_id, "secret": game.secret }));
+                for m in known.values_mut() {
+                    if m["hub"] == hub.as_str() && m["game_id"] == done.game_id.as_str() {
+                        m["secret"] = json!(game.secret);
+                    }
+                }
+                known.insert(
+                    key,
+                    json!({ "hub": hub, "game_id": done.game_id, "secret": game.secret, "title": title }),
+                );
                 let _ = std::fs::create_dir_all(data_dir())
                     .and_then(|_| std::fs::write(published_file(), Json::Object(known).to_string()));
-                if done.version == 1 {
+                let said = if done.version == 1 {
                     "Published. Anyone can find it Online.".to_owned()
                 } else {
                     format!("Version {} is out.", done.version)
-                }
+                };
+                (said, done.game_id)
             });
             *out.lock().unwrap() = Some(said);
         });
@@ -1181,6 +1256,7 @@ impl Platform {
         self.password_status = None;
         let client = self.client();
         let (name, password) = (self.sign_in_name.trim().to_owned(), self.sign_in_password.clone());
+        self.signing_in = Some(name.clone());
         let code = Some(self.sign_in_code.trim().to_owned()).filter(|c| !c.is_empty());
         let out = self.password_done.clone();
         std::thread::spawn(move || {
@@ -2480,6 +2556,42 @@ fn read_published() -> serde_json::Map<String, Json> {
         .and_then(|t| serde_json::from_str::<Json>(&t).ok())
         .and_then(|j| j.as_object().cloned())
         .unwrap_or_default()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PublishGame {
+    pub game_id: String,
+    pub title: String,
+    pub description: String,
+}
+
+pub(crate) fn published_game(hub: &str, key: &str) -> Option<String> {
+    read_published()
+        .get(key)
+        .filter(|m| m["hub"] == hub)
+        .and_then(|m| m["game_id"].as_str())
+        .map(str::to_owned)
+}
+
+fn publish_games(hub: &str, mine: Vec<GameInfo>) -> Vec<PublishGame> {
+    let mut games: Vec<PublishGame> = mine
+        .into_iter()
+        .map(|g| PublishGame { game_id: g.game_id, title: g.title, description: g.description })
+        .collect();
+    for (key, m) in read_published() {
+        let Some(id) = m["game_id"].as_str().filter(|_| m["hub"] == hub) else { continue };
+        if games.iter().any(|g| g.game_id == id) {
+            continue;
+        }
+        let title = m["title"].as_str().map(str::to_owned).unwrap_or_else(|| {
+            std::path::Path::new(&key).file_stem().map_or_else(
+                || key.trim_start_matches("untitled:").to_owned(),
+                |s| s.to_string_lossy().into_owned(),
+            )
+        });
+        games.push(PublishGame { game_id: id.to_owned(), title, description: String::new() });
+    }
+    games
 }
 
 pub(crate) fn published_files(hub: &str) -> std::collections::HashMap<String, std::path::PathBuf> {

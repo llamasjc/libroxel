@@ -448,6 +448,10 @@ pub fn publish_message(secret: &str) -> Vec<u8> {
     format!("libroxel publish\n{secret}").into_bytes()
 }
 
+pub fn publish_into_message(game_id: &str, secret: &str) -> Vec<u8> {
+    format!("libroxel publish into\n{game_id}\n{secret}").into_bytes()
+}
+
 /// Claiming or changing an account.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AccountUpdate {
@@ -1510,9 +1514,12 @@ async fn publish(
     if serde_json::from_str::<HashMap<String, IgnoredAny>>(&game.place).is_err() {
         return bad("that is not a saved game");
     }
+    let target = game.game_id.as_deref().map(str::trim).filter(|id| !id.is_empty());
+    let mut claims = false;
     let author_id = match (&game.author_id, &game.author_signature) {
         (Some(id), Some(signature)) => {
-            if !verify(id, &publish_message(&game.secret), signature) {
+            claims = target.is_some_and(|g| verify(id, &publish_into_message(g, &game.secret), signature));
+            if !claims && !verify(id, &publish_message(&game.secret), signature) {
                 return Err((StatusCode::FORBIDDEN, "the author's signature does not match".into()));
             }
             Some(id.clone())
@@ -1529,7 +1536,7 @@ async fn publish(
     let author = if game.author.trim().is_empty() { "Someone".to_owned() } else { clip(&game.author) };
     let description = clip_to(&game.description, MAX_DESCRIPTION);
     let internal = |e: rusqlite::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
-    match game.game_id.as_deref().map(str::trim).filter(|id| !id.is_empty()) {
+    match target {
         Some(id) => {
             let owner: Option<(String, i64, Option<String>)> = db
                 .query_row(
@@ -1543,6 +1550,13 @@ async fn publish(
                 return Err((StatusCode::NOT_FOUND, "there is no published game with that id".into()));
             };
             let author_id = if secret == seal::pepper(&db, &game.secret) {
+                author_id
+            } else if claims && made_by.is_some() && made_by == author_id {
+                db.execute(
+                    "UPDATE games SET secret = pepper(?2) WHERE game_id = ?1",
+                    params![id, game.secret],
+                )
+                .map_err(internal)?;
                 author_id
             } else if author_id.as_deref().is_some_and(|me| groups::may_edit(&db, id, me)) {
                 made_by
