@@ -258,9 +258,10 @@ pub fn spent(db: &Connection, player_id: &str) -> i64 {
     db.query_row(
         "SELECT COALESCE(SUM(amount), 0) FROM purchases WHERE buyer_id = ?1 AND time >= ?2",
         params![player_id, now() - MONTH_SECS],
-        |r| r.get(0),
+        |r| r.get::<_, i64>(0),
     )
     .unwrap_or(0)
+        + crate::limited::resale_spent(db, player_id, now() - MONTH_SECS)
 }
 
 pub fn buy(db: &Connection, sale: &Sale) -> Result<i64, Refused> {
@@ -526,6 +527,10 @@ pub(crate) async fn buy_item(State(db): State<Db>, Json(b): Json<Buy>) -> Result
         kind: "item".into(),
         amount: price,
     };
+    if crate::limited::is_limited(&db, &b.item_id) {
+        crate::limited::buy_first(&db, &sale)?;
+        return Ok(Json(wallet(&db, &b.player_id)));
+    }
     buy(&db, &sale)?;
     db.execute(
         "INSERT OR IGNORE INTO owned (player_id, item_id, time) VALUES (?1, ?2, ?3)",
@@ -544,6 +549,9 @@ pub(crate) async fn set_price(
     check(&db, &p.player_id, &price_message(&p.player_id, &id, p.price, p.time), &p.signature, p.time)?;
     if p.price > MAX_PRICE {
         return Err((StatusCode::BAD_REQUEST, format!("the most an item can cost is {MAX_PRICE}")));
+    }
+    if p.price == 0 && crate::limited::is_limited(&db, &id) {
+        return Err((StatusCode::BAD_REQUEST, "a limited item can't be free".into()));
     }
     let changed = db
         .execute(

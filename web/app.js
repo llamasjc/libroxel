@@ -2567,6 +2567,162 @@ async function priceItem(item, price) {
   if (ok) { catalog.at = 0; loadCatalog(); }
 }
 
+const limitedText = (l) => [
+  'Limited',
+  l.stock != null && (l.on_sale ? `${l.stock - l.sold} of ${l.stock} left` : 'Sold out'),
+  l.stock == null && !l.on_sale && 'Sale over',
+  l.on_sale && l.ends_in_secs != null && `${Math.ceil(l.ends_in_secs / 86400)}d left`,
+  l.lowest != null && `from ${l.lowest}`,
+].filter(Boolean).join(' · ');
+
+const piecesText = (pieces) => pieces.map((p) => `${p.item_id}#${p.serial}`).join(',');
+
+const trading = { mine: null, trades: null, sales: null, open: null, to: '', theirs: null, give: new Set(), get: new Set(), busy: false };
+
+function loadLimited(force) {
+  if (!session || (!force && trading.mine && trading.mine.for === session.playerId)) return;
+  trading.mine = { for: session.playerId, list: trading.mine?.list || [] };
+  api(`/accounts/${session.playerId}/limited`).then((list) => { trading.mine = { for: session.playerId, list }; render(); }).catch(() => {});
+  const time = walletTime();
+  const signature = signText(secretKey(), `libroxel trades\n${session.playerId}\n${time}`);
+  api(`/trades/${session.playerId}`, { query: { time, signature } }).then((t) => { trading.trades = t; render(); }).catch(() => {});
+}
+
+function openSales(id) {
+  trading.open = id;
+  trading.sales = null;
+  api(`/catalog/${encodeURIComponent(id)}/sales`).then((s) => { trading.sales = s; render(); })
+    .catch((e) => { draft.message = { text: e.message, kind: 'error' }; render(); });
+  render();
+}
+
+async function afterTrade(ok) {
+  if (!ok) return;
+  catalog.at = 0;
+  loadCatalog();
+  loadLimited(true);
+  if (trading.open) openSales(trading.open);
+}
+
+async function makeLimited(item, stock, days) {
+  const s = stock || null;
+  const d = days || null;
+  const time = walletTime();
+  const signature = signText(secretKey(), `libroxel limited\n${session.playerId}\n${item.item_id}\n${s ?? ''}\n${d ?? ''}\n${time}`);
+  try {
+    await api(`/catalog/${encodeURIComponent(item.item_id)}/limited`, { method: 'POST', body: { player_id: session.playerId, stock: s, days: d, time, signature } });
+    catalog.at = 0;
+    loadCatalog();
+  } catch (e) {
+    draft.message = { text: e.message, kind: 'error' };
+    render();
+  }
+}
+
+const resale = (action, itemId, serial, price) => walletPost('/resale', { action, item_id: itemId, serial, price },
+  (t) => `libroxel resale\n${session.playerId}\n${action}\n${itemId}\n${serial}\n${price}\n${t}`).then(afterTrade);
+
+async function tradePost(action, { trade_id = 0, to_id = '', give = [], get = [] }) {
+  const time = walletTime();
+  const signature = signText(secretKey(), `libroxel trade\n${session.playerId}\n${action}\n${trade_id}\n${to_id}\n${piecesText(give)}\n${piecesText(get)}\n${time}`);
+  try {
+    await api('/trades', { method: 'POST', body: { player_id: session.playerId, action, trade_id, to_id, give, get, time, signature } });
+    return true;
+  } catch (e) {
+    draft.message = { text: e.message, kind: 'error' };
+    return false;
+  } finally {
+    render();
+  }
+}
+
+async function findTrader() {
+  trading.theirs = null;
+  trading.get = new Set();
+  try {
+    const p = await api(`/accounts/${encodeURIComponent(trading.to.trim())}`);
+    const list = await api(`/accounts/${p.player_id}/limited`);
+    trading.theirs = { player_id: p.player_id, name: p.name, list };
+  } catch (e) {
+    draft.message = { text: e.message, kind: 'error' };
+  }
+  render();
+}
+
+async function sendOffer() {
+  const pick = (set) => [...set].map((k) => { const [item_id, serial] = k.split('\n'); return { item_id, serial: Number(serial) }; });
+  const ok = await tradePost('offer', { to_id: trading.theirs.player_id, give: pick(trading.give), get: pick(trading.get) });
+  if (ok) { trading.give = new Set(); trading.get = new Set(); trading.theirs = null; trading.to = ''; }
+  afterTrade(ok);
+}
+
+function limitedPanel() {
+  loadLimited();
+  const mine = trading.mine?.list || [];
+  const key = (o) => `${o.item_id}\n${o.serial}`;
+  const tick = (set, o) => {
+    const box = el('input', { type: 'checkbox', checked: set.has(key(o)) });
+    box.addEventListener('change', () => { if (box.checked) set.add(key(o)); else set.delete(key(o)); render(); });
+    return el('label', { class: 'chip' }, box, `${o.name} #${o.serial}`);
+  };
+  const owned = mine.map((o) => {
+    const box = el('input', { type: 'number', min: 1, max: 100000, value: o.listed || '', style: 'width:80px' });
+    return el('div', { class: 'form-actions' }, el('b', {}, `${o.name} #${o.serial}`),
+      o.listed != null && el('span', { class: 'soft' }, `Listed for ${o.listed}`),
+      box, el('button', { class: 'chip', onclick: () => resale('list', o.item_id, o.serial, Math.floor(Number(box.value) || 0)) }, 'Sell'),
+      o.listed != null && el('button', { class: 'chip', onclick: () => resale('unlist', o.item_id, o.serial, 0) }, 'Unlist'));
+  });
+  const s = trading.sales;
+  const sales = trading.open && [
+    el('h2', { class: 'section' }, 'Resale'),
+    !s ? el('p', { class: 'soft' }, 'Loading…') : [
+      el('p', { class: 'soft' }, `${limitedText(s.limited)} · ${s.owners} owners · ${s.fee_percent}% fee`),
+      s.listings.length ? s.listings.map((l) => el('div', { class: 'form-actions' }, `#${l.serial} by ${l.seller}`,
+        l.seller_id === session.playerId ? el('span', { class: 'soft' }, String(l.price))
+          : el('button', { class: 'chip go', onclick: () => resale('buy', s.item_id, l.serial, l.price) }, `Buy for ${l.price}`)))
+        : el('p', { class: 'soft' }, 'None for sale.'),
+      s.history.length > 0 && el('div', { class: 'caps' }, 'Price history'),
+      s.history.map((h) => el('div', { class: 'soft' }, `${h.price} · #${h.serial} · ${ago(h.secs_ago)}`)),
+    ],
+    el('button', { class: 'chip', onclick: () => { trading.open = null; render(); } }, 'Close'),
+  ];
+  const act = (t, action) => el('button', { class: 'chip', onclick: () => tradePost(action, { trade_id: t.trade_id }).then(afterTrade) },
+    { accept: 'Accept', decline: 'Decline', cancel: 'Cancel', confirm: 'Confirm' }[action]);
+  const trades = (trading.trades || []).map((t) => {
+    const fromMe = t.from_id === session.playerId;
+    const open = t.state === 'offered' || t.state === 'accepted';
+    const mineOk = fromMe ? t.from_confirmed : t.to_confirmed;
+    const list = (pieces) => pieces.map((p) => `${p.name} #${p.serial}`).join(', ') || 'nothing';
+    return el('div', { class: 'item' },
+      el('b', {}, fromMe ? `To ${t.to}` : `From ${t.from}`),
+      el('small', {}, `${fromMe ? 'You give' : 'They give'}: ${list(t.give)}`),
+      el('small', {}, `${fromMe ? 'You get' : 'They get'}: ${list(t.get)}`),
+      el('small', {}, `${t.state}${t.state === 'accepted' ? ` · ${[t.from_confirmed, t.to_confirmed].filter(Boolean).length}/2 confirmed` : ''} · ${ago(t.secs_ago)}`),
+      open && el('span', { class: 'form-actions' },
+        t.state === 'offered' && !fromMe && [act(t, 'accept'), act(t, 'decline')],
+        t.state === 'accepted' && !mineOk && act(t, 'confirm'),
+        act(t, 'cancel')));
+  });
+  const to = el('input', { value: trading.to, placeholder: 'Name' });
+  to.addEventListener('input', () => { trading.to = to.value; });
+  const theirs = trading.theirs;
+  return [
+    sales,
+    el('h2', { class: 'section' }, 'Limited'),
+    owned.length ? owned : el('p', { class: 'soft' }, 'No limited items yet.'),
+    el('h2', { class: 'section' }, 'Trades'),
+    el('div', { class: 'form-actions' }, to, el('button', { class: 'chip', onclick: findTrader }, 'Find')),
+    theirs && [
+      el('div', { class: 'caps' }, 'You give'),
+      el('div', { class: 'form-actions' }, mine.map((o) => tick(trading.give, o))),
+      el('div', { class: 'caps' }, `${theirs.name} gives`),
+      el('div', { class: 'form-actions' }, theirs.list.map((o) => tick(trading.get, o))),
+      el('div', { class: 'form-actions' }, el('button', { class: 'btn go small', disabled: !trading.give.size && !trading.get.size, onclick: sendOffer }, 'Send offer')),
+    ],
+    trades.length > 0 && el('div', { class: 'catalog' }, trades),
+  ];
+}
+
 /** For now only Hat-Makers (the Hub's owners give it out, and are ones themselves) make catalog hats. */
 const mayMakeItems = () => Boolean(data.me && (data.me.hat_maker || data.me.admin));
 
@@ -2632,8 +2788,15 @@ function avatar() {
     const box = el('input', { type: 'number', min: 0, max: 100000, value: item.price || 0, style: 'width:80px' });
     return el('span', { class: 'form-actions' },
       el('button', { class: 'chip', disabled: same(hat), onclick: () => { look.item = hat; changed(); } }, same(hat) ? 'Wearing' : 'Wear'),
-      box, el('button', { class: 'chip', onclick: () => priceItem(item, Math.max(0, Math.min(100000, Math.floor(Number(box.value) || 0)))) }, 'Set price'));
+      box, el('button', { class: 'chip', onclick: () => priceItem(item, Math.max(0, Math.min(100000, Math.floor(Number(box.value) || 0)))) }, 'Set price'),
+      !item.limited && item.price > 0 && limitedFields(item));
   };
+  const limitedFields = (item) => {
+    const stock = el('input', { type: 'number', min: 1, max: 100000, placeholder: 'Stock', style: 'width:80px' });
+    const days = el('input', { type: 'number', min: 1, max: 90, placeholder: 'Days', style: 'width:70px' });
+    return [stock, days, el('button', { class: 'chip', onclick: () => makeLimited(item, Math.floor(Number(stock.value) || 0), Math.floor(Number(days.value) || 0)) }, 'Make limited')];
+  };
+  const forSale = (item) => !item.limited || item.limited.on_sale;
   loadWallet();
   return [
     el('h1', { class: 'title' }, 'Your avatar'),
@@ -2659,9 +2822,12 @@ function avatar() {
       ? el('div', { class: 'catalog' }, hats.map(([item, hat]) => el('div', { class: 'item' },
         el('b', {}, item.name),
         el('small', {}, `by ${item.creator} · worn ${item.wears}`),
-        mine(item) ? priceField(item) : !owned(item) ? el('button', { class: 'chip go', onclick: () => buyItem(item) }, `Buy for ${item.price}`)
-          : el('button', { class: 'chip', disabled: same(hat), onclick: () => { look.item = hat; api(`/catalog/${encodeURIComponent(item.item_id)}/wear`, { method: 'POST' }).catch(() => {}); changed(); } }, same(hat) ? 'Wearing' : 'Wear'))))
+        item.limited && el('small', {}, limitedText(item.limited)),
+        mine(item) ? priceField(item) : !owned(item) ? (forSale(item) && el('button', { class: 'chip go', onclick: () => buyItem(item).then(() => afterTrade(true)) }, `Buy for ${item.price}`))
+          : el('button', { class: 'chip', disabled: same(hat), onclick: () => { look.item = hat; api(`/catalog/${encodeURIComponent(item.item_id)}/wear`, { method: 'POST' }).catch(() => {}); changed(); } }, same(hat) ? 'Wearing' : 'Wear'),
+        item.limited && el('button', { class: 'chip', onclick: () => openSales(item.item_id) }, 'Resale'))))
       : el('p', { class: 'soft' }, 'Nothing in the catalog yet.'),
+    limitedPanel(),
     clothesPanel(look, changed),
     el('div', { class: 'form-actions' }, save),
     draft.message && status(draft.message.text, draft.message.kind),

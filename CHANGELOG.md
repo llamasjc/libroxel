@@ -3,6 +3,14 @@
 What changed in each release. The full list of commits for each one is on
 its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 
+## Unreleased
+
+- **Limited items:** creators can make a priced item limited, with a stock,
+  a number of days on sale, or both. Each copy has a serial number. Owners
+  can sell copies on for Credits (30% fee) with a price history, and trade
+  them: one player offers, the other accepts or declines, and both confirm
+  before the items move.
+
 ## 0.1.22 (2026-11-27)
 
 - **No free Credits:** badges no longer give Credits, and a creator's

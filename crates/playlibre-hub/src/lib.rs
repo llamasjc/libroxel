@@ -102,6 +102,12 @@ pub use groups::{
     GroupPage, GroupPost, GroupRole, MAX_TAG, group_color, group_invites_message, group_message,
     group_view_message, valid_group_name, valid_group_tag,
 };
+mod limited;
+pub use limited::{
+    ItemSales, Limited, MAX_SALE_DAYS, MAX_STOCK, MakeLimited, OPEN_TRADES, Owned, Piece, PricePoint,
+    RESALE_FEE, ResaleAction, ResaleChange, ResaleListing, TRADE_ITEMS, Trade, TradeAction, TradeChange,
+    TradePiece, limited_message, resale_message, trade_message, trades_message,
+};
 mod limits;
 mod manage;
 mod market;
@@ -627,6 +633,8 @@ pub struct Item {
     pub wears: u32,
     #[serde(default)]
     pub price: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limited: Option<Limited>,
 }
 
 /// Reporting a published game or a catalog item as not OK.
@@ -1027,6 +1035,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     pictures::create_tables(&db)?;
     wallet::create_tables(&db)?;
     payments::create_tables(&db)?;
+    limited::create_tables(&db)?;
     earnings::create_tables(&db)?;
     data::create_tables(&db)?;
     media::create_tables(&db)?;
@@ -1179,6 +1188,12 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/catalog/{id}/wear", post(wear_item))
         .route("/catalog/{id}/price", post(wallet::set_price))
         .route("/shop/buy", post(wallet::buy_item))
+        .route("/catalog/{id}/limited", post(limited::make_limited))
+        .route("/catalog/{id}/sales", get(limited::item_sales))
+        .route("/accounts/{id}/limited", get(limited::serials))
+        .route("/resale", post(limited::change_resale))
+        .route("/trades", post(limited::change_trade))
+        .route("/trades/{id}", get(limited::list_trades))
         .route("/wallet/daily", post(wallet::no_daily))
         .route("/wallet/{id}", get(wallet::get_wallet))
         .route("/credits/packs", get(payments::packs))
@@ -1781,6 +1796,7 @@ async fn share_item(
         data: item.data,
         wears: 0,
         price: 0,
+        limited: None,
     }))
 }
 
@@ -1811,10 +1827,19 @@ async fn list_items(State(db): State<Db>, Query(query): Query<ListQuery>) -> Jso
                 data: serde_json::from_str(&data).unwrap_or(serde_json::Value::Null),
                 wears: r.get::<_, i64>(6)? as u32,
                 price: r.get::<_, i64>(7)? as u32,
+                limited: None,
             })
         })
-        .map(|rows| rows.filter_map(Result::ok).collect())
+        .map(|rows| rows.filter_map(Result::ok).collect::<Vec<Item>>())
         .unwrap_or_default();
+    drop(statement);
+    let rows = rows
+        .into_iter()
+        .map(|mut item| {
+            item.limited = limited::summary(&db, &item.item_id);
+            item
+        })
+        .collect();
     Json(rows)
 }
 
@@ -1841,6 +1866,9 @@ async fn unlist_item(
     let Some(creator) = creator else { return StatusCode::NOT_FOUND };
     if !verify(&creator, &unlist_message(&id), &signed.secret) {
         return StatusCode::FORBIDDEN;
+    }
+    if limited::summary(&db, &id).is_some_and(|l| l.sold > 0) {
+        return StatusCode::CONFLICT;
     }
     match db.execute("DELETE FROM items WHERE item_id = ?1", params![id]) {
         Ok(_) => StatusCode::NO_CONTENT,
@@ -2993,6 +3021,53 @@ impl HubClient {
 
     pub fn set_price(&self, item_id: &str, price: &SetPrice) -> Result<(), String> {
         self.post_raw(&format!("/catalog/{item_id}/price"), price).map(|_| ())
+    }
+
+    pub fn make_limited(&self, item_id: &str, m: &MakeLimited) -> Result<Limited, String> {
+        self.post_signed(&format!("/catalog/{}/limited", assets::encode(item_id)), m)
+    }
+
+    pub fn item_sales(&self, item_id: &str) -> Result<ItemSales, String> {
+        let request = self
+            .agent
+            .get(format!("{}/catalog/{}/sales", self.base, assets::encode(item_id)))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call();
+        self.answer(request)
+    }
+
+    pub fn limited_owned(&self, player_id: &str) -> Result<Vec<Owned>, String> {
+        let request = self
+            .agent
+            .get(format!("{}/accounts/{player_id}/limited", self.base))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call();
+        self.answer(request)
+    }
+
+    pub fn resale(&self, change: &ResaleChange) -> Result<Wallet, String> {
+        self.post_signed("/resale", change)
+    }
+
+    pub fn trade(&self, change: &TradeChange) -> Result<Trade, String> {
+        self.post_signed("/trades", change)
+    }
+
+    pub fn trades(&self, player_id: &str, time: i64, signature: &str) -> Result<Vec<Trade>, String> {
+        let request = self
+            .agent
+            .get(format!("{}/trades/{player_id}", self.base))
+            .query("time", time.to_string())
+            .query("signature", signature)
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call();
+        self.answer(request)
     }
 
     pub fn earnings(&self, player_id: &str, time: i64, signature: &str) -> Result<Earnings, String> {
