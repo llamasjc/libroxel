@@ -96,6 +96,7 @@ pub struct Menu {
     pub groups: crate::groups::Groups,
     my_games: crate::my_games::MyGames,
     shown: Option<(Tab, f64)>,
+    donated: Option<f64>,
 }
 
 impl Default for Menu {
@@ -104,6 +105,7 @@ impl Default for Menu {
             open: false,
             tab: Tab::Home,
             shown: None,
+            donated: None,
             game: Game::Blank,
             games: Vec::new(),
             scanned: false,
@@ -472,6 +474,34 @@ impl Menu {
                 }
             });
         });
+        if let Some(at) = self.donated {
+            let left = 4.0 - (now - at) as f32;
+            if left <= 0.0 {
+                self.donated = None;
+            } else {
+                ui.ctx().request_repaint();
+                let fade = left.min(0.4) / 0.4;
+                let text =
+                    format!("{}  {}", theme::icon::BROWSER, t("The donate page opened in your browser"));
+                let galley = ui.painter().layout_no_wrap(
+                    text,
+                    theme::display(15.0),
+                    Color32::WHITE.gamma_multiply(fade),
+                );
+                let note = egui::Rect::from_center_size(
+                    egui::pos2(screen.center().x, bar.max.y + 34.0),
+                    galley.size() + egui::vec2(32.0, 18.0),
+                );
+                let painter =
+                    ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, "donated".into()));
+                painter.rect_filled(
+                    note,
+                    note.height() / 2.0,
+                    theme::see_through(16, 40, 72, (220.0 * fade) as u8),
+                );
+                painter.galley(note.center() - galley.size() / 2.0, galley, Color32::WHITE);
+            }
+        }
         platform.name = self.name.trim().to_owned();
         if pick.is_some() {
             self.error = None;
@@ -502,19 +532,49 @@ impl Menu {
         ui.spacing_mut().item_spacing.x = 2.0;
         let chip = player_chip_width(ui, &self.name, phone);
         let credits = platform.balance();
-        let right = if phone {
-            chip + 3.0 * 48.0 + 16.0 + if credits.is_some() { 80.0 } else { 0.0 }
+        let update = crate::update::ready();
+        let gap = if phone { 4.0 } else { 8.0 };
+        let icon_w = theme::tab_width(ui, theme::icon::LIST, "") + gap;
+        let messages = if platform.account.is_some() { icon_w + 20.0 } else { 0.0 };
+        let credits_w = credits
+            .as_ref()
+            .map_or(0.0, |(b, _)| theme::tab_width(ui, theme::icon::COIN, &b.to_string()) + gap);
+        let donate_w = ui
+            .painter()
+            .layout_no_wrap(
+                format!("{}  {}", theme::icon::HEART, t("Donate")),
+                theme::display(13.0),
+                Color32::WHITE,
+            )
+            .size()
+            .x
+            + 28.0
+            + gap;
+        let update_w = update
+            .as_ref()
+            .map_or(0.0, |_| theme::tab_width(ui, theme::icon::ARROW_CIRCLE_UP, t("Update")) + gap);
+        let base = chip + gap + icon_w + messages + credits_w;
+        let extras = donate_w + icon_w + update_w;
+        let labels: f32 = TOP_TABS.iter().map(|(_, g, l)| theme::tab_width(ui, g, t(l)) + 2.0).sum();
+        let icon_tab = |g: &str| theme::tab_width(ui, g, "") + 2.0;
+        let icons: f32 = TOP_TABS.iter().map(|(_, g, _)| icon_tab(g)).sum();
+        let mac = if cfg!(target_os = "macos") { icon_w } else { 0.0 };
+        let room = ui.available_width() - mac - 8.0;
+        let compact = labels + base + extras > room;
+        let folded = icons + base + extras > room;
+        let keep = if folded {
+            let mut left = room - base - icon_w;
+            TOP_TABS
+                .iter()
+                .take_while(|(_, g, _)| {
+                    left -= icon_tab(g);
+                    left >= 0.0
+                })
+                .count()
         } else {
-            chip + 260.0
-                + 24.0
-                + if credits.is_some() { 80.0 } else { 0.0 }
-                + if crate::update::ready().is_some() { 110.0 } else { 0.0 }
+            TOP_TABS.len()
         };
-        let wide: f32 =
-            TOP_TABS.iter().map(|(_, glyph, label)| theme::tab_width(ui, glyph, t(label))).sum::<f32>()
-                + 2.0 * TOP_TABS.len() as f32;
-        let compact = wide > ui.available_width() - right;
-        for (tab, glyph, label) in TOP_TABS {
+        for &(tab, glyph, label) in &TOP_TABS[..keep] {
             let label = t(label);
             let shown = if compact { "" } else { label };
             let response = theme::tab(ui, glyph, shown, self.tab == tab);
@@ -542,12 +602,21 @@ impl Menu {
         }
         // Search and who you play as, at the right of the bar.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = if phone { 4.0 } else { 8.0 };
-            if phone {
+            ui.spacing_mut().item_spacing.x = gap;
+            if folded {
                 let more = theme::tab(ui, theme::icon::LIST, "", false).on_hover_text(t("More"));
                 egui::Popup::menu(&more).show(|ui| {
                     ui.set_min_width(200.0);
-                    if let Some(version) = crate::update::ready() {
+                    for &(tab, glyph, label) in &TOP_TABS[keep..] {
+                        if ui.selectable_label(self.tab == tab, format!("{glyph}  {}", t(label))).clicked() {
+                            ui.close();
+                            self.go(tab);
+                        }
+                    }
+                    if keep < TOP_TABS.len() {
+                        ui.separator();
+                    }
+                    if let Some(version) = &update {
                         let label = format!("{}  {}", theme::icon::ARROW_CIRCLE_UP, t("Update"));
                         if ui
                             .button(label)
@@ -561,6 +630,7 @@ impl Menu {
                     if ui.button(format!("{}  {}", theme::icon::HEART, t("Donate"))).clicked() {
                         ui.close();
                         crate::report::open_url(DONATE);
+                        self.donated = Some(ui.input(|i| i.time));
                     }
                     ui.menu_button(format!("{}  {}", theme::icon::GLOBE, t("Language")), |ui| {
                         languages(ui);
@@ -585,12 +655,13 @@ impl Menu {
                     self.go(Tab::Messages);
                 }
             }
-            if !phone {
+            if !folded {
                 if theme::block_button(ui, theme::Kind::Donate, theme::icon::HEART, t("Donate"), 28.0)
                     .on_hover_text(t("PlayLibre is open source. Donations are highly appreciated."))
                     .clicked()
                 {
                     crate::report::open_url(DONATE);
+                    self.donated = Some(ui.input(|i| i.time));
                 }
                 let globe = theme::tab(ui, theme::icon::GLOBE, "", false).on_hover_text(t("Language"));
                 egui::Popup::menu(&globe).show(|ui| {
@@ -602,7 +673,7 @@ impl Menu {
             if search.on_hover_text(t("Search for players and games")).clicked() {
                 self.go(Tab::Search);
             }
-            if !phone && let Some(version) = crate::update::ready() {
+            if !folded && let Some(version) = &update {
                 let update = theme::tab(ui, theme::icon::ARROW_CIRCLE_UP, t("Update"), false);
                 if update.on_hover_text(tf("Restart with {version}", &[("version", &version)])).clicked()
                     && let Err(why) = crate::update::restart()
