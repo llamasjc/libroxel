@@ -19,6 +19,7 @@ mod android_input;
 mod autosave;
 mod awards;
 mod browse;
+mod buy_credits;
 mod command;
 mod debugging;
 mod file_picker;

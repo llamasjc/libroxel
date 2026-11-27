@@ -416,6 +416,8 @@ footer a { color: var(--heading); text-decoration: underline; }
 .seg.on { color: #fff; text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35); background: var(--gloss), linear-gradient(rgb(96, 176, 246), rgb(30, 110, 200)); }
 .amounts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 22px; }
 .amount, .other { height: 54px; border: 1px solid var(--line); border-radius: 9px; background: linear-gradient(#fff, rgb(240, 247, 254)); font: 600 20px var(--display); color: var(--heading); cursor: pointer; }
+.amount.pack { height: 76px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
+.pack small { font-size: 14px; font-weight: 500; opacity: 0.75; }
 .amount:hover, .other:focus-within { border-color: rgb(60, 127, 177); box-shadow: var(--glow); }
 .amount.on { color: #fff; border-color: rgb(26, 100, 24); text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35); background: var(--gloss), linear-gradient(rgb(140, 220, 96), rgb(46, 150, 36)); }
 .other { display: flex; align-items: center; gap: 4px; padding: 0 12px; cursor: text; }

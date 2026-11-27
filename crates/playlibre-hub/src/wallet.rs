@@ -124,7 +124,7 @@ pub fn balance(db: &Connection, player_id: &str) -> i64 {
         .unwrap_or(0)
 }
 
-fn entry(
+pub(crate) fn entry(
     db: &Connection,
     player_id: &str,
     amount: i64,

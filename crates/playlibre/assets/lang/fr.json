@@ -256,6 +256,7 @@
  "Playing": "En jeu",
  "Playing as": "Tu joues en tant que",
  "Your Credits. Spend them on hats in the Avatar tab.": "Tes crédits. Dépense-les en chapeaux dans l'onglet Avatar.",
+ "Buy Credits": "Acheter des crédits",
  "Playing as {name}": "Tu joues en tant que {name}",
  "Playing: edits are undone when you stop": "En jeu : les modifications sont annulées à l'arrêt",
  "Plays a WAV or OGG file while the game runs: tick Playing, or call Play, Stop, Pause and Resume from a script (Ended fires when it finishes). SoundId is found like a picture; playlibre://coin, jump, boom, click, splash, chime and hum are built in. Inside a part it gets quieter further from the camera.": "Joue un fichier WAV ou OGG pendant le jeu : coche Playing, ou appelle Play, Stop, Pause et Resume depuis un script (Ended se déclenche à la fin). SoundId se cherche comme une image ; playlibre://coin, jump, boom, click, splash, chime et hum sont intégrés. Dans une pièce, il est plus faible plus la caméra est loin.",

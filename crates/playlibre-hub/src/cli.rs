@@ -138,6 +138,7 @@ pub fn cli(args: &[String], default_data: &Path) -> Result<(), String> {
         fleet,
         starters: flags.get("--starters").map(PathBuf::from),
         moderation: crate::Moderation::from_env(),
+        stripe: crate::Stripe::from_env(),
         ..Default::default()
     };
     let words: Vec<&str> = flags.rest.iter().map(String::as_str).collect();

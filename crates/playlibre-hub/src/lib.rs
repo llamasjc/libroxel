@@ -135,6 +135,8 @@ pub use parties::{
     party_view_message,
 };
 mod password;
+mod payments;
+pub use payments::{Checkout, CheckoutUrl, PACKS, Pack, Packs, Stripe, checkout_message};
 mod pictures;
 mod places;
 mod ratings;
@@ -233,6 +235,7 @@ pub struct HubOptions {
     pub starters: Option<PathBuf>,
     /// A moderation service to check messages with ([`Moderation::from_env`]).
     pub moderation: Option<Moderation>,
+    pub stripe: Option<Stripe>,
 }
 
 /// How often hosts should announce themselves.
@@ -852,11 +855,18 @@ struct Hub {
     mail: Arc<Mail>,
     fleet: Option<Arc<fleet::Fleet>>,
     moderation: Option<Arc<Moderation>>,
+    stripe: Option<Arc<Stripe>>,
 }
 
 impl FromRef<Hub> for Option<Arc<Moderation>> {
     fn from_ref(hub: &Hub) -> Option<Arc<Moderation>> {
         hub.moderation.clone()
+    }
+}
+
+impl FromRef<Hub> for Option<Arc<Stripe>> {
+    fn from_ref(hub: &Hub) -> Option<Arc<Stripe>> {
+        hub.stripe.clone()
     }
 }
 
@@ -1015,6 +1025,7 @@ pub fn open_db(path: Option<&Path>) -> Result<Connection, String> {
     copies::create_tables(&db)?;
     pictures::create_tables(&db)?;
     wallet::create_tables(&db)?;
+    payments::create_tables(&db)?;
     earnings::create_tables(&db)?;
     data::create_tables(&db)?;
     media::create_tables(&db)?;
@@ -1064,6 +1075,7 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         mail: Arc::new(options.mail),
         fleet,
         moderation: options.moderation.map(Arc::new),
+        stripe: options.stripe.map(Arc::new),
     };
     // Look after the Hub's own game servers every few seconds.
     if let (Some(fleet), Ok(runtime)) = (hub.fleet.clone(), tokio::runtime::Handle::try_current()) {
@@ -1168,6 +1180,9 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
         .route("/shop/buy", post(wallet::buy_item))
         .route("/wallet/daily", post(wallet::no_daily))
         .route("/wallet/{id}", get(wallet::get_wallet))
+        .route("/credits/packs", get(payments::packs))
+        .route("/credits/checkout", post(payments::checkout))
+        .route("/stripe", post(payments::stripe_event))
         .route("/earnings/{id}", get(earnings::get_earnings))
         .route("/earnings/cash-out", post(earnings::cash_out))
         .route("/games/{id}/passes", get(earnings::list_passes).post(earnings::change_pass))
@@ -2954,6 +2969,18 @@ impl HubClient {
             .build()
             .call();
         self.answer(request)
+    }
+
+    pub fn credit_packs(&self) -> Result<Packs, String> {
+        self.agent
+            .get(format!("{}/credits/packs", self.base))
+            .call()
+            .and_then(|mut r| r.body_mut().read_json())
+            .map_err(|e| format!("could not reach the Hub: {e}"))
+    }
+
+    pub fn checkout(&self, checkout: &Checkout) -> Result<CheckoutUrl, String> {
+        self.post_signed("/credits/checkout", checkout)
     }
 
     pub fn buy_item(&self, buy: &Buy) -> Result<Wallet, String> {

@@ -24,6 +24,7 @@ export const ROUTES = {
   password: { title: 'Password', params: [] },
   privacy: { title: 'Privacy policy', params: [] },
   donate: { title: 'Donate', params: [] },
+  credits: { title: 'Buy Credits', params: [] },
   moderation: { title: 'Moderation', params: [] },
   stats: { title: 'Stats', params: [] },
 };

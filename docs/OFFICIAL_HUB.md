@@ -103,6 +103,27 @@ check every message with OpenAI's free moderation API, add
 the Hub. Reported messages show in `playlibre-hub reports`;
 `playlibre-hub remove message <id>` deletes one.
 
+### Buying Credits
+
+Players buy Credits with Stripe Checkout. Until it is set up, the Hub sells none.
+
+1. Make a [Stripe](https://stripe.com) account and finish **Activate payments**.
+2. Open **Developers → API keys** and copy the secret key (`sk_live_...`).
+3. Open **Developers → Webhooks → Add endpoint**, use
+   `https://hub.playlibre.net/stripe`, and pick the events
+   `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
+   `charge.refunded` and `charge.dispute.created`. Copy its signing secret
+   (`whsec_...`).
+4. Add both to `/etc/playlibre/mail.conf` and restart the Hub:
+
+   ```sh
+   PLAYLIBRE_STRIPE_KEY=sk_live_...
+   PLAYLIBRE_STRIPE_WEBHOOK_SECRET=whsec_...
+   ```
+
+Refunds and disputes take the Credits back. The Android app sells none:
+Google Play requires Play Billing for that.
+
 ### Game servers
 
 The Hub runs the games players join, on its own computer. Pressing **Play**

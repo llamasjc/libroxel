@@ -502,6 +502,9 @@ impl Menu {
                 painter.galley(note.center() - galley.size() / 2.0, galley, Color32::WHITE);
             }
         }
+        let credits = platform.balance().map(|(n, _)| n);
+        let hub = platform.client();
+        platform.buy_credits.ui(ctx, &hub, credits);
         platform.name = self.name.trim().to_owned();
         if pick.is_some() {
             self.error = None;
@@ -643,8 +646,12 @@ impl Menu {
             // The account's Credits, by its name.
             if let Some((balance, _)) = &credits {
                 let shown = theme::tab(ui, theme::icon::COIN, &balance.to_string(), false);
-                if shown.on_hover_text(t("Your Credits. Spend them on hats in the Avatar tab.")).clicked() {
-                    self.go(Tab::Avatar);
+                if shown.on_hover_text(t("Buy Credits")).clicked() {
+                    if cfg!(target_os = "android") {
+                        self.go(Tab::Avatar);
+                    } else {
+                        platform.buy_credits.open();
+                    }
                 }
             }
             if platform.account.is_some() {

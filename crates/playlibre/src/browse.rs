@@ -36,6 +36,7 @@ pub struct Platform {
     pub awards: crate::awards::Awards,
     /// Game passes bought inside games.
     pub shop: crate::game_passes::Shop,
+    pub buy_credits: crate::buy_credits::BuyCredits,
     /// Teleports scripts send this player on.
     pub teleport: crate::teleport::Teleporter,
     /// The Hub's address ([`playlibre_hub::hub_address`]). It isn't
@@ -249,6 +250,7 @@ impl Default for Platform {
             item_shared: Arc::default(),
             wallet: None,
             shop: Default::default(),
+            buy_credits: Default::default(),
             teleport: Default::default(),
             wallet_found: Arc::default(),
             wallet_busy: false,
@@ -689,8 +691,8 @@ impl Platform {
 
     /// Reads the wallet again when it is a minute old.
     fn keep_wallet_fresh(&mut self) {
-        if self.account.is_some() && self.wallet_fetched.is_none_or(|t| t.elapsed() > Duration::from_secs(60))
-        {
+        let every = Duration::from_secs(if self.buy_credits.paying() { 4 } else { 60 });
+        if self.account.is_some() && self.wallet_fetched.is_none_or(|t| t.elapsed() > every) {
             self.wallet_send(WalletAction::Read);
         }
     }

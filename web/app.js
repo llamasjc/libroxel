@@ -996,7 +996,7 @@ window.addEventListener('unhandledrejection', (e) => crashed(e.reason));
 function render() {
   route = parseRoute();
   tabs();
-  const views = { home, game, games: game, charts: chartsPage, profile, creator: creatorPage, market: marketPage, search: searchPage, notifications: notificationsPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, stats: statsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy, donate: donatePage };
+  const views = { home, game, games: game, charts: chartsPage, profile, creator: creatorPage, market: marketPage, search: searchPage, notifications: notificationsPage, friends: friendsPage, groups: groupsPage, group: groupPage, messages: messagesPage, moderation: moderationPage, stats: statsPage, avatar, user, 'sign-in': signInPage, create: createPage, download, password: passwordPage, privacy, donate: donatePage, credits: creditsPage };
   // An account that signed in with an easy password sees nothing else until it sets a new one.
   loadFamily();
   const needsBirthday = session && familyInfo && !familyInfo.loading && !familyInfo.error && !familyInfo.has_birthday;
@@ -2533,7 +2533,7 @@ function creditsChip() {
   loadWallet();
   const w = walletInfo;
   if (!w || w.loading || w.error || w.balance == null) return null;
-  return el('a', { class: `tab credits${route.name === 'avatar' ? ' active' : ''}`, href: '/avatar', title: `Your ${w.currency}. Spend them on hats on the Avatar page.` },
+  return el('a', { class: `tab credits${route.name === 'credits' ? ' active' : ''}`, href: '/credits', title: `Buy ${w.currency}` },
     icon(BADGE_GLYPHS.coin), String(w.balance));
 }
 
@@ -4250,6 +4250,59 @@ function donatePage() {
     el('div', { class: 'segs' }, segs.map(([, b]) => b)),
     el('div', { class: 'amounts' }, presets, el('label', { class: 'other' }, el('span', {}, '$'), other)),
     el('div', { class: 'givers' }, paypal, sponsors, note),
+  );
+}
+
+// --- Credits -----------------------------------------------------------------
+
+const shop = { packs: null, busy: false, error: '', paid: false };
+
+function loadPacks() {
+  if (shop.packs) return;
+  shop.packs = { loading: true };
+  api('/credits/packs')
+    .then((p) => { shop.packs = p; })
+    .catch((e) => { shop.packs = { error: e.message }; })
+    .finally(() => render());
+}
+
+async function checkout(pack) {
+  shop.busy = true;
+  shop.error = '';
+  render();
+  const time = walletTime();
+  const signature = signText(secretKey(), `libroxel checkout\n${session.playerId}\n${pack.id}\n${time}`);
+  try {
+    const { url } = await api('/credits/checkout', { method: 'POST', body: { player_id: session.playerId, pack: pack.id, time, signature } });
+    location.href = url;
+  } catch (e) {
+    shop.busy = false;
+    shop.error = e.message;
+    render();
+  }
+}
+
+function creditsPage() {
+  if (!session) return needSignIn('Sign in to buy Credits.');
+  loadPacks();
+  if (new URLSearchParams(location.search).has('paid') && !shop.paid) {
+    shop.paid = true;
+    history.replaceState(null, '', '/credits');
+    [0, 3000, 10000].forEach((ms) => setTimeout(() => { walletInfo = null; render(); }, ms));
+  }
+  const p = shop.packs;
+  const money = (cents) => `$${(cents / 100).toFixed(2)}`;
+  return el('div', { class: 'donate' },
+    el('h1', { class: 'title' }, 'Buy Credits'),
+    walletBar(),
+    shop.paid && status('Thanks! Your Credits are on the way.'),
+    shop.error && status(shop.error, 'error'),
+    !p || p.loading ? el('p', { class: 'soft' }, 'Loading…')
+      : p.error ? status(p.error, 'error')
+        : !p.on ? el('p', { class: 'soft' }, 'Not available yet.')
+          : el('div', { class: 'amounts' }, p.packs.map((pack) => el('button', { class: 'amount pack', disabled: shop.busy, onclick: () => checkout(pack) },
+            el('span', {}, icon(BADGE_GLYPHS.coin), ` ${pack.credits.toLocaleString()}`),
+            el('small', {}, money(pack.cents))))),
   );
 }
 
