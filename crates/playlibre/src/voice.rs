@@ -178,31 +178,35 @@ impl Voice {
         self.speaking.retain(|_, at| now.duration_since(*at) < SPEAKING);
         let no_mic = shared.no_mic.load(Ordering::Relaxed);
         let rect = ui.max_rect();
-        egui::Area::new("voice".into()).fixed_pos(rect.min + egui::vec2(10.0, 54.0)).show(ui.ctx(), |ui| {
-            let (kind, glyph) = match (self.mic_on, no_mic) {
-                (true, false) => (theme::Kind::Primary, icon::MICROPHONE),
-                _ => (theme::Kind::Plain, icon::MICROPHONE_SLASH),
-            };
-            if theme::block_button(ui, kind, glyph, "", 34.0).clicked() {
-                self.mic_on = !self.mic_on || no_mic;
-                shared.no_mic.store(false, Ordering::Relaxed);
-                #[cfg(target_os = "android")]
-                if self.mic_on {
-                    ask_for_mic();
+        let size = theme::hud_size(rect);
+        egui::Area::new("voice".into()).fixed_pos(rect.min + egui::vec2(10.0, size + 26.0)).show(
+            ui.ctx(),
+            |ui| {
+                let (kind, glyph) = match (self.mic_on, no_mic) {
+                    (true, false) => (theme::Kind::Primary, icon::MICROPHONE),
+                    _ => (theme::Kind::Plain, icon::MICROPHONE_SLASH),
+                };
+                if theme::block_button(ui, kind, glyph, "", size - 4.0).clicked() {
+                    self.mic_on = !self.mic_on || no_mic;
+                    shared.no_mic.store(false, Ordering::Relaxed);
+                    #[cfg(target_os = "android")]
+                    if self.mic_on {
+                        ask_for_mic();
+                    }
                 }
-            }
-            let mut who: Vec<(InstanceId, &str)> =
-                self.speaking.keys().map(|id| (*id, tree.name(*id).unwrap_or("?"))).collect();
-            who.sort_by_key(|(_, name)| *name);
-            for (id, name) in who {
-                let muted = self.muted.contains(&id);
-                let glyph = if muted { icon::SPEAKER_SLASH } else { icon::SPEAKER_HIGH };
-                if ui.button(format!("{glyph} {name}")).clicked() && !self.muted.remove(&id) {
-                    self.muted.insert(id);
-                    shared.mix.lock().unwrap().voices.remove(&id);
+                let mut who: Vec<(InstanceId, &str)> =
+                    self.speaking.keys().map(|id| (*id, tree.name(*id).unwrap_or("?"))).collect();
+                who.sort_by_key(|(_, name)| *name);
+                for (id, name) in who {
+                    let muted = self.muted.contains(&id);
+                    let glyph = if muted { icon::SPEAKER_SLASH } else { icon::SPEAKER_HIGH };
+                    if ui.button(format!("{glyph} {name}")).clicked() && !self.muted.remove(&id) {
+                        self.muted.insert(id);
+                        shared.mix.lock().unwrap().voices.remove(&id);
+                    }
                 }
-            }
-        });
+            },
+        );
         if !self.speaking.is_empty() {
             ui.ctx().request_repaint_after(SPEAKING);
         }

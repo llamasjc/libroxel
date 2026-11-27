@@ -365,29 +365,36 @@ impl Menu {
         theme::paint_sky(ui.painter(), screen);
         // The top bar, a sheet of sky-tinted glass: the mark (Home), the
         // tabs, and on the right Search and who you play as.
-        let bar = egui::Rect::from_min_size(screen.min, egui::vec2(screen.width(), 68.0));
+        let phone = theme::is_phone(screen);
+        let bar = egui::Rect::from_min_size(
+            screen.min,
+            egui::vec2(screen.width(), if phone { 50.0 } else { 68.0 }),
+        );
         theme::glass_bar(ui.painter(), bar);
         ui.painter().hline(
             bar.x_range(),
             bar.max.y,
             egui::Stroke::new(1.0, theme::see_through(20, 70, 130, 120)),
         );
-        ui.scope_builder(egui::UiBuilder::new().max_rect(bar.shrink2(egui::vec2(20.0, 12.0))), |ui| {
-            ui.horizontal_centered(|ui| self.top_bar(ui, platform));
+        let inner = if phone { egui::vec2(8.0, 3.0) } else { egui::vec2(20.0, 12.0) };
+        ui.scope_builder(egui::UiBuilder::new().max_rect(bar.shrink2(inner)), |ui| {
+            ui.horizontal_centered(|ui| self.top_bar(ui, platform, phone));
         });
         // The page sits on a big frosted pane over the sky, like a window
         // on a desktop, with the sky and hills showing round its edges.
         let pane = egui::Rect::from_min_max(egui::pos2(screen.min.x, bar.max.y), screen.max)
-            .shrink2(egui::vec2(22.0, 18.0));
+            .shrink2(if phone { egui::vec2(6.0, 6.0) } else { egui::vec2(22.0, 18.0) });
         theme::frosted_pane(ui.painter(), pane);
-        ui.painter().text(
-            screen.right_bottom() - egui::vec2(10.0, 3.0),
-            egui::Align2::RIGHT_BOTTOM,
-            crate::update::tag(),
-            egui::FontId::proportional(12.0),
-            theme::MUTED,
-        );
-        let page = pane.shrink2(egui::vec2(22.0, 18.0));
+        if !phone {
+            ui.painter().text(
+                screen.right_bottom() - egui::vec2(10.0, 3.0),
+                egui::Align2::RIGHT_BOTTOM,
+                crate::update::tag(),
+                egui::FontId::proportional(12.0),
+                theme::MUTED,
+            );
+        }
+        let page = pane.shrink2(if phone { egui::vec2(12.0, 8.0) } else { egui::vec2(22.0, 18.0) });
         let now = ui.input(|i| i.time);
         let since = match self.shown {
             Some((tab, since)) if tab == self.tab => since,
@@ -484,22 +491,25 @@ impl Menu {
     /// The top bar's contents: the mark, the tabs, the More menu, Search
     /// and who you play as. When the window is too narrow for every tab's
     /// name, the tabs show only their icons (with the name on hover).
-    fn top_bar(&mut self, ui: &mut egui::Ui, platform: &mut Platform) {
+    fn top_bar(&mut self, ui: &mut egui::Ui, platform: &mut Platform, phone: bool) {
         if theme::logo_button(ui, self.tab == Tab::Home)
             .on_hover_text(format!("PlayLibre {}", crate::update::tag()))
             .clicked()
         {
             self.go(Tab::Home);
         }
-        ui.add_space(10.0);
+        ui.add_space(if phone { 4.0 } else { 10.0 });
         ui.spacing_mut().item_spacing.x = 2.0;
-        let chip = player_chip_width(ui, &self.name);
+        let chip = player_chip_width(ui, &self.name, phone);
         let credits = platform.balance();
-        let right = chip
-            + 260.0
-            + 24.0
-            + if credits.is_some() { 80.0 } else { 0.0 }
-            + if crate::update::ready().is_some() { 110.0 } else { 0.0 };
+        let right = if phone {
+            chip + 3.0 * 48.0 + 16.0 + if credits.is_some() { 80.0 } else { 0.0 }
+        } else {
+            chip + 260.0
+                + 24.0
+                + if credits.is_some() { 80.0 } else { 0.0 }
+                + if crate::update::ready().is_some() { 110.0 } else { 0.0 }
+        };
         let wide: f32 =
             TOP_TABS.iter().map(|(_, glyph, label)| theme::tab_width(ui, glyph, t(label))).sum::<f32>()
                 + 2.0 * TOP_TABS.len() as f32;
@@ -532,8 +542,32 @@ impl Menu {
         }
         // Search and who you play as, at the right of the bar.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            if player_chip(ui, &self.name, platform.account.is_some()).clicked() {
+            ui.spacing_mut().item_spacing.x = if phone { 4.0 } else { 8.0 };
+            if phone {
+                let more = theme::tab(ui, theme::icon::LIST, "", false).on_hover_text(t("More"));
+                egui::Popup::menu(&more).show(|ui| {
+                    ui.set_min_width(200.0);
+                    if let Some(version) = crate::update::ready() {
+                        let label = format!("{}  {}", theme::icon::ARROW_CIRCLE_UP, t("Update"));
+                        if ui
+                            .button(label)
+                            .on_hover_text(tf("Restart with {version}", &[("version", &version)]))
+                            .clicked()
+                            && let Err(why) = crate::update::restart()
+                        {
+                            self.error = Some(why);
+                        }
+                    }
+                    if ui.button(format!("{}  {}", theme::icon::HEART, t("Donate"))).clicked() {
+                        ui.close();
+                        crate::report::open_url(DONATE);
+                    }
+                    ui.menu_button(format!("{}  {}", theme::icon::GLOBE, t("Language")), |ui| {
+                        languages(ui);
+                    });
+                });
+            }
+            if player_chip(ui, &self.name, platform.account.is_some(), phone).clicked() {
                 self.go(Tab::Profile);
             }
             // The account's Credits, by its name.
@@ -551,36 +585,24 @@ impl Menu {
                     self.go(Tab::Messages);
                 }
             }
-            if theme::block_button(ui, theme::Kind::Donate, theme::icon::HEART, t("Donate"), 28.0)
-                .on_hover_text(t("PlayLibre is open source. Donations are highly appreciated."))
-                .clicked()
-            {
-                crate::report::open_url(DONATE);
-            }
-            let globe = theme::tab(ui, theme::icon::GLOBE, "", false).on_hover_text(t("Language"));
-            egui::Popup::menu(&globe).show(|ui| {
-                ui.set_min_width(180.0);
-                for language in crate::i18n::Language::ALL {
-                    let missing_font =
-                        language == crate::i18n::Language::Chinese && !theme::has_chinese_font();
-                    let item = ui
-                        .add_enabled(
-                            !missing_font,
-                            egui::Button::selectable(crate::i18n::current() == language, language.name()),
-                        )
-                        .on_disabled_hover_text(t("This computer has no font with Chinese characters."));
-                    if item.clicked() {
-                        crate::i18n::set(language, true);
-                        theme::reload_fonts(ui.ctx());
-                        ui.close();
-                    }
+            if !phone {
+                if theme::block_button(ui, theme::Kind::Donate, theme::icon::HEART, t("Donate"), 28.0)
+                    .on_hover_text(t("PlayLibre is open source. Donations are highly appreciated."))
+                    .clicked()
+                {
+                    crate::report::open_url(DONATE);
                 }
-            });
+                let globe = theme::tab(ui, theme::icon::GLOBE, "", false).on_hover_text(t("Language"));
+                egui::Popup::menu(&globe).show(|ui| {
+                    ui.set_min_width(180.0);
+                    languages(ui);
+                });
+            }
             let search = theme::tab(ui, theme::icon::MAGNIFYING_GLASS, "", self.tab == Tab::Search);
             if search.on_hover_text(t("Search for players and games")).clicked() {
                 self.go(Tab::Search);
             }
-            if let Some(version) = crate::update::ready() {
+            if !phone && let Some(version) = crate::update::ready() {
                 let update = theme::tab(ui, theme::icon::ARROW_CIRCLE_UP, t("Update"), false);
                 if update.on_hover_text(tf("Restart with {version}", &[("version", &version)])).clicked()
                     && let Err(why) = crate::update::restart()
@@ -816,18 +838,42 @@ const TOP_TABS: [(Tab, &str, &str); 5] = [
 const CHIP_CAPS: &str = "Playing as";
 const DONATE: &str = "https://playlibre.net/donate";
 
-fn player_chip_width(ui: &egui::Ui, name: &str) -> f32 {
-    let caps =
-        ui.painter().layout_no_wrap(t(CHIP_CAPS).into(), theme::display(12.0), theme::HEADING).size().x;
+fn languages(ui: &mut egui::Ui) {
+    for language in crate::i18n::Language::ALL {
+        let missing_font = language == crate::i18n::Language::Chinese && !theme::has_chinese_font();
+        let item = ui
+            .add_enabled(
+                !missing_font,
+                egui::Button::selectable(crate::i18n::current() == language, language.name()),
+            )
+            .on_disabled_hover_text(t("This computer has no font with Chinese characters."));
+        if item.clicked() {
+            crate::i18n::set(language, true);
+            theme::reload_fonts(ui.ctx());
+            ui.close();
+        }
+    }
+}
+
+fn chip_name_width(phone: bool) -> f32 {
+    if phone { 90.0 } else { 160.0 }
+}
+
+fn player_chip_width(ui: &egui::Ui, name: &str, phone: bool) -> f32 {
+    let caps = if phone {
+        -8.0
+    } else {
+        ui.painter().layout_no_wrap(t(CHIP_CAPS).into(), theme::display(12.0), theme::HEADING).size().x
+    };
     let shown = ui.painter().layout_no_wrap(name.to_owned(), theme::display(15.0), theme::TEXT).size().x;
-    caps + shown.min(160.0) + 34.0
+    caps + shown.min(chip_name_width(phone)) + 34.0
 }
 
 /// Who you play as, in a glass pill at the right of the top bar: your
 /// account's name, which can't be typed over. Clicking it opens Avatar,
 /// where the account is.
-fn player_chip(ui: &mut egui::Ui, name: &str, signed_in: bool) -> egui::Response {
-    let size = egui::vec2(player_chip_width(ui, name), 36.0);
+fn player_chip(ui: &mut egui::Ui, name: &str, signed_in: bool, phone: bool) -> egui::Response {
+    let size = egui::vec2(player_chip_width(ui, name, phone), 36.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     theme::name_for_screen_readers(
         ui,
@@ -843,18 +889,18 @@ fn player_chip(ui: &mut egui::Ui, name: &str, signed_in: bool) -> egui::Response
         Color32::from_rgba_unmultiplied(235, 247, 255, 150)
     };
     theme::glass(painter, rect, 18.0, tint);
-    let caps = painter.layout_no_wrap(t(CHIP_CAPS).into(), theme::display(12.0), theme::HEADING);
     let x = rect.min.x + 14.0;
-    painter.galley(egui::pos2(x, rect.center().y - caps.size().y / 2.0), caps.clone(), theme::HEADING);
+    let mut name_x = x;
+    if !phone {
+        let caps = painter.layout_no_wrap(t(CHIP_CAPS).into(), theme::display(12.0), theme::HEADING);
+        name_x += caps.size().x + 8.0;
+        painter.galley(egui::pos2(x, rect.center().y - caps.size().y / 2.0), caps, theme::HEADING);
+    }
     let mut job =
         egui::text::LayoutJob::simple_singleline(name.to_owned(), theme::display(15.0), theme::TEXT);
-    job.wrap = egui::text::TextWrapping::truncate_at_width(160.0);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(chip_name_width(phone));
     let shown = painter.layout_job(job);
-    painter.galley(
-        egui::pos2(x + caps.size().x + 8.0, rect.center().y - shown.size().y / 2.0),
-        shown,
-        theme::TEXT,
-    );
+    painter.galley(egui::pos2(name_x, rect.center().y - shown.size().y / 2.0), shown, theme::TEXT);
     let hint = if signed_in {
         t("Your account's name. Change it on the Profile tab.")
     } else {

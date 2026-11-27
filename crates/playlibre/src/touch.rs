@@ -402,6 +402,8 @@ impl TouchPad {
             ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("touch controls")));
         // Faint while resting, clearer under a thumb.
         let (ring, fill) = if held { (150, 50) } else { (90, 25) };
+        let edge = Stroke::new(1.5, Color32::from_black_alpha(60));
+        painter.circle_stroke(base, r + 2.0, edge);
         painter.circle(
             base,
             r,
@@ -410,19 +412,24 @@ impl TouchPad {
         );
         painter.circle_filled(knob, r * 0.45, Color32::from_white_alpha(if held { 190 } else { 120 }));
         let pressed = self.jump();
+        painter.circle_stroke(jump, jr + 2.0, edge);
         painter.circle(
             jump,
             jr,
             Color32::from_white_alpha(if pressed { 120 } else { 35 }),
             Stroke::new(2.5, Color32::from_white_alpha(140)),
         );
-        painter.text(
-            jump,
-            egui::Align2::CENTER_CENTER,
-            crate::theme::icon::ARROW_FAT_UP,
-            egui::FontId::proportional(jr * 0.75),
-            Color32::WHITE,
-        );
+        for (at, colour) in
+            [(jump + Vec2::new(0.0, 1.5), Color32::from_black_alpha(90)), (jump, Color32::WHITE)]
+        {
+            painter.text(
+                at,
+                egui::Align2::CENTER_CENTER,
+                crate::theme::icon::ARROW_FAT_UP,
+                egui::FontId::proportional(jr * 0.75),
+                colour,
+            );
+        }
         // The game's action buttons, lit while held.
         let ar = action_radius(view);
         for button in &self.actions {
@@ -434,6 +441,7 @@ impl TouchPad {
                     ui.allocate_rect(rect, egui::Sense::click_and_drag());
                 });
             let pressed = self.held.values().any(|n| *n == button.name);
+            painter.circle_stroke(button.center, ar + 2.0, edge);
             painter.circle(
                 button.center,
                 ar,

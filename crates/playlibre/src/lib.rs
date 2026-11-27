@@ -205,6 +205,7 @@ pub struct Editor {
     /// Keep the toolbox, explorer and properties open while playing (the
     /// default, as in other editors); off, the game gets the whole width.
     pub panels_in_play: bool,
+    pub players_shown: bool,
     /// What's typed in the toolbox's search box.
     pub toolbox_search: String,
     /// The Output, saved to a file as it grows.
@@ -296,6 +297,7 @@ impl Default for Editor {
             show_output: true,
             show_toolbox: true,
             panels_in_play: true,
+            players_shown: true,
             graphics_adapter: String::new(),
             toolbox_search: String::new(),
             log_file: Default::default(),
@@ -415,6 +417,7 @@ pub fn run() {
         ..Editor::default()
     };
     editor.touch.seen = MOBILE;
+    editor.players_shown = !MOBILE;
     if !smoke {
         stats::start(editor.crash.as_deref());
     }

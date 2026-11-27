@@ -222,6 +222,60 @@ pub fn install(ctx: &egui::Context) -> bool {
 
 fn fingers(ctx: &egui::Context) {
     ctx.options_mut(|o| o.input_options.max_click_dist = 16.0);
+    ctx.all_styles_mut(|style| {
+        let s = &mut style.spacing;
+        s.item_spacing = Vec2::new(10.0, 8.0);
+        s.button_padding = Vec2::new(14.0, 8.0);
+        s.interact_size = Vec2::new(44.0, 36.0);
+        s.icon_width = 20.0;
+        s.icon_width_inner = 11.0;
+        s.icon_spacing = 8.0;
+        s.combo_height = 320.0;
+        s.slider_width = 160.0;
+        s.scroll.bar_width = 12.0;
+        s.menu_margin = egui::Margin::same(8);
+        style.text_styles.insert(TextStyle::Body, FontId::proportional(15.0));
+        style.text_styles.insert(TextStyle::Button, FontId::proportional(15.0));
+        style.text_styles.insert(TextStyle::Small, FontId::proportional(12.5));
+    });
+}
+
+pub fn is_phone(screen: Rect) -> bool {
+    screen.height() < 500.0 || screen.width() < 700.0
+}
+
+pub fn hud_size(view: Rect) -> f32 {
+    (view.width().min(view.height()) / 9.0).clamp(40.0, 52.0)
+}
+
+pub fn hud_back(painter: &egui::Painter, rect: Rect) {
+    let radius = (rect.height() / 2.0).min(255.0) as u8;
+    painter.rect(
+        rect,
+        CornerRadius::same(radius),
+        Color32::from_black_alpha(120),
+        Stroke::new(1.0, Color32::from_white_alpha(40)),
+        egui::StrokeKind::Inside,
+    );
+}
+
+pub fn hud_button(ui: &mut egui::Ui, glyph: &str, name: &str, on: bool, size: f32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    name_for_screen_readers(ui, &response, egui::WidgetType::Button, name, Some(on));
+    let painter = ui.painter();
+    let lit = response.is_pointer_button_down_on() || on;
+    if lit || response.hovered() {
+        let alpha = if lit { 70 } else { 35 };
+        painter.circle_filled(rect.center(), size * 0.44, Color32::from_white_alpha(alpha));
+    }
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        glyph,
+        FontId::proportional(size * 0.5),
+        Color32::WHITE,
+    );
+    response.on_hover_text(name).on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 fn style(style: &mut egui::Style) {
@@ -910,11 +964,28 @@ fn glossy(
 /// A glossy, rounded button, glowing under the pointer. `glyph` is an
 /// icon from [`icon`] (or "").
 pub fn block_button(ui: &mut egui::Ui, kind: Kind, glyph: &str, label: &str, height: f32) -> Response {
+    block_button_sized(ui, kind, glyph, label, height, None)
+}
+
+pub fn wide_button(ui: &mut egui::Ui, kind: Kind, glyph: &str, label: &str, height: f32) -> Response {
+    let width = ui.available_width();
+    block_button_sized(ui, kind, glyph, label, height, Some(width))
+}
+
+fn block_button_sized(
+    ui: &mut egui::Ui,
+    kind: Kind,
+    glyph: &str,
+    label: &str,
+    height: f32,
+    width: Option<f32>,
+) -> Response {
     let size = (height * 0.4).max(13.0);
     let font = display(size);
     let text = if glyph.is_empty() { label.to_owned() } else { format!("{glyph}  {label}") };
-    let width = ui.painter().layout_no_wrap(text.clone(), font.clone(), Color32::WHITE).size().x
+    let fits = ui.painter().layout_no_wrap(text.clone(), font.clone(), Color32::WHITE).size().x
         + height.max(24.0) * 0.95;
+    let width = width.map_or(fits, |w| w.max(fits));
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height + EDGE), Sense::click());
     name_for_screen_readers(ui, &response, egui::WidgetType::Button, label, None);
     let enabled = ui.is_enabled();

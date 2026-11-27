@@ -5,6 +5,12 @@ its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 
 ## Unreleased
 
+- **Phones:** the home screen has a compact top bar on small screens, with
+  Donate and Language in a menu. In games, a menu button and a player list
+  button sit at the top left, the player list starts hidden, the pause menu
+  has bigger buttons and fits short screens, and buttons and text are
+  bigger to tap.
+
 - **Loading screen lines:** the turning cubes on the loading screen no
   longer flash thin lines across the screen. When a cube face turned
   almost side-on, the corners of its outline were drawn as long needles;
