@@ -583,6 +583,49 @@ fn a_joined_computer_cannot_teleport_its_character_across_the_map() {
 }
 
 #[test]
+fn a_local_script_can_move_its_own_character_anywhere() {
+    let mut tree = game();
+    block(&mut tree, "Far", Vec3::new(3000.0, 49.5, 0.0), Vec3::new(40.0, 1.0, 40.0));
+    let scripts = tree.starter_scripts(ClassKind::StarterPlayerScripts).unwrap();
+    code(
+        &mut tree,
+        ClassKind::LocalScript,
+        scripts,
+        "Cutscene",
+        r#"
+        local char = game.Players.LocalPlayer.Character or game.Players.LocalPlayer.CharacterAdded:Wait()
+        local hrp = char:WaitForChild("HumanoidRootPart")
+        task.wait(1)
+        char:PivotTo(hrp.CFrame - Vector3.new(0, 120, 0))
+        hrp.Anchored = true
+        task.wait(0.5)
+        char:PivotTo(CFrame.new(3000, 53, 0))
+        task.wait(0.2)
+        hrp.Anchored = false
+        "#,
+    );
+    let tree = Rc::new(RefCell::new(tree));
+    let mut host = PlaySession::host(tree, 0, None, true).unwrap();
+    let port = host.host_address().unwrap().port();
+    let mut guest =
+        PlaySession::join(Rc::new(RefCell::new(InstanceTree::new())), &format!("127.0.0.1:{port}"), "Bea")
+            .unwrap();
+    until(&mut host, &mut guest, CharacterInput::default(), |h, _| {
+        host_sees(h).is_some_and(|p| p.x > 2900.0)
+    });
+    for _ in 0..120 {
+        host.step(DT, CharacterInput::default());
+        guest.step(DT, CharacterInput::default());
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let root = guest.character().unwrap().root;
+    let at = guest.runtime().tree().borrow().get_vec3(root, Property::Position).unwrap();
+    assert!(at.x > 2900.0 && at.y > 45.0, "stayed where the script put them: {at:?}");
+    let on_host = host_sees(&host).unwrap();
+    assert!(on_host.x > 2900.0 && on_host.y > 45.0, "the host has them there too: {on_host:?}");
+}
+
+#[test]
 fn two_players_on_one_spawn_stay_on_the_ground() {
     // Before, the joined player stood on the host's player, the host's
     // player was pushed up out of them, and the two climbed into the sky.

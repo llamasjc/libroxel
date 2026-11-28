@@ -503,6 +503,20 @@ impl ScriptRuntime {
         bindings::host(&self.lua).world.borrow_mut().teleports.local = join;
     }
 
+    pub fn watch_moves(&self, part: Option<InstanceId>) {
+        let host = bindings::host(&self.lua);
+        if host.watched.get().0 != part {
+            host.watched.set((part, false));
+        }
+    }
+
+    pub fn take_watched_moved(&self) -> bool {
+        let host = bindings::host(&self.lua);
+        let (part, moved) = host.watched.get();
+        host.watched.set((part, false));
+        moved
+    }
+
     /// Takes the teleports scripts asked for.
     pub fn take_teleports(&self) -> Vec<Teleport> {
         std::mem::take(&mut bindings::host(&self.lua).world.borrow_mut().teleports.queued)

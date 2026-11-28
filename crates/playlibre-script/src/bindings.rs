@@ -366,6 +366,7 @@ pub(crate) struct Host {
     next_tween: Cell<u64>,
     /// Keys and mouse buttons held down right now.
     pub(crate) inputs_down: RefCell<std::collections::HashSet<crate::UserInput>>,
+    pub(crate) watched: Cell<(Option<InstanceId>, bool)>,
     /// Saved data: store name, then key, then value.
     pub(crate) data: RefCell<crate::services::DataStores>,
     pub(crate) data_changed: Cell<bool>,
@@ -1202,8 +1203,17 @@ pub(crate) fn part_cframe(lua: &Lua, id: InstanceId) -> mlua::Result<CFrame> {
     Ok(CFrame::new(pos, Rotation::from_orientation(orientation)))
 }
 
+fn note_move(host: &Host, id: InstanceId) {
+    if let (Some(watched), false) = host.watched.get()
+        && watched == id
+    {
+        host.watched.set((Some(watched), true));
+    }
+}
+
 pub(crate) fn set_part_cframe(lua: &Lua, id: InstanceId, cf: CFrame) -> mlua::Result<()> {
     let host = host(lua);
+    note_move(&host, id);
     let mut tree = host.tree.borrow_mut();
     tree.set(id, Property::Position, PropertyValue::Vec3(cf.pos)).map_err(tree_err)?;
     tree.set(id, Property::Orientation, PropertyValue::Vec3(cf.rot.to_orientation())).map_err(tree_err)
@@ -1948,6 +1958,9 @@ fn set_heard_now(
 ) -> mlua::Result<()> {
     let heard_now = is_value_object(class) && names::property_name(property) == "Value";
     let before = heard_now.then(|| host(lua).tree.borrow().get(id, property).ok()).flatten();
+    if matches!(property, Property::Position | Property::Orientation) {
+        note_move(&host(lua), id);
+    }
     host(lua).tree.borrow_mut().set(id, property, value).map_err(tree_err)?;
     if !heard_now || host(lua).tree.borrow().get(id, property).ok() == before {
         return Ok(());
@@ -2480,6 +2493,7 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
         tween_drops: Rc::new(RefCell::new(Vec::new())),
         next_tween: Cell::new(1),
         inputs_down: RefCell::new(Default::default()),
+        watched: Cell::new((None, false)),
         data: RefCell::new(Default::default()),
         animations: RefCell::new(Default::default()),
         data_changed: Cell::new(false),

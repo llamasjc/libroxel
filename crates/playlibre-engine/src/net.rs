@@ -3314,12 +3314,13 @@ impl PlaySession {
             let jump = t.get_number(c.humanoid, Property::JumpPower).unwrap_or(50.0) as f32;
             (from, MoveLimits::for_character(walk, jump))
         };
-        let through_wall = walls_between(&tree.borrow(), c.model, from, pos);
+        let warp = message.get("warp").and_then(Json::as_bool) == Some(true);
+        let through_wall = !warp && walls_between(&tree.borrow(), c.model, from, pos);
         let avatar = &mut self.avatars[index];
         let travel = avatar.travel.get_or_insert_with(|| limits.allowance(now));
         travel.per_second = limits.speed;
         travel.most = limits.burst;
-        if !travel.spend(limits.distance(from, pos), now) || through_wall {
+        if (!warp && !travel.spend(limits.distance(from, pos), now)) || through_wall {
             avatar.teleports += 1;
             avatar.moved_to = Some(from);
             let facing = tree.borrow().get_vec3(c.root, Property::Orientation).unwrap_or_default().y;
@@ -3376,6 +3377,8 @@ impl PlaySession {
         };
         joined.own_model = Some(c.model);
         let mut input = input;
+        self.runtime.watch_moves(Some(c.root));
+        let warped = self.runtime.take_watched_moved();
         joined.owning = {
             let mut t = tree.borrow_mut();
             let owning = !c.is_dead(&t) && t.get_ref(c.humanoid, Property::SeatPart).is_none();
@@ -3427,6 +3430,7 @@ impl PlaySession {
             "pos": [pos.x, pos.y, pos.z],
             "yaw": yaw,
             "vel": [v.x, v.y, v.z],
+            "warp": warped,
         }));
     }
 
