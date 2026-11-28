@@ -1255,7 +1255,6 @@ function game() {
         el('div', { class: 'stats' }, stats.map(([v, l]) => el('div', {}, el('b', {}, v), el('span', { class: 'caps' }, l)))),
         el('div', { class: 'actions' },
           play,
-          hostable && el('button', { class: 'btn big', title: 'Host your own server of this game; it shows on this list', onclick: () => launch(appLink('host', entry.key), `Starting a new server of ${entry.title}.`) }, icon(ICON.broadcast), 'New server'),
           entry.game && followButton('game', entry.key, entry.title)),
         el('div', { class: 'hint' }, hint))),
   ];
@@ -1286,7 +1285,7 @@ function game() {
   const withFriends = shown.filter((s) => friendsIn(s.server_id).length);
   const others = shown.filter((s) => !friendsIn(s.server_id).length);
   if (!shown.length) {
-    out.push(el('div', { class: 'empty' }, entry.servers.length ? 'Every server is full. Press New server to start one.' : hostable ? 'No one is playing right now. Press Play to start a server friends can join.' : 'No servers right now.'));
+    out.push(el('div', { class: 'empty' }, entry.servers.length ? 'Every server is full.' : hostable ? 'No one is playing right now. Press Play to start a server friends can join.' : 'No servers right now.'));
   }
   if (withFriends.length) {
     out.push(el('div', { class: 'caps group' }, 'Servers your friends are in'), withFriends.map((s) => serverRow(s, entry)));

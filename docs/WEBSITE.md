@@ -52,7 +52,6 @@ Play and Join open a `playlibre://` link:
 | --- | --- |
 | `playlibre://join/<join code>` | Joins that server |
 | `playlibre://play/<game id>` | Opens the game's page, then joins its best server or starts one |
-| `playlibre://host/<game id>` | Starts a new server of the game |
 
 Game ids are `starter:<name>` for the starter games, or a published game's
 id; the part after the action is URL-encoded. The app registers itself for

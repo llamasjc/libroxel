@@ -3,8 +3,7 @@
 //!
 //! - `playlibre://join/<code>` joins the server with that join code;
 //! - `playlibre://play/<game>` plays a game by its id (`starter:<name>` or a
-//!   published game's id): it joins the best server, or starts one;
-//! - `playlibre://host/<game>` starts a new server of it.
+//!   published game's id): it joins the best server, or starts one.
 //!
 //! The parts after the action are percent-encoded. The app registers itself
 //! for these links each time it starts (see [`register`]), so a copy that
@@ -17,7 +16,6 @@ use std::time::Instant;
 pub enum Launch {
     Join(String),
     Play(String),
-    Host(String),
     /// A private server: the game and the server's code.
     Private {
         game: String,
@@ -65,7 +63,6 @@ pub fn parse(link: &str) -> Option<Launch> {
     match action.to_ascii_lowercase().as_str() {
         "join" => Some(Launch::Join(value.to_owned())),
         "play" => Some(Launch::Play(value.to_owned())),
-        "host" => Some(Launch::Host(value.to_owned())),
         "private" => {
             let (game, code) = value.rsplit_once(':')?;
             Some(Launch::Private { game: game.to_owned(), code: code.to_owned() })
@@ -193,7 +190,6 @@ mod tests {
             parse("PLAYLIBRE://Play/starter%3AKart%20race"),
             Some(Launch::Play("starter:Kart race".into()))
         );
-        assert_eq!(parse("playlibre://host/x7k2q"), Some(Launch::Host("x7k2q".into())));
         assert_eq!(
             parse("playlibre://private/x7k2q%3Aabc"),
             Some(Launch::Private { game: "x7k2q".into(), code: "abc".into() })

@@ -132,8 +132,7 @@ its servers for that game that still has room, or starts a new one
 (`playlibre server --game <id>`, the app with no window) and the app waits a
 few seconds for it. When a server fills up the Hub starts the next one early,
 and each server stops on its own once nobody has been in it for two minutes.
-Players join friends' servers first, and anyone can still press **Host it
-myself** to run a server on their own computer.
+Players join friends' servers first.
 
 The setup script turns this on: it installs the app as
 `/usr/local/bin/playlibre` (built from source, or unpacked from the release),

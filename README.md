@@ -277,7 +277,7 @@ The first build compiles Bevy and takes a while. After that it is quick.
   with how many people play it right now. Click a game for its page: a big
   **Play** button that drops you into the best server (one with friends in
   it first, then the busiest with room, or starts a new one if none are
-  running), **New server** to host your own, and the list of its servers,
+  running), and the list of its servers,
   each with its players, its ping measured from your computer and a Join
   button, with the servers your friends are in on top. **Friends** finds
   people by name, sends and answers friend requests, and lists every

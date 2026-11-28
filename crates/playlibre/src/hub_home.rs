@@ -89,16 +89,6 @@ impl Entry {
     fn hostable(&self) -> bool {
         !matches!(self.source, Source::Live)
     }
-
-    fn host_here(&self, platform: &Platform) -> bool {
-        match &self.source {
-            Source::Published(game) if game.closed => {
-                let me = platform.account.as_ref().map(|a| a.player_id.as_str());
-                me.is_some() && game.author_id.as_deref() == me
-            }
-            _ => self.hostable(),
-        }
-    }
 }
 
 /// Every game worth showing: the starter games, the published ones and any
@@ -655,7 +645,7 @@ fn follow_link(state: &mut HomeState, platform: &mut Platform, list: &[Entry], n
     }
     let key = match &pending.launch {
         Launch::Join(code) => return Some(Pick::Join { code: code.clone(), name: name.to_owned() }),
-        Launch::Play(key) | Launch::Host(key) | Launch::Private { game: key, .. } => key.clone(),
+        Launch::Play(key) | Launch::Private { game: key, .. } => key.clone(),
     };
     let Some(entry) = list.iter().find(|e| e.key == key).filter(|_| platform.listed()) else {
         if pending.since.elapsed() < std::time::Duration::from_secs(15) {
@@ -672,10 +662,7 @@ fn follow_link(state: &mut HomeState, platform: &mut Platform, list: &[Entry], n
         platform.find_server_with(game, &entry.title, Some(code.clone()));
         return None;
     }
-    match pending.launch {
-        Launch::Host(_) if entry.host_here(platform) => host(entry, platform),
-        _ => press_play(state, platform, entry, name),
-    }
+    press_play(state, platform, entry, name)
 }
 
 /// Starts a new server of `entry` on this computer, with friends welcome.
@@ -1076,16 +1063,6 @@ fn game_page(
                 if play.on_hover_text(hint).clicked() {
                     pick = press_play(state, platform, entry, name);
                 }
-                ui.add_space(10.0);
-                if entry.host_here(platform)
-                    && theme::block_button(ui, theme::Kind::Plain, icon::BROADCAST, t("Host it myself"), 52.0)
-                        .on_hover_text(t(
-                            "Run a server of this game on your own computer instead; it shows on this list",
-                        ))
-                        .clicked()
-                {
-                    pick = host(entry, platform);
-                }
             });
             if platform.finding_server().is_some() && state.finding_for.as_deref() == Some(entry.key.as_str())
             {
@@ -1099,14 +1076,7 @@ fn game_page(
                 });
             } else if let Some(why) = &platform.find_error {
                 ui.horizontal_wrapped(|ui| {
-                    ui.colored_label(
-                        theme::RED,
-                        if entry.host_here(platform) {
-                            tf("{why} You can also host it yourself.", &[("why", &why)])
-                        } else {
-                            why.clone()
-                        },
-                    );
+                    ui.colored_label(theme::RED, why.clone());
                     crate::report::button(ui, why);
                 });
             }
@@ -1184,7 +1154,7 @@ fn game_page(
             ui.set_min_width(ui.available_width());
             ui.label(RichText::new(t("No servers are running this game right now.")).color(theme::TEXT));
             let more = if entry.hostable() {
-                t("Press New server to start one; it shows up here for everyone.")
+                t("Press Play to start one; it shows up here for everyone.")
             } else {
                 t("Servers show up here as soon as someone hosts it.")
             };
