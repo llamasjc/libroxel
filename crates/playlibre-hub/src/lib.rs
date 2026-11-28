@@ -924,6 +924,32 @@ fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
 
+static HUB_OFFSET_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// Now in milliseconds by the Hub's clock, once a Hub has answered.
+pub fn hub_now_ms() -> i64 {
+    social::now_ms() + HUB_OFFSET_MS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn note_hub_date(date: &str) {
+    let Ok(hub) = httpdate::parse_http_date(date) else { return };
+    let hub = hub.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64) + 500;
+    let offset = hub - social::now_ms();
+    let offset = if offset.abs() > 5 * 60 * 1000 { offset } else { 0 };
+    HUB_OFFSET_MS.store(offset, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn watch_hub_clock(
+    request: ureq::http::Request<ureq::SendBody>,
+    next: ureq::middleware::MiddlewareNext,
+) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+    let response = next.handle(request)?;
+    if let Some(date) = response.headers().get("date").and_then(|d| d.to_str().ok()) {
+        note_hub_date(date);
+    }
+    Ok(response)
+}
+
 fn clip(text: &str) -> String {
     text.trim().chars().take(MAX_TEXT).collect()
 }
@@ -1276,7 +1302,8 @@ pub fn router_with(db: Connection, options: HubOptions) -> Router {
                     axum::http::Method::POST,
                     axum::http::Method::DELETE,
                 ])
-                .allow_headers([axum::http::header::CONTENT_TYPE]),
+                .allow_headers([axum::http::header::CONTENT_TYPE])
+                .expose_headers([axum::http::header::DATE]),
         )
         .with_state(hub)
 }
@@ -2554,7 +2581,8 @@ impl HubClient {
         let agent = |timeout: u64| {
             let mut config = ureq::Agent::config_builder()
                 .timeout_global(Some(Duration::from_secs(timeout)))
-                .http_status_as_error(true);
+                .http_status_as_error(true)
+                .middleware(watch_hub_clock);
             if local {
                 // A Hub on this computer is never behind a proxy.
                 config = config.proxy(None);
@@ -2774,7 +2802,7 @@ impl HubClient {
         device: Option<&str>,
     ) -> Result<([u8; 32], String), String> {
         let salt = self.salt_for(name)?;
-        let time = social::now_ms();
+        let time = hub_now_ms();
         let (mut attempt, seal) = password::sign_in_with(name.trim(), password, &salt, time)?;
         attempt.code = code.map(str::to_owned);
         attempt.device = device.map(str::to_owned);
@@ -2810,7 +2838,7 @@ impl HubClient {
     /// New recovery codes for an account with two-step sign-in.
     pub fn recovery_codes(&self, key: &[u8; 32]) -> Result<Vec<String>, String> {
         let player_id = player_id_of(key);
-        let time = social::now_ms();
+        let time = hub_now_ms();
         let ask = RecoveryAsk { signature: sign(key, &recovery_message(&player_id, time)), player_id, time };
         self.post_signed::<_, RecoveryCodes>("/accounts/recovery-codes", &ask).map(|r| r.codes)
     }
@@ -2818,7 +2846,7 @@ impl HubClient {
     /// Names this device in the account's list, giving back the session.
     pub fn start_session(&self, key: &[u8; 32], device: &str) -> Result<String, String> {
         let player_id = player_id_of(key);
-        let time = social::now_ms();
+        let time = hub_now_ms();
         let start = SessionStart {
             signature: sign(key, &session_message(&player_id, device, time)),
             player_id,
@@ -2844,7 +2872,7 @@ impl HubClient {
         device: Option<&str>,
     ) -> Result<([u8; 32], String), String> {
         let key = password::new_key();
-        let password = seal_password(&key, new_password, social::now_ms() / 1000)?;
+        let password = seal_password(&key, new_password, hub_now_ms() / 1000)?;
         let reset = ResetFinish {
             name: name.trim().to_owned(),
             code: code.trim().to_owned(),
@@ -2869,9 +2897,9 @@ impl HubClient {
         let salt = self.salt_for(name)?;
         let login = password::login_key(password, &salt)?;
         let new = password::new_key();
-        let new_password = seal_password(&new, password, social::now_ms() / 1000)?;
+        let new_password = seal_password(&new, password, hub_now_ms() / 1000)?;
         let player_id = player_id_of(key);
-        let time = social::now_ms();
+        let time = hub_now_ms();
         let message = sign_out_message(&player_id, &new_password, time);
         let out = SignOutEverywhere {
             signature: sign(key, &message),

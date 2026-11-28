@@ -117,9 +117,7 @@ pub struct Social {
 impl Social {
     /// A time to sign, in milliseconds, newer than the last.
     fn stamp(&mut self) -> i64 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as i64);
+        let now = playlibre_hub::hub_now_ms();
         self.clock = now.max(self.clock + 1);
         self.clock
     }

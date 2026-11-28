@@ -67,7 +67,7 @@ fn take<T>(slot: &Slot<T>) -> Option<Result<T, String>> {
 }
 
 fn now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+    playlibre_hub::hub_now_ms() / 1000
 }
 
 impl Market {

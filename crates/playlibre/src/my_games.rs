@@ -63,7 +63,7 @@ pub struct MyGames {
 }
 
 fn now_ms() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+    playlibre_hub::hub_now_ms()
 }
 
 impl MyGames {

@@ -638,9 +638,7 @@ impl Platform {
         std::thread::spawn(move || {
             let result = crate::identity().and_then(|me| {
                 let id = me.player_id();
-                let time = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_millis() as i64);
+                let time = playlibre_hub::hub_now_ms();
                 client.my_games(&id, time, &me.sign(&playlibre_hub::creator_message(&id, time)))
             });
             *out.lock().unwrap() = Some(result);
@@ -745,9 +743,7 @@ impl Platform {
         std::thread::spawn(move || {
             let result = crate::identity().and_then(|me| {
                 let reporter_id = me.player_id();
-                let time = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_secs() as i64);
+                let time = playlibre_hub::hub_now_ms() / 1000;
                 let message =
                     playlibre_hub::report_message(&reporter_id, kind, &target, reason, &evidence, time);
                 let report = Report {
@@ -778,9 +774,7 @@ impl Platform {
         std::thread::spawn(move || {
             let result = crate::identity().and_then(|me| {
                 let creator_id = me.player_id();
-                let time = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_secs() as i64);
+                let time = playlibre_hub::hub_now_ms() / 1000;
                 let signature = me.sign(&playlibre_hub::item_message(&creator_id, &name, "hat", &data, time));
                 let item = NewItem { creator_id, name, kind: "hat".into(), data, time, signature };
                 let shared = client.share_item(&item)?;
@@ -796,9 +790,7 @@ impl Platform {
         }
         self.wallet_busy = true;
         self.wallet_fetched = Some(Instant::now());
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as i64);
+        let now = playlibre_hub::hub_now_ms();
         self.wallet_time = now.max(self.wallet_time + 1);
         let (time, client, out) = (self.wallet_time, self.client(), self.wallet_found.clone());
         std::thread::spawn(move || {
@@ -1102,9 +1094,7 @@ impl Platform {
     }
 
     fn signed_time(&mut self) -> i64 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs() as i64);
+        let now = playlibre_hub::hub_now_ms() / 1000;
         self.account_time = now.max(self.account_time + 1);
         self.account_time
     }
@@ -1234,9 +1224,7 @@ impl Platform {
         let out = self.password_done.clone();
         std::thread::spawn(move || {
             let result = crate::identity().and_then(|me| {
-                let time = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_secs() as i64);
+                let time = playlibre_hub::hub_now_ms() / 1000;
                 let set = playlibre_hub::seal_password(&me.secret_bytes(), &password, time)?;
                 client.set_password(&set)?;
                 crate::accounts::clear_weak_password();
@@ -2634,7 +2622,7 @@ fn device_name() -> String {
 }
 
 fn playlibre_hub_now_ms() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+    playlibre_hub::hub_now_ms()
 }
 
 /// "3 minutes ago" and the like.

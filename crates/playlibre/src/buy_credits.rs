@@ -116,9 +116,7 @@ impl BuyCredits {
             self.open = false;
         }
         if let Some(pack) = pick {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_millis() as i64);
+            let now = playlibre_hub::hub_now_ms();
             self.clock = now.max(self.clock + 1);
             self.error = None;
             let (time, hub) = (self.clock, hub.clone());

@@ -121,9 +121,7 @@ impl Platform {
             && let Some(i) = a.pending.iter().position(|p| p.3 <= Instant::now())
         {
             let (game, id, tries, _) = a.pending.remove(i);
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_millis() as i64);
+            let now = playlibre_hub::hub_now_ms();
             a.clock = now.max(a.clock + 1);
             let time = a.clock;
             a.sending = Some((game.clone(), id.clone(), tries));

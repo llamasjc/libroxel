@@ -16,6 +16,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 playlibre-avatar.workspace = true
 ureq = { version = "3", features = ["json"] }
+httpdate = "1"
 data-encoding = "2"
 getrandom = "0.3"
 iroh-base = { version = "1.4", default-features = false, features = ["key"] }

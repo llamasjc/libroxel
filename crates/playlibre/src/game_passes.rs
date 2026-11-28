@@ -494,9 +494,7 @@ impl Shop {
             self.offer = None;
             session.answer_host(offer.answer(false));
         } else if buy {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_millis() as i64);
+            let now = playlibre_hub::hub_now_ms();
             self.clock = now.max(self.clock + 1);
             let (time, hub, id, price) = (self.clock, hub.clone(), offer.pass_id, offer.price);
             let product = offer.product;

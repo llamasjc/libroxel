@@ -38,9 +38,7 @@ fn take<T>(slot: &Slot<T>) -> Option<Result<T, String>> {
 
 impl GameRatings {
     fn stamp(&mut self) -> i64 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as i64);
+        let now = playlibre_hub::hub_now_ms();
         self.clock = now.max(self.clock + 1);
         self.clock
     }
@@ -140,9 +138,7 @@ impl GameRatings {
         put(&self.reported, move || {
             let me = crate::identity()?;
             let reporter_id = me.player_id();
-            let time = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs() as i64);
+            let time = playlibre_hub::hub_now_ms() / 1000;
             let (target, reason) = (comment_id.to_string(), "Not OK".to_owned());
             let message = playlibre_hub::report_message(&reporter_id, "comment", &target, &reason, "", time);
             client.report(&Report {

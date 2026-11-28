@@ -120,7 +120,9 @@ function crypto_random(n) {
 }
 const rgb = ([r, g, b]) => `rgb(${r}, ${g}, ${b})`;
 const shade = (c, f) => c.map((v) => Math.min(255, Math.floor(v * f + 0.5)));
-const nowSecs = () => Math.floor(Date.now() / 1000);
+let hubOffset = 0;
+const hubNow = () => Date.now() + hubOffset;
+const nowSecs = () => Math.floor(hubNow() / 1000);
 
 /** FNV-1a over the UTF-8 bytes, as the app makes a game's picture. */
 function fnv(text) {
@@ -190,6 +192,11 @@ async function api(path, { method = 'GET', body, query } = {}) {
     remember(`${method} ${path} failed`);
     throw new HubError(0, 'Could not reach the Hub. Check your connection and try again.');
   }
+  const date = Date.parse(response.headers.get('Date') || '');
+  if (date) {
+    const offset = date + 500 - Date.now();
+    hubOffset = Math.abs(offset) > 5 * 60 * 1000 ? offset : 0;
+  }
   const text = await response.text();
   if (!response.ok) {
     remember(`${method} ${path} ${response.status}`);
@@ -249,7 +256,7 @@ async function stretchFor(name, password) {
 
 /** Signs in with keys from `stretchFor`; `code` is the two-step code, if any. */
 async function signIn(name, keys, code) {
-  const time = Date.now();
+  const time = hubNow();
   const signature = signText(keys.login, `libroxel sign in\n${name.toLowerCase()}\n${time}`);
   const signedIn = await api('/accounts/sign-in', { method: 'POST', body: { name, time, signature, code: code || null, device: deviceName() } });
   const sealed = unhex(signedIn.sealed);
@@ -437,7 +444,7 @@ async function signOutEverywhere(password, code) {
   const secret = random(32);
   const playerId = playerIdOf(secret);
   const set = await sealPassword(secret, playerId, password, nowSecs());
-  const time = Date.now();
+  const time = hubNow();
   const text = `libroxel sign out everywhere\n${session.playerId}\n${set.signature}\n${time}`;
   const done = await api('/accounts/sign-out-everywhere', {
     method: 'POST',
@@ -476,21 +483,21 @@ async function refresh() {
   }
   if (session) {
     try {
-      const time = Date.now();
+      const time = hubNow();
       const signature = signText(secretKey(), `libroxel friends\n${session.playerId}\n${time}`);
       data.friends = await api(`/friends/${session.playerId}`, { query: { time, signature } });
     } catch (e) {
       data.friends = data.friends || { friends: [], incoming: [], outgoing: [] };
     }
     try {
-      const time = Date.now();
+      const time = hubNow();
       const signature = signText(secretKey(), `libroxel party view\n${session.playerId}\n${time}`);
       data.party = await api(`/parties/${session.playerId}`, { query: { time, signature } });
     } catch {
       data.party = data.party || null;
     }
     try {
-      const time = Date.now();
+      const time = hubNow();
       const signature = signText(secretKey(), `libroxel for you\n${session.playerId}\n${time}`);
       data.forYou = await api(`/for-you/${session.playerId}`, { query: { time, signature } });
     } catch {
@@ -517,7 +524,7 @@ async function refresh() {
 
 async function loadNotifications() {
   try {
-    const time = Date.now();
+    const time = hubNow();
     const signature = signText(secretKey(), `playlibre notifications\n${session.playerId}\n${time}`);
     data.notes = await api(`/notifications/${session.playerId}`, { query: { time, signature } });
   } catch {
@@ -527,7 +534,7 @@ async function loadNotifications() {
 
 async function loadFollowing() {
   try {
-    const time = Date.now();
+    const time = hubNow();
     const signature = signText(secretKey(), `playlibre follows\n${session.playerId}\n${time}`);
     data.following = await api(`/follows/${session.playerId}`, { query: { time, signature } });
   } catch {
@@ -539,7 +546,7 @@ const isFollowing = (kind, target) => (kind === 'game' ? data.following?.games :
 
 async function changeFollow(kind, target, follow, name) {
   if (!session) { goTo('/sign-in'); return; }
-  const time = Math.max(Date.now(), lastSigned.follow + 1);
+  const time = Math.max(hubNow(), lastSigned.follow + 1);
   lastSigned.follow = time;
   const signature = signText(secretKey(), `playlibre follow\n${session.playerId}\n${kind}\n${target}\n${follow ? 1 : 0}\n${time}`);
   try {
@@ -560,7 +567,7 @@ function followButton(kind, target, name) {
 async function markNotificationsSeen() {
   const top = data.notes?.items?.[0];
   if (!top || !data.notes.unseen) return;
-  const time = Math.max(Date.now(), lastSigned.notes + 1);
+  const time = Math.max(hubNow(), lastSigned.notes + 1);
   lastSigned.notes = time;
   const up = top.notification_id;
   const signature = signText(secretKey(), `playlibre notifications seen\n${session.playerId}\n${up}\n${time}`);
@@ -1309,7 +1316,7 @@ function loadRatings(key) {
 }
 
 function signedTime() {
-  const time = Math.max(Date.now(), lastSigned.rate + 1);
+  const time = Math.max(hubNow(), lastSigned.rate + 1);
   lastSigned.rate = time;
   return time;
 }
@@ -1579,7 +1586,7 @@ function searchPage() {
 }
 
 async function changeParty(action, target, done) {
-  const time = Math.max(Date.now(), lastSigned.party + 1);
+  const time = Math.max(hubNow(), lastSigned.party + 1);
   lastSigned.party = time;
   const signature = signText(secretKey(), `libroxel party\n${session.playerId}\n${action}\n${target}\n${time}`);
   try {
@@ -1624,7 +1631,7 @@ function partyRows() {
 }
 
 async function changeFriend(otherId, action, done) {
-  const time = Math.max(Date.now(), lastSigned.friends + 1);
+  const time = Math.max(hubNow(), lastSigned.friends + 1);
   lastSigned.friends = time;
   const signature = signText(secretKey(), `libroxel friend\n${session.playerId}\n${otherId}\n${action}\n${time}`);
   try {
@@ -1706,7 +1713,7 @@ const MAX_MESSAGE = 500;
 const chats = { list: null, with: null, talk: [], draft: '', busy: false, error: null, reporting: null, at: 0, blocked: [], unread: false };
 
 function readSigned() {
-  const time = Date.now();
+  const time = hubNow();
   return { time, signature: signText(secretKey(), `libroxel messages\n${session.playerId}\n${time}`) };
 }
 
@@ -1742,7 +1749,7 @@ async function sendChat() {
   const text = chats.draft.trim();
   if (!text || chats.busy || !chats.with) return;
   const to = chats.with;
-  const time = Math.max(Date.now(), lastSigned.message + 1);
+  const time = Math.max(hubNow(), lastSigned.message + 1);
   lastSigned.message = time;
   const signature = signText(secretKey(), `libroxel message\n${session.playerId}\n${to}\n${text}\n${time}`);
   chats.busy = true;
@@ -1761,7 +1768,7 @@ async function sendChat() {
 }
 
 async function reportChat(message) {
-  const time = Date.now();
+  const time = hubNow();
   const reason = 'message';
   const signature = signText(secretKey(), `libroxel report\n${session.playerId}\nmessage\n${message.message_id}\n${reason}\n${time}`);
   try {
@@ -1775,7 +1782,7 @@ async function reportChat(message) {
 }
 
 async function readAllChats() {
-  const time = Math.max(Date.now(), lastSigned.read + 1);
+  const time = Math.max(hubNow(), lastSigned.read + 1);
   lastSigned.read = time;
   const signature = signText(secretKey(), `libroxel messages read\n${session.playerId}\n${time}`);
   try {
@@ -1788,7 +1795,7 @@ async function readAllChats() {
 }
 
 async function changeBlock(otherId, block, name) {
-  const time = Math.max(Date.now(), lastSigned.block + 1);
+  const time = Math.max(hubNow(), lastSigned.block + 1);
   lastSigned.block = time;
   const signature = signText(secretKey(), `libroxel block\n${session.playerId}\n${otherId}\n${block ? 1 : 0}\n${time}`);
   try {
@@ -1999,7 +2006,7 @@ const groupPages = new Map();
 let groupList = { text: '', results: null };
 
 async function changeGroup(action, groupId, fields, done) {
-  const time = Math.max(Date.now(), lastSigned.group + 1);
+  const time = Math.max(hubNow(), lastSigned.group + 1);
   lastSigned.group = time;
   const c = { player_id: session.playerId, action, group_id: groupId, name: '', tag: '', about: '', other_id: '', role: null, text: '', join: null, color: '', time, ...fields };
   c.signature = signText(secretKey(), `libroxel group\n${c.player_id}\n${c.action}\n${c.group_id}\n${c.name}\n${c.tag}\n${c.about}\n${c.other_id}\n${c.role || ''}\n${c.text}\n${c.join || ''}\n${c.color}\n${c.time}`);
@@ -2044,7 +2051,7 @@ function groupsPage() {
   const right = [];
   if (session && groupInvites === null) {
     groupInvites = [];
-    const time = Math.max(Date.now(), lastSigned.group + 1);
+    const time = Math.max(hubNow(), lastSigned.group + 1);
     lastSigned.group = time;
     const signature = signText(secretKey(), `libroxel group invites\n${session.playerId}\n${time}`);
     api(`/groups/invites/${session.playerId}`, { query: { time, signature } })
@@ -2089,7 +2096,7 @@ function groupPage() {
   if (!known) {
     let query;
     if (session) {
-      const time = Math.max(Date.now(), lastSigned.group + 1);
+      const time = Math.max(hubNow(), lastSigned.group + 1);
       lastSigned.group = time;
       query = { viewer: session.playerId, time, signature: signText(secretKey(), `libroxel group view\n${session.playerId}\n${id}\n${time}`) };
     }
@@ -2283,7 +2290,7 @@ function loadUsage() {
   const key = `${session.playerId}/${usage.days}`;
   if (usage.loading || usage.for === key) return;
   usage.loading = true;
-  const time = Date.now();
+  const time = hubNow();
   const signature = signText(secretKey(), `libroxel admin\n${session.playerId}\n${time}`);
   api(`/admin/${session.playerId}`, { query: { time, signature, days: usage.days } })
     .then((r) => { usage.result = r; usage.error = null; })
@@ -2334,7 +2341,7 @@ const PENALTIES = { ban: 'Ban', mute: 'Mute', warning: 'Warning' };
 function loadModeration() {
   mod.for = session.playerId;
   mod.at = Date.now();
-  const time = Date.now();
+  const time = hubNow();
   const signature = signText(secretKey(), `libroxel moderation\n${session.playerId}\n${time}`);
   api(`/moderation/${session.playerId}`, { query: { time, signature } })
     .then((b) => { mod.board = b; mod.error = null; })
@@ -2343,7 +2350,7 @@ function loadModeration() {
 }
 
 async function moderate(action, fields, done) {
-  const time = Math.max(Date.now(), lastSigned.moderate + 1);
+  const time = Math.max(hubNow(), lastSigned.moderate + 1);
   lastSigned.moderate = time;
   const c = { moderator_id: session.playerId, action, kind: '', target: '', player_id: '', reason: '', hours: 0, time, ...fields };
   c.signature = signText(secretKey(), `libroxel moderate\n${c.moderator_id}\n${c.action}\n${c.kind}\n${c.target}\n${c.player_id}\n${c.reason}\n${c.hours}\n${c.time}`);
@@ -2476,7 +2483,7 @@ function moderationPage() {
 const appealing = { key: null, text: '', busy: false };
 
 async function sendAppeal(kind, warningId) {
-  const time = Date.now();
+  const time = hubNow();
   const text = appealing.text.trim();
   const signature = signText(secretKey(), `libroxel appeal\n${session.playerId}\n${kind}\n${warningId}\n${text}\n${time}`);
   appealing.busy = true;
@@ -2531,7 +2538,7 @@ function bannedBar() {
 
 function warningsBar() {
   const seen = async () => {
-    const time = Date.now();
+    const time = hubNow();
     const signature = signText(secretKey(), `libroxel warnings seen\n${session.playerId}\n${time}`);
     try {
       await api('/accounts/warnings/seen', { method: 'POST', body: { player_id: session.playerId, time, signature } });
@@ -2551,7 +2558,7 @@ let draft = null;
 let walletInfo = null;
 
 function walletTime() {
-  const time = Math.max(Date.now(), lastSigned.wallet + 1);
+  const time = Math.max(hubNow(), lastSigned.wallet + 1);
   lastSigned.wallet = time;
   return time;
 }
@@ -2559,7 +2566,7 @@ function walletTime() {
 function loadWallet() {
   if (!session || (walletInfo && walletInfo.for === session.playerId)) return;
   walletInfo = { for: session.playerId, loading: true };
-  const time = Date.now();
+  const time = hubNow();
   const signature = signText(secretKey(), `libroxel wallet\n${session.playerId}\n${time}`);
   api(`/wallet/${session.playerId}`, { query: { time, signature } })
     .then((w) => { walletInfo = { for: session.playerId, ...w }; })
@@ -2908,7 +2915,7 @@ async function shareClothes() {
   const data = { color: f.color.match(/[0-9a-f]{2}/gi).map((h) => parseInt(h, 16)), name };
   if (f.kind === 'shirt') data.sleeves = f.sleeves;
   // Keys in the order the Hub writes them, as the signature covers the text.
-  const time = Date.now();
+  const time = hubNow();
   const signature = signText(secretKey(), `libroxel item\n${session.playerId}\n${name}\n${f.kind}\n${JSON.stringify(data)}\n${time}`);
   try {
     await api('/catalog', { method: 'POST', body: { creator_id: session.playerId, name, kind: f.kind, data, time, signature } });
@@ -2991,13 +2998,13 @@ function loadSecurity() {
   securityInfo = { for: session.playerId, loading: true };
   (async () => {
     if (!session.session) {
-      const time = Date.now();
+      const time = hubNow();
       const device = deviceName();
       const signature = signText(secretKey(), `libroxel session\n${session.playerId}\n${device}\n${time}`);
       const started = await api('/accounts/session', { method: 'POST', body: { player_id: session.playerId, device, time, signature } }).catch(() => null);
       if (started) saveSession({ ...session, session: started.session }, isRemembered());
     }
-    const time = Date.now();
+    const time = hubNow();
     const signature = signText(secretKey(), `libroxel security\n${session.playerId}\n${time}`);
     return api(`/accounts/${session.playerId}/security`, { query: { time, signature, session: session.session || '' } });
   })()
@@ -3030,7 +3037,7 @@ async function changeTwoStep(secret, code) {
 }
 
 async function newRecoveryCodes() {
-  const time = Date.now();
+  const time = hubNow();
   const signature = signText(secretKey(), `libroxel recovery codes\n${session.playerId}\n${time}`);
   try {
     twoStep.codes = (await api('/accounts/recovery-codes', { method: 'POST', body: { player_id: session.playerId, time, signature } })).codes;
@@ -3124,7 +3131,7 @@ function emailNudge() {
 let emailMessage = null;
 
 async function sendEmailCode(address) {
-  const time = Date.now();
+  const time = hubNow();
   const email = address.trim().toLowerCase();
   const signature = signText(secretKey(), `libroxel email\n${session.playerId}\n${email}\n${time}`);
   try {
@@ -3138,7 +3145,7 @@ async function sendEmailCode(address) {
 }
 
 async function proveEmail(code) {
-  const time = Date.now();
+  const time = hubNow();
   const signature = signText(secretKey(), `libroxel email code\n${session.playerId}\n${code.trim()}\n${time}`);
   try {
     await api('/accounts/email/verify', { method: 'POST', body: { player_id: session.playerId, code: code.trim(), time, signature } });
@@ -3199,7 +3206,7 @@ function loadCreator() {
   const key = `${session.playerId}/${creator.days}`;
   if (creator.loading || creator.for === key) return;
   creator.loading = true;
-  const time = Date.now();
+  const time = hubNow();
   const signature = signText(secretKey(), `libroxel creator\n${session.playerId}\n${time}`);
   api(`/creator/${session.playerId}`, { query: { time, signature, days: creator.days } })
     .then((r) => { creator.result = r; creator.error = null; })
@@ -3213,7 +3220,7 @@ function loadMine(again) {
   if (again) mine.for = null;
   if (mine.loading || mine.for === session.playerId) return;
   mine.loading = true;
-  const time = Date.now();
+  const time = hubNow();
   const signature = signText(secretKey(), `libroxel creator\n${session.playerId}\n${time}`);
   api(`/creator/${session.playerId}/games`, { query: { time, signature } })
     .then((r) => { mine.list = r; mine.error = null; })
@@ -3224,7 +3231,7 @@ function loadMine(again) {
 function loadVersions(id, again) {
   if (!again && mine.versions[id]) return;
   mine.versions[id] = { loading: true };
-  const time = Date.now();
+  const time = hubNow();
   const signature = signText(secretKey(), `libroxel creator\n${session.playerId}\n${time}`);
   api(`/games/${encodeURIComponent(id)}/versions`, { query: { player_id: session.playerId, time, signature } })
     .then((list) => { mine.versions[id] = { list }; })
@@ -3236,7 +3243,7 @@ async function manageGame(id, change, said, then) {
   if (mine.busy) return;
   mine.busy = true;
   render();
-  const time = Date.now();
+  const time = hubNow();
   const what = change.do === 'settings'
     ? `settings\n${change.private ? 1 : 0}\n${change.max_players}\n${change.title}\n${change.description}`
     : change.do === 'details' ? `details\n${change.genre}\n${change.tags.join(',')}`
@@ -3313,7 +3320,7 @@ async function changePlace(g, placeId, name, text, said) {
   if (mine.busy) return;
   mine.busy = true;
   render();
-  const time = Math.max(Date.now(), lastSigned.place + 1);
+  const time = Math.max(hubNow(), lastSigned.place + 1);
   lastSigned.place = time;
   const what = text == null ? 'remove' : await sha256Hex(new TextEncoder().encode(text));
   const body = { player_id: session.playerId, time, place_id: placeId, name, place: text, signature: '' };
@@ -3379,7 +3386,7 @@ async function changePicture(g, slot, file) {
   try {
     const bytes = file ? new Uint8Array(await file.arrayBuffer()) : null;
     if (bytes && bytes.length > 6 * 1024 * 1024) throw new Error('Pictures can be at most 6 MB.');
-    const time = Math.max(Date.now(), lastSigned.media + 1);
+    const time = Math.max(hubNow(), lastSigned.media + 1);
     lastSigned.media = time;
     const what = bytes ? await sha256Hex(bytes) : 'remove';
     const signature = signText(secretKey(), `playlibre media\n${session.playerId}\n${g.game_id}\n${time}\n${slot}\n${what}`);
@@ -3437,7 +3444,7 @@ function loadSaved(id, again) {
   if (saved.loading || (!again && saved.game === id && saved.view)) return;
   if (saved.game !== id) Object.assign(saved, { game: id, store: '', prefix: '', view: null, error: null, editing: null, adding: false });
   saved.loading = true;
-  const time = Date.now();
+  const time = hubNow();
   const signature = signText(secretKey(), `libroxel creator\n${session.playerId}\n${time}`);
   const query = { player_id: session.playerId, time, signature };
   if (saved.store) query.store = saved.store;
@@ -3459,7 +3466,7 @@ async function editSaved(id, store, key, value, said) {
   if (saved.busy) return;
   saved.busy = true;
   render();
-  const time = Math.max(Date.now(), lastSigned.data + 1);
+  const time = Math.max(hubNow(), lastSigned.data + 1);
   lastSigned.data = time;
   const what = value === null ? 'remove' : `set\n${value}`;
   const signature = signText(secretKey(), `libroxel data\n${session.playerId}\n${id}\n${time}\n${store}\n${key}\n${what}`);
@@ -3531,7 +3538,7 @@ async function changeBadge(gameId, action, b, said) {
   if (mine.busy) return;
   mine.busy = true;
   render();
-  const time = Math.max(Date.now(), lastSigned.badge + 1);
+  const time = Math.max(hubNow(), lastSigned.badge + 1);
   lastSigned.badge = time;
   const c = { player_id: session.playerId, action, badge_id: b.badge_id || '', name: b.name || '', description: b.description || '', icon: b.icon || '', color: b.color || '', time };
   c.signature = signText(secretKey(), `libroxel badge\n${c.player_id}\n${gameId}\n${c.action}\n${c.badge_id}\n${c.name}\n${c.description}\n${c.icon}\n${c.color}\n${c.time}`);
@@ -3709,7 +3716,7 @@ function loadPrivateServers() {
   if (!session) return null;
   if (privates.who === session.playerId) return privates.list;
   privates = { who: session.playerId, list: null, busy: false, name: '' };
-  const time = Date.now();
+  const time = hubNow();
   const signature = signText(secretKey(), `playlibre private servers\n${session.playerId}\n${time}`);
   api(`/private-servers/${session.playerId}`, { query: { time, signature } })
     .then((list) => { privates.list = list; render(); })
@@ -3721,7 +3728,7 @@ async function changePrivateServer(action, gameId, name, code, said) {
   if (privates.busy) return;
   privates.busy = true;
   render();
-  const time = Math.max(Date.now(), lastSigned.privateServer + 1);
+  const time = Math.max(hubNow(), lastSigned.privateServer + 1);
   lastSigned.privateServer = time;
   const body = { player_id: session.playerId, action, game_id: gameId, name, code, time };
   body.signature = signText(secretKey(), `playlibre private server\n${session.playerId}\n${action}\n${gameId}\n${name}\n${code}\n${time}`);
@@ -3856,7 +3863,7 @@ function loadEarnings(again) {
   if (again) earned.for = null;
   if (earned.loading || earned.for === session.playerId) return;
   earned.loading = true;
-  const time = Date.now();
+  const time = hubNow();
   const signature = signText(secretKey(), `libroxel earnings\n${session.playerId}\n${time}`);
   api(`/earnings/${session.playerId}`, { query: { time, signature } })
     .then((r) => { earned.result = r; earned.error = null; })
@@ -4198,7 +4205,7 @@ let parentPin = null;
 function loadFamily() {
   if (!session || (familyInfo && familyInfo.for === session.playerId)) return;
   familyInfo = { for: session.playerId, loading: true };
-  const time = Date.now();
+  const time = hubNow();
   const signature = signText(secretKey(), `libroxel family read\n${session.playerId}\n${time}`);
   api(`/accounts/${session.playerId}/family`, { query: { time, signature } })
     .then((f) => { familyInfo = { for: session.playerId, ...f }; })
@@ -4217,7 +4224,7 @@ function ageOn(born) {
 async function setBirthday(secret, playerId, born, parentEmail) {
   const parent = (parentEmail || '').trim().toLowerCase();
   const offset = -new Date().getTimezoneOffset();
-  const time = Date.now();
+  const time = hubNow();
   const signature = signText(secret, `libroxel birthday\n${playerId}\n${born}\n${parent}\n${offset}\n${time}`);
   return api('/accounts/birthday', { method: 'POST', body: { player_id: playerId, born, parent_email: parent || null, utc_offset_mins: offset, time, signature } });
 }
@@ -4277,13 +4284,13 @@ function parentPanel() {
     add(panel, [
       el('p', { style: 'color:var(--amber)' }, 'Friend requests are off until a parent approves.'),
       el('div', { class: 'search' }, code, pin, el('button', { class: 'btn go small', onclick: () => familyCall(() => {
-        const time = Date.now();
+        const time = hubNow();
         const signature = signText(secretKey(), `libroxel consent\n${id}\n${code.value.trim()}\n${pin.value}\n${time}`);
         return api('/accounts/family/consent', { method: 'POST', body: { player_id: id, code: code.value.trim(), pin: pin.value, time, signature } });
       }, 'Approved.') }, 'Approve')),
       el('div', { class: 'search' }, email, el('button', { class: 'chip', onclick: () => familyCall(async () => {
         const to = (email.value.trim() || f.parent_email || '').toLowerCase();
-        const time = Date.now();
+        const time = hubNow();
         const signature = signText(secretKey(), `libroxel parent email\n${id}\n${to}\n${time}`);
         await api('/accounts/family/parent', { method: 'POST', body: { player_id: id, parent_email: to, time, signature } });
         return null;
@@ -4318,7 +4325,7 @@ function parentPanel() {
           const fresh = parentPin.newPin || (/^\d{4}$/.test(newPin.value) ? newPin.value : null);
           const { pin } = parentPin;
           familyCall(() => {
-            const time = Date.now();
+            const time = hubNow();
             const signature = signText(secretKey(), `libroxel family\n${id}\n${pin}\n${fresh || ''}\n${JSON.stringify(settings)}\n${time}`);
             return api('/accounts/family', { method: 'POST', body: { player_id: id, pin, new_pin: fresh, settings, time, signature } });
           }, 'Saved.', () => { if (fresh) parentPin = { pin: fresh, newPin: null }; });
@@ -4871,7 +4878,7 @@ document.addEventListener('click', (e) => {
 window.addEventListener('popstate', render);
 function sayOnline() {
   if (!session || document.hidden) return;
-  const time = Date.now();
+  const time = hubNow();
   const signature = signText(secretKey(), `libroxel web\n${session.playerId}\n${time}`);
   api('/presence/web', { method: 'POST', body: { player_id: session.playerId, time, signature } }).catch(() => {});
 }

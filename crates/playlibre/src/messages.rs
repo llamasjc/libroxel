@@ -44,9 +44,7 @@ impl Chats {
     }
 
     fn stamp(&mut self) -> i64 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as i64);
+        let now = playlibre_hub::hub_now_ms();
         self.clock = now.max(self.clock + 1);
         self.clock
     }
@@ -255,8 +253,7 @@ pub fn messages_tab(ui: &mut egui::Ui, platform: &mut Platform) {
     let mut read_all = false;
     let unread: u32 = list.iter().map(|c| c.unread).sum();
     let blocked = platform.chats.blocked.clone();
-    let now =
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    let now = playlibre_hub::hub_now_ms() / 1000;
     ui.columns(2, |columns| {
         let ui = &mut columns[0];
         let row = |ui: &mut egui::Ui, id: &str, name: &str, look: &Json, line: &str, unread: u32| {
