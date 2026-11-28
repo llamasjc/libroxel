@@ -7077,7 +7077,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "playlibre"
-version = "0.1.24"
+version = "0.1.25"
 dependencies = [
  "bevy",
  "bevy_egui",
@@ -7105,7 +7105,7 @@ dependencies = [
 
 [[package]]
 name = "playlibre-avatar"
-version = "0.1.24"
+version = "0.1.25"
 dependencies = [
  "flate2",
  "playlibre-instance",
@@ -7113,7 +7113,7 @@ dependencies = [
 
 [[package]]
 name = "playlibre-engine"
-version = "0.1.24"
+version = "0.1.25"
 dependencies = [
  "bevy",
  "chacha20poly1305",
@@ -7130,7 +7130,7 @@ dependencies = [
 
 [[package]]
 name = "playlibre-hub"
-version = "0.1.24"
+version = "0.1.25"
 dependencies = [
  "argon2",
  "axum",
@@ -7157,7 +7157,7 @@ dependencies = [
 
 [[package]]
 name = "playlibre-instance"
-version = "0.1.24"
+version = "0.1.25"
 dependencies = [
  "foldhash 0.2.0",
  "ryu",
@@ -7167,7 +7167,7 @@ dependencies = [
 
 [[package]]
 name = "playlibre-net"
-version = "0.1.24"
+version = "0.1.25"
 dependencies = [
  "data-encoding",
  "iroh",
@@ -7179,7 +7179,7 @@ dependencies = [
 
 [[package]]
 name = "playlibre-proto"
-version = "0.1.24"
+version = "0.1.25"
 dependencies = [
  "bevy",
  "playlibre-engine",
@@ -7188,7 +7188,7 @@ dependencies = [
 
 [[package]]
 name = "playlibre-rbx"
-version = "0.1.24"
+version = "0.1.25"
 dependencies = [
  "foldhash 0.2.0",
  "playlibre-engine",
@@ -7204,7 +7204,7 @@ dependencies = [
 
 [[package]]
 name = "playlibre-script"
-version = "0.1.24"
+version = "0.1.25"
 dependencies = [
  "data-encoding",
  "full_moon",
@@ -7220,7 +7220,7 @@ dependencies = [
 
 [[package]]
 name = "playlibre-tests"
-version = "0.1.24"
+version = "0.1.25"
 dependencies = [
  "playlibre-engine",
  "playlibre-instance",

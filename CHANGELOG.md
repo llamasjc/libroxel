@@ -3,6 +3,17 @@
 What changed in each release. The full list of commits for each one is on
 its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 
+## 0.1.25 (2026-11-28)
+
+- **Scripts:** `PlayerGui:GetGuiObjectsAtPosition` and the older
+  `PhysicsService` collision group calls work. Local scripts can move their
+  own character in joined games, so players no longer fall during cutscenes.
+- **Clock:** signing in and other signed requests work when the computer's
+  clock is off.
+- **Leaving a game** goes back to Studio only when the game was started
+  from Studio.
+- **Host it myself** is gone.
+
 ## 0.1.24 (2026-11-27)
 
 - **Android:** 32-bit phones get the app again; 0.1.23 didn't build for them.
