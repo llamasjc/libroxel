@@ -3359,6 +3359,9 @@ add(methods, "DataStoreService", {
 	end,
 })
 add(methods, "PlayerGui", {
+	GetGuiObjectsAtPosition = function(self, x, y)
+		return L.gui_at(self, x, y)
+	end,
 	GetTopbarTransparency = function()
 		return 0.5
 	end,
@@ -4181,6 +4184,39 @@ end
 SERVICE_EXTRAS.PhysicsService = {
 	methods = {
 		GetMaxCollisionGroups = returns(32),
+		GetCollisionGroups = function(self)
+			local names = {}
+			for _, g in ipairs(self:GetRegisteredCollisionGroups()) do
+				table.insert(names, g.name or g.Name)
+			end
+			local out = {}
+			for i, a in ipairs(names) do
+				local mask = 0
+				for j, b in ipairs(names) do
+					if self:CollisionGroupsAreCollidable(a, b) then
+						mask = bit32.bor(mask, bit32.lshift(1, j - 1))
+					end
+				end
+				table.insert(out, { id = i - 1, mask = mask, name = a })
+			end
+			return out
+		end,
+		GetCollisionGroupId = function(self, name)
+			for _, g in ipairs(self:GetCollisionGroups()) do
+				if g.name == name then
+					return g.id
+				end
+			end
+			error("Could not find collision group " .. tostring(name), 2)
+		end,
+		GetCollisionGroupName = function(self, id)
+			for _, g in ipairs(self:GetCollisionGroups()) do
+				if g.id == id then
+					return g.name
+				end
+			end
+			error("Could not find collision group " .. tostring(id), 2)
+		end,
 		RenameCollisionGroup = function(self, from, to)
 			if from == "Default" or not self:IsCollisionGroupRegistered(from) then
 				error("can't rename collision group " .. tostring(from), 2)

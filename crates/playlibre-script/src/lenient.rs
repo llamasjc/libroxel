@@ -62,6 +62,19 @@ pub(crate) fn install(lua: &Lua, enum_lib: &Table) -> mlua::Result<()> {
             Ok((rect.map(|r| r[0]), rect.map(|r| r[1]), rect.map(|r| r[2]), rect.map(|r| r[3])))
         })?,
     )?;
+    layer.set(
+        "gui_at",
+        lua.create_function(|lua, (container, x, y): (Value, f32, f32)| {
+            let Some(container) = crate::bindings::as_instance(&container) else {
+                return lua.create_table();
+            };
+            let list = lua.create_table()?;
+            for id in crate::world::gui_at(lua, container, x, y) {
+                list.raw_push(Value::UserData(crate::bindings::push_instance(lua, id)?))?;
+            }
+            Ok(list)
+        })?,
+    )?;
     // A touch gesture on the GUI objects under a point: fires their event
     // `key` (TouchTap, TouchLongPress) with the rest of the arguments.
     layer.set(

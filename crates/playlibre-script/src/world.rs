@@ -39,6 +39,8 @@ pub(crate) struct WorldState {
     viewport: Vec2,
     /// Where each screen GUI object was last drawn: corner and size.
     gui_rects: HashMap<InstanceId, [f32; 4]>,
+    /// The same, in the order they were drawn.
+    gui_order: Vec<InstanceId>,
     /// What the player plays with.
     pub(crate) devices: crate::Devices,
     /// A strength `HapticService:SetMotor` set the vibration motor to,
@@ -749,7 +751,39 @@ pub(crate) fn gui_under(lua: &Lua, x: f32, y: f32) -> Vec<InstanceId> {
         .collect()
 }
 
+/// The GUI objects inside `container` drawn over a point, topmost first,
+/// leaving out those cut off there by a frame that clips them.
+pub(crate) fn gui_at(lua: &Lua, container: InstanceId, x: f32, y: f32) -> Vec<InstanceId> {
+    let host = host(lua);
+    let world = host.world.borrow();
+    let tree = host.tree.borrow();
+    let inside = |r: &[f32; 4]| x >= r[0] && y >= r[1] && x < r[0] + r[2] && y < r[1] + r[3];
+    let shows = |id: InstanceId| {
+        let mut at = tree.parent(id).ok().flatten();
+        while let Some(a) = at {
+            if a == container {
+                return true;
+            }
+            if tree.get_bool(a, Property::ClipsDescendants) == Some(true)
+                && world.gui_rects.get(&a).is_some_and(|r| !inside(r))
+            {
+                return false;
+            }
+            at = tree.parent(a).ok().flatten();
+        }
+        false
+    };
+    world
+        .gui_order
+        .iter()
+        .rev()
+        .copied()
+        .filter(|id| world.gui_rects.get(id).is_some_and(inside) && shows(*id))
+        .collect()
+}
+
 pub(crate) fn set_gui_rects(lua: &Lua, rects: Vec<(InstanceId, [f32; 4])>) {
+    host(lua).world.borrow_mut().gui_order = rects.iter().map(|(id, _)| *id).collect();
     let new: HashMap<InstanceId, [f32; 4]> = rects.into_iter().collect();
     let old = std::mem::replace(&mut host(lua).world.borrow_mut().gui_rects, new.clone());
     // Scripts that lay things out by hand listen for these.

@@ -1495,6 +1495,69 @@ fn tapping_a_gui_object_fires_its_touch_tap() {
 }
 
 #[test]
+fn player_gui_finds_the_objects_at_a_point() {
+    let rt = runtime();
+    let ids = {
+        let mut tree = rt.tree().borrow_mut();
+        let players = tree.service(ClassKind::Players).unwrap();
+        let player = tree.create(ClassKind::Player, "Sam").unwrap();
+        tree.set_parent(player, Some(players)).unwrap();
+        let gui = tree.create(ClassKind::PlayerGui, "PlayerGui").unwrap();
+        tree.set_parent(gui, Some(player)).unwrap();
+        let screen = tree.create(ClassKind::ScreenGui, "Hud").unwrap();
+        tree.set_parent(screen, Some(gui)).unwrap();
+        let panel = tree.create(ClassKind::Frame, "Panel").unwrap();
+        tree.set_parent(panel, Some(screen)).unwrap();
+        tree.set(panel, Property::ClipsDescendants, PropertyValue::Bool(true)).unwrap();
+        let slot = tree.create(ClassKind::TextButton, "Slot").unwrap();
+        tree.set_parent(slot, Some(panel)).unwrap();
+        let tip = tree.create(ClassKind::TextLabel, "Tip").unwrap();
+        tree.set_parent(tip, Some(panel)).unwrap();
+        [panel, slot, tip]
+    };
+    rt.set_gui_rects(vec![
+        (ids[0], [0.0, 0.0, 100.0, 100.0]),
+        (ids[1], [10.0, 10.0, 50.0, 50.0]),
+        (ids[2], [80.0, 10.0, 50.0, 50.0]),
+    ]);
+    run(
+        &rt,
+        r#"
+        local gui = game:GetService("Players").LocalPlayer.PlayerGui
+        local function names(x, y)
+            local out = {}
+            for _, o in gui:GetGuiObjectsAtPosition(x, y) do
+                table.insert(out, o.Name)
+            end
+            return table.concat(out, ",")
+        end
+        print(names(20, 20), names(90, 20), names(120, 20), names(300, 300))
+        "#,
+    );
+    assert_eq!(printed(&rt), vec!["Slot,Panel Tip,Panel  "]);
+}
+
+#[test]
+fn older_collision_group_calls_still_work() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        local ps = game:GetService("PhysicsService")
+        ps:RegisterCollisionGroup("TreeLeaves")
+        ps:CollisionGroupSetCollidable("TreeLeaves", "Default", false)
+        local groups = ps:GetCollisionGroups()
+        print(#groups, groups[2].name, groups[2].id, groups[2].mask, groups[1].mask)
+        print(ps:GetCollisionGroupId("TreeLeaves"), ps:GetCollisionGroupName(0))
+        print(pcall(ps.GetCollisionGroupId, ps, "Nope"))
+        "#,
+    );
+    let lines = printed(&rt);
+    assert_eq!(lines[..2], ["2 TreeLeaves 1 2 1", "1 Default"]);
+    assert!(lines[2].starts_with("false"));
+}
+
+#[test]
 fn rich_attributes_save_and_reach_other_computers() {
     let rt = runtime();
     run(
