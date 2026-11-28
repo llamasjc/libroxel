@@ -4254,7 +4254,7 @@ fn apply(action: Action, engine: &mut EngineState, editor: &mut Editor, now: f64
                     // it: no explorer, properties or script editor over it.
                     if session.is_joined() && !editor.player_mode {
                         editor.player_mode = true;
-                        editor.joined_from_editor = true;
+                        editor.joined_from_editor = !editor.menu.open;
                         editor.open_script = None;
                         editor.selection = None;
                     }
