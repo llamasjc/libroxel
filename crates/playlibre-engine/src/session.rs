@@ -716,7 +716,9 @@ impl PlaySession {
                 return;
             };
             let from = t.starter_scripts(ClassKind::StarterPlayerScripts);
-            copy_children(&mut t, from, into)
+            let copies = copy_children(&mut t, from, into);
+            add_player_module(&mut t, into);
+            copies
         };
         if !self.avatars[index].remote {
             for copy in copies {
@@ -1559,8 +1561,15 @@ impl PlaySession {
     /// A hosted game also hears from the players who joined and sends them
     /// what changed; a joined one only sends input and shows what the
     /// server sends (see [`crate::net`]).
-    pub fn step(&mut self, dt: f32, input: CharacterInput) {
+    pub fn step(&mut self, dt: f32, mut input: CharacterInput) {
         self.tidy();
+        let (walk, jump) = self.runtime.player_controls(input.move_dir);
+        if !walk {
+            input.move_dir = Vec3::ZERO;
+            input.throttle = 0.0;
+            input.steer = 0.0;
+        }
+        input.jump &= jump;
         match self.runtime.net_role() {
             NetRole::Client => {
                 self.client_step(dt, input);
@@ -2086,6 +2095,24 @@ impl PlaySession {
 }
 
 /// Copies every child of `from` (if there is one) into `into`, returning the copies.
+/// The engine's `PlayerModule` (with its `ControlModule` and `CameraModule`)
+/// in a player's scripts, unless the game brought its own.
+fn add_player_module(t: &mut InstanceTree, scripts: InstanceId) {
+    if t.find_first_child(scripts, "PlayerModule").ok().flatten().is_some() {
+        return;
+    }
+    let mark = |t: &mut InstanceTree, name: &str, parent: InstanceId| -> Option<InstanceId> {
+        let id = t.create(ClassKind::ModuleScript, name).ok()?;
+        t.set_extra(id, playlibre_script::BUILT_IN_MODULE, Some(PropertyValue::String(name.into()))).ok()?;
+        t.set_parent(id, Some(parent)).ok()?;
+        Some(id)
+    };
+    if let Some(module) = mark(t, "PlayerModule", scripts) {
+        mark(t, "ControlModule", module);
+        mark(t, "CameraModule", module);
+    }
+}
+
 fn copy_children(tree: &mut InstanceTree, from: Option<InstanceId>, into: InstanceId) -> Vec<InstanceId> {
     let Some(from) = from else { return Vec::new() };
     let children = tree.children(from).map(<[InstanceId]>::to_vec).unwrap_or_default();

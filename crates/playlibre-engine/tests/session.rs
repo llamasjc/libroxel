@@ -1092,3 +1092,55 @@ fn walking_is_as_fast_at_a_low_frame_rate() {
         assert!((speed - 16.0).abs() < 0.2, "{speed} at {dt}");
     }
 }
+
+#[test]
+fn local_scripts_can_take_over_the_players_controls() {
+    let mut tree = world();
+    let starter = tree.starter_scripts(ClassKind::StarterPlayerScripts).unwrap();
+    let id = tree.create(ClassKind::LocalScript, "Cutscene").unwrap();
+    tree.set_parent(id, Some(starter)).unwrap();
+    let source = r#"
+        local Players = game:GetService("Players")
+        local pm = require(Players.LocalPlayer:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule"))
+        local controls = pm:GetControls()
+        controls:Disable()
+        task.wait(1)
+        controls:Enable()
+        task.wait(0.5)
+        print("pointing", math.round(controls:GetMoveVector().Magnitude))
+        local cas = game:GetService("ContextActionService")
+        cas:BindAction("Lock", function() return Enum.ContextActionResult.Sink end, false,
+            Enum.PlayerActions.CharacterForward, Enum.PlayerActions.CharacterJump)
+        task.wait(1)
+        cas:UnbindAction("Lock")
+    "#;
+    tree.set(id, Property::Source, PropertyValue::String(source.into())).unwrap();
+    let mut session = start_on(tree, true).unwrap();
+    let character = session.character().unwrap();
+    let tree = session.runtime().tree().clone();
+    let x = |tree: &std::cell::RefCell<InstanceTree>| {
+        tree.borrow().get_vec3(character.root, Property::Position).unwrap().x
+    };
+    let forward = CharacterInput { move_dir: Vec3::new(1.0, 0.0, 0.0), ..Default::default() };
+    let start = x(&tree);
+    for _ in 0..50 {
+        session.step(DT, forward);
+    }
+    assert!((x(&tree) - start).abs() < 0.1, "held while the controls are off");
+    for _ in 0..30 {
+        session.step(DT, forward);
+    }
+    let walked = x(&tree);
+    assert!(walked - start > 3.0, "walks once they're back on");
+    for _ in 0..60 {
+        session.step(DT, forward);
+    }
+    let bound = x(&tree);
+    assert!(bound - walked < 9.5, "an action bound to the moves holds it again");
+    for _ in 0..30 {
+        session.step(DT, forward);
+    }
+    assert!(x(&tree) - bound > 3.0, "and lets go when unbound");
+    let log: Vec<String> = session.take_log().into_iter().map(|l| l.text).collect();
+    assert!(log.iter().any(|l| l == "pointing 1"), "{log:?}");
+}

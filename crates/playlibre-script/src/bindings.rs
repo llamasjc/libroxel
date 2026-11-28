@@ -2691,12 +2691,24 @@ pub(crate) fn install(lua: &Lua, tree: SharedTree) -> mlua::Result<()> {
     let load_module = lua.create_function(|lua, module: Value| {
         let id =
             as_instance(&module).ok_or_else(|| mlua::Error::runtime("require expects a ModuleScript"))?;
-        let (class, name, source) = {
+        let (class, name, source, built_in) = {
             let host = host(lua);
             let tree = host.tree.borrow();
             let class = tree.class(id).map_err(tree_err)?;
-            (class, tree.name(id).map_err(tree_err)?.to_owned(), tree.get_string(id, Property::Source))
+            let built_in = match tree.get_extra(id, crate::BUILT_IN_MODULE) {
+                Ok(Some(PropertyValue::String(kind))) => Some(kind),
+                _ => None,
+            };
+            (
+                class,
+                tree.name(id).map_err(tree_err)?.to_owned(),
+                tree.get_string(id, Property::Source),
+                built_in,
+            )
         };
+        if let Some(kind) = built_in.filter(|_| class == ClassKind::ModuleScript) {
+            return crate::lenient::player_module(lua, kind);
+        }
         if class != ClassKind::ModuleScript {
             return Err(mlua::Error::runtime(format!(
                 "require expects a {}, got a {}",

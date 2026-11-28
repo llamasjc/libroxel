@@ -2041,6 +2041,9 @@ add(methods, "UserInputService", {
 	IsGamepadButtonDown = function()
 		return false
 	end,
+	IsWindowFocused = function()
+		return true
+	end,
 })
 add(signals, "UserInputService", {
 	JumpRequest = function(self, sig)
@@ -2470,20 +2473,56 @@ local function editable_image(size)
 	return img
 end
 L.editable_image = editable_image
+local mesh_ids = 0
+local function next_id()
+	mesh_ids += 1
+	return mesh_ids
+end
 local function editable_mesh()
 	return L.stand_in("EditableMesh", {
 		props = { Name = "EditableMesh", SkinningEnabled = false },
 		methods = {
 			Destroy = function() end,
-			AddVertex = function() return 1 end,
-			AddTriangle = function() return 1 end,
+			AddVertex = next_id,
+			AddTriangle = next_id,
+			AddColor = next_id,
+			AddNormal = next_id,
+			AddUV = next_id,
+			SetFaceColors = NOOP,
+			SetFaceNormals = NOOP,
+			SetFaceUVs = NOOP,
+			SetColor = NOOP,
+			SetColorAlpha = NOOP,
+			SetNormal = NOOP,
+			SetUV = NOOP,
+			SetPosition = NOOP,
+			RemoveFace = NOOP,
+			RemoveUnused = function() return {} end,
 			GetVertices = function() return {} end,
 			GetFaces = function() return {} end,
 		},
 	}, "editablemesh:" .. tostring(math.random()))
 end
 
+local shared_tables = {}
+
 local SERVICES = {
+	-- With one thread, one table per name is shared by every script.
+	SharedTableRegistry = {
+		methods = {
+			GetSharedTable = function(_, name)
+				local t = shared_tables[name]
+				if not t then
+					t = g.SharedTable.new()
+					shared_tables[name] = t
+				end
+				return t
+			end,
+			SetSharedTable = function(_, name, t)
+				shared_tables[name] = t
+			end,
+		},
+	},
 	MaterialService = {
 		props = { Use2022Materials = true },
 		methods = {
@@ -2899,6 +2938,8 @@ local SERVICE_EXTRAS = {
 			GetInspectMenuEnabled = returns(false),
 			SetInspectMenuEnabled = NOOP,
 			OpenBrowserWindow = NOOP,
+			SetGameplayPausedNotificationEnabled = NOOP,
+			GetGameplayPausedNotificationEnabled = returns(true),
 		},
 	},
 	ContextActionService = {
@@ -5023,6 +5064,54 @@ function L.touch_controls_shown()
 		return false
 	end
 	return true
+end
+
+-- The player's own controls, as the reference platform's PlayerModule hands
+-- them to local scripts: the ControlModule turns them off and on and says
+-- where they point. The CameraModule is there for scripts that look for it.
+local player_modules
+function L.player_module(kind)
+	if not player_modules then
+		local controls = { enabled = true }
+		function controls:Enable(on)
+			controls.enabled = on ~= false
+			L.set_controls(controls.enabled)
+		end
+		function controls:Disable()
+			controls:Enable(false)
+		end
+		function controls:GetMoveVector()
+			local d = L.move_input()
+			local cam = workspace.CurrentCamera
+			local look = cam and cam.CFrame.LookVector or Vector3.new(0, 0, -1)
+			local flat = Vector3.new(look.X, 0, look.Z)
+			flat = if flat.Magnitude > 1e-3 then flat.Unit else Vector3.new(0, 0, -1)
+			local right = Vector3.new(-flat.Z, 0, flat.X)
+			return Vector3.new(d:Dot(right), 0, -d:Dot(flat))
+		end
+		function controls:GetActiveController()
+			return {
+				enabled = controls.enabled,
+				GetMoveVector = function()
+					return controls:GetMoveVector()
+				end,
+			}
+		end
+		local cameras = {}
+		player_modules = {
+			PlayerModule = {
+				GetControls = function()
+					return controls
+				end,
+				GetCameras = function()
+					return cameras
+				end,
+			},
+			ControlModule = controls,
+			CameraModule = cameras,
+		}
+	end
+	return player_modules[kind]
 end
 
 return L

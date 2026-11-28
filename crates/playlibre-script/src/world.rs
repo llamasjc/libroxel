@@ -46,6 +46,10 @@ pub(crate) struct WorldState {
     /// A strength `HapticService:SetMotor` set the vibration motor to,
     /// waiting for the app to take it.
     pub(crate) vibration: Option<f32>,
+    /// A script turned the player's own controls off (`ControlModule:Disable()`).
+    pub(crate) controls_off: bool,
+    /// Where the player's own controls point, in world space.
+    pub(crate) move_input: Vec3,
     /// Humanoids asked to walk somewhere (or to stop, with `None`).
     moves: Vec<(InstanceId, Option<Vec3>)>,
     /// Players whose character scripts asked to (re)spawn.

@@ -54,6 +54,20 @@ pub(crate) fn install(lua: &Lua, enum_lib: &Table) -> mlua::Result<()> {
             })
         })?,
     )?;
+    // The player's own controls (see `player_module`).
+    layer.set(
+        "set_controls",
+        lua.create_function(|lua, on: bool| {
+            crate::bindings::host(lua).world.borrow_mut().controls_off = !on;
+            Ok(())
+        })?,
+    )?;
+    layer.set(
+        "move_input",
+        lua.create_function(|lua, ()| {
+            Ok(crate::bindings::vector_value(crate::bindings::host(lua).world.borrow().move_input))
+        })?,
+    )?;
     // Where the GUI object was really drawn, for AbsolutePosition and AbsoluteSize.
     layer.set(
         "drawn_rect",
@@ -213,6 +227,13 @@ pub(crate) fn after_sandbox(lua: &Lua) -> mlua::Result<()> {
 
 fn layer(lua: &Lua) -> mlua::Result<Table> {
     lua.named_registry_value(LAYER_KEY)
+}
+
+/// What requiring one of the engine's own modules (`PlayerModule` and its
+/// `ControlModule` and `CameraModule`) gives back.
+pub(crate) fn player_module(lua: &Lua, kind: String) -> mlua::Result<Function> {
+    let made: Function = layer(lua)?.get("player_module")?;
+    lua.create_function(move |_, ()| made.call::<Value>(kind.as_str()))
 }
 
 /// The class's name, the families it belongs to, and then "Instance".

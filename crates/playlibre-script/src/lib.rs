@@ -225,6 +225,10 @@ pub const GUI_INSET: f32 = 58.0;
 pub const MEMORY_LIMIT: usize = 2048 * 1024 * 1024;
 pub const PLUGIN_MEMORY_LIMIT: usize = 256 * 1024 * 1024;
 
+/// Marks a `ModuleScript` the engine made (`PlayerModule`, `ControlModule`,
+/// `CameraModule`): requiring it gives the engine's own module of that name.
+pub const BUILT_IN_MODULE: &str = "BuiltInModule";
+
 /// The same on a phone or tablet, which has far less to spare.
 pub const MOBILE_MEMORY_LIMIT: usize = 768 * 1024 * 1024;
 
@@ -795,6 +799,21 @@ impl ScriptRuntime {
     /// to with `HapticService:SetMotor`, if it changed since last asked.
     pub fn take_vibration(&self) -> Option<f32> {
         bindings::host(&self.lua).world.borrow_mut().vibration.take()
+    }
+
+    /// What the player's own controls may do this step: walk, and jump.
+    /// Scripts take them over with `ControlModule:Disable()` or by binding
+    /// actions to the character's moves. `move_dir` is where the controls
+    /// point (for `ControlModule:GetMoveVector()`).
+    pub fn player_controls(&self, move_dir: playlibre_instance::Vec3) -> (bool, bool) {
+        let off = {
+            let host = bindings::host(&self.lua);
+            let mut world = host.world.borrow_mut();
+            world.move_input = move_dir;
+            world.controls_off
+        };
+        let (moves, jumps) = compat::bound_character_actions(&self.lua).unwrap_or((false, false));
+        (!off && !moves, !off && !jumps)
     }
 
     /// Whether the game wants the on-screen stick and jump button (scripts

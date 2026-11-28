@@ -1679,3 +1679,27 @@ fn games_award_badges() {
     assert_eq!(rt.take_badge_awards(), vec![(1, "top".to_owned())]);
     assert!(rt.take_badge_awards().is_empty());
 }
+
+#[test]
+fn window_focus_shared_tables_and_mesh_colours() {
+    let rt = runtime();
+    run(
+        &rt,
+        r#"
+        print(game:GetService("UserInputService"):IsWindowFocused())
+        game:GetService("GuiService"):SetGameplayPausedNotificationEnabled(false)
+        local registry = game:GetService("SharedTableRegistry")
+        registry:GetSharedTable("noise").seed = 7
+        print(registry:GetSharedTable("noise").seed)
+        local mesh = game:GetService("AssetService"):CreateEditableMesh()
+        local v = mesh:AddVertex(Vector3.zero)
+        local c = mesh:AddColor(Color3.new(1, 0, 0), 1)
+        local n = mesh:AddNormal(Vector3.yAxis)
+        local f = mesh:AddTriangle(v, v, v)
+        mesh:SetFaceColors(f, { c, c, c })
+        mesh:SetFaceNormals(f, { n, n, n })
+        print(c ~= n)
+        "#,
+    );
+    assert_eq!(printed(&rt), vec!["true", "7", "true"]);
+}

@@ -1790,6 +1790,36 @@ fn actions(lua: &Lua, t: &Table) -> mlua::Result<()> {
 }
 
 /// The actions bound with a touch button, in the order they were bound.
+/// Whether bound actions take over the character's moves and its jump
+/// (`Enum.PlayerActions.CharacterForward` and the like), so the player's own
+/// controls don't move it.
+pub(crate) fn bound_character_actions(lua: &Lua) -> mlua::Result<(bool, bool)> {
+    let Value::Table(bound) = lua.named_registry_value::<Value>(ACTIONS_KEY)? else {
+        return Ok((false, false));
+    };
+    let (mut moves, mut jumps) = (false, false);
+    let tostring: Function = lua.globals().get("tostring")?;
+    for pair in bound.pairs::<Value, Table>() {
+        let (_, entry) = pair?;
+        let Value::Table(keys) = entry.get::<Value>(2)? else { continue };
+        for key in keys.sequence_values::<Value>() {
+            let key = key?;
+            if !matches!(key, Value::Table(_) | Value::UserData(_)) {
+                continue;
+            }
+            let name: String = tostring.call(key)?;
+            match name.strip_prefix("Enum.PlayerActions.") {
+                Some("CharacterJump") => jumps = true,
+                Some("CharacterForward" | "CharacterBackward" | "CharacterLeft" | "CharacterRight") => {
+                    moves = true
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok((moves, jumps))
+}
+
 pub(crate) fn touch_buttons(lua: &Lua) -> mlua::Result<Vec<crate::TouchButton>> {
     let Value::Table(bound) = lua.named_registry_value::<Value>(ACTIONS_KEY)? else { return Ok(Vec::new()) };
     let mut out = Vec::new();
