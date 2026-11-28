@@ -3,6 +3,14 @@
 What changed in each release. The full list of commits for each one is on
 its [GitHub release](https://github.com/llamasjc/playlibre/releases) page.
 
+## 0.1.26 (2026-11-28)
+
+- **Scripts:** the PlayerModule's controls (`GetControls`, `Enable`,
+  `Disable`, `GetMoveVector`) work, and actions bound to `Enum.PlayerActions`
+  can hold the character still. `IsWindowFocused`, `SharedTableRegistry`,
+  `SetGameplayPausedNotificationEnabled` and the EditableMesh colour and
+  normal calls are there too.
+
 ## 0.1.25 (2026-11-28)
 
 - **Scripts:** `PlayerGui:GetGuiObjectsAtPosition` and the older
